@@ -73,6 +73,14 @@ impl KimiK2Provider {
         None
     }
 
+    fn api_bases_from_region(region: Option<&str>) -> Vec<&'static str> {
+        match region.unwrap_or_default().trim().to_lowercase().as_str() {
+            "cn" | "china" => vec![KIMIK2_API_BASE_CHINA],
+            "global" | "international" | "intl" | "us" => vec![KIMIK2_API_BASE_INTERNATIONAL],
+            _ => vec![KIMIK2_API_BASE_INTERNATIONAL, KIMIK2_API_BASE_CHINA],
+        }
+    }
+
     /// Fetch usage via Moonshot API
     async fn fetch_via_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let api_key = Self::get_api_key(ctx.api_key.as_deref()).ok_or_else(|| {
@@ -87,38 +95,42 @@ impl KimiK2Provider {
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
 
-        let api_base = match std::env::var("MOONSHOT_API_REGION")
-            .unwrap_or_default()
-            .trim()
-            .to_lowercase()
-            .as_str()
-        {
-            "cn" | "china" => KIMIK2_API_BASE_CHINA,
-            _ => KIMIK2_API_BASE_INTERNATIONAL,
-        };
+        let api_bases =
+            Self::api_bases_from_region(std::env::var("MOONSHOT_API_REGION").ok().as_deref());
+        let mut auth_error = false;
 
-        // Fetch account/billing info
-        let resp = client
-            .get(format!("{}/v1/users/me/balance", api_base))
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Accept", "application/json")
-            .send()
-            .await?;
+        for api_base in api_bases {
+            let resp = client
+                .get(format!("{}/v1/users/me/balance", api_base))
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Accept", "application/json")
+                .send()
+                .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(ProviderError::AuthRequired);
+            if !resp.status().is_success() {
+                let status = resp.status();
+                if status.as_u16() == 401 || status.as_u16() == 403 || status.as_u16() == 404 {
+                    auth_error = true;
+                    continue;
+                }
+                return Err(ProviderError::Other(format!("API error: {}", status)));
             }
-            return Err(ProviderError::Other(format!("API error: {}", status)));
+
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| ProviderError::Parse(e.to_string()))?;
+
+            return self.parse_usage_response(&json);
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ProviderError::Parse(e.to_string()))?;
-
-        self.parse_usage_response(&json)
+        if auth_error {
+            Err(ProviderError::AuthRequired)
+        } else {
+            Err(ProviderError::Other(
+                "Moonshot API endpoint not configured".to_string(),
+            ))
+        }
     }
 
     /// Parse Kimi K2 usage response
@@ -260,6 +272,33 @@ mod tests {
         assert_eq!(
             KimiK2Provider::get_api_key(Some("kimi-direct-key")),
             Some("kimi-direct-key".to_string())
+        );
+    }
+
+    #[test]
+    fn kimi_api_region_default_tries_both_regions() {
+        assert_eq!(
+            KimiK2Provider::api_bases_from_region(None),
+            vec![
+                super::KIMIK2_API_BASE_INTERNATIONAL,
+                super::KIMIK2_API_BASE_CHINA
+            ]
+        );
+    }
+
+    #[test]
+    fn kimi_api_region_can_use_international_endpoint() {
+        assert_eq!(
+            KimiK2Provider::api_bases_from_region(Some("international")),
+            vec![super::KIMIK2_API_BASE_INTERNATIONAL]
+        );
+    }
+
+    #[test]
+    fn kimi_api_region_can_pin_china_endpoint() {
+        assert_eq!(
+            KimiK2Provider::api_bases_from_region(Some("china")),
+            vec![super::KIMIK2_API_BASE_CHINA]
         );
     }
 }

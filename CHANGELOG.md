@@ -4,6 +4,14 @@
 
 ---
 
+## [Windows] 0.26.1 - 2026-05-15
+
+### Fixed
+- Preserve Moonshot / Kimi API compatibility across international and China-region API keys by trying both endpoints when `MOONSHOT_API_REGION` is unset.
+- Keep explicit `MOONSHOT_API_REGION=international` and `MOONSHOT_API_REGION=china` region pinning for users who want a single endpoint.
+
+---
+
 ## [Windows] 0.26.0 - 2026-05-15
 
 ### Added

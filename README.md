@@ -23,13 +23,11 @@ The Windows port of [CodexBar](https://github.com/steipete/CodexBar) — a syste
 - **CLI** — `codexbar usage` and `codexbar cost` for scripting and CI
 - **WSL support** — CLI works out of the box; desktop shell via WSLg
 
-## What's New in v0.26.0
+## What's New in v0.26.1
 
-- Rebuilt the Windows/Tauri release against upstream **CodexBar 0.26.0**.
-- Added **AWS Bedrock** monthly spend tracking through AWS Cost Explorer with optional `CODEXBAR_BEDROCK_BUDGET` budget display.
-- Added OpenRouter daily, weekly, and monthly key spend windows from the `/api/v1/auth/key` endpoint.
-- Updated Moonshot / Kimi API balance parsing for international and China API regions, voucher balance, cash balance, and deficit state.
-- Reviewed the remaining upstream 0.26 changes. Provider features that depend on macOS-only Swift settings, Sparkle, menu rendering, or local Apple APIs are not present in the Windows/Tauri shell.
+- Hotfix for Moonshot / Kimi API balance checks introduced in v0.26.0.
+- When `MOONSHOT_API_REGION` is unset, Win-CodexBar now tries both international and China Moonshot API endpoints so existing API keys keep working after upgrade.
+- Users who want a single endpoint can still pin `MOONSHOT_API_REGION=international` or `MOONSHOT_API_REGION=china`.
 
 ## Quick Start
 
