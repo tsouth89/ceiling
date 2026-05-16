@@ -6,9 +6,16 @@
 
 ## [Windows] 0.26.2 - 2026-05-16
 
+### Added
+- Add an optional always-on-top Floating Bar that shows remaining provider capacity in a compact transparent strip.
+- Add Floating Bar display settings for enablement, horizontal/vertical orientation, opacity, and click-through overlay mode.
+- Add native tray menu support for toggling the Floating Bar while keeping the tray check state in sync with Settings changes.
+
 ### Fixed
 - Make the Settings tab's Quit button close only the Settings window so the tray service keeps running.
 - Keep tray panel, pop-out, and native tray menu Quit actions on the app-level exit path.
+- Keep Floating Bar updates live when provider enablement, refresh cadence, or usage thresholds change.
+- Avoid Windows Tauri deadlocks by opening the Floating Bar from async command paths.
 
 ---
 

@@ -16,6 +16,7 @@ The Windows port of [CodexBar](https://github.com/steipete/CodexBar) — a syste
 
 - **41 AI providers** — Codex, Claude, Cursor, Factory, Gemini, Copilot, Antigravity, z.ai, MiniMax, Kiro, Vertex AI, Augment, OpenCode, Kimi, Kimi K2, Amp, Warp, Ollama, OpenRouter, Synthetic, JetBrains AI, Alibaba, NanoGPT, Infini, Perplexity, Abacus AI, Mistral, OpenCode Go, Kilo, AWS Bedrock, Codebuff, DeepSeek, Windsurf, Manus, Xiaomi MiMo, Doubao, Command Code, Crof, StepFun, Venice, OpenAI API
 - **System tray icon** — dynamic two-bar meter showing session + weekly usage
+- **Floating Bar** — optional always-on-top transparent capacity strip with orientation, opacity, and click-through controls
 - **Browser cookie import** — Chrome, Edge, Brave, Firefox, with browser access kept opt-in
 - **Per-provider credentials** — API keys, cookies, and OAuth all managed from the provider detail pane
 - **Credential hardening** — local secret-bearing stores are protected with Windows DPAPI on save
@@ -25,9 +26,11 @@ The Windows port of [CodexBar](https://github.com/steipete/CodexBar) — a syste
 
 ## What's New in v0.26.2
 
+- Added an optional Floating Bar: an always-on-top transparent strip for watching provider capacity without opening the tray panel.
+- Added Floating Bar settings for orientation, opacity, click-through overlay mode, and native tray toggling.
 - Fixed the Settings tab's Quit button so it closes only the Settings window and leaves CodexBar running in the tray.
 - Tray panel, pop-out, and native tray menu Quit actions still exit the whole app when you actually want to stop CodexBar.
-- This keeps Settings dismissal separate from shutting down the background tray service.
+- Hardened the Floating Bar settings path so it stays live across provider/settings changes and avoids Windows Tauri window-creation deadlocks.
 
 ## Quick Start
 

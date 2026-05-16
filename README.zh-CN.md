@@ -16,6 +16,7 @@
 
 - **41 个 AI 服务商** — Codex、Claude、Cursor、Factory、Gemini、Copilot、Antigravity、z.ai、MiniMax、Kiro、Vertex AI、Augment、OpenCode、Kimi、Kimi K2、Amp、Warp、Ollama、OpenRouter、Synthetic、JetBrains AI、Alibaba、NanoGPT、Infini、Perplexity、Abacus AI、Mistral、OpenCode Go、Kilo、AWS Bedrock、Codebuff、DeepSeek、Windsurf、Manus、小米 MiMo、Doubao、Command Code、Crof、StepFun、Venice、OpenAI API
 - **系统托盘图标** — 动态双条进度显示会话与周用量
+- **Floating Bar** — 可选的置顶透明用量条，支持方向、透明度和点击穿透控制
 - **浏览器 Cookie 导入** — Chrome、Edge、Brave、Firefox（Windows DPAPI 解密）
 - **逐服务商凭据管理** — API Key、Cookie 和 OAuth 均可在服务商详情面板管理
 - **凭据加固** — 应用管理的本地敏感存储会在保存时使用 Windows DPAPI 保护
@@ -25,9 +26,11 @@
 
 ## v0.26.2 更新内容
 
+- 新增可选 Floating Bar：一个置顶透明小条，不打开托盘面板也能查看服务商剩余额度。
+- 新增 Floating Bar 设置：方向、透明度、点击穿透覆盖模式，以及原生托盘菜单开关。
 - 修复 Settings 选项卡中的 Quit 按钮：现在它只关闭 Settings 窗口，并让 CodexBar 继续留在系统托盘中运行。
 - 托盘面板、弹出窗口和原生托盘菜单中的 Quit 仍会在你确实想停止 CodexBar 时退出整个应用。
-- 这样 Settings 的关闭操作与后台托盘服务的退出保持分离。
+- 加固 Floating Bar 设置路径：服务商/设置变化时保持实时更新，并避免 Windows Tauri 创建窗口时的死锁风险。
 
 ## 快速开始
 
