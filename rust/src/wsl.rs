@@ -69,26 +69,26 @@ fn resolve_windows_username(drive_mount: &std::path::Path) -> Option<String> {
         return None;
     }
 
-    if let Ok(wsl_user) = std::env::var("USER") {
-        let candidate = users_dir.join(&wsl_user);
-        if candidate.exists() && candidate.is_dir() && !is_system_user_dir(&wsl_user) {
-            return Some(wsl_user);
-        }
-    }
+    windows_user_from_env(&users_dir).or_else(|| first_windows_profile_dir(&users_dir))
+}
 
-    if let Ok(entries) = std::fs::read_dir(&users_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !is_system_user_dir(&name)
-                && entry.path().is_dir()
-                && entry.path().join("AppData").exists()
-            {
-                return Some(name);
-            }
-        }
-    }
+fn windows_user_from_env(users_dir: &std::path::Path) -> Option<String> {
+    let wsl_user = std::env::var("USER").ok()?;
+    let candidate = users_dir.join(&wsl_user);
+    (candidate.exists() && candidate.is_dir() && !is_system_user_dir(&wsl_user)).then_some(wsl_user)
+}
 
-    None
+fn first_windows_profile_dir(users_dir: &std::path::Path) -> Option<String> {
+    let entries = std::fs::read_dir(users_dir).ok()?;
+    entries
+        .flatten()
+        .find_map(|entry| windows_profile_name(&entry))
+}
+
+fn windows_profile_name(entry: &std::fs::DirEntry) -> Option<String> {
+    let name = entry.file_name().to_string_lossy().to_string();
+    (!is_system_user_dir(&name) && entry.path().is_dir() && entry.path().join("AppData").exists())
+        .then_some(name)
 }
 
 fn is_system_user_dir(name: &str) -> bool {
