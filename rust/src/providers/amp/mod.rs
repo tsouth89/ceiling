@@ -60,46 +60,28 @@ impl AmpProvider {
 
     /// Read Amp/Sourcegraph access token
     async fn read_access_token(&self, ctx: &FetchContext) -> Result<String, ProviderError> {
-        // Check ctx.api_key first (from settings)
-        if let Some(ref api_key) = ctx.api_key
-            && !api_key.is_empty()
-        {
-            return Ok(api_key.clone());
-        }
-
-        // Check environment variables as fallback
-        if let Ok(token) = std::env::var("SRC_ACCESS_TOKEN") {
-            return Ok(token);
-        }
-        if let Ok(token) = std::env::var("AMP_ACCESS_TOKEN") {
+        if let Some(token) = access_token_from_context(ctx) {
             return Ok(token);
         }
 
-        // Check Amp config
-        if let Some(amp_path) = Self::get_amp_config_path() {
-            let config_file = amp_path.join("config.json");
-            if config_file.exists()
-                && let Ok(content) = tokio::fs::read_to_string(&config_file).await
-                && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
-                && let Some(token) = json.get("accessToken").and_then(|v| v.as_str())
-            {
-                return Ok(token.to_string());
-            }
+        if let Some(token) = access_token_from_environment() {
+            return Ok(token);
         }
 
-        // Check Cody/Sourcegraph config
-        if let Some(cody_path) = Self::get_cody_config_path() {
-            let config_file = cody_path.join("config.json");
-            if config_file.exists()
-                && let Ok(content) = tokio::fs::read_to_string(&config_file).await
-                && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
-                && let Some(token) = json.get("accessToken").and_then(|v| v.as_str())
-            {
-                return Ok(token.to_string());
-            }
+        if let Some(token) = Self::read_local_config_token().await {
+            return Ok(token);
         }
 
         Err(ProviderError::AuthRequired)
+    }
+
+    async fn read_local_config_token() -> Option<String> {
+        let amp_token = read_access_token_config(Self::get_amp_config_path()).await;
+        if amp_token.is_some() {
+            return amp_token;
+        }
+
+        read_access_token_config(Self::get_cody_config_path()).await
     }
 
     /// Fetch usage via Sourcegraph API
@@ -198,6 +180,32 @@ impl AmpProvider {
             ))
         }
     }
+}
+
+fn access_token_from_context(ctx: &FetchContext) -> Option<String> {
+    ctx.api_key
+        .as_deref()
+        .filter(|api_key| !api_key.is_empty())
+        .map(str::to_string)
+}
+
+fn access_token_from_environment() -> Option<String> {
+    std::env::var("SRC_ACCESS_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("AMP_ACCESS_TOKEN").ok())
+}
+
+async fn read_access_token_config(config_dir: Option<PathBuf>) -> Option<String> {
+    let config_file = config_dir?.join("config.json");
+    if !config_file.exists() {
+        return None;
+    }
+
+    let content = tokio::fs::read_to_string(config_file).await.ok()?;
+    let json = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    json.get("accessToken")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 impl Default for AmpProvider {
