@@ -32,6 +32,18 @@ struct FactoryUsageWindow {
     allowance: Option<f64>,
 }
 
+impl FactoryUsageWindow {
+    fn percent_used(&self) -> f64 {
+        let used = self.used.unwrap_or(0.0);
+        let allowance = self.allowance.unwrap_or(1.0);
+        if allowance > 0.0 {
+            (used / allowance) * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
 /// Factory auth response
 #[derive(Debug, Deserialize)]
 struct FactoryAuthResponse {
@@ -50,6 +62,16 @@ struct FactoryOrganization {
     tier: Option<String>,
     #[serde(rename = "planName")]
     plan_name: Option<String>,
+}
+
+impl FactoryOrganization {
+    fn login_method(&self) -> String {
+        let tier = self.tier.as_deref().unwrap_or("Droid");
+        match self.plan_name.as_deref().filter(|plan| !plan.is_empty()) {
+            Some(plan) => format!("{tier} ({plan})"),
+            None => tier.to_string(),
+        }
+    }
 }
 
 /// Droid (Factory) provider
@@ -164,71 +186,52 @@ impl FactoryProvider {
     /// Fetch usage via web cookies
     async fn fetch_via_web(&self) -> Result<UsageSnapshot, ProviderError> {
         let cookies = self.get_cookies()?;
-
-        // Fetch auth info and usage in parallel conceptually, but sequentially here
         let auth_info = self.fetch_auth_info(&cookies).await.ok();
         let usage_data = self.fetch_usage_api(&cookies).await?;
 
-        // Calculate standard tokens usage
-        let standard_percent = if let Some(ref standard) = usage_data.standard {
-            let used = standard.used.unwrap_or(0.0);
-            let allowance = standard.allowance.unwrap_or(1.0);
-            if allowance > 0.0 {
-                (used / allowance) * 100.0
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
+        Ok(Self::apply_auth_info(
+            Self::usage_snapshot_from_response(&usage_data),
+            auth_info,
+        ))
+    }
 
-        // Calculate premium tokens usage
-        let premium_percent = if let Some(ref premium) = usage_data.premium {
-            let used = premium.used.unwrap_or(0.0);
-            let allowance = premium.allowance.unwrap_or(1.0);
-            if allowance > 0.0 {
-                (used / allowance) * 100.0
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
+    fn usage_snapshot_from_response(usage_data: &FactoryUsageResponse) -> UsageSnapshot {
+        let standard_percent = usage_data
+            .standard
+            .as_ref()
+            .map(FactoryUsageWindow::percent_used)
+            .unwrap_or(0.0);
 
         let mut usage = UsageSnapshot::new(RateWindow::new(standard_percent));
-
-        // Add premium as secondary
-        if usage_data.premium.is_some() {
-            usage = usage.with_secondary(RateWindow::new(premium_percent));
+        if let Some(premium) = &usage_data.premium {
+            usage = usage.with_secondary(RateWindow::new(premium.percent_used()));
         }
 
-        // Add auth info
-        if let Some(auth) = auth_info {
-            if let Some(user) = auth.user
-                && let Some(email) = user.email
-            {
-                usage = usage.with_email(email);
-            }
-            if let Some(org) = auth.organization {
-                // Build login method from tier and plan
-                let tier = org.tier.unwrap_or_else(|| "Droid".to_string());
-                let plan = org.plan_name.unwrap_or_default();
-                let login_method = if plan.is_empty() {
-                    tier
-                } else {
-                    format!("{} ({})", tier, plan)
-                };
-                usage = usage.with_login_method(login_method);
+        usage
+    }
 
-                if let Some(org_name) = org.name {
-                    usage = usage.with_organization(org_name);
-                }
-            }
-        } else {
-            usage = usage.with_login_method("Droid");
+    fn apply_auth_info(
+        mut usage: UsageSnapshot,
+        auth_info: Option<FactoryAuthResponse>,
+    ) -> UsageSnapshot {
+        let Some(auth) = auth_info else {
+            return usage.with_login_method("Droid");
+        };
+
+        if let Some(user) = auth.user
+            && let Some(email) = user.email
+        {
+            usage = usage.with_email(email);
         }
 
-        Ok(usage)
+        if let Some(org) = auth.organization {
+            usage = usage.with_login_method(org.login_method());
+            if let Some(org_name) = org.name {
+                usage = usage.with_organization(org_name);
+            }
+        }
+
+        usage
     }
 }
 
