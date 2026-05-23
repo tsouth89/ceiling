@@ -89,59 +89,61 @@ pub async fn check_for_updates() -> Option<UpdateInfo> {
 /// When `channel` is `UpdateChannel::Beta`, includes pre-release versions.
 /// When `channel` is `UpdateChannel::Stable`, only considers stable releases.
 pub async fn check_for_updates_with_channel(channel: UpdateChannel) -> Option<UpdateInfo> {
-    let url = match channel {
-        UpdateChannel::Beta => {
-            // For beta, we need to check all releases and find the latest (including pre-releases)
-            format!("https://api.github.com/repos/{}/releases", GITHUB_REPO)
-        }
-        UpdateChannel::Stable => {
-            // For stable, use the /latest endpoint which excludes pre-releases
-            format!(
-                "https://api.github.com/repos/{}/releases/latest",
-                GITHUB_REPO
-            )
-        }
-    };
+    let client = update_client()?;
+    let response = client.get(release_url(channel)).send().await.ok()?;
+    let release = parse_release_response(response, channel).await?;
+    let remote_version = remote_version_from_tag(&release.tag_name);
 
-    let client = reqwest::Client::builder()
-        .user_agent("CodexBar")
-        .build()
-        .ok()?;
-
-    let response = client.get(&url).send().await.ok()?;
-
-    if !response.status().is_success() {
-        tracing::debug!("GitHub API returned status: {}", response.status());
-        return None;
-    }
-
-    // Parse response based on channel
-    let release: GitHubRelease = match channel {
-        UpdateChannel::Beta => {
-            // For beta, we get an array of releases - take the first non-draft one
-            let releases: Vec<GitHubRelease> = response.json().await.ok()?;
-            releases.into_iter().find(|r| !r.draft)?
-        }
-        UpdateChannel::Stable => {
-            // For stable, we get a single release object
-            response.json().await.ok()?
-        }
-    };
-
-    // Parse version from tag (remove 'v' prefix and '-windows' suffix if present)
-    let remote_version = release
-        .tag_name
-        .trim_start_matches('v')
-        .split('-')
-        .next()
-        .unwrap_or(&release.tag_name);
-
-    // Compare versions
     if is_newer_version(remote_version, CURRENT_VERSION) {
         select_release_target(&release)
     } else {
         None
     }
+}
+
+fn release_url(channel: UpdateChannel) -> String {
+    match channel {
+        UpdateChannel::Beta => format!("https://api.github.com/repos/{}/releases", GITHUB_REPO),
+        UpdateChannel::Stable => {
+            format!(
+                "https://api.github.com/repos/{}/releases/latest",
+                GITHUB_REPO
+            )
+        }
+    }
+}
+
+fn update_client() -> Option<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent("CodexBar")
+        .build()
+        .ok()
+}
+
+async fn parse_release_response(
+    response: reqwest::Response,
+    channel: UpdateChannel,
+) -> Option<GitHubRelease> {
+    if !response.status().is_success() {
+        tracing::debug!("GitHub API returned status: {}", response.status());
+        return None;
+    }
+
+    match channel {
+        UpdateChannel::Beta => {
+            let releases: Vec<GitHubRelease> = response.json().await.ok()?;
+            releases.into_iter().find(|r| !r.draft)
+        }
+        UpdateChannel::Stable => response.json().await.ok(),
+    }
+}
+
+fn remote_version_from_tag(tag_name: &str) -> &str {
+    tag_name
+        .trim_start_matches('v')
+        .split('-')
+        .next()
+        .unwrap_or(tag_name)
 }
 
 fn select_release_target(release: &GitHubRelease) -> Option<UpdateInfo> {
