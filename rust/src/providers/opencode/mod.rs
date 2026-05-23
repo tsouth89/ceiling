@@ -261,6 +261,12 @@ impl OpenCodeProvider {
 
     /// Parse a usage window object
     fn parse_window(&self, obj: &Value) -> Option<(f64, i64)> {
+        let percent = Self::window_percent(obj)?;
+        let reset_sec = Self::window_reset_seconds(obj).unwrap_or(0);
+        Some((percent.clamp(0.0, 100.0), reset_sec.max(0)))
+    }
+
+    fn window_percent(obj: &Value) -> Option<f64> {
         let percent_keys = [
             "usagePercent",
             "usedPercent",
@@ -273,6 +279,28 @@ impl OpenCodeProvider {
             "utilization_percent",
             "usage",
         ];
+
+        Self::first_f64(obj, &percent_keys)
+            .map(|val| if val <= 1.0 { val * 100.0 } else { val })
+            .or_else(|| Self::percent_from_used_limit(obj))
+    }
+
+    fn percent_from_used_limit(obj: &Value) -> Option<f64> {
+        let used = obj
+            .get("used")
+            .or(obj.get("usage"))
+            .and_then(|v| v.as_f64());
+        let limit = obj
+            .get("limit")
+            .or(obj.get("total"))
+            .and_then(|v| v.as_f64());
+        match (used, limit) {
+            (Some(used), Some(limit)) if limit > 0.0 => Some((used / limit) * 100.0),
+            _ => None,
+        }
+    }
+
+    fn window_reset_seconds(obj: &Value) -> Option<i64> {
         let reset_in_keys = [
             "resetInSec",
             "resetInSeconds",
@@ -295,56 +323,22 @@ impl OpenCodeProvider {
             "renew_at",
         ];
 
-        let mut percent: Option<f64> = None;
-        for key in percent_keys {
-            if let Some(val) = obj.get(key).and_then(|v| v.as_f64()) {
-                percent = Some(if val <= 1.0 { val * 100.0 } else { val });
-                break;
-            }
-        }
+        Self::first_i64(obj, &reset_in_keys)
+            .or_else(|| Self::reset_at_to_seconds(obj, &reset_at_keys))
+    }
 
-        // Try computing from used/limit
-        if percent.is_none() {
-            let used = obj
-                .get("used")
-                .or(obj.get("usage"))
-                .and_then(|v| v.as_f64());
-            let limit = obj
-                .get("limit")
-                .or(obj.get("total"))
-                .and_then(|v| v.as_f64());
-            if let (Some(u), Some(l)) = (used, limit)
-                && l > 0.0
-            {
-                percent = Some((u / l) * 100.0);
-            }
-        }
+    fn reset_at_to_seconds(obj: &Value, keys: &[&str]) -> Option<i64> {
+        let reset_at = Self::first_i64(obj, keys)?;
+        let now = chrono::Utc::now().timestamp();
+        Some((reset_at - now).max(0))
+    }
 
-        let percent = percent?;
+    fn first_f64(obj: &Value, keys: &[&str]) -> Option<f64> {
+        keys.iter().find_map(|key| obj.get(*key)?.as_f64())
+    }
 
-        // Try reset-in-seconds keys first
-        let mut reset_sec: Option<i64> = None;
-        for key in reset_in_keys {
-            if let Some(val) = obj.get(key).and_then(|v| v.as_i64()) {
-                reset_sec = Some(val);
-                break;
-            }
-        }
-
-        // Fallback: try absolute resetAt keys (epoch seconds)
-        if reset_sec.is_none() {
-            for key in reset_at_keys {
-                if let Some(val) = obj.get(key).and_then(|v| v.as_i64()) {
-                    let now = chrono::Utc::now().timestamp();
-                    reset_sec = Some((val - now).max(0));
-                    break;
-                }
-            }
-        }
-
-        let reset_sec = reset_sec.unwrap_or(0);
-
-        Some((percent.clamp(0.0, 100.0), reset_sec.max(0)))
+    fn first_i64(obj: &Value, keys: &[&str]) -> Option<i64> {
+        keys.iter().find_map(|key| obj.get(*key)?.as_i64())
     }
 
     /// Extract usage via regex patterns
