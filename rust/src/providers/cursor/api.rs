@@ -10,7 +10,7 @@ use serde::Deserialize;
 const BASE_URL: &str = "https://cursor.com";
 const COOKIE_DOMAINS: [&str; 2] = ["cursor.com", "cursor.sh"];
 
-type CursorUsageResult = (
+pub(super) type CursorUsageResult = (
     RateWindow,
     Option<RateWindow>,
     Option<RateWindow>,

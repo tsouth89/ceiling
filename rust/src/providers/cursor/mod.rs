@@ -7,8 +7,8 @@ mod api;
 use async_trait::async_trait;
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    SourceMode, UsageSnapshot,
+    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
+    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 pub use api::CursorApi;
@@ -37,6 +37,60 @@ impl CursorProvider {
             api: CursorApi::new(),
         }
     }
+
+    async fn fetch_usage_parts(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<api::CursorUsageResult, ProviderError> {
+        match ctx.source_mode {
+            SourceMode::Auto | SourceMode::Web => self.fetch_web_usage_parts(ctx).await,
+            SourceMode::Cli | SourceMode::OAuth => {
+                Err(ProviderError::UnsupportedSource(ctx.source_mode))
+            }
+        }
+    }
+
+    async fn fetch_web_usage_parts(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<api::CursorUsageResult, ProviderError> {
+        if let Some(cookie_header) = ctx.manual_cookie_header.as_deref() {
+            self.api.fetch_usage_with_cookie_header(cookie_header).await
+        } else {
+            self.api.fetch_usage().await
+        }
+    }
+
+    fn build_usage_snapshot(
+        primary: RateWindow,
+        secondary: Option<RateWindow>,
+        model_specific: Option<RateWindow>,
+        email: Option<String>,
+        plan_type: Option<String>,
+    ) -> UsageSnapshot {
+        let mut usage = UsageSnapshot::new(primary);
+        if let Some(sec) = secondary {
+            usage = usage.with_secondary(sec);
+        }
+        if let Some(ms) = model_specific {
+            usage = usage.with_model_specific(ms);
+        }
+        if let Some(e) = email {
+            usage = usage.with_email(e);
+        }
+        if let Some(plan) = plan_type {
+            usage = usage.with_login_method(plan);
+        }
+        usage
+    }
+
+    fn build_fetch_result(usage: UsageSnapshot, cost: Option<CostSnapshot>) -> ProviderFetchResult {
+        let mut result = ProviderFetchResult::new(usage, "web");
+        if let Some(c) = cost {
+            result = result.with_cost(c);
+        }
+        result
+    }
 }
 
 impl Default for CursorProvider {
@@ -58,40 +112,16 @@ impl Provider for CursorProvider {
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Fetching Cursor usage via web API");
 
-        let usage_result = match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
-                if let Some(cookie_header) = ctx.manual_cookie_header.as_deref() {
-                    self.api.fetch_usage_with_cookie_header(cookie_header).await
-                } else {
-                    self.api.fetch_usage().await
-                }
-            }
-            SourceMode::Cli | SourceMode::OAuth => {
-                Err(ProviderError::UnsupportedSource(ctx.source_mode))
-            }
-        };
-
-        match usage_result {
+        match self.fetch_usage_parts(ctx).await {
             Ok((primary, secondary, model_specific, cost, email, plan_type)) => {
-                let mut usage = UsageSnapshot::new(primary);
-                if let Some(sec) = secondary {
-                    usage = usage.with_secondary(sec);
-                }
-                if let Some(ms) = model_specific {
-                    usage = usage.with_model_specific(ms);
-                }
-                if let Some(e) = email {
-                    usage = usage.with_email(e);
-                }
-                if let Some(plan) = plan_type {
-                    usage = usage.with_login_method(plan);
-                }
-
-                let mut result = ProviderFetchResult::new(usage, "web");
-                if let Some(c) = cost {
-                    result = result.with_cost(c);
-                }
-                Ok(result)
+                let usage = Self::build_usage_snapshot(
+                    primary,
+                    secondary,
+                    model_specific,
+                    email,
+                    plan_type,
+                );
+                Ok(Self::build_fetch_result(usage, cost))
             }
             Err(e) => {
                 tracing::warn!("Cursor API fetch failed: {}", e);
