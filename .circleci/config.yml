@@ -21,7 +21,14 @@ jobs:
       name: win/default
       size: large
     steps:
-      - checkout
+      - run:
+          name: Checkout code over HTTPS
+          shell: cmd.exe
+          command: |
+            git clone --no-checkout https://github.com/Finesssee/Win-CodexBar.git .
+            if errorlevel 1 exit /b %errorlevel%
+            git checkout %CIRCLE_SHA1%
+            if errorlevel 1 exit /b %errorlevel%
 
       - run:
           name: Install and verify release tools
