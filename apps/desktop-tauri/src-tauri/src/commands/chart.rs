@@ -58,7 +58,22 @@ pub struct ProviderChartData {
 }
 
 #[tauri::command]
-pub fn get_provider_chart_data(
+pub async fn get_provider_chart_data(
+    provider_id: String,
+    account_email: Option<String>,
+) -> ProviderChartData {
+    let fallback_provider_id = provider_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        build_provider_chart_data(provider_id, account_email)
+    })
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!("Provider chart data worker failed: {}", err);
+        ProviderChartData::empty(fallback_provider_id)
+    })
+}
+
+pub(crate) fn build_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
@@ -78,6 +93,18 @@ pub fn get_provider_chart_data(
         credits_history,
         usage_breakdown,
         local_usage,
+    }
+}
+
+impl ProviderChartData {
+    fn empty(provider_id: String) -> Self {
+        Self {
+            provider_id,
+            cost_history: Vec::new(),
+            credits_history: Vec::new(),
+            usage_breakdown: Vec::new(),
+            local_usage: None,
+        }
     }
 }
 

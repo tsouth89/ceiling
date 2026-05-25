@@ -663,7 +663,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
 #[test]
 fn chart_data_for_unknown_provider_is_empty() {
     let data =
-        super::get_provider_chart_data("this-provider-definitely-does-not-exist".into(), None);
+        super::build_provider_chart_data("this-provider-definitely-does-not-exist".into(), None);
     assert_eq!(data.provider_id, "this-provider-definitely-does-not-exist");
     assert!(data.credits_history.is_empty());
     assert!(data.usage_breakdown.is_empty());
@@ -671,7 +671,7 @@ fn chart_data_for_unknown_provider_is_empty() {
 
 #[test]
 fn chart_data_requires_account_email_for_codex() {
-    let data = super::get_provider_chart_data("codex".into(), None);
+    let data = super::build_provider_chart_data("codex".into(), None);
     assert_eq!(data.provider_id, "codex");
     assert!(data.credits_history.is_empty());
     assert!(data.usage_breakdown.is_empty());
