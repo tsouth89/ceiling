@@ -158,10 +158,25 @@ function Install-RustToolchain {
     }
 
     Write-Host "Installing Rust MSVC through Chocolatey rust-ms..."
-    choco install rust-ms --version=$rustVersion -y --no-progress --limit-output
-    if ($LASTEXITCODE -ne 0) {
-        throw "rust-ms install failed with exit code $LASTEXITCODE"
+    $rustJob = Start-Job -ScriptBlock {
+        param([string]$Version)
+        choco install rust-ms --version=$Version -y --no-progress --limit-output
+        if ($LASTEXITCODE -ne 0) {
+            throw "rust-ms install failed with exit code $LASTEXITCODE"
+        }
+    } -ArgumentList $rustVersion
+
+    if (Wait-Job -Job $rustJob -Timeout 180) {
+        Receive-Job -Job $rustJob
+        if ($rustJob.State -ne "Completed") {
+            throw "rust-ms install job ended with state $($rustJob.State)"
+        }
+    } else {
+        Write-Host "rust-ms install exceeded 180s; stopping wrapper and checking installed shims..."
+        Stop-Job -Job $rustJob
+        Receive-Job -Job $rustJob -ErrorAction SilentlyContinue
     }
+    Remove-Job -Job $rustJob -Force
 
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
         [System.Environment]::GetEnvironmentVariable("Path", "User")
