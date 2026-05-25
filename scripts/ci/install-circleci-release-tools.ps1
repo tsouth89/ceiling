@@ -138,9 +138,30 @@ function Install-RustArchive {
     }
 
     Write-Host "Installing $Name..."
-    & tar.exe -xzf $archive -C $extractDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "tar failed extracting $Name with exit code $LASTEXITCODE"
+    $sevenZip = Get-Command "7z.exe" -ErrorAction SilentlyContinue
+    if ($sevenZip) {
+        $tarPath = Join-Path $downloadDir "$Name.tar"
+        if (Test-Path $tarPath) {
+            Remove-Item -Force $tarPath
+        }
+
+        & $sevenZip.Source x $archive "-o$downloadDir" -y -bd -bso0 -bsp0
+        if ($LASTEXITCODE -ne 0) {
+            throw "7z failed decompressing $Name with exit code $LASTEXITCODE"
+        }
+        if (-not (Test-Path $tarPath)) {
+            throw "7z did not create expected tar file $tarPath"
+        }
+
+        & $sevenZip.Source x $tarPath "-o$extractDir" -y -bd -bso0 -bsp0
+        if ($LASTEXITCODE -ne 0) {
+            throw "7z failed extracting $Name tar with exit code $LASTEXITCODE"
+        }
+    } else {
+        & tar.exe -xzf $archive -C $extractDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "tar failed extracting $Name with exit code $LASTEXITCODE"
+        }
     }
 
     $packageDir = Get-ChildItem -Directory $extractDir | Select-Object -First 1
