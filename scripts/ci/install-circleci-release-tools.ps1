@@ -43,10 +43,32 @@ function Install-MinimalRustupToolchain {
     Write-Host "Ensuring minimal Rust MSVC toolchain..."
 
     if (-not (Test-Command "rustup")) {
-        Write-Host "Installing rustup through Chocolatey..."
-        choco install rustup.install --version=1.27.1 -y --no-progress
+        $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
+        $rustupUrl = "https://static.rust-lang.org/rustup/archive/1.27.1/x86_64-pc-windows-msvc/rustup-init.exe"
+        $rustupChecksum = "193d6c727e18734edbf7303180657e96e9d5a08432002b4e6c5bbe77c60cb3e8"
+        $chocoHelpers = Join-Path $env:ChocolateyInstall "helpers\chocolateyInstaller.psm1"
+
+        if (-not (Test-Path $chocoHelpers)) {
+            throw "Chocolatey helper module not found at $chocoHelpers"
+        }
+
+        Import-Module $chocoHelpers -Force
+        Write-Host "Downloading rustup-init through Chocolatey helper..."
+        Get-ChocolateyWebFile `
+            -PackageName "rustup.install" `
+            -FileFullPath $rustupInit `
+            -Url64bit $rustupUrl `
+            -Checksum64 $rustupChecksum `
+            -ChecksumType64 "sha256" | Out-Null
+
+        if (-not (Test-Path $rustupInit)) {
+            throw "rustup-init download did not create $rustupInit"
+        }
+
+        Write-Host "Installing rustup without a default toolchain..."
+        & $rustupInit -y --no-modify-path --profile minimal --default-toolchain none
         if ($LASTEXITCODE -ne 0) {
-            throw "rustup.install failed with exit code $LASTEXITCODE"
+            throw "rustup-init failed with exit code $LASTEXITCODE"
         }
 
         Add-CargoPath
