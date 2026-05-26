@@ -174,9 +174,25 @@ describe("FloatBar", () => {
     const titles = Array.from(container.querySelectorAll(".floatbar__pill")).map(
       (el) => el.getAttribute("title") ?? "",
     );
-    // Highest used (codex, 75%) shows first; remaining percentage shown.
-    expect(titles[0]).toMatch(/Codex: 25% remaining/);
-    expect(titles[1]).toMatch(/Claude: 80% remaining/);
+    // Highest used (codex, 75%) shows first; display follows showAsUsed.
+    expect(titles[0]).toMatch(/Codex: 75% used/);
+    expect(titles[1]).toMatch(/Claude: 20% used/);
+  });
+
+  it("can show remaining percentages when configured", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 20),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ showAsUsed: false }));
+
+    const { container } = renderFloatBar(bootstrap({ showAsUsed: false }));
+
+    await waitFor(() => {
+      const title = container
+        .querySelector(".floatbar__pill")
+        ?.getAttribute("title");
+      expect(title).toContain("Claude: 80% remaining");
+    });
   });
 
   it("applies warning tone when remaining drops below the high threshold", async () => {
@@ -280,7 +296,7 @@ describe("FloatBar", () => {
       const title = container
         .querySelector(".floatbar__pill")
         ?.getAttribute("title");
-      expect(title).toContain("Claude: 80% remaining");
+      expect(title).toContain("Claude: 20% used");
       expect(title).toMatch(/Resets in 3h 4[12]m/);
       expect(title).not.toContain("Resets in due now");
     });
