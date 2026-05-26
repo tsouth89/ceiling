@@ -14,7 +14,7 @@ import MenuSurface, {
   type MenuFooterRow,
 } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
-import ProviderGrid from "../components/ProviderGrid";
+import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import { DEMO_ENABLED, DEMO_PROVIDERS } from "../lib/demoProviders";
 
@@ -86,6 +86,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     initialProviderId,
   );
+  const [gridExpanded, setGridExpanded] = useState(false);
 
   useEffect(() => {
     setSelectedProviderId(initialProviderId);
@@ -108,6 +109,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           .filter((p): p is ProviderUsageSnapshot => p !== undefined);
       }
       // Overview: show all providers (they have data, email, or error), non-error first
+      if (sorted.length + 1 > 32 && !gridExpanded) {
+        return prioritizeProviders(sorted, null).slice(0, 4);
+      }
       const normal = sorted.filter((p) => !p.error);
       const errors = sorted.filter((p) => !!p.error);
       return [...normal, ...errors];
@@ -120,7 +124,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       return [...normal, ...errors];
     }
     return [match];
-  }, [sorted, selectedProviderId]);
+  }, [sorted, selectedProviderId, gridExpanded]);
 
   // Dynamically size the Tauri window to fit content, capped at 800px.
   // The first pass can grow the hidden window for a complete measurement.
@@ -349,6 +353,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         providers={providers}
         selectedProviderId={selectedProviderId}
         showAsUsed={settings.showAsUsed}
+        expanded={gridExpanded}
+        onExpandedChange={setGridExpanded}
         onSelect={handleGridClick}
       />
       <div className="provider-grid__divider" />

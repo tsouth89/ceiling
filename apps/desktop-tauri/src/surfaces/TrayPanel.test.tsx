@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -244,7 +244,7 @@ describe("TrayPanel provider grid", () => {
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("claude", undefined);
   });
 
-  it("renders the full provider catalog in the dense tray grid", async () => {
+  it("collapses and expands the full provider catalog in the dense tray grid", async () => {
     const providers = TEST_PROVIDER_CATALOG.map(([id, displayName], index) =>
       provider(id, displayName, (index * 7) % 100),
     );
@@ -253,16 +253,33 @@ describe("TrayPanel provider grid", () => {
 
     await waitFor(() => {
       expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(
-        providers.length + 1,
+        20,
       );
     });
 
     const grid = container.querySelector(".provider-grid");
     expect(grid?.classList.contains("provider-grid--sparse")).toBe(false);
     expect(grid?.classList.contains("provider-grid--compact")).toBe(true);
+    expect(grid?.getAttribute("data-expanded")).toBe("false");
     expect(grid?.getAttribute("data-provider-count")).toBe(
       String(providers.length + 1),
     );
+    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(4);
+
+    const expand = container.querySelector<HTMLButtonElement>(
+      '.provider-grid__item--more[aria-label="Show all providers"]',
+    );
+    expect(expand).not.toBeNull();
+    expect(expand?.textContent).toContain(`+${providers.length - 18}`);
+
+    fireEvent.click(expand!);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(
+        providers.length + 2,
+      );
+    });
+    expect(grid?.getAttribute("data-expanded")).toBe("true");
     expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(
       providers.length,
     );
@@ -283,6 +300,19 @@ describe("TrayPanel provider grid", () => {
 
     await waitFor(() => {
       expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
+    });
+
+    const expand = container.querySelector<HTMLButtonElement>(
+      '.provider-grid__item--more[aria-label="Show all providers"]',
+    );
+    expect(expand).not.toBeNull();
+
+    fireEvent.click(expand!);
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('.provider-grid__item[title="Copilot"]'),
+      ).not.toBeNull();
     });
 
     const copilot = container.querySelector(

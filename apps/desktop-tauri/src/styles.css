@@ -4755,6 +4755,26 @@ html:has(.menu-surface--tray) {
   height: 3px;
 }
 
+.provider-grid__item--more {
+  color: var(--text-secondary);
+}
+
+.provider-grid__item--more .provider-grid__icon-overview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.10);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.provider-grid__item--more:hover .provider-grid__icon-overview {
+  background: rgba(255, 255, 255, 0.16);
+}
+
 .provider-grid--compact .provider-icon,
 .provider-grid--compact .provider-grid__icon-overview {
   transform: translateY(1px);

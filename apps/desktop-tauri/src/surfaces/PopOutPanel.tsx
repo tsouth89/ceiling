@@ -12,7 +12,7 @@ import MenuSurface, {
   type MenuFooterRow,
 } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
-import ProviderGrid from "../components/ProviderGrid";
+import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { DEMO_ENABLED, DEMO_PROVIDERS } from "../lib/demoProviders";
 
 /** Sort: highest primary used% first, then alphabetical by name. */
@@ -56,6 +56,7 @@ export default function PopOutPanel({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     providerId ?? null,
   );
+  const [gridExpanded, setGridExpanded] = useState(false);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
 
   useEffect(() => {
@@ -64,11 +65,16 @@ export default function PopOutPanel({
 
   const visibleProviders = useMemo(
     () => {
-      if (selectedProviderId === null) return sorted;
+      if (selectedProviderId === null) {
+        if (sorted.length + 1 > 32 && !gridExpanded) {
+          return prioritizeProviders(sorted, null).slice(0, 4);
+        }
+        return sorted;
+      }
       const match = sorted.find((p) => p.providerId === selectedProviderId);
       return match ? [match] : sorted;
     },
-    [sorted, selectedProviderId],
+    [sorted, selectedProviderId, gridExpanded],
   );
 
   const handleGridClick = useCallback((nextProviderId: string | null) => {
@@ -225,6 +231,8 @@ export default function PopOutPanel({
         providers={providers}
         selectedProviderId={selectedProviderId}
         showAsUsed={settings.showAsUsed}
+        expanded={gridExpanded}
+        onExpandedChange={setGridExpanded}
         onSelect={handleGridClick}
       />
       <div className="provider-grid__divider" />
