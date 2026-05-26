@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from "react";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   BootstrapState,
@@ -10,7 +10,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
 import type { LocaleKey } from "../i18n/keys";
-import { closeSettingsWindow, setSurfaceMode } from "../lib/tauri";
+import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
 import GeneralTab from "./settings/tabs/GeneralTab";
 import DisplayTab from "./settings/tabs/DisplayTab";
 import AdvancedTab from "./settings/tabs/AdvancedTab";
@@ -100,15 +100,41 @@ function isSettingsTab(value: string): value is SettingsTab {
 
 const SETTINGS_WINDOW_HEIGHT = 580;
 const SETTINGS_WINDOW_DEFAULT_WIDTH = 496;
-const SETTINGS_WINDOW_PROVIDERS_WIDTH = 720;
+const SETTINGS_WINDOW_PROVIDERS_WIDTH = 600;
 
-function applySettingsWindowSize(tab: SettingsTab) {
-  const width =
+async function applySettingsWindowSize(tab: SettingsTab) {
+  const requestedWidth =
     tab === "providers"
       ? SETTINGS_WINDOW_PROVIDERS_WIDTH
       : SETTINGS_WINDOW_DEFAULT_WIDTH;
-  void getCurrentWindow()
-    .setSize(new LogicalSize(width, SETTINGS_WINDOW_HEIGHT))
+  const workArea = await getWorkAreaRect().catch(() => null);
+  const screenWidth = window.screen.availWidth || window.innerWidth || requestedWidth;
+  const screenHeight = window.screen.availHeight || window.innerHeight || SETTINGS_WINDOW_HEIGHT;
+  const maxWidth = Math.min(workArea?.width ?? screenWidth, screenWidth);
+  const maxHeight = Math.min(workArea?.height ?? screenHeight, screenHeight);
+  const width = Math.max(
+    360,
+    Math.min(requestedWidth, maxWidth - 16),
+  );
+  const height = Math.max(
+    360,
+    Math.min(SETTINGS_WINDOW_HEIGHT, maxHeight - 16),
+  );
+  const win = getCurrentWindow();
+  await win.setSize(new LogicalSize(width, height)).catch(() => {});
+  const screenOrigin = window.screen as Screen & {
+    availLeft?: number;
+    availTop?: number;
+  };
+  const left = screenOrigin.availLeft ?? workArea?.x ?? 0;
+  const top = screenOrigin.availTop ?? workArea?.y ?? 0;
+  await win
+    .setPosition(
+      new LogicalPosition(
+        left + Math.max(8, Math.round((screenWidth - width) / 2)),
+        top + Math.max(8, Math.round((screenHeight - height) / 2)),
+      ),
+    )
     .catch(() => {});
 }
 
@@ -125,7 +151,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
   useEffect(() => {
-    applySettingsWindowSize(initialTab);
+    void applySettingsWindowSize(initialTab);
     // initialTab is captured once on mount; subsequent tab changes are
     // handled by handleTabClick / shellTarget effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,7 +162,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     if (propTab && isSettingsTab(propTab)) {
       setActiveTab((current) => {
         if (current === propTab) return current;
-        applySettingsWindowSize(propTab);
+        void applySettingsWindowSize(propTab);
         return propTab;
       });
     }
@@ -150,7 +176,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     const nextTab: SettingsTab = shellTarget.tab;
     setActiveTab((current) => {
       if (current === nextTab) return current;
-      applySettingsWindowSize(nextTab);
+      void applySettingsWindowSize(nextTab);
       return nextTab;
     });
   }, [shellTarget]);
@@ -158,7 +184,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   const set = (patch: SettingsUpdate) => void update(patch);
   const handleTabClick = useCallback((tab: SettingsTab) => {
     setActiveTab(tab);
-    applySettingsWindowSize(tab);
+    void applySettingsWindowSize(tab);
     // Only transition the main window if we're NOT in the detached settings window
     if (getCurrentWebviewWindow().label !== "settings") {
       void setSurfaceMode("settings", { kind: "settings", tab });

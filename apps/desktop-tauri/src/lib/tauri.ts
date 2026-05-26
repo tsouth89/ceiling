@@ -28,6 +28,7 @@ import type {
   RegionOption,
   SafeDiagnostics,
   CredentialStorageStatus,
+  WorkAreaRect,
 } from "../types/bridge";
 
 export function getBootstrapState(): Promise<BootstrapState> {
@@ -97,6 +98,10 @@ export function getCachedProviders(): Promise<ProviderUsageSnapshot[]> {
 
 export function getSafeDiagnostics(): Promise<SafeDiagnostics> {
   return invoke<SafeDiagnostics>("get_safe_diagnostics");
+}
+
+export function getWorkAreaRect(): Promise<WorkAreaRect> {
+  return invoke<WorkAreaRect>("get_work_area_rect");
 }
 
 export function getCredentialStorageStatus(): Promise<CredentialStorageStatus> {

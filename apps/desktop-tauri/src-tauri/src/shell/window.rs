@@ -49,7 +49,8 @@ pub fn apply_window_layout(
         .map_err(map_err)?;
 
     if props.visible {
-        let size = tauri::LogicalSize::new(props.width, props.height);
+        let (width, height) = capped_logical_size(window, props.width, props.height);
+        let size = tauri::LogicalSize::new(width, height);
         window.set_size(size).map_err(map_err)?;
 
         if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
@@ -67,6 +68,31 @@ pub fn apply_window_layout(
         window.hide().map_err(map_err)?;
         Ok(false)
     }
+}
+
+fn capped_logical_size(window: &WebviewWindow, width: f64, height: f64) -> (f64, f64) {
+    const MARGIN: f64 = 16.0;
+
+    let Some(monitor) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+    else {
+        return (width, height);
+    };
+
+    let scale = monitor.scale_factor();
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let work_area = monitor.work_area();
+    let max_width = (work_area.size.width as f64 / scale - MARGIN).max(320.0);
+    let max_height = (work_area.size.height as f64 / scale - MARGIN).max(240.0);
+
+    (width.min(max_width), height.min(max_height))
 }
 
 /// Make the window visible and give it input focus.

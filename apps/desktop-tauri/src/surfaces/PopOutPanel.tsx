@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
 import { setSurfaceMode, openSettingsWindow, quitApp as quitApplication } from "../lib/tauri";
 import { useProviders } from "../hooks/useProviders";
@@ -26,10 +27,8 @@ function sortProviders(
 }
 
 /**
- * Pop-out window — same card stack as the tray (per upstream parity),
- * just hosted in a detached resizable window with a slightly wider
- * surface variant. If `providerId` is supplied (deep-link) we scroll
- * that card into view, but every provider card is always rendered.
+ * Pop-out window — dashboard shows the full card stack; provider deep-links
+ * show the selected provider only so the target is unambiguous.
  */
 export default function PopOutPanel({
   state,
@@ -56,16 +55,37 @@ export default function PopOutPanel({
     if (!providerId) return ordered;
     const selected = ordered.find((p) => p.providerId === providerId);
     if (!selected) return ordered;
-    return [
-      selected,
-      ...ordered.filter((p) => p.providerId !== providerId),
-    ];
+    return [selected];
   }, [providers, providerId]);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const errorCount = useMemo(
     () => sorted.filter((p) => p.error !== null).length,
     [sorted],
   );
+
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const screenWidth = window.screen.availWidth || window.innerWidth || 420;
+    const screenHeight = window.screen.availHeight || window.innerHeight || 680;
+    const width = Math.max(320, Math.min(420, screenWidth - 16));
+    // Leave room for native borders/title bars on Windows; the body scrolls.
+    const height = Math.max(320, Math.min(680, screenHeight - 88));
+    const screenOrigin = window.screen as Screen & {
+      availLeft?: number;
+      availTop?: number;
+    };
+    const left = screenOrigin.availLeft ?? 0;
+    const top = screenOrigin.availTop ?? 0;
+
+    void win.setSize(new LogicalSize(width, height)).then(() =>
+      win.setPosition(
+        new LogicalPosition(
+          left + Math.max(8, screenWidth - width - 8),
+          top + 8,
+        ),
+      ),
+    ).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!providerId || sorted.length === 0) return;

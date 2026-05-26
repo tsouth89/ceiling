@@ -10,7 +10,7 @@ use crate::proof_harness;
 use crate::state::AppState;
 use crate::surface::{SurfaceMode, SurfaceTransition, WindowProperties};
 use crate::surface_target::SurfaceTarget;
-use crate::window_positioner::{self, Rect};
+use crate::window_positioner::{self, PanelSize, Rect};
 
 use super::geometry::surface_panel_size;
 use super::position::default_surface_position;
@@ -279,6 +279,34 @@ fn current_monitor_work_area(
     ))
 }
 
+fn clamp_current_window_to_work_area(window: &WebviewWindow) {
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let Some((monitor_rect, _scale_factor)) =
+        current_monitor_work_area(window, (position.x, position.y))
+    else {
+        return;
+    };
+    let panel_size = PanelSize {
+        width: size.width,
+        height: size.height,
+    };
+    let (x, y) = window_positioner::clamp_position_to_work_area(
+        position.x,
+        position.y,
+        &monitor_rect,
+        &panel_size,
+        1.0,
+    );
+    if x != position.x || y != position.y {
+        let _ = window.set_position(os_position(window, x, y));
+    }
+}
+
 fn preserved_visible_mode_change_position(
     window: &WebviewWindow,
     resolution: &TransitionResolution,
@@ -384,6 +412,7 @@ fn apply_same_mode_target_update(
     if let Some((x, y)) = position {
         let _ = window.set_position(os_position(window, x, y));
     }
+    clamp_current_window_to_work_area(window);
     // Commit state + emit event before making the window visible so the
     // React frontend renders the correct surface first.
     commit_surface_snapshot(
@@ -431,6 +460,7 @@ pub(super) fn apply_transition(
             if needs_show {
                 let _ = show_window(window);
             }
+            clamp_current_window_to_work_area(window);
 
             proof_harness::sync_after_surface_transition(app);
             Ok(transition.to)

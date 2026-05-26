@@ -109,7 +109,7 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
       {/* ── Keychain access ──────────────────────────────────────── */}
       <section className="settings-section">
         <h3 className="settings-section__title settings-section__title--bold">
-          Keychain access
+          KEYCHAIN ACCESS
         </h3>
         <p className="settings-section__caption">
           Disable all Keychain reads and writes. Browser cookie import is

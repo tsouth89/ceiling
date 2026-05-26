@@ -2,11 +2,12 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
 import { setSurfaceMode, openSettingsWindow, quitApp as quitApplication } from "../lib/tauri";
-import { reanchorTrayPanel } from "../lib/tauri";
+import { getWorkAreaRect, reanchorTrayPanel } from "../lib/tauri";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
 import { useLocale } from "../hooks/useLocale";
+import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import MenuCard from "../components/MenuCard";
 import MenuSurface, {
   MenuEmpty,
@@ -76,14 +77,20 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { updateState, checkNow, download, apply, dismiss, openRelease } =
     useUpdateState();
   const { t } = useLocale();
+  const surfaceTarget = useSurfaceTarget("trayPanel");
 
   const sorted = useMemo(() => sortProviders(providers), [providers]);
+  const initialProviderId =
+    surfaceTarget?.kind === "provider" ? surfaceTarget.providerId : null;
 
   // null = overview (all providers), string = single provider detail
-  // Default to overview like macOS — shows all cards sorted by priority
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
-    null,
+    initialProviderId,
   );
+
+  useEffect(() => {
+    setSelectedProviderId(initialProviderId);
+  }, [initialProviderId]);
 
   // Hide panel during the initial resize+reposition dance so the user
   // doesn't see the window jump around.  Revealed after first layout pass.
@@ -122,7 +129,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   // bounce to max height and back while providers finish refreshing.
   useEffect(() => {
     const TRAY_WIDTH = 310;
-    const MAX_HEIGHT = 920;
+    const MAX_MEASURE_HEIGHT = 920;
     const MIN_HEIGHT = 200;
 
     const resize = async () => {
@@ -130,6 +137,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       const win = getCurrentWindow();
       const surface = document.querySelector<HTMLElement>(".menu-surface--tray");
       if (!surface) return;
+      const workArea = await getWorkAreaRect().catch(() => null);
+      const maxHeight = Math.max(
+        MIN_HEIGHT,
+        Math.min(MAX_MEASURE_HEIGHT, (workArea?.height ?? MAX_MEASURE_HEIGHT) - 16),
+      );
 
       const body = surface.querySelector<HTMLElement>(".menu-surface__body");
       const stack = surface.querySelector<HTMLElement>(".menu-stack");
@@ -156,10 +168,10 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
       try {
         if (!layoutReadyRef.current) {
-          await win.setSize(new LogicalSize(TRAY_WIDTH, MAX_HEIGHT));
+          await win.setSize(new LogicalSize(TRAY_WIDTH, maxHeight));
           for (let i = 0; i < 20; i++) {
             await new Promise<void>((r) => setTimeout(r, 50));
-            if (document.documentElement.clientHeight >= MAX_HEIGHT - 20) break;
+            if (document.documentElement.clientHeight >= maxHeight - 20) break;
           }
         }
 
@@ -185,7 +197,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         }
 
         const contentHeight = Math.ceil(maxBottom - surfaceRect.top) + 4;
-        const height = Math.min(Math.max(contentHeight, MIN_HEIGHT), MAX_HEIGHT);
+        const height = Math.min(Math.max(contentHeight, MIN_HEIGHT), maxHeight);
 
         // Lock surface to measured content height.
         surface.style.maxHeight = `${height}px`;

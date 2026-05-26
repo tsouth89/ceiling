@@ -195,6 +195,13 @@ function formatRelative(updatedAt: string): string {
   return `${diffDay}d ago`;
 }
 
+function displayPlanName(planName: string | null): string | null {
+  if (!planName) return null;
+  const normalized = planName.trim().toLowerCase();
+  if (normalized === "default_claude_ai") return "Claude AI";
+  return planName;
+}
+
 function paceStageKey(stage: PaceSnapshot["stage"]): LocaleKey {
   switch (stage) {
     case "on_track":
@@ -333,6 +340,7 @@ export default function MenuCard({ provider, hideEmail, resetTimeRelative }: Men
       ? maskEmail(provider.accountEmail)
       : provider.accountEmail
     : null;
+  const planName = displayPlanName(provider.planName);
 
   const metrics: MetricEntry[] = [
     { label: provider.primaryLabel ?? t("DetailWindowPrimary"), snap: provider.primary },
@@ -388,8 +396,8 @@ export default function MenuCard({ provider, hideEmail, resetTimeRelative }: Men
             <span className="menu-card__subtitle">
               {t("DetailUpdatedPrefix")} {formatRelative(provider.updatedAt)}
             </span>
-            {provider.planName && (
-              <span className="menu-card__plan-badge">{provider.planName}</span>
+            {planName && (
+              <span className="menu-card__plan-badge">{planName}</span>
             )}
           </div>
         )}

@@ -13,7 +13,8 @@ import {
   type ProviderSidebarStatus,
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
-import { getCachedProviders, reorderProviders } from "../../../lib/tauri";
+import { reorderProviders } from "../../../lib/tauri";
+import { useProviders } from "../../../hooks/useProviders";
 
 interface ProvidersTabProps {
   settings: BootstrapState["settings"];
@@ -29,10 +30,10 @@ export default function ProvidersTab({
   saving,
 }: ProvidersTabProps) {
   const { t } = useLocale();
+  const { providers: snapshots } = useProviders();
   const [selectedId, setSelectedId] = useState<string | null>(
     providers[0]?.id ?? null,
   );
-  const [snapshots, setSnapshots] = useState<ProviderUsageSnapshot[]>([]);
   // Locally-owned catalog order so drag-reorder feels instant before the
   // backend `reorder_providers` round-trip settles.
   const [orderedProviders, setOrderedProviders] =
@@ -41,10 +42,6 @@ export default function ProvidersTab({
   useEffect(() => {
     setOrderedProviders(providers);
   }, [providers]);
-
-  useEffect(() => {
-    void getCachedProviders().then(setSnapshots);
-  }, []);
 
   const enabled = new Set(settings.enabledProviders);
 
@@ -140,7 +137,7 @@ function providerSidebarSubtitle(
     return `${t("ProviderDisabled")} — ${providerSourceHintShort(providerId, t)}`;
   }
   if (!snap) {
-    return t("ProviderNotDetected");
+    return "Waiting for usage";
   }
   const source = snap.sourceLabel || providerSourceHintShort(providerId, t);
   return source;
