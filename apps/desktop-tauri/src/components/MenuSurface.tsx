@@ -88,7 +88,12 @@ export function MenuSummary({
   lastRefresh,
 }: MenuSummaryProps) {
   const { t } = useLocale();
-  const parts: string[] = [`${total} ${t("SummaryProvidersLabel")}`];
+  const providersLabel = t("SummaryProvidersLabel");
+  const providerLabel =
+    total === 1 && providersLabel.toLocaleLowerCase("en-US") === "providers"
+      ? "provider"
+      : providersLabel;
+  const parts: string[] = [`${total} ${providerLabel}`];
   if (isRefreshing) {
     parts.push(t("SummaryRefreshing"));
   } else if (lastRefresh && lastRefresh.errorCount > 0) {

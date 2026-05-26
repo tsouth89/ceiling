@@ -137,6 +137,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       const win = getCurrentWindow();
       const surface = document.querySelector<HTMLElement>(".menu-surface--tray");
       if (!surface) return;
+      const html = document.documentElement;
+      const pageBody = document.body;
       const workArea = await getWorkAreaRect().catch(() => null);
       const maxHeight = Math.max(
         MIN_HEIGHT,
@@ -147,9 +149,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       const stack = surface.querySelector<HTMLElement>(".menu-stack");
 
       const previous = {
-        htmlOverflow: document.documentElement.style.overflow,
-        bodyOverflow: document.body.style.overflow,
-        bodyMinHeight: document.body.style.minHeight,
+        htmlOverflow: html.style.overflow,
+        bodyOverflow: pageBody.style.overflow,
+        bodyMinHeight: pageBody.style.minHeight,
         surfaceMaxHeight: surface.style.maxHeight,
         surfaceOverflow: surface.style.overflow,
         bodyInnerOverflow: body?.style.overflow,
@@ -158,20 +160,27 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       };
       let committedHeight = false;
 
-      document.documentElement.style.overflow = "visible";
-      document.body.style.overflow = "visible";
-      document.body.style.minHeight = "0";
+      html.style.overflow = "visible";
+      pageBody.style.overflow = "visible";
+      pageBody.style.minHeight = "0";
       surface.style.maxHeight = "none";
       surface.style.overflow = "visible";
       if (body) { body.style.overflow = "visible"; body.style.flex = "0 0 auto"; }
       if (stack) { stack.style.overflow = "visible"; }
+
+      const revealPanel = () => {
+        if (run === resizeRunRef.current) {
+          layoutReadyRef.current = true;
+          setLayoutReady(true);
+        }
+      };
 
       try {
         if (!layoutReadyRef.current) {
           await win.setSize(new LogicalSize(TRAY_WIDTH, maxHeight));
           for (let i = 0; i < 20; i++) {
             await new Promise<void>((r) => setTimeout(r, 50));
-            if (document.documentElement.clientHeight >= maxHeight - 20) break;
+            if (html.clientHeight >= maxHeight - 20) break;
           }
         }
 
@@ -206,19 +215,21 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         await win.setSize(new LogicalSize(TRAY_WIDTH, height));
         await reanchorTrayPanel().catch(() => {});
 
-        // First layout pass complete — reveal the panel
-        if (run === resizeRunRef.current) {
-          layoutReadyRef.current = true;
-          setLayoutReady(true);
-        }
+        // First layout pass complete — reveal the panel.
+        revealPanel();
+      } catch (error) {
+        console.warn("CodexBar tray panel resize failed", error);
+        // If Windows refuses a transient resize/reanchor request, prefer a
+        // visible slightly-imperfect panel over an unusable invisible one.
+        revealPanel();
       } finally {
         if (!committedHeight) {
           surface.style.maxHeight = previous.surfaceMaxHeight;
         }
         surface.style.overflow = previous.surfaceOverflow;
-        document.documentElement.style.overflow = previous.htmlOverflow;
-        document.body.style.overflow = previous.bodyOverflow;
-        document.body.style.minHeight = previous.bodyMinHeight;
+        html.style.overflow = previous.htmlOverflow;
+        pageBody.style.overflow = previous.bodyOverflow;
+        pageBody.style.minHeight = previous.bodyMinHeight;
         if (body) {
           body.style.overflow = previous.bodyInnerOverflow ?? "";
           body.style.flex = previous.bodyFlex ?? "";
@@ -233,6 +244,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
     return () => {
       clearTimeout(t0);
+      resizeRunRef.current += 1;
     };
   }, [visibleProviders, providers]);
 
@@ -292,6 +304,15 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       setSelectedProviderId(providerId);
     },
     [],
+  );
+  const gridPercent = useCallback(
+    (provider: ProviderUsageSnapshot) => {
+      const pct = settings.showAsUsed
+        ? provider.primary.usedPercent
+        : provider.primary.remainingPercent;
+      return Math.max(0, Math.min(100, pct));
+    },
+    [settings.showAsUsed],
   );
 
   const banner = (
@@ -365,7 +386,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
               <span
                 className="provider-grid__weekly-track"
                 style={{
-                  "--weekly-pct": `${Math.max(0, Math.min(100, p.primary.remainingPercent))}%`,
+                  "--weekly-pct": `${gridPercent(p)}%`,
                   "--weekly-color": getProviderIcon(p.providerId).brandColor,
                 } as React.CSSProperties}
               />
@@ -389,6 +410,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
                   provider={p}
                   hideEmail={settings.hidePersonalInfo}
                   resetTimeRelative={settings.resetTimeRelative}
+                  showAsUsed={settings.showAsUsed}
+                  compactMetrics={selectedProviderId === null}
                 />
               </div>
             </Fragment>

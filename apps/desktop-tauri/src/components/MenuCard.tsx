@@ -46,6 +46,8 @@ interface MenuCardProps {
   provider: ProviderUsageSnapshot;
   hideEmail: boolean;
   resetTimeRelative: boolean;
+  showAsUsed?: boolean;
+  compactMetrics?: boolean;
 }
 
 function maskEmail(email: string): string {
@@ -247,14 +249,18 @@ function MetricRow({
   snap,
   exhaustedLabel,
   resetTimeRelative,
+  showAsUsed,
 }: {
   title: string;
   snap: RateWindowSnapshot;
   exhaustedLabel: string;
   resetTimeRelative: boolean;
+  showAsUsed: boolean;
 }) {
   const pct = Math.min(100, Math.max(0, snap.usedPercent));
   const remain = 100 - pct;
+  const displayPct = showAsUsed ? pct : remain;
+  const displayLabel = showAsUsed ? "used" : "left";
   const level = levelOf(remain, snap.isExhausted);
   const resetText = useFormattedResetTime(
     snap.resetsAt,
@@ -265,10 +271,10 @@ function MetricRow({
     <div className="menu-metric">
       <span className="menu-metric__title">{title}</span>
       <div className="menu-metric__bar">
-        <div className="menu-metric__bar-fill" data-level={level} style={{ width: `${remain}%` }} />
+        <div className="menu-metric__bar-fill" data-level={level} style={{ width: `${displayPct}%` }} />
       </div>
       <div className="menu-metric__row">
-        <span className="menu-metric__pct">{Math.round(100 - pct)}% left</span>
+        <span className="menu-metric__pct">{Math.round(displayPct)}% {displayLabel}</span>
         {resetText && (
           <span className="menu-metric__reset">{resetText}</span>
         )}
@@ -304,7 +310,13 @@ function MetricRow({
  *
  * Padding: horizontal 16, vertical 2 (matches upstream UsageMenuCardView).
  */
-export default function MenuCard({ provider, hideEmail, resetTimeRelative }: MenuCardProps) {
+export default function MenuCard({
+  provider,
+  hideEmail,
+  resetTimeRelative,
+  showAsUsed = false,
+  compactMetrics = false,
+}: MenuCardProps) {
   const { t } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
   const formattedCostReset = useFormattedResetTime(
@@ -357,6 +369,7 @@ export default function MenuCard({ provider, hideEmail, resetTimeRelative }: Men
   for (const extra of provider.extraRateWindows ?? []) {
     metrics.push({ label: extra.title, snap: extra.window });
   }
+  const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
 
   const hasCostHistory =
     chartData !== null && chartData.costHistory.some((point) => point.value > 0);
@@ -366,16 +379,15 @@ export default function MenuCard({ provider, hideEmail, resetTimeRelative }: Men
     chartData !== null && chartData.usageBreakdown.length > 0;
   const hasCharts = hasCostHistory || hasCreditsHistory || hasUsageBreakdown;
   const demoLocalUsage = localUsageForDemo(provider.providerId);
-  const localUsage = chartData?.localUsage ?? demoLocalUsage;
+  const localUsage = provider.error ? null : chartData?.localUsage ?? demoLocalUsage;
   const localCostHistory = DEMO_ENABLED
     ? costBarsForDemo()
     : chartData?.costHistory ?? [];
-  const hasMetrics = metrics.length > 0;
+  const hasMetrics = visibleMetrics.length > 0;
   const hasCost = !!provider.cost;
   const hasPace = !!provider.pace;
   const hasDetails =
-    (!provider.error && (hasMetrics || hasCost || hasPace || hasCharts)) ||
-    !!localUsage;
+    !provider.error && (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage);
 
   return (
     <article className={`menu-card${provider.error ? " menu-card--error" : ""}`}>
@@ -409,13 +421,14 @@ export default function MenuCard({ provider, hideEmail, resetTimeRelative }: Men
         <div className="menu-card__content">
           {!provider.error && hasMetrics && (
             <section className="menu-card__group menu-card__metrics">
-              {metrics.map((m) => (
+              {visibleMetrics.map((m) => (
                 <MetricRow
                   key={m.label}
                   title={m.label}
                   snap={m.snap}
                   exhaustedLabel={t("DetailWindowExhausted")}
                   resetTimeRelative={resetTimeRelative}
+                  showAsUsed={showAsUsed}
                 />
               ))}
             </section>

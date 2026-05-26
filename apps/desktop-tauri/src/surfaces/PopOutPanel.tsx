@@ -27,8 +27,9 @@ function sortProviders(
 }
 
 /**
- * Pop-out window — dashboard shows the full card stack; provider deep-links
- * show the selected provider only so the target is unambiguous.
+ * Pop-out window — dashboard and provider deep-links both keep the full card
+ * stack. A provider target only scrolls/focuses the requested card so the
+ * layout stays consistent with the tray/menu surface.
  */
 export default function PopOutPanel({
   state,
@@ -51,12 +52,8 @@ export default function PopOutPanel({
   const { t } = useLocale();
 
   const sorted = useMemo(() => {
-    const ordered = sortProviders(providers);
-    if (!providerId) return ordered;
-    const selected = ordered.find((p) => p.providerId === providerId);
-    if (!selected) return ordered;
-    return [selected];
-  }, [providers, providerId]);
+    return sortProviders(providers);
+  }, [providers]);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const errorCount = useMemo(
     () => sorted.filter((p) => p.error !== null).length,
@@ -222,7 +219,6 @@ export default function PopOutPanel({
           <div
             key={p.providerId}
             className="menu-stack__item"
-            data-deeplinked={p.providerId === providerId || undefined}
             ref={(node) => {
               if (node) {
                 cardRefs.current.set(p.providerId, node);
@@ -236,6 +232,7 @@ export default function PopOutPanel({
               provider={p}
               hideEmail={settings.hidePersonalInfo}
               resetTimeRelative={settings.resetTimeRelative}
+              showAsUsed={settings.showAsUsed}
             />
           </div>
         ))}

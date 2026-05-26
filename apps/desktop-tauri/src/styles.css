@@ -1042,6 +1042,10 @@ html {
    user never sees the window jump around.  Once layout is measured and
    the window is anchored in its final position, .tray-panel-reveal--ready
    fades the content in smoothly. */
+html:has(.tray-panel-reveal),
+body:has(.tray-panel-reveal) {
+  background: transparent;
+}
 .tray-panel-reveal {
   opacity: 0;
 }
@@ -2867,6 +2871,9 @@ html {
 .menu-surface--popout {
   width: 100%;
   padding: 6px 10px;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
 }
 
 /* Header bar — small CodexBar wordmark + iconified actions
@@ -2949,6 +2956,45 @@ html {
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+
+.menu-surface--popout .menu-surface__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142, 142, 147, 0.45) transparent;
+}
+
+.menu-surface--popout .menu-surface__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.menu-surface--popout .menu-surface__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.menu-surface--popout .menu-surface__body::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(142, 142, 147, 0.45);
+  background-clip: padding-box;
+}
+
+.menu-surface--popout .menu-stack {
+  flex: 0 0 auto;
+  max-height: none;
+  overflow: visible;
+}
+
+.menu-surface--popout .menu-stack__item,
+.menu-surface--popout .menu-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .menu-surface__empty {
@@ -3299,15 +3345,15 @@ html:has(.menu-surface--tray) {
 .menu-surface--tray .menu-card__charts {
   display: none;
 }
+.menu-surface--tray .menu-card__local-usage {
+  display: none;
+}
 /* Hide cost section in tray — macOS compact popover only shows usage metrics */
 .menu-surface--tray .menu-card__cost,
 .menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
   display: none;
 }
 
-.menu-surface--tray .menu-card__local-usage {
-  gap: 10px;
-}
 .menu-card__local-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3687,12 +3733,6 @@ html:has(.menu-surface--tray) {
   gap: 10px;
 }
 
-/* Subtle outline for a deep-linked card in the pop-out window. */
-.menu-stack__item[data-deeplinked] .menu-card {
-  background: var(--surface-elevated);
-  border-radius: 6px;
-}
-
 /* ════════════════════════════════════════════════════════════════════
  * macOS PARITY OVERLAY  (last cascade — wins over earlier rules)
  *
@@ -3757,6 +3797,9 @@ html:has(.menu-surface--tray) {
   border-radius: 0;
   border: none;
   box-shadow: none;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
 }
 .menu-surface--tray {
   border: 1px solid rgba(255, 255, 255, 0.10);

@@ -484,9 +484,20 @@ fn selected_tray_percents(
         .or_else(|| selected_metric_percent(snapshot, provider, MetricPreference::Automatic))
         .unwrap_or(snapshot.primary.used_percent);
 
-    let secondary = snapshot.secondary.as_ref().map(|w| w.used_percent);
+    let secondary = snapshot
+        .secondary
+        .as_ref()
+        .map(|w| display_metric_percent(w.used_percent, settings.show_as_used));
 
-    (primary, secondary)
+    (
+        display_metric_percent(primary, settings.show_as_used),
+        secondary,
+    )
+}
+
+fn display_metric_percent(used_percent: f64, show_as_used: bool) -> f64 {
+    let used = used_percent.clamp(0.0, 100.0);
+    if show_as_used { used } else { 100.0 - used }
 }
 
 fn selected_metric_percent(
@@ -961,6 +972,28 @@ mod tests {
 
         assert_eq!(primary, 15.0);
         assert_eq!(secondary, Some(20.0));
+    }
+
+    #[test]
+    fn selected_tray_percent_respects_remaining_display_mode() {
+        let mut settings = Settings {
+            show_as_used: false,
+            ..Settings::default()
+        };
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
+        let snapshot = fake_snapshot_with(
+            "cursor",
+            "Cursor",
+            10.0,
+            Some(20.0),
+            Some(72.0),
+            Some((15.0, 100.0)),
+        );
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 85.0);
+        assert_eq!(secondary, Some(80.0));
     }
 
     #[test]

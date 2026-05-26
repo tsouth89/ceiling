@@ -25,19 +25,24 @@ function ProviderPill({
   provider,
   highRemaining,
   critRemaining,
+  showAsUsed,
 }: {
   provider: ProviderUsageSnapshot;
   highRemaining: number;
   critRemaining: number;
+  showAsUsed: boolean;
 }) {
   const remaining = Math.max(0, Math.min(100, provider.primary.remainingPercent));
+  const used = Math.max(0, Math.min(100, provider.primary.usedPercent));
+  const displayPercent = showAsUsed ? used : remaining;
+  const displaySuffix = showAsUsed ? "used" : "remaining";
   const exhausted = provider.primary.isExhausted || provider.error;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (exhausted || remaining <= critRemaining) tone = "crit";
   else if (remaining <= highRemaining) tone = "warn";
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = provider.error ? "—" : `${Math.round(remaining)}%`;
+  const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     provider.primary.resetsAt,
     provider.primary.resetDescription,
@@ -48,7 +53,7 @@ function ProviderPill({
   return (
     <div
       className={`floatbar__pill floatbar__pill--${tone}`}
-      title={`${provider.displayName}: ${label} remaining${resetSuffix}`}
+      title={`${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`}
       style={{ "--brand": brand } as React.CSSProperties}
     >
       <ProviderIcon providerId={provider.providerId} size={11} />
@@ -154,6 +159,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
             provider={p}
             highRemaining={highRemaining}
             critRemaining={critRemaining}
+            showAsUsed={settings.showAsUsed}
           />
         ))
       )}

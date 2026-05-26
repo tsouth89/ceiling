@@ -123,7 +123,7 @@ const ALL_DEMO_PROVIDERS: ProviderUsageSnapshot[] = [
     accountEmail: null,
     sourceLabel: "Cookie",
     updatedAt: now,
-    error: "The operation couldn't be completed. (Swift.CancellationError error 1.)",
+    error: null,
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,
