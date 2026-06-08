@@ -154,25 +154,25 @@ impl CursorApi {
                 if let Some(plan) = &individual.plan {
                     let used_cents = plan.used.unwrap_or(0) as f64;
                     let limit_cents = plan
-                        .breakdown
-                        .as_ref()
-                        .and_then(|b| b.total)
-                        .or(plan.limit)
+                        .limit
+                        .or_else(|| plan.breakdown.as_ref().and_then(|b| b.total))
                         .unwrap_or(0) as f64;
 
-                    let percent = if limit_cents > 0.0 {
+                    let percent = if let Some(percent) = plan.total_percent_used {
+                        percent
+                    } else if limit_cents > 0.0 {
                         (used_cents / limit_cents) * 100.0
                     } else {
-                        plan.total_percent_used.unwrap_or(0.0) * 100.0
+                        0.0
                     };
 
                     let secondary = plan
                         .auto_percent_used
-                        .map(|v| RateWindow::with_details(v * 100.0, None, billing_end, None));
+                        .map(|v| RateWindow::with_details(v, None, billing_end, None));
 
                     let model_specific = plan
                         .api_percent_used
-                        .map(|v| RateWindow::with_details(v * 100.0, None, billing_end, None));
+                        .map(|v| RateWindow::with_details(v, None, billing_end, None));
 
                     let cost = Self::on_demand_cost(individual.on_demand.as_ref(), billing_end)
                         .or_else(|| {
@@ -379,9 +379,9 @@ mod tests {
                 "plan": {
                     "used": 1500,
                     "limit": 5000,
-                    "totalPercentUsed": 0.30,
-                    "autoPercentUsed": 0.20,
-                    "apiPercentUsed": 0.10
+                    "totalPercentUsed": 30.0,
+                    "autoPercentUsed": 20.0,
+                    "apiPercentUsed": 10.0
                 }
             }
         }"#;
@@ -401,6 +401,41 @@ mod tests {
         assert!(ms.resets_at.is_some());
 
         assert!(cost.is_some());
+        assert_eq!(plan_type.as_deref(), Some("Cursor Pro"));
+    }
+
+    #[test]
+    fn test_cursor_build_result_prefers_api_percent_fields() {
+        let json = r#"{
+            "membershipType": "pro",
+            "autoModelSelectedDisplayMessage": "You've used 13% of your included total usage",
+            "individualUsage": {
+                "plan": {
+                    "used": 2000,
+                    "limit": 2000,
+                    "breakdown": {
+                        "included": 2000,
+                        "bonus": 580,
+                        "total": 2580
+                    },
+                    "autoPercentUsed": 17.2,
+                    "apiPercentUsed": 0,
+                    "totalPercentUsed": 13.230769230769232
+                }
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (primary, secondary, model_specific, cost, _, plan_type) =
+            api().build_result(summary, None).unwrap();
+
+        assert!((primary.used_percent - 13.230769230769232).abs() < 0.01);
+        assert!((secondary.unwrap().used_percent - 17.2).abs() < 0.01);
+        assert!((model_specific.unwrap().used_percent - 0.0).abs() < 0.01);
+
+        let cost = cost.expect("plan usage should still produce cost snapshot");
+        assert!((cost.used - 20.0).abs() < 0.01);
+        assert_eq!(cost.limit, Some(20.0));
         assert_eq!(plan_type.as_deref(), Some("Cursor Pro"));
     }
 
@@ -453,7 +488,7 @@ mod tests {
                 "plan": {
                     "used": 800,
                     "limit": 5000,
-                    "totalPercentUsed": 0.16
+                    "totalPercentUsed": 16.0
                 },
                 "onDemand": {
                     "enabled": true,
