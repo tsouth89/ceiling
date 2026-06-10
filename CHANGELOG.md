@@ -4,6 +4,17 @@
 
 ---
 
+## [Windows] 0.32.9 - 2026-06-11
+
+### Fixed
+- Apply Display settings changes to the native tray immediately after saving, including tray metric mode, highest-usage selection, percent icon mode, provider metric preferences, and enabled-provider changes.
+- Make the **Show provider icons** setting affect the tray and pop-out provider switcher grids instead of only being stored.
+- Make **Show percent in tray** render a real numeric tray icon.
+- Make **Tray icon mode** affect native tray status rows by switching between a single summary row and per-provider rows.
+- Shorten native tray tooltip reset text to relative countdowns such as `resets in 2h 05m` and bound long tooltip lines so Windows does not trim provider status text mid-line.
+
+---
+
 ## [Windows] 0.32.8 - 2026-06-09
 
 ### Changed

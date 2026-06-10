@@ -53,7 +53,7 @@ For Claude, browser cookies/sessionKey are preferred because they match Claude's
 
 ## Latest Release
 
-**v0.32.8** fixes Windows background auto-refresh and ships a real installed console CLI for diagnostics while keeping Start Menu shortcuts on the tray app.
+**v0.32.9** fixes tray display settings so changes apply immediately, restores the provider-icon toggle, and shortens native tray tooltip reset text so Windows no longer trims useful status lines.
 
 See the full history in [CHANGELOG.md](CHANGELOG.md).
 
@@ -147,7 +147,7 @@ Installer builds include `codexbar.exe` as the console CLI and `codexbar-desktop
 For local Windows release builds, use the cached release builder:
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.32.8 -SmokeInstall
+.\scripts\windows-release-build.ps1 -Ref v0.32.9 -SmokeInstall
 ```
 
 The script builds the real Tauri release binary plus the console CLI, verifies signed installer dependencies, packages with Inno Setup, writes installer/portable assets, writes SHA-256 sidecars, and can run a silent install/uninstall smoke test.
