@@ -95,7 +95,7 @@ impl VertexAITokenRefresher {
             ));
         }
 
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| RefreshError::NetworkError(e.to_string()))?;

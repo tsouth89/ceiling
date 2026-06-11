@@ -220,7 +220,7 @@ impl AugmentSessionKeepalive {
 
     /// Ping Augment's session endpoint to trigger cookie refresh
     async fn ping_session_endpoint(config: &KeepaliveConfig) -> Result<bool, String> {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(config.refresh_timeout)
             .build()
             .map_err(|e| e.to_string())?;

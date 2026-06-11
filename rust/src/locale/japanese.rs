@@ -1,25 +1,25 @@
 use super::*;
 
 impl LocaleKey {
-    pub(super) fn english(self) -> &'static str {
+    pub(super) fn japanese(self) -> &'static str {
         match self {
             // Tab names
-            LocaleKey::TabGeneral => "General",
-            LocaleKey::TabProviders => "Providers",
-            LocaleKey::TabDisplay => "Display",
+            LocaleKey::TabGeneral => "一般",
+            LocaleKey::TabProviders => "プロバイダー",
+            LocaleKey::TabDisplay => "表示",
             LocaleKey::TabApiKeys => "API Keys",
             LocaleKey::TabCookies => "Cookies",
-            LocaleKey::TabAdvanced => "Advanced",
-            LocaleKey::TabAbout => "About",
-            LocaleKey::TabShortcuts => "Shortcuts",
+            LocaleKey::TabAdvanced => "詳細",
+            LocaleKey::TabAbout => "情報",
+            LocaleKey::TabShortcuts => "ショートカット",
 
             // General settings
-            LocaleKey::InterfaceLanguage => "Interface Language",
-            LocaleKey::StartupSettings => "System",
-            LocaleKey::StartAtLogin => "Start at Login",
-            LocaleKey::StartMinimized => "Start Minimized",
-            LocaleKey::StartAtLoginHelper => "Login automatically after system startup",
-            LocaleKey::StartMinimizedHelper => "Start minimized to system tray",
+            LocaleKey::InterfaceLanguage => "表示言語",
+            LocaleKey::StartupSettings => "システム",
+            LocaleKey::StartAtLogin => "ログイン時に起動",
+            LocaleKey::StartMinimized => "最小化して起動",
+            LocaleKey::StartAtLoginHelper => "システム起動後に自動的にログインします",
+            LocaleKey::StartMinimizedHelper => "システムトレイに最小化して起動します",
 
             // Notification settings
             LocaleKey::ShowNotifications => "Show Notifications",

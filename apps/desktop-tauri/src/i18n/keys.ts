@@ -373,6 +373,7 @@ export const ALL_LOCALE_KEYS = [
   "ShowDebugSettingsHelper",
   "LanguageEnglishOption",
   "LanguageChineseOption",
+  "LanguageJapaneseOption",
   "SectionTheme",
   "ThemeLabel",
   "ThemeHelper",

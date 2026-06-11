@@ -9,6 +9,8 @@ pub enum Language {
     English,
     /// Chinese (Simplified)
     Chinese,
+    /// Japanese
+    Japanese,
 }
 
 impl Language {
@@ -17,12 +19,13 @@ impl Language {
         match self {
             Language::English => "English",
             Language::Chinese => "中文",
+            Language::Japanese => "日本語",
         }
     }
 
     /// Get all available languages
     pub fn all() -> &'static [Language] {
-        &[Language::English, Language::Chinese]
+        &[Language::English, Language::Chinese, Language::Japanese]
     }
 }
 

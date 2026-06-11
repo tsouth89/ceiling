@@ -109,21 +109,36 @@ impl CodexPricing {
 struct ClaudePricing;
 
 impl ClaudePricing {
-    fn cost_usd(model: &str, input: u64, cache_create: u64, cache_read: u64, output: u64) -> f64 {
-        let (input_price, cache_create_price, cache_read_price, output_price) =
-            match model.to_lowercase().as_str() {
-                m if m.contains("opus") => (15.00, 18.75, 1.50, 75.00),
-                m if m.contains("sonnet") => (3.00, 3.75, 0.30, 15.00),
-                m if m.contains("haiku") => (0.25, 0.30, 0.03, 1.25),
-                _ => (3.00, 3.75, 0.30, 15.00), // Default to Sonnet
-            };
+    fn cost_usd_with_cache_ttl(
+        model: &str,
+        input: u64,
+        cache_create: u64,
+        cache_create_1h: u64,
+        cache_read: u64,
+        output: u64,
+    ) -> f64 {
+        let (input_price, cache_create_price, cache_read_price, output_price) = match model
+            .to_lowercase()
+            .as_str()
+        {
+            m if m.contains("fable-5") => (10.00, 12.50, 1.00, 50.00),
+            m if m.contains("opus-4-6") || m.contains("opus_4_6") => (5.00, 6.25, 0.50, 25.00),
+            m if m.contains("sonnet-4-6") || m.contains("sonnet_4_6") => (3.00, 3.75, 0.30, 15.00),
+            m if m.contains("opus") => (15.00, 18.75, 1.50, 75.00),
+            m if m.contains("sonnet") => (3.00, 3.75, 0.30, 15.00),
+            m if m.contains("haiku") => (0.25, 0.30, 0.03, 1.25),
+            _ => (3.00, 3.75, 0.30, 15.00), // Default to Sonnet
+        };
 
+        let cache_create_1h = cache_create_1h.min(cache_create);
+        let cache_create_5m = cache_create.saturating_sub(cache_create_1h);
         let input_cost = (input as f64 / 1_000_000.0) * input_price;
-        let cache_create_cost = (cache_create as f64 / 1_000_000.0) * cache_create_price;
+        let cache_create_cost = (cache_create_5m as f64 / 1_000_000.0) * cache_create_price;
+        let cache_create_1h_cost = (cache_create_1h as f64 / 1_000_000.0) * input_price * 2.0;
         let cache_read_cost = (cache_read as f64 / 1_000_000.0) * cache_read_price;
         let output_cost = (output as f64 / 1_000_000.0) * output_price;
 
-        input_cost + cache_create_cost + cache_read_cost + output_cost
+        input_cost + cache_create_cost + cache_create_1h_cost + cache_read_cost + output_cost
     }
 }
 
@@ -394,6 +409,8 @@ impl CostScanner {
                             .get("cache_creation_input_tokens")
                             .and_then(|t| t.as_u64())
                             .unwrap_or(0);
+                        let cache_create_1h =
+                            claude_one_hour_cache_creation_tokens(usage, cache_create);
                         let cache_read = usage
                             .get("cache_read_input_tokens")
                             .and_then(|t| t.as_u64())
@@ -403,8 +420,14 @@ impl CostScanner {
                         summary.output_tokens += output;
                         summary.cached_tokens += cache_create + cache_read;
 
-                        let cost =
-                            ClaudePricing::cost_usd(model, input, cache_create, cache_read, output);
+                        let cost = ClaudePricing::cost_usd_with_cache_ttl(
+                            model,
+                            input,
+                            cache_create,
+                            cache_create_1h,
+                            cache_read,
+                            output,
+                        );
                         session_cost += cost;
                         has_tokens = true;
 
@@ -427,6 +450,15 @@ impl CostScanner {
             summary.sessions_count += 1;
         }
     }
+}
+
+fn claude_one_hour_cache_creation_tokens(usage: &serde_json::Value, total: u64) -> u64 {
+    usage
+        .get("cache_creation")
+        .and_then(|cache_creation| cache_creation.get("ephemeral_1h_input_tokens"))
+        .and_then(|tokens| tokens.as_u64())
+        .unwrap_or(0)
+        .min(total)
 }
 
 type CodexDays = HashMap<String, HashMap<String, Vec<i32>>>;
@@ -611,8 +643,42 @@ mod tests {
     #[test]
     fn test_claude_pricing() {
         // Test Sonnet pricing: $3/1M input, $15/1M output
-        let cost = ClaudePricing::cost_usd("claude-3-5-sonnet", 1_000_000, 0, 0, 1_000_000);
+        let cost = ClaudePricing::cost_usd_with_cache_ttl(
+            "claude-3-5-sonnet",
+            1_000_000,
+            0,
+            0,
+            0,
+            1_000_000,
+        );
         assert!((cost - 18.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_claude_fable_5_pricing() {
+        let cost = ClaudePricing::cost_usd_with_cache_ttl("claude-fable-5", 100, 10, 0, 20, 5);
+        let expected = (100.0 / 1_000_000.0) * 10.00
+            + (10.0 / 1_000_000.0) * 12.50
+            + (20.0 / 1_000_000.0) * 1.00
+            + (5.0 / 1_000_000.0) * 50.00;
+        assert!((cost - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_claude_one_hour_cache_write_pricing() {
+        let cost = ClaudePricing::cost_usd_with_cache_ttl("claude-fable-5", 100, 30, 20, 20, 5);
+        let expected = (100.0 / 1_000_000.0) * 10.00
+            + (10.0 / 1_000_000.0) * 12.50
+            + (20.0 / 1_000_000.0) * 20.00
+            + (20.0 / 1_000_000.0) * 1.00
+            + (5.0 / 1_000_000.0) * 50.00;
+        assert!((cost - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_claude_sonnet_46_uses_standard_full_context_pricing() {
+        let cost = ClaudePricing::cost_usd_with_cache_ttl("claude-sonnet-4-6", 240_000, 0, 0, 0, 0);
+        assert!((cost - 0.72).abs() < 0.001);
     }
 
     #[test]

@@ -290,7 +290,7 @@ impl OpenCodeUsageFetcher {
     ) -> Result<String, OpenCodeError> {
         let url = Self::build_server_url(&request.server_id, &request.args, &request.method);
 
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
             .map_err(|e| OpenCodeError::NetworkError(e.to_string()))?;

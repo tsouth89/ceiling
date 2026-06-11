@@ -234,7 +234,7 @@ impl ClaudeWebApiFetcher {
     /// Create a new fetcher
     pub fn new() -> Self {
         Self {
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("Failed to create HTTP client"),

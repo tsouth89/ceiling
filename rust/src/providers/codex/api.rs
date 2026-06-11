@@ -24,7 +24,7 @@ pub struct CodexApi {
 impl CodexApi {
     pub fn new() -> Self {
         // Build client with proper TLS settings
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .use_rustls_tls()
             .timeout(std::time::Duration::from_secs(30))
             .build()

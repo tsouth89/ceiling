@@ -44,6 +44,7 @@ fn parse_locale_language(raw: &str) -> Option<Language> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "en" | "en-us" | "english" => Some(Language::English),
         "zh" | "zh-cn" | "zh-hans" | "chinese" | "中文" => Some(Language::Chinese),
+        "ja" | "ja-jp" | "japanese" | "日本語" => Some(Language::Japanese),
         _ => None,
     }
 }
@@ -94,6 +95,14 @@ mod locale_tests {
     }
 
     #[test]
+    fn locale_strings_roundtrip_japanese() {
+        let bundle = locale_strings_for(Language::Japanese);
+        assert_eq!(bundle.language, "japanese");
+        assert_eq!(bundle.entries.get("TabGeneral").copied(), Some("一般"));
+        assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
+    }
+
+    #[test]
     fn locale_strings_contains_every_variant() {
         let bundle = locale_strings_for(Language::English);
         for (_, name) in locale::LocaleKey::ALL {
@@ -125,6 +134,18 @@ mod locale_tests {
         assert!(matches!(
             parse_locale_language("中文"),
             Some(Language::Chinese)
+        ));
+        assert!(matches!(
+            parse_locale_language("ja"),
+            Some(Language::Japanese)
+        ));
+        assert!(matches!(
+            parse_locale_language("Japanese"),
+            Some(Language::Japanese)
+        ));
+        assert!(matches!(
+            parse_locale_language("日本語"),
+            Some(Language::Japanese)
         ));
         assert!(parse_locale_language("klingon").is_none());
     }

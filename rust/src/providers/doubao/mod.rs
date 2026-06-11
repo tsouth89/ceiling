@@ -42,7 +42,7 @@ impl DoubaoProvider {
                 ),
                 status_page_url: None,
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
@@ -61,7 +61,11 @@ impl DoubaoProvider {
         let mut last_error = None;
         for model in PROBE_MODELS {
             match self.probe(api_key, model).await {
-                Ok(snapshot) => return Ok(snapshot),
+                Ok(result) => {
+                    return Ok(self
+                        .confirm_ambiguous_zero_remaining(api_key, model, result)
+                        .await);
+                }
                 Err(error @ ProviderError::AuthRequired) => return Err(error),
                 Err(error) => {
                     last_error = Some(error);
@@ -72,7 +76,38 @@ impl DoubaoProvider {
             .unwrap_or_else(|| ProviderError::Other("All Doubao probe models failed".into())))
     }
 
-    async fn probe(&self, api_key: &str, model: &str) -> Result<UsageSnapshot, ProviderError> {
+    async fn confirm_ambiguous_zero_remaining(
+        &self,
+        api_key: &str,
+        model: &str,
+        initial: DoubaoProbeResult,
+    ) -> UsageSnapshot {
+        if !initial.has_ambiguous_zero_remaining() {
+            return initial.snapshot;
+        }
+
+        match self.probe(api_key, model).await {
+            Ok(confirmation) if confirmation.status == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                initial.snapshot
+            }
+            Ok(confirmation) if confirmation.has_ambiguous_zero_remaining() => snapshot_from_parts(
+                confirmation.remaining,
+                confirmation.limit,
+                confirmation.resets_at,
+                confirmation.total_tokens,
+                false,
+            ),
+            Ok(confirmation) => confirmation.snapshot,
+            Err(error) => {
+                tracing::warn!(
+                    "Doubao zero-remaining confirmation failed; preserving initial exhausted state: {error}"
+                );
+                initial.snapshot
+            }
+        }
+    }
+
+    async fn probe(&self, api_key: &str, model: &str) -> Result<DoubaoProbeResult, ProviderError> {
         let response = self
             .client
             .post(DOUBAO_API_URL)
@@ -100,31 +135,93 @@ impl DoubaoProvider {
 
         let headers = response.headers().clone();
         let body: serde_json::Value = response.json().await.unwrap_or_else(|_| json!({}));
-        Ok(snapshot_from_headers(&headers, &body))
+        Ok(probe_result_from_response(status, &headers, &body))
     }
 }
 
-fn snapshot_from_headers(
+#[derive(Debug)]
+struct DoubaoProbeResult {
+    snapshot: UsageSnapshot,
+    status: reqwest::StatusCode,
+    remaining: Option<i64>,
+    limit: Option<i64>,
+    resets_at: Option<DateTime<Utc>>,
+    total_tokens: Option<i64>,
+    request_limits_reliable: bool,
+}
+
+impl DoubaoProbeResult {
+    fn has_ambiguous_zero_remaining(&self) -> bool {
+        self.status == reqwest::StatusCode::OK
+            && self.request_limits_reliable
+            && self.limit.is_some_and(|limit| limit > 0)
+            && self.remaining == Some(0)
+    }
+}
+
+fn probe_result_from_response(
+    status: reqwest::StatusCode,
     headers: &reqwest::header::HeaderMap,
     body: &serde_json::Value,
-) -> UsageSnapshot {
+) -> DoubaoProbeResult {
     let remaining = int_header(headers, "x-ratelimit-remaining-requests");
     let limit = int_header(headers, "x-ratelimit-limit-requests");
     let resets_at = string_header(headers, "x-ratelimit-reset-requests").and_then(parse_reset_time);
+    let total_tokens = body
+        .get("usage")
+        .and_then(|usage| usage.get("total_tokens"))
+        .and_then(|value| value.as_i64());
+    let request_limits_reliable = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        limit.is_some()
+    } else {
+        limit.is_some() && remaining.is_some()
+    };
+
+    let snapshot = snapshot_from_parts(
+        remaining,
+        limit,
+        resets_at,
+        total_tokens,
+        request_limits_reliable,
+    );
+
+    DoubaoProbeResult {
+        snapshot,
+        status,
+        remaining,
+        limit,
+        resets_at,
+        total_tokens,
+        request_limits_reliable,
+    }
+}
+
+fn snapshot_from_parts(
+    remaining: Option<i64>,
+    limit: Option<i64>,
+    resets_at: Option<DateTime<Utc>>,
+    total_tokens: Option<i64>,
+    request_limits_reliable: bool,
+) -> UsageSnapshot {
+    let effective_remaining = remaining.unwrap_or(0);
 
     let (used_percent, detail) = if let (Some(remaining), Some(limit)) = (remaining, limit) {
-        let used = (limit - remaining).max(0);
+        if request_limits_reliable && limit > 0 {
+            let used = (limit - remaining).max(0);
+            let percent = used as f64 / limit as f64 * 100.0;
+            (percent, format!("{used}/{limit} requests"))
+        } else {
+            (0.0, "Active - check dashboard for details".to_string())
+        }
+    } else if let Some(limit) = limit.filter(|limit| request_limits_reliable && *limit > 0) {
+        let used = (limit - effective_remaining).max(0);
         let percent = if limit > 0 {
             used as f64 / limit as f64 * 100.0
         } else {
             0.0
         };
         (percent, format!("{used}/{limit} requests"))
-    } else if let Some(total_tokens) = body
-        .get("usage")
-        .and_then(|usage| usage.get("total_tokens"))
-        .and_then(|value| value.as_i64())
-    {
+    } else if let Some(total_tokens) = total_tokens {
         (0.0, format!("Active - {total_tokens} tokens observed"))
     } else {
         (0.0, "Active - check dashboard for details".to_string())
@@ -242,7 +339,74 @@ mod tests {
             "x-ratelimit-limit-requests",
             HeaderValue::from_static("100"),
         );
-        let snapshot = snapshot_from_headers(&headers, &json!({}));
+        let snapshot =
+            probe_result_from_response(reqwest::StatusCode::OK, &headers, &json!({})).snapshot;
         assert_eq!(snapshot.primary.used_percent, 75.0);
+    }
+
+    #[test]
+    fn doubao_repeated_successful_zero_remaining_falls_back_to_active() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-ratelimit-remaining-requests",
+            HeaderValue::from_static("0"),
+        );
+        headers.insert(
+            "x-ratelimit-limit-requests",
+            HeaderValue::from_static("1000"),
+        );
+
+        let result = probe_result_from_response(reqwest::StatusCode::OK, &headers, &json!({}));
+        assert!(result.has_ambiguous_zero_remaining());
+
+        let snapshot = snapshot_from_parts(
+            result.remaining,
+            result.limit,
+            result.resets_at,
+            result.total_tokens,
+            false,
+        );
+        assert_eq!(snapshot.primary.used_percent, 0.0);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("Active - check dashboard for details")
+        );
+    }
+
+    #[test]
+    fn doubao_rate_limit_with_limit_header_reports_exhausted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-ratelimit-limit-requests",
+            HeaderValue::from_static("1000"),
+        );
+        let snapshot = probe_result_from_response(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            &json!({}),
+        )
+        .snapshot;
+
+        assert_eq!(snapshot.primary.used_percent, 100.0);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("1000/1000 requests")
+        );
+    }
+
+    #[test]
+    fn doubao_bare_rate_limit_uses_active_fallback() {
+        let snapshot = probe_result_from_response(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &HeaderMap::new(),
+            &json!({}),
+        )
+        .snapshot;
+
+        assert_eq!(snapshot.primary.used_percent, 0.0);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("Active - check dashboard for details")
+        );
     }
 }

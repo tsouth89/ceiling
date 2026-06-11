@@ -48,7 +48,7 @@ impl ElevenLabsProvider {
                 dashboard_url: Some("https://elevenlabs.io/app/settings/api-keys"),
                 status_page_url: Some("https://status.elevenlabs.io"),
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

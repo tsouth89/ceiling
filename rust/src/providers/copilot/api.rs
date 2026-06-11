@@ -39,7 +39,7 @@ pub struct CopilotApi {
 
 impl CopilotApi {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .use_rustls_tls()
             .timeout(std::time::Duration::from_secs(30))
             .build()

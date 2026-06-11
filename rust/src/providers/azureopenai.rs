@@ -58,7 +58,7 @@ impl AzureOpenAIProvider {
         )?;
 
         let body = Self::validation_body(&config.deployment, &config.api_version);
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(1)))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

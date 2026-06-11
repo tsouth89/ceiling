@@ -76,7 +76,7 @@ impl GroqProvider {
                 dashboard_url: Some("https://console.groq.com/settings/metrics"),
                 status_page_url: Some("https://status.groq.com"),
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

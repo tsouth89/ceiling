@@ -70,7 +70,7 @@ impl T3ChatProvider {
 
     async fn fetch_via_web(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let request_context = self.resolve_request_context(ctx)?;
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(1)))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

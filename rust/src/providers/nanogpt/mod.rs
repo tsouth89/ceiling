@@ -159,7 +159,7 @@ impl NanoGPTProvider {
     async fn fetch_usage_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let api_key = Self::get_api_token(ctx.api_key.as_deref())?;
 
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

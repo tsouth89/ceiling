@@ -42,7 +42,7 @@ impl CodebuffProvider {
                 dashboard_url: Some("https://www.codebuff.com/usage"),
                 status_page_url: None,
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
@@ -130,7 +130,7 @@ impl CodebuffProvider {
     }
 
     async fn fetch_subscription(&self, base: &str, api_key: &str) -> Option<Value> {
-        let client = Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(3))
             .build()
             .ok()?;

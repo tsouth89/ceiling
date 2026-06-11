@@ -135,7 +135,7 @@ impl OpenRouterProvider {
     }
 
     fn build_client(timeout: std::time::Duration) -> Result<reqwest::Client, ProviderError> {
-        reqwest::Client::builder()
+        crate::core::credentialed_http_client_builder()
             .timeout(timeout)
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))

@@ -24,7 +24,7 @@ pub struct ClaudeAdminApiFetcher {
 impl ClaudeAdminApiFetcher {
     pub fn new() -> Self {
         Self {
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(20))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

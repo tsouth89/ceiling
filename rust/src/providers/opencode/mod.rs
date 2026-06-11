@@ -48,7 +48,7 @@ impl OpenCodeProvider {
                 dashboard_url: Some("https://opencode.ai"),
                 status_page_url: None,
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

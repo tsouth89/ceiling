@@ -49,7 +49,7 @@ impl VeniceProvider {
                 dashboard_url: Some("https://venice.ai/settings/api"),
                 status_page_url: None,
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

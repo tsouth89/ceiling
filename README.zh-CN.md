@@ -24,6 +24,14 @@
 - **CLI** — `codexbar usage`、`codexbar cost`、`codexbar config` 和本机回环 `codexbar serve`，便于脚本化、本地集成和 CI
 - **WSL 支持** — CLI 开箱即用，桌面壳层通过 WSLg 运行
 
+## v0.33.0 更新内容
+
+- 将上游 CodexBar v0.33.0 的 provider 与成本统计修复移植到 Win-CodexBar。
+- 设置界面新增日语作为可选显示语言。
+- 加固带凭据的 provider HTTP 请求：跨源重定向不会继续沿用 provider 认证上下文。
+- 更新 Claude 本地成本估算，覆盖 Fable 5、Opus 4.6、Sonnet 4.6 与 1 小时 cache write 计价。
+- 修复 Doubao Ark 成功响应里不可靠的 `0 remaining` 请求限制头导致误显示 100% 用尽的问题。
+
 ## v0.32.2 更新内容
 
 - 将上游 CodexBar v0.32.2 的性能优化和托盘 UI 微调移植到 Win-CodexBar。

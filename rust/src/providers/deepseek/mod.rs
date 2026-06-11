@@ -135,7 +135,7 @@ impl DeepSeekProvider {
                 dashboard_url: Some("https://platform.deepseek.com/usage"),
                 status_page_url: Some("https://status.deepseek.com"),
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

@@ -1,5 +1,7 @@
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 use codexbar::settings::Settings;
 use tauri::Manager;

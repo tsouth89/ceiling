@@ -876,6 +876,7 @@ pub(super) fn language_label(language: Language) -> &'static str {
     match language {
         Language::English => "english",
         Language::Chinese => "chinese",
+        Language::Japanese => "japanese",
     }
 }
 

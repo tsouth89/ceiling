@@ -4,6 +4,22 @@
 
 ---
 
+## [Windows] 0.33.0 - 2026-06-11
+
+### Added
+- Add Japanese as a selectable interface language in the Tauri Settings UI.
+
+### Changed
+- Port upstream CodexBar 0.33.0 provider and cost-accounting fixes into the Windows/Tauri Rust backend.
+- Route provider HTTP clients through a shared same-origin redirect policy so credentialed requests do not follow cross-origin redirects with provider auth context.
+- Update Claude local cost pricing for Fable 5, Opus 4.6, Sonnet 4.6, and 1-hour cache writes.
+
+### Fixed
+- Avoid showing Doubao API keys as falsely exhausted when Ark returns successful zero-remaining request-limit headers that are not reliable quota state.
+- Preserve existing Copilot unlimited-chat and Antigravity untracked-quota behavior from the upstream 0.33.0 cycle.
+
+---
+
 ## [Windows] 0.32.9 - 2026-06-11
 
 ### Fixed

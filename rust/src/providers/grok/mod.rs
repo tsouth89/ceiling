@@ -39,7 +39,7 @@ impl GrokProvider {
                 dashboard_url: Some("https://grok.com/?_s=usage"),
                 status_page_url: Some("https://status.x.ai"),
             },
-            client: Client::builder()
+            client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| Client::new()),

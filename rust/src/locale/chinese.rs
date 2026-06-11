@@ -479,6 +479,7 @@ impl LocaleKey {
             LocaleKey::ShowDebugSettingsHelper => "在界面中显示故障排查和开发者相关选项。",
             LocaleKey::LanguageEnglishOption => "English",
             LocaleKey::LanguageChineseOption => "中文",
+            LocaleKey::LanguageJapaneseOption => "日本語",
 
             // Tauri desktop shell — Theme (Phase 12)
             // REVIEW-i18n: ZH translations for Phase 12 theme labels.

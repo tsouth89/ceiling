@@ -125,7 +125,7 @@ impl FactoryProvider {
 
     /// Fetch auth info from Factory API
     async fn fetch_auth_info(&self, cookies: &str) -> Result<FactoryAuthResponse, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
@@ -155,7 +155,7 @@ impl FactoryProvider {
 
     /// Fetch usage from Factory API
     async fn fetch_usage_api(&self, cookies: &str) -> Result<FactoryUsageResponse, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

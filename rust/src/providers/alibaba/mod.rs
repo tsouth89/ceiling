@@ -140,7 +140,7 @@ impl AlibabaProvider {
         let cookies = self.resolve_cookies(ctx)?;
         let cache_key = sec_token_cache_key(region.region_code(), &cookies);
 
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(15)))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

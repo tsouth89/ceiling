@@ -138,7 +138,7 @@ impl AugmentProvider {
     async fn fetch_via_web(&self) -> Result<UsageSnapshot, ProviderError> {
         let token = self.read_auth_token().await?;
 
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

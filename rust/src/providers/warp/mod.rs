@@ -172,7 +172,7 @@ impl WarpProvider {
     }
 
     async fn request_limit_info(api_key: &str) -> Result<GraphQLResponse, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

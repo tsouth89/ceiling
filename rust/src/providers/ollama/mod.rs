@@ -56,7 +56,7 @@ impl OllamaProvider {
     async fn fetch_usage_web(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let cookie_header = self.resolve_cookie_header(ctx)?;
 
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout))
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -142,7 +142,7 @@ impl OllamaProvider {
 
     async fn fetch_usage_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let api_key = Self::resolve_api_key(ctx).ok_or(ProviderError::AuthRequired)?;
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(1)))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

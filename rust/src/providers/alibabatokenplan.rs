@@ -61,7 +61,7 @@ impl AlibabaTokenPlanProvider {
 
     async fn fetch_via_web(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let cookie_header = Self::resolve_cookie_header(ctx)?;
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(1)))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()

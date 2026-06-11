@@ -11,6 +11,7 @@ pub fn get_text(lang: Language, key: LocaleKey) -> &'static str {
     match lang {
         Language::English => key.english(),
         Language::Chinese => key.chinese(),
+        Language::Japanese => key.japanese(),
     }
 }
 
@@ -544,6 +545,7 @@ pub enum LocaleKey {
     ShowDebugSettingsHelper,
     LanguageEnglishOption,
     LanguageChineseOption,
+    LanguageJapaneseOption,
 
     // Tauri desktop shell — Theme (Phase 12)
     SectionTheme,
@@ -685,6 +687,7 @@ pub enum LocaleKey {
 
 mod chinese;
 mod english;
+mod japanese;
 mod keys;
 
 #[cfg(test)]

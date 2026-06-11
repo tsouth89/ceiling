@@ -250,7 +250,7 @@ impl MiniMaxProvider {
         api_key: &str,
         region: MiniMaxRegion,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
@@ -348,7 +348,7 @@ impl MiniMaxProvider {
         cookie_header: &str,
         region: MiniMaxRegion,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;

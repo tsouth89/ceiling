@@ -265,6 +265,7 @@ fn parse_language(s: &str) -> Option<Language> {
     match s {
         "english" => Some(Language::English),
         "chinese" => Some(Language::Chinese),
+        "japanese" => Some(Language::Japanese),
         _ => None,
     }
 }
