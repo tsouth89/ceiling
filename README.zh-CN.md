@@ -24,6 +24,12 @@
 - **CLI** — `codexbar usage`、`codexbar cost`、`codexbar config` 和本机回环 `codexbar serve`，便于脚本化、本地集成和 CI
 - **WSL 支持** — CLI 开箱即用，桌面壳层通过 WSLg 运行
 
+## v0.33.2 更新内容
+
+- 修复托盘面板失焦后不会自动关闭的问题，现在表现更接近标准 Windows 托盘弹窗。
+- 支持按 Escape 关闭托盘面板，不会退出应用。
+- 修复点击托盘图标触发失焦关闭后又立刻重新打开的反弹问题。
+
 ## v0.33.1 更新内容
 
 - 当 GitHub Copilot 返回超额预算时，现在会显示真实百分比，例如 `115% used`，而不是强行压到 `100%`。

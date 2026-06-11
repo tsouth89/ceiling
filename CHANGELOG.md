@@ -1,5 +1,14 @@
 # Changelog
 
+## [Windows] 0.33.2 - 2026-06-12
+
+### Fixed
+- Hide the tray panel when it loses focus, matching normal tray-popover behavior.
+- Allow Escape to dismiss the tray panel without quitting the app.
+- Prevent the tray icon click that caused a blur-dismiss from immediately reopening the panel.
+
+---
+
 ## [Windows] 0.33.1 - 2026-06-11
 
 ### Fixed

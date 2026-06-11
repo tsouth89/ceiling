@@ -53,7 +53,7 @@ For Claude, browser cookies/sessionKey are preferred because they match Claude's
 
 ## Latest Release
 
-**v0.33.1** shows GitHub Copilot over-budget quota values, such as `115% used`, instead of clamping them to `100%` while keeping progress bars visually capped.
+**v0.33.2** fixes tray-panel dismissal so the popover closes on focus loss or Escape, without immediately reopening from the same tray click.
 
 See the full history in [CHANGELOG.md](CHANGELOG.md).
 
@@ -147,7 +147,7 @@ Installer builds include `codexbar.exe` as the console CLI and `codexbar-desktop
 For local Windows release builds, use the cached release builder:
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.33.1 -SmokeInstall
+.\scripts\windows-release-build.ps1 -Ref v0.33.2 -SmokeInstall
 ```
 
 The script builds the real Tauri release binary plus the console CLI, verifies signed installer dependencies, packages with Inno Setup, writes installer/portable assets, writes SHA-256 sidecars, and can run a silent install/uninstall smoke test.
