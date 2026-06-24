@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use crate::core::{CostUsagePricing, ProviderId};
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

@@ -269,13 +269,11 @@ Complete porting of Swift CodexBar features to Rust Windows version:
 - **JSONL Scanner**: Incremental log file parsing with file-level caching for Codex/Claude sessions
 - **OpenAI Dashboard Models**: Usage breakdown and credits data structures
 - **Cookie Header Cache**: Cookie normalization and caching with staleness tracking
-- **Provider Fetch Plan**: Orchestrated fetching with strategy pipelines and fallback logic
 - **Widget Snapshot**: Data export structures for external widget integrations
 - **TTY Command Runner**: Windows-optimized command execution with ConPTY-style features
 
 #### New Providers
 - **Amp Provider**: Sourcegraph/Cody with API token support
-- **Synthetic Provider**: Usage tracking support
 
 #### UI Enhancements
 - **API Keys Tab**: Provider access token configuration UI
@@ -286,7 +284,7 @@ Complete porting of Swift CodexBar features to Rust Windows version:
 - Console window hides automatically in GUI mode
 
 #### New Modules
-`keepalive`, `token_refresher`, `local_storage`, `watchdog`, `usage_pace`, `redactor`, `icon_twist`, `blink`, `device_flow`, `mcp_details`, `scraper`, `command_runner`, `token_accounts`, `credential_migration`, `friendly_errors`, `version`, `weekly_indicator`, `menu_invalidation`, `indicators`, `session_quota`, `cost_pricing`, `jsonl_scanner`, `openai_dashboard`, `cookie_cache`, `fetch_plan`, `widget_snapshot`, `tty_runner`
+`keepalive`, `token_refresher`, `local_storage`, `watchdog`, `usage_pace`, `redactor`, `icon_twist`, `blink`, `device_flow`, `mcp_details`, `scraper`, `command_runner`, `token_accounts`, `credential_migration`, `friendly_errors`, `version`, `weekly_indicator`, `menu_invalidation`, `indicators`, `session_quota`, `cost_pricing`, `jsonl_scanner`, `openai_dashboard`, `cookie_cache`, `widget_snapshot`, `tty_runner`
 
 ### Changed
 - Renamed "Zed AI" to "Zai" across entire codebase (display names, docs, comments)

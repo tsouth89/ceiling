@@ -1,12 +1,8 @@
 //! Core data models and traits
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 mod cost_pricing;
 mod credential_migration;
 mod credentials;
-mod fetch_plan;
 mod http;
 mod jsonl_scanner;
 mod openai_dashboard;
@@ -23,7 +19,6 @@ mod widget_snapshot;
 pub use cost_pricing::*;
 pub use credential_migration::*;
 pub use credentials::*;
-pub use fetch_plan::*;
 pub use http::*;
 pub use jsonl_scanner::*;
 pub use openai_dashboard::*;
