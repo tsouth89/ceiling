@@ -385,7 +385,24 @@ impl Settings {
         Ok(())
     }
 
-    fn start_at_login_command(exe_path: &std::path::Path) -> String {
+    fn start_at_login_exe_path(current_exe: &std::path::Path) -> std::path::PathBuf {
+        if current_exe
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("codexbar.exe"))
+            && let Some(desktop_exe) = current_exe
+                .parent()
+                .map(|dir| dir.join("codexbar-desktop.exe"))
+                .filter(|path| path.exists())
+        {
+            return desktop_exe;
+        }
+
+        current_exe.to_path_buf()
+    }
+
+    fn start_at_login_command(current_exe: &std::path::Path) -> String {
+        let exe_path = Self::start_at_login_exe_path(current_exe);
         format!("\"{}\"", exe_path.display())
     }
 
