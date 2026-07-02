@@ -122,9 +122,24 @@ impl ClaudePricing {
             .as_str()
         {
             m if m.contains("fable-5") => (10.00, 12.50, 1.00, 50.00),
-            m if m.contains("opus-4-6") || m.contains("opus_4_6") => (5.00, 6.25, 0.50, 25.00),
+            // Opus 4.5 and later (4.5/4.6/4.7/4.8) bill at $5/$25. Older Opus
+            // (3, 4.0, 4.1) stay at the legacy $15/$75 in the generic `opus`
+            // arm below. Current-gen IDs are consistently named `opus-4-N`, so
+            // match them explicitly; the generic fallback also correctly keeps
+            // Opus 3 (ID `claude-3-opus-...`) on legacy pricing.
+            m if m.contains("opus-4-5")
+                || m.contains("opus_4_5")
+                || m.contains("opus-4-6")
+                || m.contains("opus_4_6")
+                || m.contains("opus-4-7")
+                || m.contains("opus_4_7")
+                || m.contains("opus-4-8")
+                || m.contains("opus_4_8") =>
+            {
+                (5.00, 6.25, 0.50, 25.00)
+            }
             m if m.contains("sonnet-4-6") || m.contains("sonnet_4_6") => (3.00, 3.75, 0.30, 15.00),
-            m if m.contains("opus") => (15.00, 18.75, 1.50, 75.00),
+            m if m.contains("opus") => (15.00, 18.75, 1.50, 75.00), // legacy Opus 3 / 4.0 / 4.1
             m if m.contains("sonnet") => (3.00, 3.75, 0.30, 15.00),
             m if m.contains("haiku") => (0.25, 0.30, 0.03, 1.25),
             _ => (3.00, 3.75, 0.30, 15.00), // Default to Sonnet
@@ -679,6 +694,43 @@ mod tests {
     fn test_claude_sonnet_46_uses_standard_full_context_pricing() {
         let cost = ClaudePricing::cost_usd_with_cache_ttl("claude-sonnet-4-6", 240_000, 0, 0, 0, 0);
         assert!((cost - 0.72).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_current_gen_opus_uses_5_25_pricing() {
+        // Opus 4.5/4.6/4.7/4.8 bill at $5/1M input + $25/1M output = $30 total,
+        // not the legacy $15/$75. Regression guard for opus-4-7/4-8 previously
+        // falling through to the generic (legacy) Opus arm.
+        for model in [
+            "claude-opus-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+        ] {
+            let cost = ClaudePricing::cost_usd_with_cache_ttl(model, 1_000_000, 0, 0, 0, 1_000_000);
+            assert!(
+                (cost - 30.00).abs() < 0.001,
+                "{model} should bill $30 ($5 in + $25 out), got {cost}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_legacy_opus_keeps_legacy_pricing() {
+        // Opus 3 / 4.0 / 4.1 remain at $15/1M input + $75/1M output = $90.
+        // Note Opus 3's ID is `claude-3-opus-...` (inverted), caught by the
+        // generic `opus` fallback rather than an `opus-4-N` arm.
+        for model in [
+            "claude-3-opus-20240229",
+            "claude-opus-4-1",
+            "claude-opus-4-0",
+        ] {
+            let cost = ClaudePricing::cost_usd_with_cache_ttl(model, 1_000_000, 0, 0, 0, 1_000_000);
+            assert!(
+                (cost - 90.00).abs() < 0.001,
+                "{model} should bill $90 ($15 in + $75 out), got {cost}"
+            );
+        }
     }
 
     #[test]
