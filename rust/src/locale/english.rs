@@ -485,6 +485,15 @@ impl LocaleKey {
             LocaleKey::DisplayModeDetailed => "Detailed",
             LocaleKey::DisplayModeCompact => "Compact",
             LocaleKey::DisplayModeMinimal => "Minimal",
+            LocaleKey::WindowScaleLabel => "Window scale",
+            LocaleKey::WindowScaleHelper => {
+                "Scales the PopOut dashboard contents. The window remains freely resizable."
+            }
+            LocaleKey::WindowScaleAriaLabel => "Window scale",
+            LocaleKey::WindowMinimize => "Minimize",
+            LocaleKey::WindowMaximize => "Maximize",
+            LocaleKey::WindowRestore => "Restore",
+            LocaleKey::WindowClose => "Close",
             LocaleKey::ShowAsUsedLabel => "Show as used",
             LocaleKey::ShowAsUsedHelper => "Display usage bars as consumed rather than remaining.",
             LocaleKey::ShowAllTokenAccountsLabel => "Show all token accounts",

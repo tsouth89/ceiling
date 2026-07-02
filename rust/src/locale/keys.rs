@@ -514,6 +514,13 @@ impl LocaleKey {
         (LocaleKey::DisplayModeDetailed, "DisplayModeDetailed"),
         (LocaleKey::DisplayModeCompact, "DisplayModeCompact"),
         (LocaleKey::DisplayModeMinimal, "DisplayModeMinimal"),
+        (LocaleKey::WindowScaleLabel, "WindowScaleLabel"),
+        (LocaleKey::WindowScaleHelper, "WindowScaleHelper"),
+        (LocaleKey::WindowScaleAriaLabel, "WindowScaleAriaLabel"),
+        (LocaleKey::WindowMinimize, "WindowMinimize"),
+        (LocaleKey::WindowMaximize, "WindowMaximize"),
+        (LocaleKey::WindowRestore, "WindowRestore"),
+        (LocaleKey::WindowClose, "WindowClose"),
         (LocaleKey::ShowAsUsedLabel, "ShowAsUsedLabel"),
         (LocaleKey::ShowAsUsedHelper, "ShowAsUsedHelper"),
         (
