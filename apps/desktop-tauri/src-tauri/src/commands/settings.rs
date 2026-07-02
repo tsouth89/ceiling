@@ -262,12 +262,7 @@ fn parse_update_channel(s: &str) -> Option<UpdateChannel> {
 }
 
 fn parse_language(s: &str) -> Option<Language> {
-    match s {
-        "english" => Some(Language::English),
-        "chinese" => Some(Language::Chinese),
-        "japanese" => Some(Language::Japanese),
-        _ => None,
-    }
+    Language::resolve(s)
 }
 
 #[tauri::command]
