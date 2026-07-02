@@ -272,6 +272,22 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
 static CLAUDE_PRICING: LazyLock<HashMap<&'static str, ClaudePricing>> = LazyLock::new(|| {
     let mut m = HashMap::new();
 
+    // Fable 5
+    m.insert(
+        "claude-fable-5",
+        ClaudePricing {
+            input_cost_per_token: 1e-5,
+            output_cost_per_token: 5e-5,
+            cache_creation_input_cost_per_token: 1.25e-5,
+            cache_read_input_cost_per_token: 1e-6,
+            threshold_tokens: None,
+            input_cost_per_token_above_threshold: None,
+            output_cost_per_token_above_threshold: None,
+            cache_creation_input_cost_per_token_above_threshold: None,
+            cache_read_input_cost_per_token_above_threshold: None,
+        },
+    );
+
     // Haiku 4.5
     m.insert(
         "claude-haiku-4-5",
@@ -335,6 +351,22 @@ static CLAUDE_PRICING: LazyLock<HashMap<&'static str, ClaudePricing>> = LazyLock
     // Opus 4.7 (same pricing as Opus 4.6)
     m.insert(
         "claude-opus-4-7",
+        ClaudePricing {
+            input_cost_per_token: 5e-6,
+            output_cost_per_token: 2.5e-5,
+            cache_creation_input_cost_per_token: 6.25e-6,
+            cache_read_input_cost_per_token: 5e-7,
+            threshold_tokens: None,
+            input_cost_per_token_above_threshold: None,
+            output_cost_per_token_above_threshold: None,
+            cache_creation_input_cost_per_token_above_threshold: None,
+            cache_read_input_cost_per_token_above_threshold: None,
+        },
+    );
+
+    // Opus 4.8 (same pricing as Opus 4.5/4.6/4.7)
+    m.insert(
+        "claude-opus-4-8",
         ClaudePricing {
             input_cost_per_token: 5e-6,
             output_cost_per_token: 2.5e-5,
@@ -617,6 +649,16 @@ impl CostUsagePricing {
         Some(cost)
     }
 
+    /// Base per-token input rate for a Claude model. Exposed for callers that
+    /// need a rate the standard cost function doesn't model — e.g. the usage
+    /// scanner's one-hour cache-write premium, billed at 2x the input rate.
+    pub fn claude_input_cost_per_token(model: &str) -> Option<f64> {
+        let key = Self::normalize_claude_model(model);
+        CLAUDE_PRICING
+            .get(key.as_str())
+            .map(|p| p.input_cost_per_token)
+    }
+
     /// Format model name for display (e.g., "claude-3.5-sonnet" → "Sonnet 3.5")
     pub fn format_model_name(model: &str) -> String {
         let lower = model.to_lowercase();
@@ -708,6 +750,38 @@ mod tests {
     fn test_claude_cost() {
         let cost = CostUsagePricing::claude_cost_usd("claude-haiku-4-5-20251001", 1000, 0, 0, 500);
         assert!(cost.is_some());
+    }
+
+    #[test]
+    fn test_opus_4_8_cost() {
+        // Opus 4.8 bills at $5/1M input + $25/1M output (same tier as 4.5/4.6/4.7).
+        let cost = CostUsagePricing::claude_cost_usd("claude-opus-4-8", 1_000, 0, 0, 500).unwrap();
+        // 1000 * 5e-6 + 500 * 2.5e-5 = 0.005 + 0.0125 = 0.0175
+        assert!((cost - 0.0175).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fable_5_cost() {
+        // Fable 5 bills at $10/1M input + $50/1M output.
+        let cost = CostUsagePricing::claude_cost_usd("claude-fable-5", 1_000, 0, 0, 500).unwrap();
+        // 1000 * 1e-5 + 500 * 5e-5 = 0.01 + 0.025 = 0.035
+        assert!((cost - 0.035).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_claude_input_cost_per_token() {
+        assert_eq!(
+            CostUsagePricing::claude_input_cost_per_token("claude-opus-4-8"),
+            Some(5e-6)
+        );
+        assert_eq!(
+            CostUsagePricing::claude_input_cost_per_token("claude-fable-5"),
+            Some(1e-5)
+        );
+        assert_eq!(
+            CostUsagePricing::claude_input_cost_per_token("totally-unknown-model"),
+            None
+        );
     }
 
     #[test]
