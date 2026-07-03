@@ -57,7 +57,9 @@ For repeat release builds on a Windows server, prefer the cached release script:
 
 It builds from a clean managed checkout but keeps Cargo output, the pnpm store,
 and signed installer bootstrapper downloads in `C:\code\Win-CodexBar-release\cache`.
-Release assets land in `C:\code\Win-CodexBar-release\assets`.
+Release assets land in `C:\code\Win-CodexBar-release\assets`. Keep the
+`.sha256` sidecars; they are the copy/paste source for Winget's
+`InstallerSha256`.
 
 Useful release flags:
 
