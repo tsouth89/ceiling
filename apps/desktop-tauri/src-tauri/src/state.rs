@@ -489,12 +489,8 @@ mod tests {
 
         state.begin_gesture_blur_guard(now);
 
-        assert!(!state.is_gesture_blur_guard_active(
-            now + std::time::Duration::from_secs(15)
-        ));
-        assert!(!state.is_gesture_blur_guard_active(
-            now + std::time::Duration::from_secs(16)
-        ));
+        assert!(!state.is_gesture_blur_guard_active(now + std::time::Duration::from_secs(15)));
+        assert!(!state.is_gesture_blur_guard_active(now + std::time::Duration::from_secs(16)));
     }
 
     #[test]
