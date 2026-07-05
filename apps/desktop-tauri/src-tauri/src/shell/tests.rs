@@ -470,9 +470,9 @@ fn visible_surface_position_without_anchor_prefers_primary_over_offview_current_
     let position = visible_surface_position_for_mode_with_fallbacks(
         SurfaceMode::PopOut,
         Some(&[offview_current, primary]),
-        None,                              // no tray anchor
-        Some(offview_current),             // hidden main window parked off-view
-        Some(((-1288, 8), (1024, 1088))),  // last bounds also off-view
+        None,                             // no tray anchor
+        Some(offview_current),            // hidden main window parked off-view
+        Some(((-1288, 8), (1024, 1088))), // last bounds also off-view
         Some(primary),
     )
     .expect("should resolve a position");
