@@ -146,7 +146,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     100;
   const zoomRow = (
     <div className="menu-surface__footer-row menu-surface__footer-zoom">
-      <span>Zoom</span>
+      <span>{t("PanelZoom")}</span>
       <input
         type="range"
         className="menu-surface__footer-zoom-slider"
@@ -154,7 +154,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         max={TRAY_SCALE_MAX}
         step={TRAY_SCALE_STEP}
         value={trayScaleDraft}
-        aria-label="Zoom"
+        aria-label={t("PanelZoom")}
         onChange={(e) => handleTrayScaleChange(Number(e.target.value))}
         style={{ "--zoom-fill": `${trayScaleFillPercent}%` } as CSSProperties}
       />
@@ -342,10 +342,10 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   ];
 
   const footerRows: MenuFooterRow[] = [
-    { icon: "↻", label: "Refresh", shortcut: "Ctrl+R", onClick: refresh },
-    { icon: "⚙", label: "Settings\u2026", shortcut: "Ctrl+,", onClick: openSettings },
-    { icon: "ⓘ", label: "About CodexBar", onClick: openAbout },
-    { icon: "⌧", label: "Quit", shortcut: "Ctrl+Q", onClick: quitApp },
+    { icon: "↻", label: t("ActionRefresh"), shortcut: "Ctrl+R", onClick: refresh },
+    { icon: "⚙", label: t("MenuSettings"), shortcut: "Ctrl+,", onClick: openSettings },
+    { icon: "ⓘ", label: t("MenuAbout"), onClick: openAbout },
+    { icon: "⌧", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
   ];
 
   // Keyboard shortcuts
@@ -498,7 +498,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
                     <rect x="11.5" y="3" width="2.5" height="11" rx="0.6" fill="currentColor" />
                   </svg>
                 </span>
-                Usage Dashboard
+                {t("ActionUsageDashboard")}
               </button>
             )}
             {HAS_STATUS_PAGE.has(selectedProviderId) && (
@@ -512,7 +512,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
                     <path d="M1 7H4L5.5 3L8 11L10.5 5L12 7H17" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                   </svg>
                 </span>
-                Status Page
+                {t("ActionStatusPage")}
               </button>
             )}
           </div>

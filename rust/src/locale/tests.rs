@@ -45,6 +45,43 @@ fn test_locale_key_japanese() {
 }
 
 #[test]
+fn test_japanese_menu_card_locale_values_are_translated() {
+    let cases = [
+        (LocaleKey::ActionCopyError, "エラーをコピー"),
+        (LocaleKey::DetailWindowPrimary, "プライマリ"),
+        (LocaleKey::DetailWindowSecondary, "セカンダリ"),
+        (LocaleKey::DetailWindowModelSpecific, "モデル別"),
+        (LocaleKey::DetailWindowTertiary, "第3枠"),
+        (LocaleKey::DetailWindowExhausted, "使い切りました"),
+        (LocaleKey::DetailPaceTitle, "ペース"),
+        (LocaleKey::DetailPaceOnTrack, "順調"),
+        (LocaleKey::DetailPaceAhead, "先行"),
+        (LocaleKey::DetailPaceBehind, "遅れ"),
+        (LocaleKey::DetailPaceRunsOutIn, "残り"),
+        (LocaleKey::DetailPaceWillLastToReset, "リセットまで持ちます"),
+        (LocaleKey::DetailCostTitle, "コスト"),
+        (LocaleKey::DetailCostUsed, "使用済み"),
+        (LocaleKey::DetailCostLimit, "上限"),
+        (LocaleKey::DetailCostRemaining, "残り"),
+        (LocaleKey::DetailCostResets, "リセット"),
+        (LocaleKey::DetailChartCost, "コスト（30日間）"),
+        (LocaleKey::DetailChartCredits, "使用クレジット（30日間）"),
+        (
+            LocaleKey::DetailChartUsageBreakdown,
+            "サービス別使用量（30日間）",
+        ),
+        (
+            LocaleKey::DetailChartEmpty,
+            "まだチャートデータはありません。",
+        ),
+    ];
+
+    for (key, expected) in cases {
+        assert_eq!(get_text(Language::Japanese, key), expected, "{key:?}");
+    }
+}
+
+#[test]
 fn test_locale_key_spanish() {
     assert_eq!(
         get_text(Language::Spanish, LocaleKey::TabGeneral),
