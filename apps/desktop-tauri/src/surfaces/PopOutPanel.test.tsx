@@ -215,7 +215,15 @@ describe("PopOutPanel", () => {
       localUsage: null,
     });
     tauriMocks.getLocaleStrings.mockResolvedValue(
-      buildBundle({ SummaryProvidersLabel: "providers" }),
+      buildBundle({
+        PanelAllProviders: "All providers",
+        PanelAllProvidersShort: "All",
+        PanelLeftSuffix: "left",
+        PanelShowAllProviders: "Show all providers",
+        PanelShowFewerProviders: "Show fewer providers",
+        PanelUsedSuffix: "used",
+        SummaryProvidersLabel: "providers",
+      }),
     );
     tauriMocks.openFlyoutWindow.mockResolvedValue(undefined);
     eventMocks.listen.mockResolvedValue(() => {});
@@ -289,6 +297,25 @@ describe("PopOutPanel", () => {
     // itself never resizes or repositions the native window.
     expect(windowMocks.setSize).not.toHaveBeenCalled();
     expect(windowMocks.setPosition).not.toHaveBeenCalled();
+  });
+
+  it("localizes static popout panel footer labels in Japanese", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle(
+        {
+          MenuAbout: "CodexBar について",
+          MenuQuit: "終了",
+          TooltipSettings: "設定",
+        },
+        "japanese",
+      ),
+    );
+
+    renderPopOut([provider("codex", "Codex", 80)]);
+
+    expect(await screen.findByText("設定")).toBeInTheDocument();
+    expect(screen.getByText("CodexBar について")).toBeInTheDocument();
+    expect(screen.getByText("終了")).toBeInTheDocument();
   });
 
   it("renders overview cards in settings catalog order instead of fetch order", async () => {

@@ -92,7 +92,22 @@ function renderCard(
 describe("MenuCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({
+        ActionCopyError: "Copy error",
+        PanelEstimatedFromLocalLogs: "Estimated from local logs",
+        PanelLeftSuffix: "left",
+        PanelNow: "now",
+        PanelOneHour: "1h",
+        PanelFiveHours: "5h",
+        PanelOnPaceBudget: "On-pace budget",
+        PanelReserveSuffix: "in reserve",
+        PanelThirtyDayCost: "30d cost",
+        PanelThirtyDayTokens: "30d tokens",
+        PanelTodayBudget: "today",
+        PanelUsedSuffix: "used",
+      }),
+    );
     tauriMocks.getProviderChartData.mockResolvedValue({
       providerId: "claude",
       costHistory: [{ date: "2026-05-24", value: 1.23 }],

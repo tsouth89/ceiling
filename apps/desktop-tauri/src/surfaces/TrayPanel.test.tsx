@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -214,7 +214,21 @@ describe("TrayPanel provider grid", () => {
       usageBreakdown: [],
       localUsage: null,
     });
-    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({
+        ActionRefresh: "Refresh",
+        MenuAbout: "About CodexBar",
+        MenuQuit: "Quit",
+        MenuSettings: "Settings...",
+        PanelAllProviders: "All providers",
+        PanelAllProvidersShort: "All",
+        PanelLeftSuffix: "left",
+        PanelShowAllProviders: "Show all providers",
+        PanelShowFewerProviders: "Show fewer providers",
+        PanelUsedSuffix: "used",
+        PanelZoom: "Zoom",
+      }),
+    );
     eventMocks.listen.mockImplementation(
       (event: string, handler: (event: { payload: unknown }) => void) => {
         const listeners = eventMocks.listeners.get(event) ?? [];
@@ -288,6 +302,93 @@ describe("TrayPanel provider grid", () => {
     await waitFor(() => {
       expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("localizes static tray panel labels in Japanese", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle(
+        {
+          ActionRefresh: "更新",
+          DetailUpdatedPrefix: "更新",
+          MenuAbout: "CodexBar について",
+          MenuQuit: "終了",
+          MenuSettings: "設定...",
+          PanelAllProviders: "すべてのプロバイダー",
+          PanelAllProvidersShort: "すべて",
+          PanelLatestTokens: "最新トークン",
+          PanelThirtyDayCost: "30日間のコスト",
+          PanelTopModelPrefix: "トップモデル",
+          PanelEstimatedFromLocalLogs: "ローカルログから推定",
+          PanelZoom: "ズーム",
+        },
+        "japanese",
+      ),
+    );
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      providerId: "codex",
+      costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: null,
+        thirtyDayCost: 1.23,
+        thirtyDayTokens: 584_000,
+        latestTokens: 1200,
+        topModel: "gpt-5.5",
+        estimateNote: "Estimated from local logs",
+      },
+    });
+
+    const { container } = renderTrayPanel([provider("codex", "Codex", 35)]);
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('.provider-grid__item[aria-label="すべてのプロバイダー"]'),
+      ).not.toBeNull();
+    });
+    expect(container.querySelector(".provider-grid__item")?.textContent).toContain("すべて");
+    expect(screen.getByText("ズーム")).toBeInTheDocument();
+    expect(screen.getByLabelText("ズーム")).toBeInTheDocument();
+    expect(screen.getByText("更新")).toBeInTheDocument();
+    expect(screen.getByText("設定...")).toBeInTheDocument();
+    expect(screen.getByText("CodexBar について")).toBeInTheDocument();
+    expect(screen.getByText("終了")).toBeInTheDocument();
+    expect(await screen.findByText("30日間のコスト")).toBeInTheDocument();
+    expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("更新");
+    expect(screen.getByText("最新トークン")).toBeInTheDocument();
+    expect(screen.getByText("トップモデル: gpt-5.5")).toBeInTheDocument();
+    expect(screen.getByText("ローカルログから推定")).toBeInTheDocument();
+  });
+
+  it("localizes the expanded dense grid collapse label in Japanese", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle(
+        {
+          PanelAllProviders: "すべてのプロバイダー",
+          PanelAllProvidersShort: "すべて",
+          PanelShowAllProviders: "すべてのプロバイダーを表示",
+          PanelShowFewerProviders: "表示を減らす",
+        },
+        "japanese",
+      ),
+    );
+    const providers = TEST_PROVIDER_CATALOG.map(([id, displayName], index) =>
+      provider(id, displayName, (index * 7) % 100),
+    );
+
+    const { container } = renderTrayPanel(providers);
+
+    await waitFor(() => {
+      expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
+    });
+
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        '.provider-grid__item--more[aria-label="すべてのプロバイダーを表示"]',
+      )!,
+    );
+
+    expect(await screen.findByText("表示を減らす")).toBeInTheDocument();
   });
 
   it.each([

@@ -161,8 +161,8 @@ export default function PopOutPanel({
 
   const footerRows: MenuFooterRow[] = [
     { icon: "⚙", label: t("TooltipSettings"), shortcut: "Ctrl+,", onClick: openSettings },
-    { icon: "ℹ", label: "About CodexBar", onClick: openAbout },
-    { icon: "✕", label: "Quit", shortcut: "Ctrl+Q", onClick: quitApp },
+    { icon: "ℹ", label: t("MenuAbout"), onClick: openAbout },
+    { icon: "✕", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
   ];
 
   // Keyboard shortcuts

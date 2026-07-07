@@ -2,6 +2,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
+import { useLocale } from "../hooks/useLocale";
 
 export default function ProviderGrid({
   providers,
@@ -29,6 +30,7 @@ export default function ProviderGrid({
   /** Called on mouseup or dragend of a draggable item (drag finished or canceled). */
   onGestureEnd?: () => void;
 }) {
+  const { t } = useLocale();
   const [uncontrolledExpanded, setUncontrolledExpanded] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -91,10 +93,10 @@ export default function ProviderGrid({
         type="button"
         className={`provider-grid__item${selectedProviderId === null ? " provider-grid__item--active" : ""}`}
         onClick={() => onSelect(null)}
-        aria-label="All providers"
+        aria-label={t("PanelAllProviders")}
       >
         {showProviderIcons && <span className="provider-grid__icon-overview">⊞</span>}
-        <span className="provider-grid__label">All</span>
+        <span className="provider-grid__label">{t("PanelAllProvidersShort")}</span>
       </button>
       {visibleProviders.map((p) => (
         <button
@@ -160,7 +162,7 @@ export default function ProviderGrid({
           type="button"
           className="provider-grid__item provider-grid__item--more"
           onClick={() => setExpanded(!isExpanded)}
-          aria-label={isExpanded ? "Show fewer providers" : "Show all providers"}
+          aria-label={isExpanded ? t("PanelShowFewerProviders") : t("PanelShowAllProviders")}
           aria-expanded={isExpanded}
         >
           {showProviderIcons && (
@@ -169,7 +171,7 @@ export default function ProviderGrid({
             </span>
           )}
           <span className="provider-grid__label">
-            {isExpanded ? "Less" : `+${hiddenCount}`}
+            {isExpanded ? t("PanelShowFewerProviders") : `+${hiddenCount}`}
           </span>
         </button>
       )}

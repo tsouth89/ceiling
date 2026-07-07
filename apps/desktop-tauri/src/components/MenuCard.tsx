@@ -19,6 +19,7 @@ import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
+  const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(text).catch(() => {});
@@ -30,8 +31,8 @@ function CopyIconButton({ text }: { text: string }) {
       type="button"
       className="menu-card__copy-btn"
       onClick={handleCopy}
-      aria-label={copied ? "Copied" : "Copy error"}
-      title={copied ? "Copied" : "Copy error"}
+      aria-label={copied ? t("PanelCopied") : t("ActionCopyError")}
+      title={copied ? t("PanelCopied") : t("ActionCopyError")}
     >
       {copied ? "✓" : (
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -86,6 +87,7 @@ function LocalUsageBlock({
   summary: ProviderLocalUsageSummary;
   costHistory: DailyCostPoint[];
 }) {
+  const { t } = useLocale();
   const isCodex = providerId === "codex";
   const visibleHistory = costHistory
     .slice(-30)
@@ -96,7 +98,7 @@ function LocalUsageBlock({
     <section className="menu-card__group menu-card__local-usage">
       <div className="menu-card__local-grid">
         <div>
-          <span className="menu-card__local-label">Today</span>
+          <span className="menu-card__local-label">{t("PanelToday")}</span>
           <strong>
             {summary.todayCost != null
               ? formatCurrency(summary.todayCost, "USD")
@@ -104,7 +106,7 @@ function LocalUsageBlock({
           </strong>
         </div>
         <div>
-          <span className="menu-card__local-label">30d cost</span>
+          <span className="menu-card__local-label">{t("PanelThirtyDayCost")}</span>
           <strong>
             {summary.thirtyDayCost != null
               ? formatCurrency(summary.thirtyDayCost, "USD")
@@ -112,17 +114,17 @@ function LocalUsageBlock({
           </strong>
         </div>
         <div>
-          <span className="menu-card__local-label">30d tokens</span>
+          <span className="menu-card__local-label">{t("PanelThirtyDayTokens")}</span>
           <strong>{formatCompactCount(summary.thirtyDayTokens)}</strong>
         </div>
         <div>
-          <span className="menu-card__local-label">Latest tokens</span>
+          <span className="menu-card__local-label">{t("PanelLatestTokens")}</span>
           <strong>{formatCompactCount(summary.latestTokens)}</strong>
         </div>
       </div>
 
       {isCodex && visibleHistory.length > 0 && (
-        <div className="menu-card__local-chart" aria-label="30 day cost histogram">
+        <div className="menu-card__local-chart" aria-label={t("PanelThirtyDayCostHistogram")}>
           {visibleHistory.map((point, index) => (
             <span
               key={`${point.date}-${index}`}
@@ -136,8 +138,12 @@ function LocalUsageBlock({
       )}
 
       <div className="menu-card__local-note">
-        {summary.topModel && <strong>Top model: {summary.topModel}</strong>}
-        <span>{summary.estimateNote}</span>
+        {summary.topModel && <strong>{t("PanelTopModelPrefix")}: {summary.topModel}</strong>}
+        <span>
+          {summary.estimateNote === "Estimated from local logs"
+            ? t("PanelEstimatedFromLocalLogs")
+            : summary.estimateNote}
+        </span>
       </div>
     </section>
   );
@@ -253,12 +259,13 @@ function MetricRow({
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
+  const { t } = useLocale();
   const usedPct = Number.isFinite(snap.usedPercent) ? Math.max(0, snap.usedPercent) : 0;
   const barPct = Math.min(100, usedPct);
   const remain = 100 - usedPct;
   const displayPct = showAsUsed ? usedPct : Math.max(0, remain);
   const barDisplayPct = showAsUsed ? barPct : Math.max(0, Math.min(100, remain));
-  const displayLabel = showAsUsed ? "used" : "left";
+  const displayLabel = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
   const level = levelOf(remain, snap.isExhausted);
   const resetText = useFormattedResetTime(
     snap.resetsAt,
@@ -291,15 +298,15 @@ function MetricRow({
             onClick={onToggleExpanded}
             aria-expanded={expanded}
           >
-            <span>On-pace budget</span>
+            <span>{t("PanelOnPaceBudget")}</span>
             {snap.reserveDescription && <span>{snap.reserveDescription}</span>}
           </button>
           <div className="menu-metric__budget-pills">
             {[
-              ["now", paceView.budget.now],
-              ["1h", paceView.budget.nextHour],
-              ["5h", paceView.budget.nextFiveHours],
-              ["today", paceView.budget.today],
+              [t("PanelNow"), paceView.budget.now],
+              [t("PanelOneHour"), paceView.budget.nextHour],
+              [t("PanelFiveHours"), paceView.budget.nextFiveHours],
+              [t("PanelTodayBudget"), paceView.budget.today],
             ].map(([label, value]) => (
               <span className="menu-metric__budget-pill" key={String(label)}>
                 {label} {formatBudget(Number(value))}%
@@ -311,7 +318,7 @@ function MetricRow({
       )}
       {paceView.kind === "reserve" && (
         <div className="menu-metric__row menu-metric__reserve">
-          <span className="menu-metric__pct">{Math.round(paceView.percent)}% in reserve</span>
+          <span className="menu-metric__pct">{Math.round(paceView.percent)}% {t("PanelReserveSuffix")}</span>
           {paceView.description && (
             <span className="menu-metric__reset">{paceView.description}</span>
           )}
@@ -552,13 +559,13 @@ export default function MenuCard({
                 </span>
               </div>
               <div className="menu-card__pace-bars">
-                <div className="menu-card__pace-track" title="Expected">
+                <div className="menu-card__pace-track" title={t("PanelExpected")}>
                   <div
                     className="menu-card__pace-fill menu-card__pace-fill--expected"
                     style={{ width: `${provider.pace.expectedUsedPercent.toFixed(1)}%` }}
                   />
                 </div>
-                <div className="menu-card__pace-track" title="Actual">
+                <div className="menu-card__pace-track" title={t("PanelActual")}>
                   <div
                     className="menu-card__pace-fill"
                     data-pace={paceCategory(provider.pace.stage)}
