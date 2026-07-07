@@ -165,6 +165,7 @@ Last30DaysCost = Last 30 days: ${ "{:.2}" }
 StatusLabel = Status: { "{}" }
 TrayOpenCodexBar = Pop Out Dashboard
 TrayPopOutDashboard = Pop Out Dashboard
+TrayShowWindow = Show Window
 TrayShowFloatBar = Show Float Bar
 TrayRefreshAll = Refresh All
 TrayProviders = Providers

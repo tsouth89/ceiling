@@ -165,6 +165,7 @@ Last30DaysCost = Últimos 30 días: ${ "{:.2}" }
 StatusLabel = Estado: { "{}" }
 TrayOpenCodexBar = Abrir panel
 TrayPopOutDashboard = Abrir panel
+TrayShowWindow = Mostrar ventana
 TrayShowFloatBar = Mostrar barra flotante
 TrayRefreshAll = Actualizar todo
 TrayProviders = Proveedores

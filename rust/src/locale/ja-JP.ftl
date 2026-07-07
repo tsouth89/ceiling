@@ -165,6 +165,7 @@ Last30DaysCost = Last 30 days: ${ "{:.2}" }
 StatusLabel = Status: { "{}" }
 TrayOpenCodexBar = ダッシュボードを開く
 TrayPopOutDashboard = ダッシュボードを開く
+TrayShowWindow = ウィンドウを表示
 TrayShowFloatBar = フロートバーを表示
 TrayRefreshAll = すべて更新
 TrayProviders = プロバイダー

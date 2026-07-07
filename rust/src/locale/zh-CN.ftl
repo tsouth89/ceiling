@@ -165,6 +165,7 @@ Last30DaysCost = 近 30 天：${ "{:.2}" }
 StatusLabel = 状态：{ "{}" }
 TrayOpenCodexBar = 弹出仪表盘
 TrayPopOutDashboard = 弹出仪表盘
+TrayShowWindow = 显示窗口
 TrayShowFloatBar = 显示浮动栏
 TrayRefreshAll = 刷新全部
 TrayProviders = 服务商

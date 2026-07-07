@@ -370,6 +370,7 @@ locale_keys! {
     // Tray - Single icon mode
     TrayOpenCodexBar,
     TrayPopOutDashboard,
+    TrayShowWindow,
     TrayShowFloatBar,
     TrayRefreshAll,
     TrayProviders,
