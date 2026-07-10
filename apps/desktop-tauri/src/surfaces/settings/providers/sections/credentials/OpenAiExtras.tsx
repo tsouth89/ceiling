@@ -117,6 +117,13 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
           placeholder: "org/acme",
           help: "Used with the saved bearer token for Devin billing quota usage.",
         };
+      case "opencodego":
+        return {
+          title: t("OpenCodeGoWorkspaceTitle"),
+          label: t("OpenCodeGoWorkspaceLabel"),
+          placeholder: "wrk_...",
+          help: t("OpenCodeGoWorkspaceHelp"),
+        };
       case "zed":
         return {
           title: "Zed API",
