@@ -217,55 +217,12 @@ export interface SettingsSnapshot {
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
+  /** When true, scan and render local cost summaries. */
+  floatBarShowCost?: boolean;
 }
 
 /** Partial settings object — only include fields you want to change. */
-export interface SettingsUpdate {
-  enabledProviders?: string[];
-  refreshIntervalSecs?: number;
-  refreshAllProvidersOnMenuOpen?: boolean;
-  startAtLogin?: boolean;
-  startMinimized?: boolean;
-  showNotifications?: boolean;
-  soundEnabled?: boolean;
-  soundVolume?: number;
-  highUsageThreshold?: number;
-  criticalUsageThreshold?: number;
-  trayIconMode?: TrayIconMode;
-  switcherShowsIcons?: boolean;
-  menuBarShowsHighestUsage?: boolean;
-  menuBarShowsPercent?: boolean;
-  showAsUsed?: boolean;
-  showAllTokenAccountsInMenu?: boolean;
-  enableAnimations?: boolean;
-  resetTimeRelative?: boolean;
-  menuBarDisplayMode?: MenuBarDisplayMode;
-  hidePersonalInfo?: boolean;
-  updateChannel?: UpdateChannel;
-  autoDownloadUpdates?: boolean;
-  installUpdatesOnQuit?: boolean;
-  globalShortcut?: string;
-  codexCustomSessionsDirs?: string[];
-  uiLanguage?: Language;
-  theme?: ThemePreference;
-  windowScalePercent?: number;
-  trayScalePercent?: number;
-  powertoysStatusPipeEnabled?: boolean;
-  claudeAvoidKeychainPrompts?: boolean;
-  codexSparkUsageVisible?: boolean;
-  disableKeychainAccess?: boolean;
-  /** Map of provider CLI name → metric preference label. */
-  providerMetrics?: Record<string, MetricPreference>;
-  floatBarEnabled?: boolean;
-  floatBarOpacity?: number;
-  floatBarScale?: number;
-  floatBarOrientation?: FloatBarOrientation;
-  floatBarStyle?: FloatBarStyle;
-  floatBarClickThrough?: boolean;
-  floatBarProviderIds?: string[];
-  floatBarDarkText?: boolean;
-  floatBarShowResetInline?: boolean;
-}
+export type SettingsUpdate = Partial<Omit<SettingsSnapshot, "providerOrder">>;
 
 export interface BootstrapState {
   contractVersion: string;
@@ -479,36 +436,7 @@ export interface ProviderTokenAccountsBridge {
 
 // ── Phase 4 — provider ordering / cookie source / region ─────────────
 
-export interface ProviderSummary {
-  id: string;
-  displayName: string;
-  enabled: boolean;
-  order: number;
-}
-
 // ── Phase 4 — credential detection ───────────────────────────────────
-
-export interface GeminiCliStatus {
-  signedIn: boolean;
-  credentialsPath: string | null;
-}
-
-export interface VertexAiStatus {
-  hasCredentials: boolean;
-  credentialsPath: string | null;
-}
-
-export interface JetbrainsIde {
-  id: string;
-  displayName: string;
-  path: string;
-  detected: boolean;
-}
-
-export interface KiroStatus {
-  available: boolean;
-  hint: string | null;
-}
 
 // ── Phase 4 — session / environment ──────────────────────────────────
 

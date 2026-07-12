@@ -133,6 +133,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarProviderIds: [],
     floatBarDarkText: false,
     floatBarShowResetInline: false,
+    floatBarShowCost: false,
     ...overrides,
   };
 }
@@ -199,7 +200,7 @@ describe("FloatBar", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("codex", "Codex", 75),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ floatBarShowCost: true }));
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue({
       todayCost: 1.25,
       thirtyDayCost: 12.5,
@@ -209,12 +210,24 @@ describe("FloatBar", () => {
       estimateNote: "Estimated from local logs",
     });
 
-    renderFloatBar(bootstrap());
+    renderFloatBar(bootstrap({ floatBarShowCost: true }));
 
     await waitFor(() => {
       expect(tauriMocks.getProviderLocalUsageSummary).toHaveBeenCalledWith("codex");
     });
     expect(tauriMocks.getProviderChartData).not.toHaveBeenCalled();
+  });
+
+  it("does not scan local costs by default", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("codex", "Codex", 75)]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    renderFloatBar(bootstrap());
+
+    await waitFor(() => {
+      expect(tauriMocks.getCachedProviders).toHaveBeenCalled();
+    });
+    expect(tauriMocks.getProviderLocalUsageSummary).not.toHaveBeenCalled();
   });
 
   it("can show remaining percentages when configured", async () => {

@@ -144,6 +144,17 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           />
         </Field>
         <Field
+          label="Show Cost"
+          description="Shows local usage cost estimates in the floating bar."
+          leading
+        >
+          <Toggle
+            checked={settings.floatBarShowCost === true}
+            disabled={saving || !settings.floatBarEnabled}
+            onChange={(v) => set({ floatBarShowCost: v })}
+          />
+        </Field>
+        <Field
           label="Invert Colors"
           description="Switches to dark text on light glass for bright backgrounds."
           leading

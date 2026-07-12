@@ -292,6 +292,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const filterIds = settings.floatBarProviderIds;
   const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
   const showResetInline = settings.floatBarShowResetInline;
+  const showCost = settings.floatBarShowCost === true;
   const visible = useMemo(() => {
     const enabled = new Set(settings.enabledProviders);
     let list = providers.filter((p) => enabled.has(p.providerId));
@@ -307,12 +308,14 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     .join("|");
   const visibleCostTargets = useMemo<FloatBarCostTarget[]>(
     () =>
-      visible.map((provider) => ({
-        key: providerCostKey(provider),
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-      })),
-    [visibleCostTargetKey],
+      showCost
+        ? visible.map((provider) => ({
+            key: providerCostKey(provider),
+            providerId: provider.providerId,
+            displayName: provider.displayName,
+          }))
+        : [],
+    [showCost, visibleCostTargetKey],
   );
 
   useEffect(() => {

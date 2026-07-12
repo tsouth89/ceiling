@@ -51,6 +51,7 @@ pub struct SettingsUpdate {
     pub float_bar_provider_ids: Option<Vec<String>>,
     pub float_bar_dark_text: Option<bool>,
     pub float_bar_show_reset_inline: Option<bool>,
+    pub float_bar_show_cost: Option<bool>,
 }
 
 impl SettingsUpdate {
@@ -244,6 +245,7 @@ impl SettingsUpdate {
             provider_ids: self.float_bar_provider_ids.clone(),
             dark_text: self.float_bar_dark_text,
             show_reset_inline: self.float_bar_show_reset_inline,
+            show_cost: self.float_bar_show_cost,
         }
     }
 

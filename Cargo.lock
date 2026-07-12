@@ -667,7 +667,6 @@ dependencies = [
  "dirs",
  "fluent-templates",
  "futures",
- "global-hotkey",
  "iana-time-zone",
  "image",
  "keyring",

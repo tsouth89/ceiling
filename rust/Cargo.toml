@@ -48,7 +48,6 @@ async-trait = "0.1"
 futures = "0.3"
 
 image = { version = "0.25", default-features = false, features = ["png"] }
-global-hotkey = "0.7.0"
 
 # SQLite for reading browser cookies
 rusqlite = { version = "0.32", features = ["bundled"] }

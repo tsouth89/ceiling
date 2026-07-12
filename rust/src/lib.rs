@@ -15,7 +15,6 @@ pub mod notifications;
 pub mod providers;
 pub mod secure_file;
 pub mod settings;
-pub mod shortcuts;
 pub mod sound;
 
 pub mod status;

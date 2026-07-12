@@ -23,6 +23,7 @@ fn float_bar_defaults_are_safe() {
     assert!(settings.float_bar_provider_ids.is_empty());
     assert!(!settings.float_bar_dark_text);
     assert!(!settings.float_bar_show_reset_inline);
+    assert!(!settings.float_bar_show_cost);
 }
 
 #[test]
@@ -138,6 +139,7 @@ fn float_bar_settings_round_trip_through_raw() {
         float_bar_provider_ids: vec!["claude".into(), "codex".into()],
         float_bar_dark_text: true,
         float_bar_show_reset_inline: true,
+        float_bar_show_cost: true,
         ..Settings::default()
     };
 
@@ -152,6 +154,7 @@ fn float_bar_settings_round_trip_through_raw() {
     assert_eq!(back.float_bar_provider_ids, vec!["claude", "codex"]);
     assert!(back.float_bar_dark_text);
     assert!(back.float_bar_show_reset_inline);
+    assert!(back.float_bar_show_cost);
 }
 
 #[test]

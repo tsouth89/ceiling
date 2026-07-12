@@ -73,6 +73,9 @@ pub struct OAuthUsageResponse {
 
     #[serde(rename = "extraUsage", alias = "extra_usage")]
     pub extra_usage: Option<ExtraUsage>,
+
+    #[serde(default)]
+    limits: Vec<super::ScopedWeeklyLimit>,
 }
 
 /// A usage window from the OAuth API
@@ -398,6 +401,9 @@ impl ClaudeOAuthFetcher {
                     .push(NamedRateWindow::new(id, title, window));
             }
         }
+        usage
+            .extra_rate_windows
+            .extend(super::scoped_weekly_windows(&response.limits));
 
         // Login method from rate limit tier or default
         if let Some(ref tier) = credentials.rate_limit_tier {
@@ -499,6 +505,14 @@ mod tests {
                 "five_hour": {"utilization": 1.0, "resets_at": "2026-05-22T22:10:00Z"},
                 "seven_day": {"utilization": 0.14, "resets_at": "2026-05-29T10:00:00Z"},
                 "seven_day_oauth_apps": {"utilization": 0.0},
+                "limits": [{
+                    "kind": "weekly_scoped",
+                    "group": "weekly",
+                    "percent": 7,
+                    "resets_at": "2026-05-29T10:00:00Z",
+                    "scope": {"model": {"id": null, "display_name": "Fable"}},
+                    "is_active": true
+                }],
                 "extra_usage": {"is_enabled": true, "used_credits": 0, "monthly_limit": 1000, "currency": "USD"}
             }"#,
         )
@@ -515,7 +529,15 @@ mod tests {
 
         assert_eq!(usage.primary.used_percent, 100.0);
         assert!((usage.secondary.expect("weekly").used_percent - 14.0).abs() < 0.001);
-        assert!(usage.extra_rate_windows.is_empty());
+        let scoped = usage
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.id == "claude-weekly-scoped-fable")
+            .expect("Fable scoped weekly limit");
+        assert_eq!(scoped.title, "Fable only");
+        assert_eq!(scoped.window.used_percent, 7.0);
+        assert_eq!(scoped.window.window_minutes, Some(10080));
+        assert!(scoped.window.resets_at.is_some());
     }
 
     #[test]

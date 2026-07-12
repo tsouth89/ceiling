@@ -96,7 +96,7 @@ pub(super) fn extract_cli_scoped_weekly_limits(
     limits
 }
 
-fn slug_claude_model(label: &str) -> String {
+pub(super) fn slug_claude_model(label: &str) -> String {
     let mut slug = String::new();
     let mut previous_dash = false;
     for character in label.chars() {
