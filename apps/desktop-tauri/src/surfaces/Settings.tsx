@@ -52,18 +52,24 @@ const TabIcons: Record<SettingsTab, ReactElement> = {
       <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
     </Svg>
   ),
-  providers: (
+  notifications: (
+    <Svg>
+      <path d="M3.5 11.5h9l-1.2-1.8V7a3.3 3.3 0 0 0-6.6 0v2.7Z" />
+      <path d="M6.5 13a1.7 1.7 0 0 0 3 0" />
+    </Svg>
+  ),
+  menuBar: (
+    <Svg>
+      <path d="M1.5 8c1.6-3 4-4.5 6.5-4.5S13 5 14.5 8c-1.5 3-4 4.5-6.5 4.5S3.1 11 1.5 8Z" />
+      <circle cx="8" cy="8" r="2" />
+    </Svg>
+  ),
+  menu: (
     <Svg>
       <rect x="2" y="2" width="5" height="5" rx="1" />
       <rect x="9" y="2" width="5" height="5" rx="1" />
       <rect x="2" y="9" width="5" height="5" rx="1" />
       <rect x="9" y="9" width="5" height="5" rx="1" />
-    </Svg>
-  ),
-  display: (
-    <Svg>
-      <path d="M1.5 8c1.6-3 4-4.5 6.5-4.5S13 5 14.5 8c-1.5 3-4 4.5-6.5 4.5S3.1 11 1.5 8Z" />
-      <circle cx="8" cy="8" r="2" />
     </Svg>
   ),
   advanced: (
@@ -83,13 +89,11 @@ const TabIcons: Record<SettingsTab, ReactElement> = {
   ),
 };
 
-// Tab order mirrors upstream PreferencesView (General, Providers, Display,
-// Advanced, About). Per-provider credential management (API keys, cookies,
-// token accounts) is handled inside the Providers tab.
 const TAB_META: { id: SettingsTab; labelKey: LocaleKey }[] = [
   { id: "general", labelKey: "TabGeneral" },
-  { id: "providers", labelKey: "TabProviders" },
-  { id: "display", labelKey: "TabDisplay" },
+  { id: "notifications", labelKey: "TabNotifications" },
+  { id: "menuBar", labelKey: "TabMenuBar" },
+  { id: "menu", labelKey: "TabMenu" },
   { id: "advanced", labelKey: "TabAdvanced" },
   { id: "about", labelKey: "TabAbout" },
 ];
@@ -104,7 +108,7 @@ const SETTINGS_WINDOW_PROVIDERS_WIDTH = 600;
 
 async function applySettingsWindowSize(tab: SettingsTab) {
   const requestedWidth =
-    tab === "providers"
+    tab === "general"
       ? SETTINGS_WINDOW_PROVIDERS_WIDTH
       : SETTINGS_WINDOW_DEFAULT_WIDTH;
   const workArea = await getWorkAreaRect().catch(() => null);
@@ -193,7 +197,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
 
   return (
     <div
-      className={`settings${activeTab === "providers" ? " settings--providers-active" : ""}`}
+      className={`settings${activeTab === "general" ? " settings--providers-active" : ""}`}
     >
       {/* custom title bar (decorations disabled for guaranteed dark theme) */}
       <div className="settings-titlebar" data-tauri-drag-region>
@@ -244,20 +248,26 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
       )}
 
       {/* tab panels */}
-      <div className={`settings-body${activeTab === "providers" ? " settings-body--providers" : ""}`}>
+      <div className={`settings-body${activeTab === "general" ? " settings-body--providers" : ""}`}>
         {activeTab === "general" && (
-          <GeneralTab settings={settings} set={set} saving={saving} />
+          <>
+            <GeneralTab mode="general" settings={settings} set={set} saving={saving} />
+            <ProvidersTab
+              settings={settings}
+              providers={state.providers}
+              set={set}
+              saving={saving}
+            />
+          </>
         )}
-        {activeTab === "providers" && (
-          <ProvidersTab
-            settings={settings}
-            providers={state.providers}
-            set={set}
-            saving={saving}
-          />
+        {activeTab === "notifications" && (
+          <GeneralTab mode="notifications" settings={settings} set={set} saving={saving} />
         )}
-        {activeTab === "display" && (
-          <DisplayTab settings={settings} set={set} saving={saving} />
+        {activeTab === "menuBar" && (
+          <DisplayTab mode="menuBar" settings={settings} set={set} saving={saving} />
+        )}
+        {activeTab === "menu" && (
+          <DisplayTab mode="menu" settings={settings} set={set} saving={saving} />
         )}
         {activeTab === "advanced" && (
           <AdvancedTab settings={settings} set={set} saving={saving} />

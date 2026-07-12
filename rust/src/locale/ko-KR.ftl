@@ -1,6 +1,7 @@
 TabGeneral = 일반
-TabProviders = 제공업체
-TabDisplay = 디스플레이
+TabNotifications = Notifications
+TabMenuBar = Menu Bar
+TabMenu = Menu
 TabApiKeys = API 키
 TabCookies = 쿠키
 TabAdvanced = 고급

@@ -24,7 +24,12 @@ const REFRESH_CADENCE_OPTIONS: { value: string; label: string }[] = [
   { value: "3600", label: "1 hour" },
 ];
 
-export default function GeneralTab({ settings, set, saving }: TabProps) {
+export default function GeneralTab({
+  mode = "general",
+  settings,
+  set,
+  saving,
+}: TabProps & { mode?: "general" | "notifications" }) {
   const { t } = useLocale();
   const [playingSound, setPlayingSound] = useState(false);
   const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>(
@@ -45,7 +50,7 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
 
   return (
     <>
-      <section className="settings-section">
+      {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("SectionLanguage")}</h3>
         <div className="settings-section__group">
           <Field label={t("InterfaceLanguage")}>
@@ -60,9 +65,9 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
-      <section className="settings-section">
+      {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("StartupSettings")}</h3>
         <div className="settings-section__group">
           <Field label={t("StartAtLogin")} description={t("StartAtLoginHelper")} leading>
@@ -84,9 +89,9 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
-      <section className="settings-section">
+      {mode === "notifications" && <section className="settings-section">
         <h3 className="settings-section__title">
           {t("SectionNotifications")}
         </h3>
@@ -146,9 +151,9 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             </Field>
           )}
         </div>
-      </section>
+      </section>}
 
-      <section className="settings-section">
+      {mode === "notifications" && <section className="settings-section">
         <h3 className="settings-section__title">
           {t("SectionUsageThresholds")}
         </h3>
@@ -180,10 +185,10 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
       {/* ── Automation ───────────────────────────────────────────── */}
-      <section className="settings-section">
+      {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("SectionRefresh")}</h3>
         <div className="settings-section__group">
           <Field
@@ -209,7 +214,7 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
     </>
   );
 }

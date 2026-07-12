@@ -103,7 +103,14 @@ describe("GeneralTab language picker", () => {
 
   it("updates the predictive pace warning preference", () => {
     const set = vi.fn();
-    render(<GeneralTab settings={settings} set={set} saving={false} />);
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={settings}
+        set={set}
+        saving={false}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }));
 

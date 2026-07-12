@@ -2,8 +2,9 @@ export type SurfaceMode = "hidden" | "trayPanel" | "popOut" | "settings";
 export type VisibleSurfaceMode = Exclude<SurfaceMode, "hidden">;
 export type SettingsTabId =
   | "general"
-  | "providers"
-  | "display"
+  | "notifications"
+  | "menuBar"
+  | "menu"
   | "advanced"
   | "about";
 

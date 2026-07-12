@@ -1,6 +1,7 @@
 TabGeneral = General
-TabProviders = Proveedores
-TabDisplay = Pantalla
+TabNotifications = Notifications
+TabMenuBar = Menu Bar
+TabMenu = Menu
 TabApiKeys = Claves API
 TabCookies = Cookies
 TabAdvanced = Avanzado

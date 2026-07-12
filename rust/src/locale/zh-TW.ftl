@@ -1,6 +1,7 @@
 TabGeneral = 一般
-TabProviders = 提供者
-TabDisplay = 顯示
+TabNotifications = Notifications
+TabMenuBar = Menu Bar
+TabMenu = Menu
 TabApiKeys = API 金鑰
 TabCookies = Cookie
 TabAdvanced = 高階
