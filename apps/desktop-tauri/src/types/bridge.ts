@@ -434,10 +434,6 @@ export interface ProviderTokenAccountsBridge {
   activeIndex: number;
 }
 
-// ── Phase 4 — provider ordering / cookie source / region ─────────────
-
-// ── Phase 4 — credential detection ───────────────────────────────────
-
 // ── Phase 4 — session / environment ──────────────────────────────────
 
 export interface WorkAreaRect {

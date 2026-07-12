@@ -98,12 +98,6 @@ struct UsageResponse {
     limits: Vec<super::ScopedWeeklyLimit>,
 }
 
-impl UsageResponse {
-    fn scoped_weekly_windows(&self) -> Vec<NamedRateWindow> {
-        super::scoped_weekly_windows(&self.limits)
-    }
-}
-
 impl<'de> Deserialize<'de> for UsageResponse {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let mut map: std::collections::HashMap<String, serde_json::Value> =
@@ -369,7 +363,7 @@ impl ClaudeWebApiFetcher {
         }
         snapshot
             .extra_rate_windows
-            .extend(usage.scoped_weekly_windows());
+            .extend(super::scoped_weekly_windows(&usage.limits));
 
         if let Some(ref acc) = account {
             if let Some(ref email) = acc.email_address {
@@ -841,7 +835,7 @@ mod tests {
         )
         .unwrap();
 
-        let windows = usage.scoped_weekly_windows();
+        let windows = super::super::scoped_weekly_windows(&usage.limits);
 
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, "claude-weekly-scoped-fable");
