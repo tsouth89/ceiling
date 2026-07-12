@@ -139,6 +139,8 @@ pub(super) struct RawSettings {
     float_bar_dark_text: bool,
     #[serde(default)]
     float_bar_show_reset_inline: bool,
+    #[serde(default)]
+    float_bar_show_cost: bool,
 }
 
 impl Default for RawSettings {
@@ -222,6 +224,7 @@ impl Default for RawSettings {
             float_bar_provider_ids: s.float_bar_provider_ids,
             float_bar_dark_text: s.float_bar_dark_text,
             float_bar_show_reset_inline: s.float_bar_show_reset_inline,
+            float_bar_show_cost: s.float_bar_show_cost,
         }
     }
 }
@@ -488,6 +491,7 @@ impl From<RawSettings> for Settings {
             float_bar_provider_ids: raw.float_bar_provider_ids,
             float_bar_dark_text: raw.float_bar_dark_text,
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
+            float_bar_show_cost: raw.float_bar_show_cost,
         }
     }
 }

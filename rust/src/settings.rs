@@ -223,6 +223,10 @@ pub struct Settings {
     /// When true, show the primary window's next reset inline in each pill.
     #[serde(default)]
     pub float_bar_show_reset_inline: bool,
+
+    /// When true, show local cost summaries in the floating bar.
+    #[serde(default)]
+    pub float_bar_show_cost: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -406,6 +410,7 @@ impl Default for Settings {
             float_bar_provider_ids: Vec::new(),
             float_bar_dark_text: false,
             float_bar_show_reset_inline: false,
+            float_bar_show_cost: false,
         }
     }
 }

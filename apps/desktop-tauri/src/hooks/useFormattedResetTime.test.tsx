@@ -32,6 +32,7 @@ async function mountWithLocale(ui: React.ReactNode) {
     buildBundle({
       MetricResetsIn: "Resets in",
       ResetsInHoursMinutes: "Resets in {}h {}m",
+      ResetsInMinutes: "Resets in {}m",
       ResetsInDaysHours: "Resets in {}d {}h",
       TrayResetsDueNow: "Resetting",
     }),
@@ -57,6 +58,14 @@ describe("useFormattedResetTime", () => {
       <Probe resetsAt={target} fallback="later" relative={true} />,
     );
     expect(screen.getByTestId("reset")).toHaveTextContent("Resets in 3h 42m");
+  });
+
+  it("omits zero hours for sub-hour resets", async () => {
+    const target = new Date("2024-06-01T00:40:00Z").toISOString();
+    await mountWithLocale(
+      <Probe resetsAt={target} fallback="later" relative={true} />,
+    );
+    expect(screen.getByTestId("reset")).toHaveTextContent("Resets in 40m");
   });
 
   it("leaves fallback text unlabelled in relative mode", async () => {

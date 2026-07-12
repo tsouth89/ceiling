@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Field, Select, Toggle } from "../components/FormControls";
+import { useLocale } from "../hooks/useLocale";
 import type {
   FloatBarOrientation,
   FloatBarStyle,
@@ -42,6 +43,7 @@ function useDraftNumber(value: number) {
  * imports a single component.
  */
 export default function FloatBarSettingsSection({ settings, saving, set }: Props) {
+  const { t } = useLocale();
   const opacity = useDraftNumber(settings.floatBarOpacity);
   const scale = useDraftNumber(settings.floatBarScale);
   const commitOpacity = () => {
@@ -130,6 +132,17 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             onBlur={commitScale}
             onKeyUp={commitScale}
             aria-label="Floating bar size"
+          />
+        </Field>
+        <Field
+          label={t("FloatBarShowCost")}
+          description={t("FloatBarShowCostDescription")}
+          leading
+        >
+          <Toggle
+            checked={settings.floatBarShowCost}
+            disabled={saving || !settings.floatBarEnabled}
+            onChange={(v) => set({ floatBarShowCost: v })}
           />
         </Field>
         <Field

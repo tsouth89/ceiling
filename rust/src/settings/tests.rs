@@ -11,6 +11,7 @@ fn test_settings_default() {
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
+    assert!(!settings.float_bar_show_cost);
 }
 
 #[test]

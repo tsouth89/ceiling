@@ -147,6 +147,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarProviderIds: [],
     floatBarDarkText: false,
     floatBarShowResetInline: false,
+    floatBarShowCost: false,
     ...overrides,
   };
 }

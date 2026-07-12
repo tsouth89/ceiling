@@ -95,6 +95,7 @@ struct UsageResponse {
     seven_day_design: Option<UsageWindow>,
     seven_day_routines: Option<UsageWindow>,
     extra_usage: Option<ExtraUsageResponse>,
+    limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
 }
 
 impl<'de> Deserialize<'de> for UsageResponse {
@@ -156,6 +157,14 @@ impl<'de> Deserialize<'de> for UsageResponse {
                     "cowork",
                 ],
             )?,
+            limits: map
+                .get("limits")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(serde::de::Error::custom)?
+                .unwrap_or_default(),
             extra_usage: map
                 .remove("extra_usage")
                 .filter(|value| !value.is_null())
@@ -351,6 +360,9 @@ impl ClaudeWebApiFetcher {
                     .extra_rate_windows
                     .push(NamedRateWindow::new(id, title, window));
             }
+            snapshot
+                .extra_rate_windows
+                .extend(super::scoped_weekly::scoped_weekly_windows(&usage.limits));
         }
 
         if let Some(ref acc) = account {
@@ -803,6 +815,28 @@ mod tests {
 
         assert!((design.used_percent - 26.0).abs() < f64::EPSILON);
         assert!((routines.used_percent - 11.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn maps_scoped_weekly_limits_even_when_inactive() {
+        let usage: super::UsageResponse = serde_json::from_str(
+            r#"{
+                "limits": [{
+                    "kind": "weekly_scoped",
+                    "group": "weekly",
+                    "percent": 7,
+                    "resets_at": "2026-07-16T10:00:00Z",
+                    "scope": {"model": {"id": null, "display_name": "Fable"}},
+                    "is_active": false
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let windows = super::super::scoped_weekly::scoped_weekly_windows(&usage.limits);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].id, "claude-weekly-scoped-fable");
+        assert_eq!(windows[0].title, "Fable only");
     }
 
     #[test]

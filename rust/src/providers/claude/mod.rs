@@ -3,6 +3,7 @@
 mod admin_api;
 mod cli_reset;
 mod oauth;
+mod scoped_weekly;
 mod web_api;
 
 use async_trait::async_trait;

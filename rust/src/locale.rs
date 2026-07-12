@@ -437,6 +437,7 @@ locale_keys! {
     ResetsInShort,
     ResetsInDaysHours,
     ResetsInHoursMinutes,
+    ResetsInMinutes,
 
     // Provider detail - Tray Display
     TrayDisplayTitle,
@@ -735,6 +736,8 @@ locale_keys! {
     FloatBarThirtyDayShort,
     FloatBarNoProviders,
     FloatBarRemainingSuffix,
+    FloatBarShowCost,
+    FloatBarShowCostDescription,
 
     // Tauri desktop shell — update banner
     BannerCheckingForUpdates,

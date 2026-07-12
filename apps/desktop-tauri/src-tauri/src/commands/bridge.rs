@@ -453,6 +453,7 @@ pub struct SettingsSnapshot {
     float_bar_provider_ids: Vec<String>,
     float_bar_dark_text: bool,
     float_bar_show_reset_inline: bool,
+    float_bar_show_cost: bool,
 }
 
 #[tauri::command]
@@ -545,6 +546,7 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_provider_ids: settings.float_bar_provider_ids,
             float_bar_dark_text: settings.float_bar_dark_text,
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
+            float_bar_show_cost: settings.float_bar_show_cost,
         }
     }
 }

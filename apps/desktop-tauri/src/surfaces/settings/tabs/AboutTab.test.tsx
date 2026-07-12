@@ -83,6 +83,7 @@ const settings: SettingsSnapshot = {
   floatBarProviderIds: [],
   floatBarDarkText: false,
   floatBarShowResetInline: false,
+  floatBarShowCost: false,
 };
 
 describe("AboutTab", () => {

@@ -41,6 +41,9 @@ export function useResetCountdown(
       .replace("{}", String(days))
       .replace("{}", String(hours));
   }
+  if (hours === 0) {
+    return t("ResetsInMinutes").replace("{}", String(minutes));
+  }
   return t("ResetsInHoursMinutes")
     .replace("{}", String(hours))
     .replace("{}", String(minutes));

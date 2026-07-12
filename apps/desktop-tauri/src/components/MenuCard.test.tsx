@@ -116,6 +116,7 @@ describe("MenuCard", () => {
         PanelTodayBudget: "today",
         PanelUsedSuffix: "used",
         ResetsInHoursMinutes: "Resets in {}h {}m",
+        ResetsInMinutes: "Resets in {}m",
         WayfinderGatewayStatus: "Gateway",
         WayfinderModels: "Models",
         WayfinderRequests: "Requests",
@@ -190,7 +191,7 @@ describe("MenuCard", () => {
 
     renderCard(snapshot, { showResetWhenExhausted: true });
 
-    expect(await screen.findByText(/Resets in 0h/)).toBeInTheDocument();
+    expect(await screen.findByText(/Resets in \d+m/)).toBeInTheDocument();
     expect(screen.queryByText("0% left")).not.toBeInTheDocument();
   });
 

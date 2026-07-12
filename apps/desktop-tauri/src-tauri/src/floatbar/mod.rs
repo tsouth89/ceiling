@@ -105,6 +105,7 @@ pub struct SettingsPatch {
     pub provider_ids: Option<Vec<String>>,
     pub dark_text: Option<bool>,
     pub show_reset_inline: Option<bool>,
+    pub show_cost: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -149,6 +150,9 @@ impl SettingsPatch {
         }
         if let Some(v) = self.show_reset_inline {
             settings.float_bar_show_reset_inline = v;
+        }
+        if let Some(v) = self.show_cost {
+            settings.float_bar_show_cost = v;
         }
     }
 }

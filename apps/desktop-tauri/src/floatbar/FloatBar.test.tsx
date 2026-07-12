@@ -135,6 +135,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarProviderIds: [],
     floatBarDarkText: false,
     floatBarShowResetInline: false,
+    floatBarShowCost: false,
     ...overrides,
   };
 }
@@ -181,7 +182,9 @@ describe("FloatBar", () => {
       snapshot("claude", "Claude", 20),
       snapshot("codex", "Codex", 75),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowCost: true }),
+    );
 
     const { container } = renderFloatBar(bootstrap());
     await waitFor(() => {
@@ -212,12 +215,26 @@ describe("FloatBar", () => {
       tokenCostUpdatedAtMs: 1234,
     });
 
-    renderFloatBar(bootstrap());
+    renderFloatBar(bootstrap({ floatBarShowCost: true }));
 
     await waitFor(() => {
       expect(tauriMocks.getProviderLocalUsageSummary).toHaveBeenCalledWith("codex");
     });
     expect(tauriMocks.getProviderChartData).not.toHaveBeenCalled();
+  });
+
+  it("does not scan local costs by default", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 75),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    renderFloatBar(bootstrap());
+
+    await waitFor(() => {
+      expect(tauriMocks.getCachedProviders).toHaveBeenCalled();
+    });
+    expect(tauriMocks.getProviderLocalUsageSummary).not.toHaveBeenCalled();
   });
 
   it("can show remaining percentages when configured", async () => {

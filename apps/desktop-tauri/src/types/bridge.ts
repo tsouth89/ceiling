@@ -262,6 +262,8 @@ export interface SettingsSnapshot {
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
+  /** When true, scan and render local cost summaries. */
+  floatBarShowCost: boolean;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -315,6 +317,7 @@ export interface SettingsUpdate {
   floatBarProviderIds?: string[];
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
+  floatBarShowCost?: boolean;
 }
 
 export interface UsageThresholdOverride {

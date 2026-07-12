@@ -31,6 +31,7 @@ async function mountWithLocale(ui: React.ReactNode) {
   (tauri.getLocaleStrings as ReturnType<typeof vi.fn>).mockResolvedValue(
     buildBundle({
       ResetsInHoursMinutes: "{}h {}m",
+      ResetsInMinutes: "{}m",
       ResetsInDaysHours: "{}d {}h",
       TrayResetsDueNow: "resetting",
     }),
@@ -64,6 +65,12 @@ describe("useResetCountdown", () => {
     const target = new Date("2024-06-01T03:42:00Z").toISOString();
     await mountWithLocale(<Probe resetsAt={target} fallback="x" />);
     expect(screen.getByTestId("cd")).toHaveTextContent("3h 42m");
+  });
+
+  it("omits zero hours for sub-hour deltas", async () => {
+    const target = new Date("2024-06-01T00:40:00Z").toISOString();
+    await mountWithLocale(<Probe resetsAt={target} fallback="x" />);
+    expect(screen.getByTestId("cd")).toHaveTextContent(/^40m$/);
   });
 
   it("renders days+hours for multi-day deltas", async () => {
