@@ -112,22 +112,17 @@ function isSettingsTab(value: string): value is SettingsTab {
 }
 
 const SETTINGS_WINDOW_HEIGHT = 580;
-const SETTINGS_WINDOW_DEFAULT_WIDTH = 496;
-const SETTINGS_WINDOW_PROVIDERS_WIDTH = 600;
+const SETTINGS_WINDOW_WIDTH = 600;
 
-async function applySettingsWindowSize(tab: SettingsTab) {
-  const requestedWidth =
-    tab === "providers"
-      ? SETTINGS_WINDOW_PROVIDERS_WIDTH
-      : SETTINGS_WINDOW_DEFAULT_WIDTH;
+async function applySettingsWindowSize() {
   const workArea = await getWorkAreaRect().catch(() => null);
-  const screenWidth = window.screen.availWidth || window.innerWidth || requestedWidth;
+  const screenWidth = window.screen.availWidth || window.innerWidth || SETTINGS_WINDOW_WIDTH;
   const screenHeight = window.screen.availHeight || window.innerHeight || SETTINGS_WINDOW_HEIGHT;
   const maxWidth = Math.min(workArea?.width ?? screenWidth, screenWidth);
   const maxHeight = Math.min(workArea?.height ?? screenHeight, screenHeight);
   const width = Math.max(
     360,
-    Math.min(requestedWidth, maxWidth - 16),
+    Math.min(SETTINGS_WINDOW_WIDTH, maxWidth - 16),
   );
   const height = Math.max(
     360,
@@ -164,10 +159,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
   useEffect(() => {
-    void applySettingsWindowSize(initialTab);
-    // initialTab is captured once on mount; subsequent tab changes are
-    // handled by handleTabClick / shellTarget effect below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void applySettingsWindowSize();
   }, []);
 
   // Respond to prop-driven tab changes (detached window re-focus events).
@@ -175,7 +167,6 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     if (propTab && isSettingsTab(propTab)) {
       setActiveTab((current) => {
         if (current === propTab) return current;
-        void applySettingsWindowSize(propTab);
         return propTab;
       });
     }
@@ -189,7 +180,6 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     const nextTab: SettingsTab = shellTarget.tab;
     setActiveTab((current) => {
       if (current === nextTab) return current;
-      void applySettingsWindowSize(nextTab);
       return nextTab;
     });
   }, [shellTarget]);
@@ -197,7 +187,6 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   const set = (patch: SettingsUpdate) => void update(patch);
   const handleTabClick = useCallback((tab: SettingsTab) => {
     setActiveTab(tab);
-    void applySettingsWindowSize(tab);
     // Only transition the main window if we're NOT in the detached settings window
     if (getCurrentWebviewWindow().label !== "settings") {
       void setSurfaceMode("settings", { kind: "settings", tab });

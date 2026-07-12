@@ -4865,6 +4865,7 @@ html:has(.menu-surface--tray) {
 
 /* ── Settings body container: padded, centered, capped at 560px ─── */
 .settings-body {
+  width: 100%;
   max-width: 560px;
   margin: 0 auto;
   padding: 16px 20px 24px;
