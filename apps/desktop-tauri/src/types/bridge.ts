@@ -417,6 +417,10 @@ export interface RefreshCompletePayload {
   errorCount: number;
 }
 
+export interface RefreshStartedPayload {
+  providerIds: string[];
+}
+
 export interface SafeDiagnostics {
   appVersion: string;
   platform: string;

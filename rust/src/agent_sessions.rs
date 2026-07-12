@@ -1,4 +1,4 @@
-use crate::host::{CommandOptions, CommandRunner};
+use crate::host::{CommandError, CommandOptions, CommandRunner};
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -744,6 +744,30 @@ impl RemoteSessionFetcher {
         results
     }
 
+    async fn tailscale_hosts() -> Result<Vec<String>, String> {
+        let options = CommandOptions {
+            timeout: Duration::from_secs(5),
+            initial_delay: Duration::ZERO,
+            extra_args: vec!["status".to_string(), "--json".to_string()],
+            ..CommandOptions::default()
+        };
+        match CommandRunner::new().run_async("tailscale", None, &options).await {
+            Err(CommandError::BinaryNotFound(_)) => Ok(Vec::new()),
+            Err(_) => Err(
+                "Unable to query Tailscale peers; manual SSH hosts are still available.".to_string(),
+            ),
+            Ok(result) if result.exit_code == Some(0) && !result.timed_out => {
+                TailscaleStatusParser::hosts(&result.text).map_err(|_| {
+                    "Tailscale returned an invalid status response; manual SSH hosts are still available."
+                        .to_string()
+                })
+            }
+            Ok(_) => Err(
+                "Tailscale status failed; manual SSH hosts are still available.".to_string(),
+            ),
+        }
+    }
+
     async fn fetch_host(host: String, timeout: Duration) -> AgentSessionHostResult {
         let options = match Self::ssh_options(&host, timeout) {
             Ok(options) => options,
@@ -858,6 +882,10 @@ impl RemoteSessionFetcher {
         sanitized
     }
 
+    pub fn merge_hosts(manual: &[String], automatic: &[String]) -> Vec<String> {
+        Self::sanitized_hosts(&manual.iter().chain(automatic).cloned().collect::<Vec<_>>())
+    }
+
     pub fn validate_host(host: &str) -> Result<String, String> {
         let host = host.trim();
         if host.is_empty() {
@@ -910,7 +938,17 @@ impl AgentSessionDiscovery {
         let AgentSessionDiscoveryMode::Enabled { ssh_hosts } = mode else {
             return AgentSessionDiscoveryResult::Disabled;
         };
-        let (local, remote) = tokio::join!(self.local.scan(), self.remote.fetch(&ssh_hosts));
+        let (local, automatic) =
+            tokio::join!(self.local.scan(), RemoteSessionFetcher::tailscale_hosts());
+        let (automatic_hosts, tailscale_error) = match automatic {
+            Ok(hosts) => (hosts, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let merged_hosts = RemoteSessionFetcher::merge_hosts(&ssh_hosts, &automatic_hosts);
+        let mut remote = self.remote.fetch(&merged_hosts).await;
+        if let Some(error) = tailscale_error {
+            remote.push(AgentSessionHostResult::failed("tailscale", error));
+        }
         let mut hosts = Vec::with_capacity(remote.len() + 1);
         hosts.push(local);
         hosts.extend(remote);

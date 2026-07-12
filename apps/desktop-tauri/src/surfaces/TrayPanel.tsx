@@ -93,6 +93,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const {
     providers,
     isRefreshing,
+    refreshingProviderIds,
     refresh,
     hasCachedData,
     hasLoadedCache,
@@ -432,6 +433,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       >
         <MenuCard
           provider={p}
+          isRefreshing={refreshingProviderIds.has(p.providerId)}
           hideEmail={settings.hidePersonalInfo}
           resetTimeRelative={settings.resetTimeRelative}
           showResetWhenExhausted={settings.showResetWhenExhausted}

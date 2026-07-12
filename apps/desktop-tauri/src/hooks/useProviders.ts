@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   ProviderUsageSnapshot,
   RefreshCompletePayload,
+  RefreshStartedPayload,
 } from "../types/bridge";
 import {
   getCachedProviders,
@@ -35,6 +36,7 @@ export interface UseProvidersResult {
   providers: ProviderUsageSnapshot[];
   /** True while a refresh cycle is in progress. */
   isRefreshing: boolean;
+  refreshingProviderIds: ReadonlySet<string>;
   /** Trigger a manual refresh. No-op if already refreshing. */
   refresh: () => void;
   /** Summary from the last completed refresh cycle, if any. */
@@ -57,7 +59,9 @@ export interface UseProvidersResult {
  */
 export function useProviders(options: UseProvidersOptions = {}): UseProvidersResult {
   const [providers, setProviders] = useState<ProviderUsageSnapshot[]>([]);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshingProviderIds, setRefreshingProviderIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [lastRefresh, setLastRefresh] = useState<RefreshCompletePayload | null>(
     null,
   );
@@ -106,10 +110,9 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
   const refresh = useCallback(() => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
-    setIsRefreshing(true);
     refreshProviders().catch(() => {
       refreshingRef.current = false;
-      setIsRefreshing(false);
+      setRefreshingProviderIds(new Set());
     });
   }, []);
 
@@ -138,7 +141,15 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
     const unlistenUpdated = listen<ProviderUsageSnapshot>(
       "provider-updated",
       (event) => {
-        if (!cancelled) queueSnapshot(event.payload);
+        if (!cancelled) {
+          queueSnapshot(event.payload);
+          setRefreshingProviderIds(
+            (current) =>
+              new Set(
+                [...current].filter((id) => id !== event.payload.providerId),
+              ),
+          );
+        }
       },
     );
 
@@ -164,10 +175,10 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
         });
     });
 
-    const unlistenStarted = listen("refresh-started", () => {
+    const unlistenStarted = listen<RefreshStartedPayload>("refresh-started", (event) => {
       if (!cancelled) {
         refreshingRef.current = true;
-        setIsRefreshing(true);
+        setRefreshingProviderIds(new Set(event.payload.providerIds));
       }
     });
 
@@ -177,7 +188,7 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
         if (!cancelled) {
           if (!settingsReloadingRef.current) flushPendingSnapshots();
           refreshingRef.current = false;
-          setIsRefreshing(false);
+          setRefreshingProviderIds(new Set());
           setLastRefresh(event.payload);
         }
       },
@@ -192,7 +203,7 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
       refreshPromise.catch(() => {
         if (!cancelled) {
           refreshingRef.current = false;
-          setIsRefreshing(false);
+          setRefreshingProviderIds(new Set());
         }
       });
     };
@@ -277,7 +288,8 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
 
   return {
     providers,
-    isRefreshing,
+    isRefreshing: refreshingProviderIds.size > 0,
+    refreshingProviderIds,
     refresh,
     lastRefresh,
     hasCachedData: providers.length > 0,

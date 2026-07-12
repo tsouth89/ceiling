@@ -52,6 +52,7 @@ interface MenuCardProps {
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
   compactMetrics?: boolean;
+  isRefreshing?: boolean;
   onLayoutChange?: () => void;
 }
 
@@ -419,6 +420,7 @@ export default function MenuCard({
   showResetWhenExhausted = false,
   showAsUsed = false,
   compactMetrics = false,
+  isRefreshing = false,
   onLayoutChange,
 }: MenuCardProps) {
   const { t } = useLocale();
@@ -520,13 +522,14 @@ export default function MenuCard({
   const cardClassName = [
     "menu-card",
     provider.error ? "menu-card--error" : null,
+    isRefreshing ? "menu-card--refreshing" : null,
     hasDetails ? "menu-card--with-details" : "menu-card--header-only",
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <article className={cardClassName}>
+    <article className={cardClassName} aria-busy={isRefreshing}>
       <header className="menu-card__header">
         <div className="menu-card__title-row">
           <div className="menu-card__name-group">

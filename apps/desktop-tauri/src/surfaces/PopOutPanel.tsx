@@ -31,6 +31,7 @@ export default function PopOutPanel({
   const {
     providers,
     isRefreshing,
+    refreshingProviderIds,
     refresh,
     hasCachedData,
   } = useProviders();
@@ -251,6 +252,7 @@ export default function PopOutPanel({
             >
               <MenuCard
                 provider={p}
+                isRefreshing={refreshingProviderIds.has(p.providerId)}
                 hideEmail={settings.hidePersonalInfo}
                 resetTimeRelative={settings.resetTimeRelative}
                 showResetWhenExhausted={settings.showResetWhenExhausted}

@@ -102,6 +102,39 @@ bad line
     }
 
     #[test]
+    fn tailscale_parser_returns_online_peer_dns_names() {
+        let json = r#"{
+            "Self": {"DNSName": "this-pc.tailnet.ts.net."},
+            "Peer": {
+                "one": {"DNSName": "devbox.tailnet.ts.net.", "Online": true},
+                "two": {"DNSName": "offline.tailnet.ts.net.", "Online": false},
+                "three": {"DNSName": "", "Online": true}
+            }
+        }"#;
+
+        assert_eq!(
+            TailscaleStatusParser::hosts(json).unwrap(),
+            vec!["devbox.tailnet.ts.net"]
+        );
+    }
+
+    #[test]
+    fn tailscale_parser_rejects_malformed_json() {
+        assert!(TailscaleStatusParser::hosts("{").is_err());
+    }
+
+    #[test]
+    fn automatic_and_manual_hosts_are_validated_and_deduplicated() {
+        assert_eq!(
+            RemoteSessionFetcher::merge_hosts(
+                &["manual".into(), "DEVBOX.tailnet.ts.net".into()],
+                &["devbox.tailnet.ts.net".into(), "-unsafe".into()],
+            ),
+            vec!["manual", "DEVBOX.tailnet.ts.net"]
+        );
+    }
+
+    #[test]
     fn codex_rollout_parser_reads_first_line_metadata() {
         let metadata = CodexRolloutFirstLineParser::parse(
             r#"{"type":"session_meta","payload":{"session_id":"abc","cwd":"C:\\work\\proj","originator":"codex_exec","source":"cli"}}"#,

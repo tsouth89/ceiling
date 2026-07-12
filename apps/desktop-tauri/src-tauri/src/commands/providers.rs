@@ -169,9 +169,15 @@ async fn do_refresh_providers_with_policy(
         return Ok(());
     }
 
-    events::emit_refresh_started(app);
-
     let inputs = ProviderRefreshInputs::load();
+    events::emit_refresh_started(
+        app,
+        inputs
+            .enabled_ids
+            .iter()
+            .map(|id| id.cli_name().to_string())
+            .collect(),
+    );
     let enabled_count = inputs.enabled_ids.len();
 
     let handles = spawn_provider_refreshes(app, &inputs);

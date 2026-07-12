@@ -1,5 +1,25 @@
 use super::*;
 
+impl TailscaleStatusParser {
+    pub fn hosts(json: &str) -> Result<Vec<String>, String> {
+        let status: serde_json::Value =
+            serde_json::from_str(json).map_err(|_| "invalid Tailscale status JSON".to_string())?;
+        let mut hosts = status
+            .get("Peer")
+            .and_then(serde_json::Value::as_object)
+            .into_iter()
+            .flat_map(|peers| peers.values())
+            .filter(|peer| peer.get("Online").and_then(serde_json::Value::as_bool) == Some(true))
+            .filter_map(|peer| peer.get("DNSName").and_then(serde_json::Value::as_str))
+            .map(|host| host.trim().trim_end_matches('.').to_string())
+            .filter(|host| !host.is_empty())
+            .filter(|host| RemoteSessionFetcher::validate_host(host).is_ok())
+            .collect::<Vec<_>>();
+        hosts.sort_by_key(|host| host.to_ascii_lowercase());
+        Ok(RemoteSessionFetcher::sanitized_hosts(&hosts))
+    }
+}
+
 impl AgentPSOutputParser {
     pub fn parse(output: &str) -> Vec<AgentProcessRecord> {
         let mut seen_pids = HashSet::new();

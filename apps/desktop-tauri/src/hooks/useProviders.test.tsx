@@ -369,12 +369,13 @@ describe("useProviders", () => {
     vi.useFakeTimers();
     try {
       act(() => {
-        emitProviderEvent("refresh-started", {});
+        emitProviderEvent("refresh-started", { providerIds: ["codex"] });
         emitProviderEvent("provider-updated", provider("codex", 10));
         emitProviderEvent("refresh-complete", {
           providerCount: 1,
           errorCount: 0,
         });
+
       });
 
       expect(result.current.providers.map((snapshot) => snapshot.providerId)).toEqual([
@@ -388,5 +389,32 @@ describe("useProviders", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("clears each provider from refresh state as it completes", async () => {
+    const { result } = renderHook(() =>
+      useProviders({ refreshOnMount: false }),
+    );
+    await waitFor(() => expect(result.current.hasLoadedCache).toBe(true));
+
+    act(() =>
+      emitProviderEvent("refresh-started", {
+        providerIds: ["codex", "claude"],
+      }),
+    );
+    expect([...result.current.refreshingProviderIds]).toEqual(["codex", "claude"]);
+
+    act(() => emitProviderEvent("provider-updated", provider("codex", 10)));
+    expect([...result.current.refreshingProviderIds]).toEqual(["claude"]);
+    expect(result.current.isRefreshing).toBe(true);
+
+    act(() =>
+      emitProviderEvent("refresh-complete", {
+        providerCount: 2,
+        errorCount: 0,
+      }),
+    );
+    expect(result.current.refreshingProviderIds.size).toBe(0);
+    expect(result.current.isRefreshing).toBe(false);
   });
 });

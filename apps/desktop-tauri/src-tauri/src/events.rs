@@ -39,6 +39,12 @@ pub struct RefreshCompletePayload {
     pub error_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshStartedPayload {
+    pub provider_ids: Vec<String>,
+}
+
 // ── Emit helpers ─────────────────────────────────────────────────────
 
 pub fn emit_surface_mode_changed(
@@ -66,8 +72,8 @@ pub fn emit_provider_updated(app: &AppHandle, snapshot: &ProviderUsageSnapshot) 
     let _ = app.emit(PROVIDER_UPDATED, snapshot);
 }
 
-pub fn emit_refresh_started(app: &AppHandle) {
-    let _ = app.emit(REFRESH_STARTED, ());
+pub fn emit_refresh_started(app: &AppHandle, provider_ids: Vec<String>) {
+    let _ = app.emit(REFRESH_STARTED, RefreshStartedPayload { provider_ids });
 }
 
 pub fn emit_refresh_complete(app: &AppHandle, provider_count: usize, error_count: usize) {
