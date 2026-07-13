@@ -6000,8 +6000,50 @@ html:has(.menu-surface--tray) {
   flex-direction: column;
   height: 100vh;
   min-height: 0;
-  background: var(--ceiling-panel-bg);
+  box-sizing: border-box;
+  /* Fully opaque (app-bg has no alpha, unlike --ceiling-panel-bg's 0.98) so
+     ONLY the rounded-corner cutouts below show the desktop, not the whole
+     panel. */
+  background: var(--app-bg);
   color: var(--text-primary);
+  /* Round the whole window here. The main window is `transparent: true`, so the
+     corner cutouts reveal the desktop and the window reads as a real rounded
+     card instead of a hard square. `overflow: hidden` clips the title bar and
+     cards to the radius so nothing pokes a square corner past it. A hairline
+     border defines the edge against whatever is behind it. */
+  border: 1px solid var(--ceiling-glass-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* The main window is transparent so its rounded corners can show through; the
+   html/body/#root layers behind the dashboard shell must therefore be
+   transparent too, or they'd paint a square opaque backdrop and defeat the
+   radius. Scoped to the dashboard so the flyout/settings surfaces are
+   untouched. */
+html:has(.dashboard-shell),
+body:has(.dashboard-shell),
+body:has(.dashboard-shell) #root {
+  background: transparent;
+}
+/* The flyout caption bleeds past the tray surface's 10px/12px padding with a
+   negative margin. The dashboard shell has NO padding, so that same negative
+   margin would drag the caption up under the window's top edge and clip it —
+   which read as "no space above the Ceiling text, looks cut off". Reset the
+   bleed and give the caption a proper, roomy height instead. */
+.dashboard-shell .popout-titlebar {
+  margin: 0;
+  height: 42px;
+  padding: 0 8px 0 16px;
+  background: transparent;
+  border-bottom: 1px solid var(--ceiling-glass-border);
+}
+.dashboard-shell .popout-titlebar__title {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  opacity: 0.92;
+}
+.dashboard-shell .popout-titlebar__control {
+  height: 42px;
 }
 .dashboard {
   flex: 1;
