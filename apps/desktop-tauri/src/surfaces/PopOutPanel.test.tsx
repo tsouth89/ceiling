@@ -291,10 +291,12 @@ describe("PopOutPanel", () => {
     expect(container.querySelector(".activity-timeline")).not.toBeNull();
     expect(container.querySelector(".dashboard-placeholder")).toBeNull();
 
-    // Accounts is still a foundation-phase placeholder.
+    // Accounts is a real section too — one card per provider, no placeholder.
     fireEvent.click(screen.getByRole("button", { name: "Accounts" }));
     expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Accounts");
-    expect(container.querySelector(".dashboard-placeholder")).not.toBeNull();
+    expect(container.querySelector(".accounts-panel")).not.toBeNull();
+    expect(container.querySelector(".account-card")).not.toBeNull();
+    expect(container.querySelector(".dashboard-placeholder")).toBeNull();
   });
 
   it("opens Settings from the rail", async () => {

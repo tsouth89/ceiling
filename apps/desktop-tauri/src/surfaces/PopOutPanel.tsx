@@ -11,6 +11,7 @@ import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import ActivityTimeline from "./ActivityTimeline";
 import ChartsPanel from "./ChartsPanel";
+import AccountsPanel from "./AccountsPanel";
 import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
 import { orderProviderSnapshots } from "../lib/providerOrder";
@@ -391,6 +392,12 @@ export default function PopOutPanel({
               <ActivityTimeline providers={sorted} />
             ) : activeSection === "charts" ? (
               <ChartsPanel providers={sorted} />
+            ) : activeSection === "accounts" ? (
+              <AccountsPanel
+                providers={sorted}
+                hideEmail={settings.hidePersonalInfo}
+                onManage={() => openSettingsWindow("providers")}
+              />
             ) : (
               <div className="dashboard-placeholder">
                 <strong>{meta.title} — coming soon</strong>
