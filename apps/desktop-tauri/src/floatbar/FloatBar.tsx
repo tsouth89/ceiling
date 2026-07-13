@@ -29,6 +29,7 @@ import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import {
   capacityFreshness,
   constrainingWindow,
+  glanceMeters,
   activePromoBoosts,
   type CapacityFreshness,
 } from "../lib/capacityPresentation";
@@ -159,9 +160,9 @@ function CostPill({
 /**
  * The capacity pill shown for a single provider.
  *
- * Shows the constraining measured window (highest used %). Color follows
- * remaining capacity; a state chip appears when data is stale, errored, or
- * includes a not-enforced window.
+ * Hero % is the primary plan pool (same as overview cards). A hot companion
+ * lane (Auto/API/5-hour) appears as a quiet secondary chip. Tone still
+ * follows the constraining window so pressure isn't hidden.
  */
 function ProviderPill({
   provider,
@@ -184,37 +185,55 @@ function ProviderPill({
   usedSuffix: string;
   remainingSuffix: string;
 }) {
+  const meters = glanceMeters(provider);
   const constraining = constrainingWindow(provider);
+  const hero = meters.primary;
+  const companion = meters.companion;
   const freshness = capacityFreshness(provider);
   const boosts = activePromoBoosts(provider);
-  const remaining = Math.max(
+  const remaining = Math.max(0, Math.min(100, hero.window.remainingPercent));
+  const used = Math.max(0, Math.min(100, hero.window.usedPercent));
+  const displayPercent = showAsUsed ? used : remaining;
+  const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
+  const pressureRemaining = Math.max(
     0,
     Math.min(100, constraining.window.remainingPercent),
   );
-  const used = Math.max(0, Math.min(100, constraining.window.usedPercent));
-  const displayPercent = showAsUsed ? used : remaining;
-  const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
-  const exhausted = constraining.window.isExhausted || !!provider.error;
+  const exhausted =
+    constraining.window.isExhausted ||
+    hero.window.isExhausted ||
+    !!provider.error;
   let tone: "ok" | "warn" | "crit" = "ok";
-  if (exhausted || remaining <= critRemaining) tone = "crit";
-  else if (remaining <= highRemaining) tone = "warn";
+  if (exhausted || pressureRemaining <= critRemaining) tone = "crit";
+  else if (pressureRemaining <= highRemaining) tone = "warn";
 
   const brand = getProviderIcon(provider.providerId).brandColor;
   const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
-    constraining.window.resetsAt,
-    constraining.window.resetDescription,
+    hero.window.resetsAt,
+    hero.window.resetDescription,
     resetRelative,
   );
-  const resetSuffix = resetText ? `\n${resetText}` : "";
   const inlineReset = resetText ? inlineResetTime(resetText) : null;
-  const iconSize = Math.round(11 * scale);
+  const iconSize = Math.round(14 * scale);
   const resetIconSize = Math.round(10 * scale);
   const stateChip = freshnessChipLabel(freshness);
   const boostTitle = boosts[0]?.title ?? null;
+  const companionPct = companion
+    ? Math.round(
+        showAsUsed
+          ? companion.window.usedPercent
+          : companion.window.remainingPercent,
+      )
+    : null;
+  const companionText =
+    companion && companionPct != null
+      ? `${companion.label} ${companionPct}%`
+      : null;
   const titleBits = [
     `${provider.displayName}: ${label} ${displaySuffix}`,
-    constraining.label,
+    hero.label,
+    companionText ? `hot ${companionText}` : null,
     boostTitle ? `promo ${boostTitle}` : null,
     stateChip ? `state ${stateChip}` : null,
     resetText,
@@ -244,8 +263,13 @@ function ProviderPill({
           {label}
         </span>
         <span className="floatbar__window" data-tauri-drag-region>
-          {constraining.label}
+          {hero.label}
         </span>
+        {companionText && (
+          <span className="floatbar__companion" data-tauri-drag-region>
+            {companionText}
+          </span>
+        )}
         {boostTitle && (
           <span className="floatbar__chip floatbar__chip--promo" data-tauri-drag-region>
             {boostTitle}

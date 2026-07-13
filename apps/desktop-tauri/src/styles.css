@@ -3039,20 +3039,21 @@ body:has(.tray-panel-reveal) {
   display: flex;
   flex-direction: column;
   /* upstream MenuContent VStack(spacing: 8) */
-  gap: 8px;
+  gap: 10px;
   /* upstream .padding(.horizontal, 10) .padding(.vertical, 6) */
-  padding: 8px 10px;
+  padding: 10px 12px 12px;
   width: 100%;
   min-width: 260px;
   font-size: 13px;
   line-height: 1.30;
   color: var(--text-primary);
-  background: var(--menu-popover-bg);
+  background: color-mix(in srgb, var(--ceiling-glass-bg, var(--menu-popover-bg)) 92%, transparent);
   border: 1px solid var(--ceiling-glass-border, var(--panel-border));
   border-radius: var(--radius-panel, 12px);
-  backdrop-filter: blur(var(--ceiling-glass-blur, 18px)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--ceiling-glass-blur, 18px)) saturate(140%);
+  backdrop-filter: blur(var(--ceiling-glass-blur, 18px)) saturate(145%);
+  -webkit-backdrop-filter: blur(var(--ceiling-glass-blur, 18px)) saturate(145%);
   -webkit-font-smoothing: antialiased;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .popout-scale-shell {
@@ -3075,7 +3076,7 @@ body:has(.tray-panel-reveal) {
   display: flex;
   align-items: center;
   height: 30px;
-  margin: -8px -10px 0;
+  margin: -10px -12px 0;
   padding: 0 4px 0 12px;
   background: color-mix(in srgb, var(--ceiling-glass-bg) 88%, transparent);
   border-bottom: 1px solid var(--ceiling-glass-border, var(--panel-border));
@@ -3397,8 +3398,8 @@ body:has(.menu-surface--popout) .popout-scale-shell,
 .menu-stack {
   display: flex;
   flex-direction: column;
-  /* upstream MenuContent VStack(spacing: 8) */
-  gap: 6px;
+  /* Glance cards need a little air between glass surfaces */
+  gap: 8px;
   flex: 1 1 auto;
   min-height: 0;
   max-height: 100%;
@@ -3417,13 +3418,16 @@ html:has(.menu-surface--tray) {
 /* Tray variant — auto-sized by JS, no forced min-height. */
 .menu-surface--tray {
   min-height: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: clip;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  padding: 4px 0;
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 28px rgba(0, 0, 0, 0.38);
+  padding: 8px 10px 6px;
   display: flex;
   flex-direction: column;
+  gap: 8px;
   /* Auto-size to content; JS resizes the Tauri window to match.
      No max-height here — JS sets an explicit pixel cap after measuring. */
   height: auto;
@@ -3445,55 +3449,55 @@ html:has(.menu-surface--tray) {
   flex-shrink: 0;
 }
 .menu-surface--tray .menu-stack {
-  gap: 2px;
+  gap: 8px;
   flex: 0 0 auto;
   max-height: none;
   overflow: visible;
   min-width: 0;
 }
 
-/* Tray cards — flush layout matching macOS panel (no card containers) */
+/* Tray cards — glass stack items; cards carry their own surface */
 .menu-surface--tray .menu-stack__item {
   background: transparent;
   border: none;
   border-radius: 0;
-  padding: 2px 0;
+  padding: 0;
   min-width: 0;
   max-width: 100%;
   width: 100%;
   box-sizing: border-box;
   overflow: visible;
 }
-/* Selected card — subtle highlight like macOS active provider */
+/* Selected card — keep selection soft so glance cards stay primary */
 .menu-surface--tray .menu-stack__item--selected {
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   border: none;
-  border-radius: 6px;
-  padding: 4px 4px;
+  border-radius: 0;
+  padding: 0;
 }
-/* Tray separators — subtle hairlines matching macOS card dividers */
+/* Tray separators — quiet hairlines between stack groups */
 .menu-surface--tray .menu-stack__sep {
-  height: 0.5px;
-  margin: 2px 16px;
-  background: rgba(255, 255, 255, 0.08);
+  height: 1px;
+  margin: 2px 4px;
+  background: var(--ceiling-glass-border, rgba(255, 255, 255, 0.08));
 }
 [data-theme="light"] .menu-surface--tray .menu-stack__sep {
   background: rgba(0, 0, 0, 0.08);
 }
 [data-theme="light"] .menu-surface--tray .menu-stack__item {
-  background: rgba(0, 0, 0, 0.03);
-  border: 0.5px solid rgba(0, 0, 0, 0.04);
-}
-[data-theme="light"] .menu-surface--tray .menu-stack__item--selected {
-  background: rgba(0, 0, 0, 0.06);
+  background: transparent;
   border: none;
 }
-/* Tray grid — flush with no background container, matching macOS */
+[data-theme="light"] .menu-surface--tray .menu-stack__item--selected {
+  background: transparent;
+  border: none;
+}
+/* Tray grid — flush with no background container */
 .menu-surface--tray .provider-grid {
   background: transparent;
   border: none;
   border-radius: 0;
-  padding: 8px 12px 6px;
+  padding: 4px 2px 2px;
   grid-template-columns: repeat(10, 24px);
   justify-content: start;
   gap: 8px 6px;
@@ -3515,8 +3519,8 @@ html:has(.menu-surface--tray) {
 /* Divider between provider grid and card stack */
 .menu-surface--tray .provider-grid__divider {
   height: 1px;
-  margin: 2px 0;
-  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 2px 2px;
+  background: var(--ceiling-glass-border, rgba(255, 255, 255, 0.08));
 }
 
 /* Tray font sizing — match macOS: .headline=13pt, .footnote=10pt */
@@ -3528,6 +3532,12 @@ html:has(.menu-surface--tray) {
   width: 100%;
   box-sizing: border-box;
   overflow: visible;
+}
+
+/* Glance cards keep their denser glass padding even inside the tray shell */
+.menu-surface--tray .plan-status-card {
+  gap: 10px;
+  padding: 12px 14px 12px 16px;
 }
 
 .menu-surface--tray .menu-card--with-details {
@@ -3758,22 +3768,23 @@ html:has(.menu-surface--tray) {
   line-height: 1.3;
 }
 
-/* Tray footer — match macOS NSMenuItem native look (10pt, ~16px row height) */
+/* Tray footer — compact actions under the glance stack */
 .menu-surface--tray .menu-surface__footer {
-  padding: 4px 0 3px;
+  padding: 6px 0 2px;
   margin-top: 2px;
-  border-top: 0.5px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.10));
 }
 .menu-surface--tray .menu-surface__footer-row {
-  padding: 3px 16px;
+  padding: 4px 6px;
   font-size: 11px;
   line-height: 1.3;
-  min-height: 18px;
+  min-height: 20px;
+  border-radius: 6px;
 }
 /* Indent must override the tray padding above so iconless rows (Settings /
    About / Quit) align with the iconified Refresh row. */
 .menu-surface--tray .menu-surface__footer-row--no-icon {
-  padding-left: calc(16px + 14px + 8px);
+  padding-left: calc(6px + 14px + 8px);
 }
 .menu-surface--tray .menu-surface__footer-icon {
   font-size: 11px;
@@ -4518,23 +4529,28 @@ html:has(.menu-surface--tray) {
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
-/* ── Menu surface: rounded NSMenu-style panel matching macOS popover ── */
+/* ── Menu surface: glass panel (tokens set earlier; keep cascade soft) ── */
 .menu-surface {
   width: 100%;
   min-width: 260px;
-  background: var(--menu-popover-bg);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
+  background: color-mix(in srgb, var(--ceiling-glass-bg, var(--menu-popover-bg)) 92%, transparent);
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.10));
+  border-radius: var(--radius-panel, 12px);
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 1px rgba(0, 0, 0, 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 32px rgba(0, 0, 0, 0.42);
   font-size: var(--font-body);
   line-height: var(--line-tight);
 }
 /* Re-assert tray overrides after the second .menu-surface rule (cascade order) */
 .menu-surface--tray {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.10));
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 28px rgba(0, 0, 0, 0.38);
 }
 .menu-surface--popout {
   width: 100%;
@@ -4545,20 +4561,18 @@ html:has(.menu-surface--tray) {
   max-height: 100vh;
   min-height: 0;
 }
-.menu-surface--tray {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
 [data-theme="light"] .menu-surface {
-  background: var(--menu-popover-bg);
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 0 1px rgba(0, 0, 0, 0.12);
+  background: color-mix(in srgb, var(--ceiling-glass-bg, var(--menu-popover-bg)) 94%, transparent);
+  border: 1px solid var(--ceiling-glass-border, rgba(15, 23, 42, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 8px 28px rgba(15, 23, 42, 0.14);
 }
 [data-theme="light"] .menu-surface--tray {
-  border: none;
-  box-shadow: none;
+  border: 1px solid var(--ceiling-glass-border, rgba(15, 23, 42, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 8px 24px rgba(15, 23, 42, 0.12);
 }
 
 .menu-surface__header {

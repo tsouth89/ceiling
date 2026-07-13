@@ -82,20 +82,23 @@ body.floatbar-window #root {
 .floatbar__pill {
   display: inline-flex;
   align-items: center;
-  gap: calc(3px * var(--floatbar-scale, 1));
-  padding: calc(2px * var(--floatbar-scale, 1)) calc(6px * var(--floatbar-scale, 1));
-  min-height: calc(18px * var(--floatbar-scale, 1));
-  border-radius: calc(8px * var(--floatbar-scale, 1));
-  background: rgba(232, 242, 246, 0.78);
-  backdrop-filter: blur(16px) saturate(145%);
-  -webkit-backdrop-filter: blur(16px) saturate(145%);
-  border: 1px solid rgba(26, 155, 181, 0.22);
+  gap: calc(5px * var(--floatbar-scale, 1));
+  padding: calc(3px * var(--floatbar-scale, 1)) calc(8px * var(--floatbar-scale, 1))
+    calc(3px * var(--floatbar-scale, 1)) calc(6px * var(--floatbar-scale, 1));
+  min-height: calc(22px * var(--floatbar-scale, 1));
+  border-radius: calc(10px * var(--floatbar-scale, 1));
+  background: rgba(28, 32, 38, 0.72);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.58),
-    0 1px 2px rgba(15, 23, 42, 0.16);
-  color: rgba(15, 23, 42, 0.92);
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #26b5ce) 78%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 3px rgba(15, 23, 42, 0.28);
+  color: rgba(241, 245, 249, 0.95);
   white-space: nowrap;
   cursor: grab;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
 }
 .floatbar__text {
   display: inline-flex;
@@ -107,7 +110,19 @@ body.floatbar-window #root {
   font-size: 0.72em;
   font-weight: 600;
   opacity: 0.62;
-  max-width: calc(64px * var(--floatbar-scale, 1));
+  max-width: calc(72px * var(--floatbar-scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.floatbar__companion {
+  font-size: 0.7em;
+  font-weight: 650;
+  opacity: 0.78;
+  padding: 0 calc(4px * var(--floatbar-scale, 1));
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--brand, #26b5ce) 35%, transparent);
+  background: color-mix(in srgb, var(--brand, #26b5ce) 14%, transparent);
+  max-width: calc(88px * var(--floatbar-scale, 1));
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -142,11 +157,11 @@ body.floatbar-window #root {
   border-color: rgba(38, 181, 206, 0.4);
 }
 .floatbar__pill--promo-boost {
-  border-color: rgba(38, 181, 206, 0.55);
+  border-color: color-mix(in srgb, var(--brand, #26b5ce) 55%, transparent);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.58),
-    0 0 0 1px rgba(38, 181, 206, 0.28),
-    0 0 10px rgba(38, 181, 206, 0.22);
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #26b5ce) 85%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px color-mix(in srgb, #26b5ce 28%, transparent);
 }
 .floatbar__pill--stale {
   opacity: 0.82;
@@ -167,6 +182,12 @@ body.floatbar-window #root {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+.floatbar__provider-icon .provider-icon {
+  background: color-mix(in srgb, var(--brand, #26b5ce) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, #26b5ce) 40%, transparent);
+  border-radius: 6px;
+  color: var(--brand, #26b5ce);
 }
 .floatbar__cost-pill {
   display: inline-flex;
@@ -214,18 +235,20 @@ body.floatbar-window #root {
   gap: calc(2px * var(--floatbar-scale, 1));
 }
 .floatbar__pill--warn {
-  background: rgba(250, 221, 171, 0.84);
-  border-color: rgba(255, 246, 219, 0.62);
-  color: #7a4c05;
+  background: rgba(66, 48, 20, 0.78);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fde68a;
 }
 .floatbar__pill--crit {
-  background: rgba(255, 194, 194, 0.86);
-  border-color: rgba(255, 236, 236, 0.66);
-  color: #7f1d1d;
+  background: rgba(64, 28, 28, 0.82);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fecaca;
 }
 .floatbar__pct {
+  font-size: 1.05em;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
   line-height: 1;
 }
 .floatbar__reset {
@@ -276,16 +299,26 @@ body.floatbar-window #root {
 .floatbar--light-bg .floatbar__cost-pill,
 .floatbar--light-bg .floatbar__empty {
   background: rgba(248, 252, 255, 0.82);
-  border-color: rgba(255, 255, 255, 0.64);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #1a9bb5) 72%, transparent),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+  color: rgba(15, 23, 42, 0.92);
 }
 .floatbar--light-bg .floatbar__pill--warn {
+  background: rgba(254, 243, 199, 0.9);
   border-color: #b45309;
   color: #92400e;
 }
 .floatbar--light-bg .floatbar__pill--crit {
+  background: rgba(254, 226, 226, 0.92);
   border-color: #b91c1c;
   color: #991b1b;
+}
+.floatbar--light-bg .floatbar__companion {
+  border-color: color-mix(in srgb, var(--brand, #1a9bb5) 40%, transparent);
+  background: color-mix(in srgb, var(--brand, #1a9bb5) 12%, transparent);
+  color: rgba(15, 23, 42, 0.78);
 }
 .floatbar--light-bg .floatbar__handle {
   background-color: transparent;
@@ -336,12 +369,14 @@ body.floatbar-window #root {
 }
 .floatbar--floating .floatbar__pill,
 .floatbar--floating .floatbar__cost-pill {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid var(--brand, rgba(255, 255, 255, 0.22));
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  border-radius: calc(10px * var(--floatbar-scale, 1));
+  background: rgba(28, 32, 38, 0.72);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #26b5ce) 78%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.28);
 }
 .floatbar--floating .floatbar__pill--warn {
   background: rgba(255, 255, 255, 0.08);

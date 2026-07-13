@@ -253,7 +253,7 @@ describe("FloatBar", () => {
     });
   });
 
-  it("shows the constraining window and a lifted chip when inactive meters exist", async () => {
+  it("shows plan-pool hero and a hot companion lane on the strip", async () => {
     const live = snapshot("cursor", "Cursor", 20);
     live.updatedAt = new Date().toISOString();
     live.primaryLabel = "Monthly";
@@ -279,11 +279,14 @@ describe("FloatBar", () => {
     );
 
     await waitFor(() => {
-      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Auto");
+      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Monthly");
+      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("20%");
+      expect(container.querySelector(".floatbar__companion")?.textContent).toBe(
+        "Auto 70%",
+      );
       expect(container.querySelector(".floatbar__chip--lifted")?.textContent).toBe(
         "lifted",
       );
-      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("70%");
     });
   });
 
