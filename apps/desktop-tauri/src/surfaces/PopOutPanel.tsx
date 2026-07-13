@@ -13,6 +13,7 @@ import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
+import { formatRelativeUpdated } from "../lib/relativeTime";
 
 type DashboardSection = "overview" | "activity" | "accounts" | "charts";
 
@@ -128,6 +129,23 @@ export default function PopOutPanel({
       Math.min(250, Math.max(100, Number.isFinite(scalePercent) ? scalePercent : 100)) / 100
     );
   }, [settings.windowScalePercent]);
+
+  // Live "updated N ago" clock for the status bar; re-renders every 30s so the
+  // relative time stays current without a refresh.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const latestUpdatedMs = useMemo(() => {
+    let latest: number | null = null;
+    for (const p of sorted) {
+      if (!p.updatedAt) continue;
+      const ms = Date.parse(p.updatedAt);
+      if (!Number.isNaN(ms) && (latest === null || ms > latest)) latest = ms;
+    }
+    return latest;
+  }, [sorted]);
 
   // Scale the dashboard via the webview's native zoom (like a browser's Ctrl-+):
   // it reflows content at the real window width, so the side-by-side cards keep
@@ -391,7 +409,9 @@ export default function PopOutPanel({
                 className={`dashboard-status__dot${isRefreshing ? " dashboard-status__dot--busy" : ""}`}
                 aria-hidden
               />
-              {isRefreshing ? t("SummaryRefreshing") : "Updated just now"}
+              {isRefreshing
+                ? t("SummaryRefreshing")
+                : formatRelativeUpdated(latestUpdatedMs, t, nowMs)}
             </span>
             <span>All times local</span>
           </footer>
