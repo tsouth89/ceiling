@@ -127,10 +127,6 @@ pub(crate) fn build_tray_menu_with(
         "pop_out",
         text(LocaleKey::TrayPopOutDashboard),
     ));
-    menu.push(TrayMenuEntry::item(
-        "show_panel",
-        text(LocaleKey::TrayShowWindow),
-    ));
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
         text(LocaleKey::TrayShowFloatBar),
@@ -286,7 +282,6 @@ mod tests {
             vec![
                 "Refresh All",
                 "Pop Out Dashboard",
-                "Show Window",
                 "Show Float Bar",
                 "Providers",
                 "Settings...",
@@ -395,7 +390,6 @@ mod tests {
         let items = proof_menu_items(&menu, "tray").unwrap();
 
         assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "ウィンドウを表示"));
         assert!(items.iter().any(|item| item == "設定..."));
         assert!(items.iter().any(|item| item == "終了"));
         assert!(!items.iter().any(|item| item == "Refresh All"));

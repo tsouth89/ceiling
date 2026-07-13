@@ -827,7 +827,6 @@ mod tests {
         let (_, items) = native_menu_snapshot_for_settings(&providers, &settings, "tray");
 
         assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "ウィンドウを表示"));
         assert!(!items.iter().any(|item| item == "Refresh All"));
     }
 
