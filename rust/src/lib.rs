@@ -1,4 +1,4 @@
-//! Shared library surface for CodexBar.
+//! Shared library surface for Ceiling.
 //!
 //! This keeps the current Rust implementation usable from the existing CLI/bin
 //! while giving the rewrite a stable crate dependency for future shells.

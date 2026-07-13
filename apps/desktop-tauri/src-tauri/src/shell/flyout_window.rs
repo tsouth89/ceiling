@@ -97,7 +97,7 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     let url = WebviewUrl::App("index.html?window=flyout".into());
 
     let mut builder = tauri::WebviewWindowBuilder::new(app, FLYOUT_LABEL, url)
-        .title("CodexBar")
+        .title("Ceiling")
         .inner_size(width, height)
         .decorations(props.decorations)
         .shadow(false)

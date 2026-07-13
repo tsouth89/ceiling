@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default permissions for the CodexBar desktop scaffold.",
+  "description": "Default permissions for the Ceiling desktop app.",
   "windows": ["main", "settings", "floatbar", "flyout"],
   "permissions": [
     "core:event:allow-listen",

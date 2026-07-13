@@ -20,7 +20,7 @@ pub struct ApiKeyEntry {
 impl ApiKeys {
     /// Get the API keys file path
     pub fn keys_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join("api_keys.json"))
+        dirs::config_dir().map(|p| p.join("Ceiling").join("api_keys.json"))
     }
 
     /// Load API keys from disk

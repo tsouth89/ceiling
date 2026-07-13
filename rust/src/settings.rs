@@ -1,4 +1,4 @@
-//! Settings management for CodexBar
+//! Settings management for Ceiling
 //!
 //! Handles persistent configuration including:
 //! - Enabled/disabled providers
@@ -418,7 +418,7 @@ impl Default for Settings {
 impl Settings {
     /// Get the settings file path
     pub fn settings_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join("settings.json"))
+        dirs::config_dir().map(|p| p.join("Ceiling").join("settings.json"))
     }
 
     /// Load settings from disk
@@ -498,9 +498,9 @@ impl Settings {
         if enabled {
             let exe_path = std::env::current_exe()?;
             let command = Self::start_at_login_command(&exe_path);
-            run_key.set_value("CodexBar", &command)?;
+            run_key.set_value("Ceiling", &command)?;
         } else {
-            let _ = run_key.delete_value("CodexBar");
+            let _ = run_key.delete_value("Ceiling");
         }
 
         Ok(())
@@ -519,15 +519,15 @@ impl Settings {
             return false;
         };
 
-        let Ok(existing) = run_key.get_value::<String, _>("CodexBar") else {
+        let Ok(existing) = run_key.get_value::<String, _>("Ceiling") else {
             return false;
         };
 
         match std::env::current_exe() {
             Ok(exe_path) if Self::start_at_login_command_needs_repair(&existing, &exe_path) => {
                 let command = Self::start_at_login_command(&exe_path);
-                if let Err(error) = run_key.set_value("CodexBar", &command) {
-                    tracing::warn!("Failed to repair CodexBar start-at-login command: {error}");
+                if let Err(error) = run_key.set_value("Ceiling", &command) {
+                    tracing::warn!("Failed to repair Ceiling start-at-login command: {error}");
                 }
             }
             Err(error) => {
@@ -561,7 +561,7 @@ impl Settings {
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         if let Ok(run_key) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") {
-            run_key.get_value::<String, _>("CodexBar").is_ok()
+            run_key.get_value::<String, _>("Ceiling").is_ok()
         } else {
             false
         }

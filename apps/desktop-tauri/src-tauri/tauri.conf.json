@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CodexBar Desktop",
+  "productName": "Ceiling",
   "version": "0.42.0",
-  "identifier": "com.codexbar.desktop",
+  "identifier": "io.github.tsouth89.ceiling",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "beforeBuildCommand": "pnpm run build",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "CodexBar Desktop",
+        "title": "Ceiling",
         "width": 496,
         "height": 800,
         "minWidth": 320,
