@@ -230,6 +230,8 @@ function ProviderPill({
     companion && companionPct != null
       ? `${companion.label} ${companionPct}%`
       : null;
+  // Strip always shows reset when depleted; otherwise honor the setting.
+  const showReset = !!inlineReset && (showResetInline || exhausted);
   const titleBits = [
     `${provider.displayName}: ${label} ${displaySuffix}`,
     hero.label,
@@ -247,7 +249,6 @@ function ProviderPill({
         "floatbar__pill",
         `floatbar__pill--${tone}`,
         freshness !== "live" ? `floatbar__pill--${freshness}` : null,
-        boosts.length > 0 ? "floatbar__pill--promo-boost" : null,
       ]
         .filter(Boolean)
         .join(" ")}
@@ -270,11 +271,6 @@ function ProviderPill({
             {companionText}
           </span>
         )}
-        {boostTitle && (
-          <span className="floatbar__chip floatbar__chip--promo" data-tauri-drag-region>
-            {boostTitle}
-          </span>
-        )}
         {stateChip && (
           <span
             className={`floatbar__chip floatbar__chip--${freshness}`}
@@ -283,11 +279,11 @@ function ProviderPill({
             {stateChip}
           </span>
         )}
-        {showResetInline && resetText && inlineReset && (
+        {showReset && (
           <span
-            className="floatbar__reset"
-            title={resetText}
-            aria-label={resetText}
+            className={`floatbar__reset${exhausted ? " floatbar__reset--emphasis" : ""}`}
+            title={resetText ?? undefined}
+            aria-label={resetText ?? undefined}
             data-tauri-drag-region
           >
             <ResetIcon size={resetIconSize} />

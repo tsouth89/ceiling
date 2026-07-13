@@ -147,7 +147,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
         </Field>
         <Field
           label="Show Reset Time Inline"
-          description="Shows the reset time beside each provider percentage with a reset icon."
+          description="Shows countdown beside each percentage. Depleted providers always show reset when known."
           leading
         >
           <Toggle

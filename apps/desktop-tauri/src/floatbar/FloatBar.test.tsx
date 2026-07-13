@@ -432,6 +432,55 @@ describe("FloatBar", () => {
     });
   });
 
+  it("shows reset on depleted pills even when inline reset is disabled", async () => {
+    const resetsAt = new Date(Date.now() + 4 * 60 * 60_000).toISOString();
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 100, { exhausted: true, resetsAt }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowResetInline: false }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarShowResetInline: false }),
+    );
+
+    await waitFor(() => {
+      const reset = container.querySelector(".floatbar__reset--emphasis");
+      expect(reset).not.toBeNull();
+      expect(reset?.textContent).toMatch(/[34]h/);
+      expect(container.querySelector(".floatbar__chip--promo")).toBeNull();
+    });
+  });
+
+  it("keeps promo signals out of the strip chrome", async () => {
+    const live = snapshot("cursor", "Cursor", 84);
+    live.updatedAt = new Date().toISOString();
+    live.primaryLabel = "Plan";
+    live.promoSignals = [
+      {
+        id: "promo-1",
+        kind: "boost",
+        title: "promotional",
+        description: "Extra capacity",
+      },
+    ];
+    tauriMocks.getCachedProviders.mockResolvedValue([live]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["cursor"] }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["cursor"] }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+      expect(container.querySelector(".floatbar__chip--promo")).toBeNull();
+      expect(container.querySelector(".floatbar__pill--promo-boost")).toBeNull();
+    });
+  });
+
   it("polls refreshProvidersIfStale on the configured interval", async () => {
     vi.useFakeTimers();
     try {

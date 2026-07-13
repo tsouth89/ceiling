@@ -87,12 +87,16 @@ body.floatbar-window #root {
     calc(3px * var(--floatbar-scale, 1)) calc(6px * var(--floatbar-scale, 1));
   min-height: calc(22px * var(--floatbar-scale, 1));
   border-radius: calc(10px * var(--floatbar-scale, 1));
-  background: rgba(28, 32, 38, 0.72);
+  background: color-mix(
+    in srgb,
+    var(--ceiling-glass-bg, rgba(28, 32, 38, 0.72)) 92%,
+    transparent
+  );
   backdrop-filter: blur(18px) saturate(145%);
   -webkit-backdrop-filter: blur(18px) saturate(145%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.1));
   box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #26b5ce) 78%, transparent),
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 82%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
     0 1px 3px rgba(15, 23, 42, 0.28);
   color: rgba(241, 245, 249, 0.95);
@@ -120,8 +124,8 @@ body.floatbar-window #root {
   opacity: 0.78;
   padding: 0 calc(4px * var(--floatbar-scale, 1));
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--brand, #26b5ce) 35%, transparent);
-  background: color-mix(in srgb, var(--brand, #26b5ce) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 35%, transparent);
+  background: color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 14%, transparent);
   max-width: calc(88px * var(--floatbar-scale, 1));
   overflow: hidden;
   text-overflow: ellipsis;
@@ -137,31 +141,19 @@ body.floatbar-window #root {
   line-height: 1.4;
 }
 .floatbar__chip--stale {
-  color: #92400e;
-  background: rgba(251, 191, 36, 0.28);
-  border-color: rgba(180, 83, 9, 0.28);
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.28);
 }
 .floatbar__chip--error {
-  color: #991b1b;
-  background: rgba(248, 113, 113, 0.24);
-  border-color: rgba(220, 38, 38, 0.28);
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.28);
 }
 .floatbar__chip--lifted {
-  color: #0f766e;
-  background: rgba(45, 212, 191, 0.18);
-  border: 1px dashed rgba(15, 118, 110, 0.45);
-}
-.floatbar__chip--promo {
-  color: #0f766e;
-  background: rgba(38, 181, 206, 0.22);
-  border-color: rgba(38, 181, 206, 0.4);
-}
-.floatbar__pill--promo-boost {
-  border-color: color-mix(in srgb, var(--brand, #26b5ce) 55%, transparent);
-  box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #26b5ce) 85%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 0 1px color-mix(in srgb, #26b5ce 28%, transparent);
+  color: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 85%, white);
+  background: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 16%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--ceiling-accent, #26b5ce) 45%, transparent);
 }
 .floatbar__pill--stale {
   opacity: 0.82;
@@ -170,7 +162,7 @@ body.floatbar-window #root {
   border-style: dashed;
 }
 .floatbar__pill--error {
-  border-color: rgba(220, 38, 38, 0.45);
+  border-color: color-mix(in srgb, #f87171 35%, var(--ceiling-glass-border, rgba(255, 255, 255, 0.1)));
 }
 .floatbar__pill *,
 .floatbar__cost-pill *,
@@ -184,10 +176,10 @@ body.floatbar-window #root {
   justify-content: center;
 }
 .floatbar__provider-icon .provider-icon {
-  background: color-mix(in srgb, var(--brand, #26b5ce) 22%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, #26b5ce) 40%, transparent);
+  background: color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 40%, transparent);
   border-radius: 6px;
-  color: var(--brand, #26b5ce);
+  color: var(--brand, var(--ceiling-accent, #26b5ce));
 }
 .floatbar__cost-pill {
   display: inline-flex;
@@ -234,15 +226,20 @@ body.floatbar-window #root {
   flex-direction: column;
   gap: calc(2px * var(--floatbar-scale, 1));
 }
+/* Pressure stays subtle: keep mica glass, hint with accent-adjacent borders. */
 .floatbar__pill--warn {
-  background: rgba(66, 48, 20, 0.78);
-  border-color: rgba(245, 158, 11, 0.35);
-  color: #fde68a;
+  border-color: color-mix(in srgb, #f59e0b 38%, var(--ceiling-glass-border, rgba(255, 255, 255, 0.1)));
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, #f59e0b 72%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 3px rgba(15, 23, 42, 0.28);
 }
 .floatbar__pill--crit {
-  background: rgba(64, 28, 28, 0.82);
-  border-color: rgba(248, 113, 113, 0.4);
-  color: #fecaca;
+  border-color: color-mix(in srgb, #f87171 32%, var(--ceiling-glass-border, rgba(255, 255, 255, 0.1)));
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, #f87171 68%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 3px rgba(15, 23, 42, 0.28);
 }
 .floatbar__pct {
   font-size: 1.05em;
@@ -260,6 +257,11 @@ body.floatbar-window #root {
   opacity: 0.72;
   line-height: 1;
 }
+.floatbar__reset--emphasis {
+  opacity: 1;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 55%, white);
+}
 .floatbar__reset-icon-svg {
   display: block;
   flex-shrink: 0;
@@ -269,6 +271,9 @@ body.floatbar-window #root {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+.floatbar__reset--emphasis .floatbar__reset-time {
+  font-weight: 650;
 }
 .floatbar--vertical .floatbar__text {
   flex-direction: column;
@@ -298,27 +303,51 @@ body.floatbar-window #root {
 .floatbar--light-bg .floatbar__pill,
 .floatbar--light-bg .floatbar__cost-pill,
 .floatbar--light-bg .floatbar__empty {
-  background: rgba(248, 252, 255, 0.82);
-  border-color: rgba(15, 23, 42, 0.08);
+  background: color-mix(
+    in srgb,
+    var(--ceiling-glass-bg, rgba(248, 252, 255, 0.82)) 94%,
+    transparent
+  );
+  border-color: var(--ceiling-glass-border, rgba(15, 23, 42, 0.08));
   box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #1a9bb5) 72%, transparent),
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, var(--ceiling-accent, #1a9bb5)) 72%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
     0 1px 2px rgba(0, 0, 0, 0.12);
   color: rgba(15, 23, 42, 0.92);
 }
 .floatbar--light-bg .floatbar__pill--warn {
-  background: rgba(254, 243, 199, 0.9);
-  border-color: #b45309;
-  color: #92400e;
+  border-color: color-mix(in srgb, #d97706 40%, rgba(15, 23, 42, 0.08));
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, #d97706 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+  color: rgba(15, 23, 42, 0.92);
 }
 .floatbar--light-bg .floatbar__pill--crit {
-  background: rgba(254, 226, 226, 0.92);
-  border-color: #b91c1c;
-  color: #991b1b;
+  border-color: color-mix(in srgb, #ef4444 36%, rgba(15, 23, 42, 0.08));
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, #ef4444 68%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+  color: rgba(15, 23, 42, 0.92);
 }
 .floatbar--light-bg .floatbar__companion {
-  border-color: color-mix(in srgb, var(--brand, #1a9bb5) 40%, transparent);
-  background: color-mix(in srgb, var(--brand, #1a9bb5) 12%, transparent);
+  border-color: color-mix(in srgb, var(--brand, var(--ceiling-accent, #1a9bb5)) 40%, transparent);
+  background: color-mix(in srgb, var(--brand, var(--ceiling-accent, #1a9bb5)) 12%, transparent);
   color: rgba(15, 23, 42, 0.78);
+}
+.floatbar--light-bg .floatbar__chip--stale {
+  color: #92400e;
+  background: rgba(251, 191, 36, 0.2);
+  border-color: rgba(180, 83, 9, 0.28);
+}
+.floatbar--light-bg .floatbar__chip--error {
+  color: #991b1b;
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(220, 38, 38, 0.28);
+}
+.floatbar--light-bg .floatbar__reset--emphasis {
+  color: var(--ceiling-accent, #1a9bb5);
 }
 .floatbar--light-bg .floatbar__handle {
   background-color: transparent;
@@ -370,23 +399,31 @@ body.floatbar-window #root {
 .floatbar--floating .floatbar__pill,
 .floatbar--floating .floatbar__cost-pill {
   border-radius: calc(10px * var(--floatbar-scale, 1));
-  background: rgba(28, 32, 38, 0.72);
+  background: color-mix(
+    in srgb,
+    var(--ceiling-glass-bg, rgba(28, 32, 38, 0.72)) 92%,
+    transparent
+  );
   backdrop-filter: blur(18px) saturate(145%);
   -webkit-backdrop-filter: blur(18px) saturate(145%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.1));
   box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, #26b5ce) 78%, transparent),
+    inset 2px 0 0 0 color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 78%, transparent),
     0 1px 3px rgba(0, 0, 0, 0.28);
 }
 .floatbar--floating .floatbar__pill--warn {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: #f59e0b;
-  color: #fbbf24;
+  border-color: color-mix(in srgb, #f59e0b 40%, rgba(255, 255, 255, 0.1));
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, #f59e0b 72%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.28);
+  color: rgba(241, 245, 249, 0.95);
 }
 .floatbar--floating .floatbar__pill--crit {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: #ef4444;
-  color: #fca5a5;
+  border-color: color-mix(in srgb, #f87171 34%, rgba(255, 255, 255, 0.1));
+  box-shadow:
+    inset 2px 0 0 0 color-mix(in srgb, #f87171 68%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.28);
+  color: rgba(241, 245, 249, 0.95);
 }
 .floatbar--floating .floatbar__empty {
   border-radius: 999px;
@@ -405,12 +442,12 @@ body.floatbar-window #root {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 .floatbar--floating.floatbar--light-bg .floatbar__pill--warn {
-  border-color: #b45309;
-  color: #92400e;
+  border-color: color-mix(in srgb, #d97706 42%, rgba(15, 23, 42, 0.1));
+  color: rgba(15, 23, 42, 0.92);
 }
 .floatbar--floating.floatbar--light-bg .floatbar__pill--crit {
-  border-color: #b91c1c;
-  color: #991b1b;
+  border-color: color-mix(in srgb, #ef4444 38%, rgba(15, 23, 42, 0.1));
+  color: rgba(15, 23, 42, 0.92);
 }
 .floatbar--floating.floatbar--light-bg .floatbar__handle {
   background-color: rgba(20, 22, 26, 0.10);

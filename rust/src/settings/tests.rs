@@ -94,7 +94,7 @@ fn float_bar_defaults_are_safe() {
     assert!(!settings.float_bar_click_through);
     assert!(settings.float_bar_provider_ids.is_empty());
     assert!(!settings.float_bar_dark_text);
-    assert!(!settings.float_bar_show_reset_inline);
+    assert!(settings.float_bar_show_reset_inline);
     assert!(!settings.float_bar_show_cost);
 }
 

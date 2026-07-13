@@ -409,7 +409,7 @@ impl Default for Settings {
             float_bar_click_through: false,
             float_bar_provider_ids: Vec::new(),
             float_bar_dark_text: false,
-            float_bar_show_reset_inline: false,
+            float_bar_show_reset_inline: true,
             float_bar_show_cost: false,
         }
     }
