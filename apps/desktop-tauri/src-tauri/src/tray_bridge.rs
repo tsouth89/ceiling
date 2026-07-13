@@ -692,17 +692,67 @@ fn build_tooltip(
     let error_label = get_text(lang, LocaleKey::TrayStatusRowError);
     let mut lines = Vec::with_capacity(snapshots.len() + 1);
     for s in snapshots {
-        let status = if let Some(ref err) = s.error {
-            let short = truncate_tooltip_text(err, 36);
-            format!("{}: {} ({})", s.display_name, error_label, short)
-        } else {
-            let label = crate::commands::compact_tray_status_label(&s.primary, lang);
-            format!("{}: {}", s.display_name, truncate_tooltip_text(&label, 42))
-        };
-        lines.push(status);
+        if s.error.is_some() {
+            lines.push(format!("{}  {}", s.display_name, error_label));
+            continue;
+        }
+        // Compact: "Name  85% Plan · 24d 11h" — percent, the window label (the
+        // key "which limit is this?" detail), and a short reset when known.
+        // Kept terse so every configured provider fits Windows' tooltip cap.
+        let mut line = format!("{}  {:.0}%", s.display_name, s.primary.used_percent);
+        if let Some(label) = s
+            .primary_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+        {
+            line.push(' ');
+            line.push_str(&truncate_tooltip_text(label, 12));
+        }
+        if let Some(reset) = tooltip_short_reset(
+            s.primary.resets_at.as_deref(),
+            s.primary.reset_description.as_deref(),
+        ) {
+            line.push_str(" · ");
+            line.push_str(&reset);
+        }
+        lines.push(line);
     }
 
     format!("Ceiling\n{}", lines.join("\n"))
+}
+
+/// Compact reset duration for the tooltip ("24d 11h" / "2h 21m" / "12m"), or
+/// `None` when there is no known future reset. Deliberately unit-terse and
+/// language-neutral to keep the native Windows tooltip within its length cap.
+fn tooltip_short_reset(resets_at: Option<&str>, reset_desc: Option<&str>) -> Option<String> {
+    if let Some(ra) = resets_at
+        && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ra)
+    {
+        let dt = parsed.with_timezone(&chrono::Utc);
+        let now = chrono::Utc::now();
+        if dt > now {
+            let mins = (dt - now).num_minutes().max(0);
+            let (d, h, m) = (mins / 1440, (mins % 1440) / 60, mins % 60);
+            return Some(if d > 0 {
+                format!("{d}d {h}h")
+            } else if h > 0 {
+                format!("{h}h {m}m")
+            } else {
+                format!("{m}m")
+            });
+        }
+    }
+    // Fall back to the provider's own reset description, minus a leading
+    // "resets in " and trimmed to keep the native tooltip compact.
+    let desc = reset_desc.map(str::trim).filter(|d| !d.is_empty())?;
+    let lower = desc.to_ascii_lowercase();
+    let body = ["resets in ", "reset in ", "in "]
+        .iter()
+        .find(|p| lower.starts_with(**p))
+        .map(|p| desc[p.len()..].trim_start())
+        .unwrap_or(desc);
+    Some(truncate_tooltip_text(body, 14))
 }
 
 fn truncate_tooltip_text(text: &str, max_chars: usize) -> String {
@@ -1205,7 +1255,7 @@ mod tests {
 
         assert_eq!(
             tooltip,
-            "Ceiling\nClaude: 13% • Resets in 2h 05m\nCodex: 8% • Resets in 4h 10m"
+            "Ceiling\nClaude  13% · 2h 05m\nCodex  8% · 4h 10m"
         );
     }
 
@@ -1218,9 +1268,9 @@ mod tests {
         let tooltip = build_tooltip(&[claude], codexbar::settings::Language::English);
 
         let line = tooltip.lines().nth(1).expect("provider tooltip line");
-        assert!(line.starts_with("Claude: 13% • Resets in Jun 10 at 3:00PM"));
-        assert!(line.ends_with("..."));
-        assert!(line.chars().count() <= 53);
+        assert!(line.starts_with("Claude  13% · Jun 10 at 3:00"), "{line}");
+        assert!(line.ends_with("..."), "{line}");
+        assert!(line.chars().count() <= 40, "{line}");
     }
 
     #[test]
@@ -1240,21 +1290,18 @@ mod tests {
         claude.primary.resets_at =
             Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
 
+        // The native tooltip is intentionally compact and language-neutral
+        // (percent + a universal d/h/m reset) so every provider fits, so it no
+        // longer carries the localized "Resets in" text.
         let english_tooltip =
             build_tooltip(&[claude.clone()], codexbar::settings::Language::English);
-        let japanese_tooltip =
-            build_tooltip(&[claude.clone()], codexbar::settings::Language::Japanese);
-
-        assert!(english_tooltip.contains("Resets in"), "{english_tooltip}");
+        assert!(english_tooltip.contains("Claude  13%"), "{english_tooltip}");
         assert!(
-            japanese_tooltip.contains("リセットまで"),
-            "{japanese_tooltip}"
-        );
-        assert!(
-            !japanese_tooltip.to_ascii_lowercase().contains("resets in"),
-            "{japanese_tooltip}"
+            !english_tooltip.to_ascii_lowercase().contains("resets in"),
+            "{english_tooltip}"
         );
 
+        // The tray *menu* status labels still relocalize without a refetch.
         let (_, english_label) =
             provider_status_label(&claude, codexbar::settings::Language::English);
         let (_, japanese_label) =
