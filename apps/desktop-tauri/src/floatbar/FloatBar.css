@@ -557,3 +557,78 @@ body.floatbar-window #root {
   background: rgba(20, 22, 26, 0.1);
   color: rgba(15, 23, 42, 1);
 }
+
+/* ── Unified pill restyle (v2) ─────────────────────────────────────────
+ * Every pill shares identical neutral glass chrome; color means exactly one
+ * thing — urgency — carried only by a thin left tone stripe and the % number.
+ * No tone/brand-colored borders, no colored ring around the provider icon, so
+ * a row of pills reads as one coherent set instead of three color themes.
+ * `!important` cuts through the per-variant (default/floating/light-bg ×
+ * warn/crit) rules above without editing each one. */
+.floatbar__pill {
+  position: relative;
+  --tone: var(--ceiling-accent, #35c2da);
+}
+.floatbar__pill--warn {
+  --tone: #f59e0b;
+}
+.floatbar__pill--crit,
+.floatbar__pill--error {
+  --tone: #f87171;
+}
+.floatbar__pill,
+.floatbar--floating .floatbar__pill {
+  border-color: var(--ceiling-glass-border, rgba(255, 255, 255, 0.1)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 8px rgba(0, 0, 0, 0.34) !important;
+}
+.floatbar--light-bg .floatbar__pill,
+.floatbar--floating.floatbar--light-bg .floatbar__pill {
+  border-color: var(--ceiling-glass-border, rgba(15, 23, 42, 0.08)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.14) !important;
+}
+/* Rounded tone stripe (replaces the old inset box-shadow stripe). */
+.floatbar__pill::before {
+  content: "";
+  position: absolute;
+  left: calc(3px * var(--floatbar-scale, 1));
+  top: 24%;
+  bottom: 24%;
+  width: calc(2.5px * var(--floatbar-scale, 1));
+  border-radius: 2px;
+  background: var(--tone);
+}
+.floatbar--vertical .floatbar__pill::before {
+  left: 24%;
+  right: 24%;
+  top: calc(3px * var(--floatbar-scale, 1));
+  bottom: auto;
+  width: auto;
+  height: calc(2.5px * var(--floatbar-scale, 1));
+}
+/* The % number is the primary urgency signal. */
+.floatbar__pct {
+  color: var(--tone);
+}
+/* Neutral icon badge — logo keeps its brand glyph, but no colored ring/fill. */
+.floatbar__provider-icon .provider-icon {
+  background: rgba(255, 255, 255, 0.07) !important;
+  box-shadow: none !important;
+}
+.floatbar--light-bg .floatbar__provider-icon .provider-icon {
+  background: rgba(15, 23, 42, 0.06) !important;
+}
+/* Neutral companion chip. */
+.floatbar__companion {
+  border-color: var(--ceiling-glass-border, rgba(255, 255, 255, 0.12)) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(226, 232, 240, 0.62) !important;
+}
+.floatbar--light-bg .floatbar__companion {
+  background: rgba(15, 23, 42, 0.05) !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+  color: rgba(15, 23, 42, 0.62) !important;
+}
