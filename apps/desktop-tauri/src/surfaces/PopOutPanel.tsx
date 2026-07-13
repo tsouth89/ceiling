@@ -280,11 +280,26 @@ export default function PopOutPanel({
     { id: "accounts", label: "Accounts", icon: <IconUsers /> },
     { id: "charts", label: "Charts", icon: <IconBars /> },
   ];
-  const sectionMeta: Record<DashboardSection, { title: string; sub: string }> = {
-    overview: { title: "Overview", sub: "All accounts" },
-    activity: { title: "Activity", sub: "Recent usage" },
-    accounts: { title: "Accounts", sub: "Connected providers" },
-    charts: { title: "Charts", sub: "Usage over time" },
+  const sectionMeta: Record<
+    DashboardSection,
+    { title: string; sub: string; blurb: string }
+  > = {
+    overview: { title: "Overview", sub: "All accounts", blurb: "" },
+    activity: {
+      title: "Activity",
+      sub: "Recent usage",
+      blurb: "A timeline of usage and resets across your providers.",
+    },
+    accounts: {
+      title: "Accounts",
+      sub: "Connected providers",
+      blurb: "Manage the accounts and sources Ceiling reads from.",
+    },
+    charts: {
+      title: "Charts",
+      sub: "Usage over time",
+      blurb: "Usage and cost trends, per provider.",
+    },
   };
   const meta = sectionMeta[activeSection];
 
@@ -387,9 +402,9 @@ export default function PopOutPanel({
               )
             ) : (
               <div className="dashboard-placeholder">
-                <strong>{meta.title} is coming soon</strong>
-                Ceiling is in its foundation phase. This view lands as the
-                product fills in — the Overview is live today.
+                <strong>{meta.title} — coming soon</strong>
+                {meta.blurb} Ceiling is in its foundation phase; the Overview is
+                live today.
               </div>
             )}
           </div>

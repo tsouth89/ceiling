@@ -3021,6 +3021,19 @@ body:has(.tray-panel-reveal) {
     animation: none !important;
     transition: none !important;
   }
+
+  /* App-wide: honor the OS "reduce motion" preference. Neutralizes decorative
+     animations/transitions (including the infinite sidebar/shortcut pulses and
+     card entrances); loading spinners simply hold still. Only affects users who
+     have set the preference. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 
