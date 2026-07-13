@@ -98,22 +98,79 @@ impl NotificationType {
     }
 }
 
+/// How long after process start to suppress toasts for already-high usage.
+/// We still record alert state so pre-existing high usage does not flood after
+/// the quiet period ends.
+const STARTUP_QUIET_PERIOD: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Drop below this offset under the high threshold before re-arming alerts.
+/// Avoids flicker when a meter hovers around the boundary across refreshes.
+const REARM_HYSTERESIS: f64 = 3.0;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ThresholdAlertKey {
+    provider: ProviderId,
+    window: String,
+    kind: NotificationType,
+}
+
 /// Notification manager
 pub struct NotificationManager {
-    /// Track which notifications have been sent to avoid spam
-    sent_notifications: std::collections::HashSet<(ProviderId, NotificationType)>,
-    /// Track previous session percent for depleted/restored transitions
+    /// Track which threshold notifications have been sent to avoid spam.
+    /// Keyed by provider + window so session/weekly cannot clear each other.
+    sent_notifications: std::collections::HashSet<ThresholdAlertKey>,
+    /// Track previous session percent for depleted/restored transitions.
+    /// Missing entry means we have not observed this provider yet (baseline).
     previous_session_percent: std::collections::HashMap<ProviderId, f64>,
     predictive_warning_keys: std::collections::HashSet<PredictiveWarningKey>,
+    started_at: std::time::Instant,
+    #[cfg(test)]
+    pub(crate) toasts_shown: usize,
 }
 
 impl NotificationManager {
     pub fn new() -> Self {
+        Self::with_started_at(std::time::Instant::now())
+    }
+
+    fn with_started_at(started_at: std::time::Instant) -> Self {
         Self {
             sent_notifications: std::collections::HashSet::new(),
             previous_session_percent: std::collections::HashMap::new(),
             predictive_warning_keys: std::collections::HashSet::new(),
+            started_at,
+            #[cfg(test)]
+            toasts_shown: 0,
         }
+    }
+
+    #[cfg(test)]
+    fn new_past_quiet_period() -> Self {
+        Self::with_started_at(
+            std::time::Instant::now()
+                .checked_sub(STARTUP_QUIET_PERIOD + std::time::Duration::from_secs(1))
+                .unwrap_or_else(std::time::Instant::now),
+        )
+    }
+
+    fn in_startup_quiet_period(&self) -> bool {
+        self.started_at.elapsed() < STARTUP_QUIET_PERIOD
+    }
+
+    fn emit_toast(&mut self, title: &str, body: &str) {
+        if self.in_startup_quiet_period() {
+            tracing::debug!(
+                "Suppressing toast during startup quiet period: {} — {}",
+                title,
+                body
+            );
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.toasts_shown += 1;
+        }
+        self.show_toast(title, body);
     }
 
     pub fn record_predictive_observation(
@@ -212,11 +269,17 @@ impl NotificationManager {
             LocaleKey::PredictivePaceWarningBody,
             &[&eta],
         );
-        self.show_toast(&title, &body);
-        play_alert(AlertSound::Warning, settings);
+        self.emit_toast(&title, &body);
+        if !self.in_startup_quiet_period() {
+            play_alert(AlertSound::Warning, settings);
+        }
     }
 
-    /// Check usage and send notifications if thresholds are crossed
+    /// Check usage and send notifications if thresholds are crossed.
+    ///
+    /// Alerts are deduped per `(provider, window, severity)`. Dropping below the
+    /// high threshold (with hysteresis) re-arms that window only — a quiet weekly
+    /// meter must not clear a loud session alert (and vice versa).
     pub fn check_and_notify(
         &mut self,
         provider: ProviderId,
@@ -229,25 +292,42 @@ impl NotificationManager {
         }
 
         let thresholds = settings.usage_thresholds(provider, window);
-        let notification_type = if used_percent >= 100.0 {
+        let rearm_below = (thresholds.high - REARM_HYSTERESIS).max(0.0);
+
+        // Session depletion/restoration is owned by `check_session_transition` so
+        // we do not double-toast Exhausted + SessionDepleted for the same crossing.
+        let notification_type = if window == "session" && used_percent >= 100.0 {
+            None
+        } else if used_percent >= 100.0 {
             Some(NotificationType::Exhausted)
         } else if used_percent >= thresholds.critical {
             Some(NotificationType::CriticalUsage)
         } else if used_percent >= thresholds.high {
             Some(NotificationType::HighUsage)
+        } else if used_percent < rearm_below {
+            self.clear_window_alerts(provider, window);
+            None
         } else {
-            // Reset notifications if usage dropped
-            self.sent_notifications.retain(|(p, _)| *p != provider);
             None
         };
 
         if let Some(notif_type) = notification_type {
-            let key = (provider, notif_type);
+            let key = ThresholdAlertKey {
+                provider,
+                window: window.to_string(),
+                kind: notif_type,
+            };
             if !self.sent_notifications.contains(&key) {
-                self.send_notification(provider, used_percent, notif_type, settings);
+                // Mark before emit so startup quiet still arms state.
                 self.sent_notifications.insert(key);
+                self.send_notification(provider, window, used_percent, notif_type, settings);
             }
         }
+    }
+
+    fn clear_window_alerts(&mut self, provider: ProviderId, window: &str) {
+        self.sent_notifications
+            .retain(|key| !(key.provider == provider && key.window == window));
     }
 
     /// Send a notification for a status issue
@@ -257,17 +337,24 @@ impl NotificationManager {
         description: &str,
         settings: &Settings,
     ) {
-        let key = (provider, NotificationType::StatusIssue);
+        if !settings.show_notifications {
+            return;
+        }
+        let key = ThresholdAlertKey {
+            provider,
+            window: "status".to_string(),
+            kind: NotificationType::StatusIssue,
+        };
         if !self.sent_notifications.contains(&key) {
-            self.send_status_notification(provider, description, settings);
             self.sent_notifications.insert(key);
+            self.send_status_notification(provider, description, settings);
         }
     }
 
     /// Clear status issue notification (when resolved)
     pub fn clear_status_issue(&mut self, provider: ProviderId) {
         self.sent_notifications
-            .remove(&(provider, NotificationType::StatusIssue));
+            .retain(|key| !(key.provider == provider && key.kind == NotificationType::StatusIssue));
     }
 
     /// Check session quota transitions (depleted/restored)
@@ -284,11 +371,20 @@ impl NotificationManager {
 
         const DEPLETED_THRESHOLD: f64 = 99.99; // Consider depleted at 99.99%+
 
-        let previous_percent = self
-            .previous_session_percent
-            .get(&provider)
-            .copied()
-            .unwrap_or(0.0);
+        let Some(previous_percent) = self.previous_session_percent.get(&provider).copied() else {
+            // First observation: baseline only. If already depleted, arm the
+            // depleted flag quietly so a later restore can still notify.
+            if current_percent >= DEPLETED_THRESHOLD {
+                self.sent_notifications.insert(ThresholdAlertKey {
+                    provider,
+                    window: "session".to_string(),
+                    kind: NotificationType::SessionDepleted,
+                });
+            }
+            self.previous_session_percent
+                .insert(provider, current_percent);
+            return;
+        };
 
         // Check for depleted transition: was not depleted, now is
         if previous_percent < DEPLETED_THRESHOLD && current_percent >= DEPLETED_THRESHOLD {
@@ -297,64 +393,79 @@ impl NotificationManager {
                 "{} session depleted. 0% left. Will notify when available again.",
                 provider.display_name()
             );
-            self.show_toast(title, &body);
-            play_alert(AlertSound::Error, settings);
-            self.sent_notifications
-                .insert((provider, NotificationType::SessionDepleted));
+            self.emit_toast(title, &body);
+            if !self.in_startup_quiet_period() {
+                play_alert(AlertSound::Error, settings);
+            }
+            self.sent_notifications.insert(ThresholdAlertKey {
+                provider,
+                window: "session".to_string(),
+                kind: NotificationType::SessionDepleted,
+            });
         }
         // Check for restored transition: was depleted, now is not
         else if previous_percent >= DEPLETED_THRESHOLD && current_percent < DEPLETED_THRESHOLD {
-            // Only notify restored if we previously sent a depleted notification
-            if self
-                .sent_notifications
-                .contains(&(provider, NotificationType::SessionDepleted))
-            {
+            let depleted_key = ThresholdAlertKey {
+                provider,
+                window: "session".to_string(),
+                kind: NotificationType::SessionDepleted,
+            };
+            if self.sent_notifications.contains(&depleted_key) {
                 let title = NotificationType::SessionRestored.title();
                 let body = format!(
                     "{} session restored. Session quota is available again.",
                     provider.display_name()
                 );
-                self.show_toast(title, &body);
-                play_alert(AlertSound::Success, settings);
-                self.sent_notifications
-                    .remove(&(provider, NotificationType::SessionDepleted));
+                self.emit_toast(title, &body);
+                if !self.in_startup_quiet_period() {
+                    play_alert(AlertSound::Success, settings);
+                }
+                self.sent_notifications.remove(&depleted_key);
             }
         }
 
-        // Update the tracked previous percent
         self.previous_session_percent
             .insert(provider, current_percent);
     }
 
     /// Send a Windows toast notification with sound
     fn send_notification(
-        &self,
+        &mut self,
         provider: ProviderId,
+        window: &str,
         used_percent: f64,
         notif_type: NotificationType,
         settings: &Settings,
     ) {
         let title = notif_type.title();
-        let body = Self::notification_body(provider, used_percent, notif_type);
-        self.show_toast(title, &body);
-        play_alert(Self::alert_sound_for(notif_type), settings);
+        let body = Self::notification_body(provider, window, used_percent, notif_type);
+        self.emit_toast(title, &body);
+        if !self.in_startup_quiet_period() {
+            play_alert(Self::alert_sound_for(notif_type), settings);
+        }
     }
 
     fn notification_body(
         provider: ProviderId,
+        window: &str,
         used_percent: f64,
         notif_type: NotificationType,
     ) -> String {
         let provider_name = provider.display_name();
+        let window_label = match window {
+            "session" => "session",
+            "weekly" => "weekly",
+            other => other,
+        };
         match notif_type {
             NotificationType::HighUsage => {
-                format!("{provider_name} usage at {used_percent:.0}% - approaching limit")
+                format!("{provider_name} {window_label} at {used_percent:.0}% — approaching limit")
             }
             NotificationType::CriticalUsage => {
-                format!("{provider_name} usage at {used_percent:.0}% - critically high!")
+                format!("{provider_name} {window_label} at {used_percent:.0}% — critically high")
             }
             NotificationType::Exhausted => {
-                format!("{provider_name} usage limit exhausted ({used_percent:.0}%)")
+                format!("{provider_name} {window_label} exhausted ({used_percent:.0}%)")
             }
             NotificationType::StatusIssue => format!("{provider_name} is experiencing issues"),
             NotificationType::SessionDepleted => {
@@ -378,15 +489,17 @@ impl NotificationManager {
     }
 
     fn send_status_notification(
-        &self,
+        &mut self,
         provider: ProviderId,
         description: &str,
         settings: &Settings,
     ) {
         let title = NotificationType::StatusIssue.title();
         let body = format!("{}: {}", provider.display_name(), description);
-        self.show_toast(title, &body);
-        play_alert(AlertSound::Error, settings);
+        self.emit_toast(title, &body);
+        if !self.in_startup_quiet_period() {
+            play_alert(AlertSound::Error, settings);
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -685,5 +798,108 @@ mod tests {
             &reset,
             &pace(false, Some(3600.0)),
         ));
+    }
+
+    #[test]
+    fn threshold_alerts_do_not_retrigger_across_refreshes() {
+        let mut manager = NotificationManager::new_past_quiet_period();
+        let settings = Settings::default();
+
+        manager.check_and_notify(ProviderId::Cursor, "session", 80.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, "weekly", 20.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        // Simulate many refreshes with the same split (high session, quiet weekly).
+        for _ in 0..10 {
+            manager.check_and_notify(ProviderId::Cursor, "session", 82.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, "weekly", 25.0, &settings);
+        }
+        assert_eq!(
+            manager.toasts_shown, 1,
+            "quiet weekly must not clear session high-usage alert"
+        );
+    }
+
+    #[test]
+    fn threshold_alerts_are_isolated_per_window() {
+        let mut manager = NotificationManager::new_past_quiet_period();
+        let settings = Settings::default();
+
+        manager.check_and_notify(ProviderId::Claude, "session", 75.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, "weekly", 92.0, &settings);
+        assert_eq!(manager.toasts_shown, 2);
+
+        manager.check_and_notify(ProviderId::Claude, "session", 76.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, "weekly", 93.0, &settings);
+        assert_eq!(manager.toasts_shown, 2);
+    }
+
+    #[test]
+    fn threshold_alerts_rearm_only_after_hysteresis_drop() {
+        let mut manager = NotificationManager::new_past_quiet_period();
+        let settings = Settings::default();
+
+        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        // Still near the high threshold — do not re-arm.
+        manager.check_and_notify(ProviderId::Codex, "session", 68.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        // Drop clearly below high-hysteresis, then climb again.
+        manager.check_and_notify(ProviderId::Codex, "session", 60.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
+        assert_eq!(manager.toasts_shown, 2);
+    }
+
+    #[test]
+    fn session_transition_ignores_first_observation() {
+        let mut manager = NotificationManager::new_past_quiet_period();
+        let settings = Settings::default();
+
+        manager.check_session_transition(ProviderId::Claude, 100.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+
+        manager.check_session_transition(ProviderId::Claude, 100.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+
+        manager.check_session_transition(ProviderId::Claude, 40.0, &settings);
+        assert_eq!(
+            manager.toasts_shown, 1,
+            "restore should notify after quiet baseline"
+        );
+    }
+
+    #[test]
+    fn startup_quiet_period_suppresses_but_arms_state() {
+        let mut manager = NotificationManager::new();
+        let settings = Settings::default();
+
+        manager.check_and_notify(ProviderId::Cursor, "session", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, "weekly", 20.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+
+        // Even after quiet would end, armed state prevents a late flood for the
+        // same already-high reading.
+        manager.started_at = std::time::Instant::now()
+            .checked_sub(STARTUP_QUIET_PERIOD + std::time::Duration::from_secs(1))
+            .unwrap();
+        manager.check_and_notify(ProviderId::Cursor, "session", 95.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+    }
+
+    #[test]
+    fn session_exhaustion_does_not_double_toast_with_transition() {
+        let mut manager = NotificationManager::new_past_quiet_period();
+        let settings = Settings::default();
+
+        manager.check_session_transition(ProviderId::Claude, 50.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, "session", 100.0, &settings);
+        manager.check_session_transition(ProviderId::Claude, 100.0, &settings);
+        assert_eq!(
+            manager.toasts_shown, 1,
+            "only session-depleted should fire, not Exhausted + depleted"
+        );
     }
 }
