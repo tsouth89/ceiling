@@ -292,7 +292,8 @@ fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
         &token_accounts,
     );
 
-    assert_eq!(ctx.source_mode, SourceMode::Cli);
+    // Cursor defaults to Automatic and resolves IDE disk / browser cookies in-provider.
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
     assert!(ctx.manual_cookie_header.is_none());
 }
 
@@ -337,7 +338,8 @@ fn fetch_context_claude_explicit_cli_source_still_uses_cli() {
 
 #[test]
 fn fetch_context_manual_cookie_uses_web_without_browser_import() {
-    let settings = Settings::default();
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Cursor, "manual");
     let mut cookies = ManualCookies::default();
     cookies.set("cursor", "session=abc123");
     let api_keys = ApiKeys::default();

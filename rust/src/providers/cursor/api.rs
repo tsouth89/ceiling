@@ -50,7 +50,7 @@ impl CursorApi {
         self.build_result(usage_summary, user_info)
     }
 
-    fn get_cookie_header(&self) -> Result<String, ProviderError> {
+    pub(super) fn get_cookie_header(&self) -> Result<String, ProviderError> {
         browser_cookie_header(&COOKIE_DOMAINS)
     }
 

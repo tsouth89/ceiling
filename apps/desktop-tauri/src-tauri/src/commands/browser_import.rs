@@ -73,12 +73,23 @@ pub fn import_browser_cookies(
 
     if cookies.is_empty() {
         return Err(format!(
-            "No cookies found for {domain} in {}. Make sure you are signed in to that site in the browser.",
+            "No cookies found for {domain} in {}. Make sure you are signed in to that site in the browser. Chrome/Edge may block automatic import (App-Bound Encryption) — try Firefox, or for Cursor use Automatic to read the IDE session on disk.",
             browser.browser_type.display_name()
         ));
     }
 
-    let cookie_header = CookieExtractor::build_cookie_header(&cookies);
+    let mut cookie_header = CookieExtractor::build_cookie_header(&cookies);
+    if pid == codexbar::core::ProviderId::Cursor {
+        cookie_header = codexbar::providers::cursor::normalize_cookie_header(&cookie_header)
+            .filter(|header| {
+                header
+                    .to_ascii_lowercase()
+                    .contains("workoscursorsessiontoken=")
+            })
+            .ok_or_else(|| {
+                "Found cookies for cursor.com, but no WorkosCursorSessionToken. Sign in at cursor.com (Google SSO or email), then import again — or set Automatic to use the Cursor IDE session.".to_string()
+            })?;
+    }
     validate_single_line_secret(&cookie_header, "Cookie header", MAX_COOKIE_HEADER_LEN)?;
 
     // Persist as manual cookie.

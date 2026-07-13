@@ -430,7 +430,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 lang,
                 "manual",
                 "",
-                "Paste a Cookie header from a cursor.com request.",
+                "Paste WorkosCursorSessionToken=… from cursor.com cookies, or a bare session value / JWT.",
                 None,
             ),
         ],

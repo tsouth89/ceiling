@@ -1,8 +1,12 @@
 //! Cursor provider implementation
 //!
-//! Fetches usage data from Cursor's API using browser cookies
+//! Fetches usage data from Cursor's API using:
+//! 1. Pasted / imported session cookies
+//! 2. The local Cursor IDE session (`state.vscdb`)
+//! 3. Browser cookies for cursor.com / cursor.sh
 
 mod api;
+mod session;
 
 use async_trait::async_trait;
 
@@ -12,6 +16,7 @@ use crate::core::{
 };
 
 pub use api::CursorApi;
+pub use session::normalize_cookie_header;
 
 /// Cursor provider for fetching AI usage limits
 pub struct CursorProvider {
@@ -54,10 +59,45 @@ impl CursorProvider {
         &self,
         ctx: &FetchContext,
     ) -> Result<api::CursorUsageResult, ProviderError> {
-        if let Some(cookie_header) = ctx.manual_cookie_header.as_deref() {
-            self.api.fetch_usage_with_cookie_header(cookie_header).await
-        } else {
-            self.api.fetch_usage().await
+        let cookie_header = self.resolve_cookie_header(ctx)?;
+        self.api
+            .fetch_usage_with_cookie_header(&cookie_header)
+            .await
+    }
+
+    fn resolve_cookie_header(&self, ctx: &FetchContext) -> Result<String, ProviderError> {
+        if let Some(raw) = ctx.manual_cookie_header.as_deref() {
+            if let Some(header) = normalize_cookie_header(raw) {
+                return Ok(header);
+            }
+            return Err(ProviderError::Other(
+                "Cursor session paste was not recognized. Paste WorkosCursorSessionToken=… from cursor.com cookies, or the bare session value / JWT.".to_string(),
+            ));
+        }
+
+        match session::disk_session_cookie() {
+            Ok(header) => {
+                tracing::debug!("Using Cursor IDE disk session for usage fetch");
+                return Ok(header);
+            }
+            Err(ProviderError::NotInstalled(_)) | Err(ProviderError::AuthRequired) => {}
+            Err(err) => {
+                tracing::debug!("Cursor IDE disk session unavailable: {err}");
+            }
+        }
+
+        match self.api.get_cookie_header() {
+            Ok(header) => {
+                if let Some(normalized) = normalize_cookie_header(&header) {
+                    Ok(normalized)
+                } else {
+                    Ok(header)
+                }
+            }
+            Err(err) => {
+                tracing::debug!("Cursor browser cookie lookup failed: {err}");
+                Err(ProviderError::AuthRequired)
+            }
         }
     }
 }
@@ -91,7 +131,12 @@ impl Provider for CursorProvider {
             }
             Err(e) => {
                 tracing::warn!("Cursor API fetch failed: {}", e);
-                Err(e)
+                Err(match e {
+                    ProviderError::AuthRequired => ProviderError::Other(
+                        "Cursor auth failed. Automatic uses your signed-in Cursor IDE session when available. Otherwise paste WorkosCursorSessionToken from cursor.com (Application → Cookies), or import via Firefox if Chrome/Edge blocks cookie access.".to_string(),
+                    ),
+                    other => other,
+                })
             }
         }
     }

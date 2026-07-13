@@ -63,11 +63,11 @@ impl TokenAccountSupport {
             }),
             ProviderId::Cursor => Some(TokenAccountSupport {
                 title: "Session tokens",
-                subtitle: "Store multiple Cursor Cookie headers.",
-                placeholder: "Cookie: ...",
+                subtitle: "Paste WorkosCursorSessionToken from cursor.com, or a bare session value / JWT. Automatic can also read the signed-in Cursor IDE session on disk.",
+                placeholder: "WorkosCursorSessionToken=… or bare user_…%3A%3A… / JWT",
                 injection: TokenInjection::CookieHeader,
                 requires_manual_cookie_source: true,
-                cookie_name: None,
+                cookie_name: Some("WorkosCursorSessionToken"),
             }),
             ProviderId::OpenCode => Some(TokenAccountSupport {
                 title: "Session tokens",
@@ -272,6 +272,12 @@ impl TokenAccountSupport {
 
     /// Normalize a cookie header for a provider
     pub fn normalized_cookie_header(provider: ProviderId, token: &str) -> String {
+        if provider == ProviderId::Cursor
+            && let Some(header) = crate::providers::cursor::normalize_cookie_header(token)
+        {
+            return header;
+        }
+
         let trimmed = token.trim();
         let Some(support) = Self::for_provider(provider) else {
             return trimmed.to_string();
@@ -281,12 +287,17 @@ impl TokenAccountSupport {
             return trimmed.to_string();
         };
 
-        let lower = trimmed.to_lowercase();
-        if lower.contains("cookie:") || trimmed.contains('=') {
-            return trimmed.to_string();
+        let mut header = trimmed;
+        let lower = header.to_lowercase();
+        if lower.starts_with("cookie:") {
+            header = header["cookie:".len()..].trim();
         }
 
-        format!("{}={}", cookie_name, trimmed)
+        if header.contains('=') {
+            return header.to_string();
+        }
+
+        format!("{}={}", cookie_name, header)
     }
 
     /// Check if a token is a Claude OAuth token

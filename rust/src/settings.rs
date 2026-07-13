@@ -666,15 +666,20 @@ impl Settings {
         self.provider_configs.entry(id).or_default()
     }
 
-    /// Cookie source for `id`, or the default `"manual"` if unset.
+    /// Cookie source for `id`, or a provider-specific default if unset.
     ///
-    /// Cursor users should switch to Automatic (or Import) after signing into
-    /// cursor.com in a browser — there is no OAuth path for Cursor.
+    /// Cursor defaults to Automatic so Ceiling can use the signed-in IDE session
+    /// on disk (and browser cookies when available). Other cookie providers still
+    /// default to Manual.
     pub fn cookie_source(&self, id: ProviderId) -> &str {
         self.provider_configs
             .get(&id)
             .and_then(|c| c.cookie_source.as_deref())
-            .unwrap_or(DEFAULT_COOKIE_SOURCE)
+            .unwrap_or(if id == ProviderId::Cursor {
+                "auto"
+            } else {
+                DEFAULT_COOKIE_SOURCE
+            })
     }
 
     pub fn set_cookie_source(&mut self, id: ProviderId, source: impl Into<String>) {

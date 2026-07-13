@@ -58,6 +58,9 @@ pub(crate) fn build_fetch_context(
                     SourceMode::Web
                 } else if id == ProviderId::Claude && usage_source != SourceMode::Cli {
                     SourceMode::OAuth
+                } else if id == ProviderId::Cursor {
+                    // Provider resolves IDE disk session / browser cookies itself.
+                    SourceMode::Web
                 } else {
                     SourceMode::Cli
                 };

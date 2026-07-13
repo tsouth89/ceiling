@@ -744,7 +744,12 @@ fn test_legacy_per_provider_fields_migrate_into_provider_configs() {
     assert_eq!(settings.cookie_source(ProviderId::Alibaba), "manual");
     // Untouched providers fall through to the default "manual" to avoid
     // background browser-cookie reads unless the user opts into Automatic.
+    // Cursor is the exception: it defaults to Automatic so the IDE disk session works.
     assert_eq!(settings.cookie_source(ProviderId::Amp), "manual");
+    assert_eq!(
+        Settings::default().cookie_source(ProviderId::Cursor),
+        "auto"
+    );
 
     // Manual cookie headers + api regions
     assert_eq!(

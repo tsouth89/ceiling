@@ -134,8 +134,16 @@ pub fn set_manual_cookie(
     }
     validate_single_line_secret(&cookie_header, "Cookie header", MAX_COOKIE_HEADER_LEN)?;
 
+    let normalized = if id == codexbar::core::ProviderId::Cursor {
+        codexbar::providers::cursor::normalize_cookie_header(&cookie_header).ok_or_else(|| {
+            "Unrecognized Cursor session. Paste WorkosCursorSessionToken=… from Application → Cookies → cursor.com, or a bare session value / JWT.".to_string()
+        })?
+    } else {
+        codexbar::core::TokenAccountSupport::normalized_cookie_header(id, &cookie_header)
+    };
+
     let mut cookies = ManualCookies::load();
-    cookies.set(id.cli_name(), cookie_header.trim());
+    cookies.set(id.cli_name(), normalized.trim());
     cookies.save().map_err(|e| e.to_string())?;
     Ok(get_manual_cookies())
 }
