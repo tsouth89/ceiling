@@ -69,6 +69,14 @@ pub struct NamedRateWindowSnapshot {
     pub window: RateWindowSnapshot,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InactiveRateWindowSnapshot {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
 /// Pace prediction snapshot for tray/bridge display.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +102,7 @@ pub struct ProviderUsageSnapshot {
     pub model_specific: Option<RateWindowSnapshot>,
     pub tertiary: Option<RateWindowSnapshot>,
     pub extra_rate_windows: Vec<NamedRateWindowSnapshot>,
+    pub inactive_rate_windows: Vec<InactiveRateWindowSnapshot>,
     pub cost: Option<CostSnapshotBridge>,
     pub plan_name: Option<String>,
     pub account_email: Option<String>,
@@ -193,6 +202,15 @@ impl ProviderUsageSnapshot {
                     window: RateWindowSnapshot::from_rate_window(&extra.window),
                 })
                 .collect(),
+            inactive_rate_windows: usage
+                .inactive_rate_windows
+                .iter()
+                .map(|window| InactiveRateWindowSnapshot {
+                    id: window.id.clone(),
+                    title: window.title.clone(),
+                    description: window.description.clone(),
+                })
+                .collect(),
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {
                 used: c.used,
                 limit: c.limit,
@@ -239,6 +257,7 @@ impl ProviderUsageSnapshot {
             model_specific: None,
             tertiary: None,
             extra_rate_windows: Vec::new(),
+            inactive_rate_windows: Vec::new(),
             cost: None,
             plan_name: None,
             account_email: None,

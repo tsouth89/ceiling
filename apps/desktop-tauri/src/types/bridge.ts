@@ -381,6 +381,11 @@ export interface ProviderUsageSnapshot {
     title: string;
     window: RateWindowSnapshot;
   }>;
+  inactiveRateWindows?: Array<{
+    id: string;
+    title: string;
+    description: string;
+  }>;
   cost: CostSnapshotBridge | null;
   planName: string | null;
   accountEmail: string | null;

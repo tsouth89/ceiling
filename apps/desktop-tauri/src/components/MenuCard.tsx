@@ -272,6 +272,13 @@ interface MetricEntry {
   snap: RateWindowSnapshot;
 }
 
+interface InactiveMetricEntry {
+  id: string;
+  label: string;
+  description: string;
+  inactive: true;
+}
+
 type MetricPaceView =
   | { kind: "budget"; budget: NonNullable<ReturnType<typeof getPaceBudget>> }
   | { kind: "reserve"; percent: number }
@@ -465,7 +472,7 @@ export default function MenuCard({
     : null;
   const planName = !isWayfinder ? displayPlanName(provider.planName) : null;
 
-  const metrics: MetricEntry[] = [
+  const metrics: Array<MetricEntry | InactiveMetricEntry> = [
     ...(isWayfinder
       ? []
       : [
@@ -499,6 +506,14 @@ export default function MenuCard({
       id: `extra-${extra.id}`,
       label: extra.title,
       snap: extra.window,
+    });
+  }
+  for (const inactive of provider.inactiveRateWindows ?? []) {
+    metrics.push({
+      id: `inactive-${inactive.id}`,
+      label: inactive.title,
+      description: inactive.description,
+      inactive: true,
     });
   }
   const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
@@ -562,24 +577,32 @@ export default function MenuCard({
         <div className="menu-card__content">
           {!provider.error && hasMetrics && (
             <section className="menu-card__group menu-card__metrics">
-              {visibleMetrics.map((m) => (
-                <MetricRow
-                  key={m.id}
-                  title={m.label}
-                  snap={m.snap}
-                  exhaustedLabel={t("DetailWindowExhausted")}
-                  resetTimeRelative={resetTimeRelative}
-                  showResetWhenExhausted={showResetWhenExhausted}
-                  showAsUsed={showAsUsed}
-                  expanded={expandedPaceWindow === m.id}
-                  onToggleExpanded={() => {
-                    setExpandedPaceWindow((current) =>
-                      current === m.id ? null : m.id,
-                    );
-                    requestAnimationFrame(() => onLayoutChange?.());
-                  }}
-                />
-              ))}
+              {visibleMetrics.map((m) =>
+                "inactive" in m ? (
+                  <div className="menu-metric menu-metric--inactive" key={m.id}>
+                    <span className="menu-metric__title">{m.label}</span>
+                    <strong>Not currently enforced</strong>
+                    <span className="menu-metric__reset">{m.description}</span>
+                  </div>
+                ) : (
+                  <MetricRow
+                    key={m.id}
+                    title={m.label}
+                    snap={m.snap}
+                    exhaustedLabel={t("DetailWindowExhausted")}
+                    resetTimeRelative={resetTimeRelative}
+                    showResetWhenExhausted={showResetWhenExhausted}
+                    showAsUsed={showAsUsed}
+                    expanded={expandedPaceWindow === m.id}
+                    onToggleExpanded={() => {
+                      setExpandedPaceWindow((current) =>
+                        current === m.id ? null : m.id,
+                      );
+                      requestAnimationFrame(() => onLayoutChange?.());
+                    }}
+                  />
+                ),
+              )}
             </section>
           )}
 

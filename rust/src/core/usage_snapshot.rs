@@ -46,6 +46,30 @@ pub struct NamedRateWindow {
     pub window: RateWindow,
 }
 
+/// A known provider limit window that was deliberately not reported in an
+/// otherwise-successful snapshot. This is distinct from a 0% usage window:
+/// the provider has not supplied a limit to meter right now.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InactiveRateWindow {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
+impl InactiveRateWindow {
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description: description.into(),
+        }
+    }
+}
+
 impl NamedRateWindow {
     pub fn new(id: impl Into<String>, title: impl Into<String>, window: RateWindow) -> Self {
         Self {
@@ -78,6 +102,10 @@ pub struct UsageSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_rate_windows: Vec<NamedRateWindow>,
 
+    /// Known windows that a provider is not currently enforcing or reporting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inactive_rate_windows: Vec<InactiveRateWindow>,
+
     /// When this snapshot was captured
     pub updated_at: DateTime<Utc>,
 
@@ -103,6 +131,7 @@ impl UsageSnapshot {
             model_specific: None,
             tertiary: None,
             extra_rate_windows: Vec::new(),
+            inactive_rate_windows: Vec::new(),
             updated_at: Utc::now(),
             account_email: None,
             account_organization: None,
@@ -137,6 +166,18 @@ impl UsageSnapshot {
     ) -> Self {
         self.extra_rate_windows
             .push(NamedRateWindow::new(id, title, window));
+        self
+    }
+
+    /// Builder pattern: append a named window with no active provider meter.
+    pub fn with_inactive_rate_window(
+        mut self,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.inactive_rate_windows
+            .push(InactiveRateWindow::new(id, title, description));
         self
     }
 

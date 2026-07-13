@@ -285,7 +285,8 @@ impl CodexApi {
             .map(|s| s.to_string());
 
         // Extract rate limit info - handle multiple possible structures
-        let (primary, secondary, code_review) = self.extract_rate_limits(json);
+        let (primary, secondary, code_review, five_hour_not_enforced) =
+            self.extract_rate_limits(json);
 
         // Build login method string
         let login_method = plan_type.as_ref().map(|pt| match pt.as_str() {
@@ -317,6 +318,13 @@ impl CodexApi {
         if let Some(cr) = code_review {
             usage = usage.with_model_specific(cr);
         }
+        if five_hour_not_enforced {
+            usage = usage.with_inactive_rate_window(
+                "codex-five-hour",
+                "5-hour",
+                "Not currently enforced by OpenAI",
+            );
+        }
         for extra in self.extract_additional_rate_limits(json) {
             usage.extra_rate_windows.push(extra);
         }
@@ -333,7 +341,7 @@ impl CodexApi {
     fn extract_rate_limits(
         &self,
         json: &serde_json::Value,
-    ) -> (RateWindow, Option<RateWindow>, Option<RateWindow>) {
+    ) -> (RateWindow, Option<RateWindow>, Option<RateWindow>, bool) {
         // Try rate_limit object
         if let Some(rate_limit) = json.get("rate_limit") {
             let primary_opt = rate_limit
@@ -349,13 +357,16 @@ impl CodexApi {
                 .map(|w| self.parse_window(w));
 
             // If primary is missing, promote secondary to primary (weekly-only plans)
-            let (primary, secondary) = match (primary_opt, secondary_opt) {
-                (Some(p), s) => (p, s),
-                (None, Some(s)) => (s, None),
-                (None, None) => (RateWindow::new(0.0), None),
+            let (primary, secondary, five_hour_not_enforced) = match (primary_opt, secondary_opt) {
+                (Some(p), s) => (p, s, false),
+                // OpenAI occasionally removes the session meter while retaining
+                // weekly usage. Preserve the weekly window and surface the absent
+                // five-hour meter explicitly instead of fabricating 100% left.
+                (None, Some(s)) => (s, None, true),
+                (None, None) => (RateWindow::new(0.0), None, false),
             };
 
-            return (primary, secondary, code_review);
+            return (primary, secondary, code_review, five_hour_not_enforced);
         }
 
         // Try rate_limits array
@@ -365,7 +376,7 @@ impl CodexApi {
             let primary = self.parse_window(first);
             let secondary = rate_limits.get(1).map(|w| self.parse_window(w));
             let code_review = rate_limits.get(2).map(|w| self.parse_window(w));
-            return (primary, secondary, code_review);
+            return (primary, secondary, code_review, false);
         }
 
         // Try direct fields
@@ -375,7 +386,7 @@ impl CodexApi {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
 
-        (RateWindow::new(used_percent), None, None)
+        (RateWindow::new(used_percent), None, None, false)
     }
 
     fn parse_window(&self, window: &serde_json::Value) -> RateWindow {
@@ -925,6 +936,31 @@ mod tests {
         assert_eq!(usage.extra_rate_windows[1].id, "codex-spark-weekly");
         assert_eq!(usage.extra_rate_windows[1].title, "Codex Spark Weekly");
         assert_eq!(usage.extra_rate_windows[1].window.used_percent, 62.0);
+    }
+
+    #[test]
+    fn preserves_a_lifted_five_hour_window_when_only_weekly_is_reported() {
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "plan_type": "pro",
+                "rate_limit": {
+                    "secondary_window": {
+                        "used_percent": 24,
+                        "limit_window_seconds": 604800
+                    }
+                }
+            }))
+            .expect("codex usage");
+
+        assert_eq!(usage.primary.window_minutes, Some(604800 / 60));
+        assert_eq!(usage.primary.used_percent, 24.0);
+        assert_eq!(usage.inactive_rate_windows.len(), 1);
+        assert_eq!(usage.inactive_rate_windows[0].id, "codex-five-hour");
+        assert_eq!(
+            usage.inactive_rate_windows[0].description,
+            "Not currently enforced by OpenAI"
+        );
     }
 
     #[test]

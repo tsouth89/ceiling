@@ -1066,6 +1066,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             }),
+            inactive_rate_windows: Vec::new(),
             extra_rate_windows: Vec::new(),
             cost: cost.map(|(used, limit)| crate::commands::CostSnapshotBridge {
                 used,
