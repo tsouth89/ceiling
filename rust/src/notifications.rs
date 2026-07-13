@@ -1,4 +1,4 @@
-//! System notifications for CodexBar
+//! System notifications for Ceiling
 //!
 //! Provides Windows toast notifications for usage alerts
 
@@ -455,6 +455,8 @@ impl NotificationManager {
         let window_label = match window {
             "session" => "session",
             "weekly" => "weekly",
+            "monthly" => "monthly",
+            "primary" => "usage",
             other => other,
         };
         match notif_type {
@@ -509,7 +511,7 @@ impl NotificationManager {
         use std::sync::Once;
 
         // Register our AUMID (App User Model ID) exactly once per process so that
-        // CreateToastNotifier("CodexBar") finds a valid registration rather than
+        // CreateToastNotifier("Ceiling") finds a valid registration rather than
         // silently returning a null notifier.
         static AUMID_INIT: Once = Once::new();
         AUMID_INIT.call_once(ensure_aumid_registered);
@@ -540,11 +542,11 @@ impl NotificationManager {
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml($template)
     $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("CodexBar")
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Ceiling")
     if ($null -eq $notifier) {{ throw "CreateToastNotifier returned null" }}
     $notifier.Show($toast)
 }} catch {{
-    [System.Console]::Error.WriteLine("CodexBar toast failed: $_")
+    [System.Console]::Error.WriteLine("Ceiling toast failed: $_")
     exit 1
 }}"#,
             safe_title, safe_body
@@ -573,7 +575,7 @@ impl NotificationManager {
         // Try notify-send first (works on most Linux distros including WSL with WSLg)
         if let Ok(output) = Command::new("notify-send")
             .args([
-                "--app-name=CodexBar",
+                "--app-name=Ceiling",
                 "--icon=dialog-information",
                 title,
                 body,
@@ -609,8 +611,8 @@ impl Default for NotificationManager {
     }
 }
 
-/// Register the CodexBar App User Model ID (AUMID) in the Windows registry so that
-/// `CreateToastNotifier("CodexBar")` resolves to a valid notifier instead of returning
+/// Register the Ceiling App User Model ID (AUMID) in the Windows registry so that
+/// `CreateToastNotifier("Ceiling")` resolves to a valid notifier instead of returning
 /// null.  Must be called at least once before the first toast.  Safe to call multiple
 /// times (idempotent registry write).
 #[cfg(target_os = "windows")]
@@ -622,12 +624,12 @@ fn ensure_aumid_registered() {
     // HKCU\SOFTWARE\Classes\AppUserModelId\<AUMID> is the documented path for
     // registering Win32 desktop app AUMIDs without a COM server or Start Menu shortcut.
     let result = hkcu
-        .create_subkey(r"SOFTWARE\Classes\AppUserModelId\CodexBar")
-        .and_then(|(key, _)| key.set_value("DisplayName", &"CodexBar"));
+        .create_subkey(r"SOFTWARE\Classes\AppUserModelId\Ceiling")
+        .and_then(|(key, _)| key.set_value("DisplayName", &"Ceiling"));
 
     match result {
-        Ok(()) => tracing::debug!("CodexBar AUMID registered for Windows toast notifications"),
-        Err(e) => tracing::warn!("Failed to register CodexBar AUMID: {}", e),
+        Ok(()) => tracing::debug!("Ceiling AUMID registered for Windows toast notifications"),
+        Err(e) => tracing::warn!("Failed to register Ceiling AUMID: {}", e),
     }
 }
 

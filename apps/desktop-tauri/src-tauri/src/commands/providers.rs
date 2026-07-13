@@ -415,6 +415,50 @@ fn update_tray_and_notifications(
     Ok(())
 }
 
+/// Classify a rate window by its reset cadence into a stable notification key,
+/// independent of whether it currently sits in the primary or secondary slot.
+///
+/// Codex and Claude promote the weekly window into `primary` whenever the API
+/// omits the 5-hour meter, so keying alerts by slot makes that swap look like a
+/// brand-new threshold crossing — and drives a false session depleted/restored
+/// cycle on every refresh. Keying by cadence keeps each real window's alert
+/// stable across the swap.
+fn window_notify_key(window_minutes: Option<u32>) -> &'static str {
+    match window_minutes {
+        Some(m) if m <= 720 => "session",   // 5-hour class (<= 12h)
+        Some(m) if m <= 20_160 => "weekly", // up to two weeks
+        Some(_) => "monthly",               // monthly or longer
+        None => "primary",                  // unknown cadence — never the session
+    }
+}
+
+/// Plan per-window threshold alerts for a snapshot's primary/secondary windows.
+///
+/// Returns stable, cadence-based window keys (so a primary/secondary swap cannot
+/// masquerade as a new crossing) and the used-percent of the true 5-hour session
+/// window *only when it is actually present this refresh* — a promoted weekly is
+/// never reported as the session.
+fn plan_threshold_alerts(
+    primary: &RateWindowSnapshot,
+    secondary: Option<&RateWindowSnapshot>,
+) -> (Vec<(&'static str, f64)>, Option<f64>) {
+    let mut alerts: Vec<(&'static str, f64)> = Vec::new();
+    let mut session_percent: Option<f64> = None;
+    let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+
+    for window in std::iter::once(primary).chain(secondary) {
+        let key = window_notify_key(window.window_minutes);
+        if key == "session" {
+            session_percent = Some(window.used_percent);
+        }
+        if seen.insert(key) {
+            alerts.push((key, window.used_percent));
+        }
+    }
+
+    (alerts, session_percent)
+}
+
 fn notify_usage_thresholds(
     state: &tauri::State<'_, Mutex<AppState>>,
     settings: &Settings,
@@ -427,25 +471,21 @@ fn notify_usage_thresholds(
             if snapshot.error.is_none()
                 && let Some(&provider) = cli_map.get(snapshot.provider_id.as_str())
             {
-                guard.notification_manager.check_and_notify(
-                    provider,
-                    "session",
-                    snapshot.primary.used_percent,
-                    settings,
-                );
-                if let Some(weekly) = &snapshot.secondary {
-                    guard.notification_manager.check_and_notify(
-                        provider,
-                        "weekly",
-                        weekly.used_percent,
-                        settings,
-                    );
+                let (alerts, session_percent) =
+                    plan_threshold_alerts(&snapshot.primary, snapshot.secondary.as_ref());
+                for (window_key, used_percent) in alerts {
+                    guard
+                        .notification_manager
+                        .check_and_notify(provider, window_key, used_percent, settings);
                 }
-                guard.notification_manager.check_session_transition(
-                    provider,
-                    snapshot.primary.used_percent,
-                    settings,
-                );
+                // Session depleted/restored tracks the real 5-hour window only.
+                // When the API omits it, the promoted weekly must not be read as
+                // the session — that was the depleted/restored spam.
+                if let Some(percent) = session_percent {
+                    guard
+                        .notification_manager
+                        .check_session_transition(provider, percent, settings);
+                }
                 notify_predictive_pace(
                     &mut guard.notification_manager,
                     provider,
@@ -624,5 +664,48 @@ mod predictive_warning_tests {
             predictive_warning_identity(ProviderId::Codex, "cli", Some("  "), None),
             None
         );
+    }
+
+    fn rw(window_minutes: Option<u32>, used_percent: f64) -> RateWindowSnapshot {
+        RateWindowSnapshot {
+            used_percent,
+            remaining_percent: 100.0 - used_percent,
+            window_minutes,
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: used_percent >= 100.0,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+        }
+    }
+
+    #[test]
+    fn window_key_classifies_by_reset_cadence() {
+        assert_eq!(window_notify_key(Some(300)), "session"); // 5-hour
+        assert_eq!(window_notify_key(Some(10_080)), "weekly");
+        assert_eq!(window_notify_key(Some(43_200)), "monthly");
+        assert_eq!(window_notify_key(None), "primary");
+    }
+
+    /// Regression: Codex's API intermittently omits the 5-hour meter, so the app
+    /// promotes the weekly window into `primary`. Keying by slot made every swap
+    /// look like a new crossing and a session depleted/restored cycle. Keying by
+    /// cadence must keep the weekly stable and never read it as the session.
+    #[test]
+    fn promoted_weekly_is_not_treated_as_session() {
+        // 5-hour present: primary = 5h (100%), secondary = weekly (75%).
+        let (alerts, session) =
+            plan_threshold_alerts(&rw(Some(300), 100.0), Some(&rw(Some(10_080), 75.0)));
+        assert_eq!(session, Some(100.0));
+        assert!(alerts.contains(&("session", 100.0)));
+        assert!(alerts.contains(&("weekly", 75.0)));
+
+        // Next refresh omits the 5-hour, so the weekly is promoted to primary.
+        // It must NOT be reported as the session, and it keeps the "weekly" key.
+        let (alerts, session) = plan_threshold_alerts(&rw(Some(10_080), 75.0), None);
+        assert_eq!(session, None, "a promoted weekly must not be read as the session");
+        assert_eq!(alerts, vec![("weekly", 75.0)]);
     }
 }
