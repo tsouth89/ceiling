@@ -6328,6 +6328,78 @@ body:has(.dashboard-shell) #root {
   font-weight: 600;
 }
 
+/* ── Charts tab ─────────────────────────────────────────────────────── */
+.charts-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* Provider selector: pill chips across the providers that report history. */
+.charts-provider-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.charts-provider-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ceiling-glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.charts-provider-tab:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+.charts-provider-tab[data-active="true"] {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--ceiling-accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ceiling-accent) 40%, transparent);
+}
+.charts-provider-tab__icon {
+  flex-shrink: 0;
+}
+/* The reused ChartsSection reads as a contained chart card in the dashboard. */
+.charts-panel .provider-detail-charts {
+  margin-bottom: 0;
+  padding: 14px;
+  border-color: var(--ceiling-glass-border);
+  border-radius: 12px;
+}
+/* The shared BarChart/LineChart render at a fixed ~280px for the narrow
+   Settings pane. In the dashboard's wider (but column-capped) card, let the
+   SVG fill the width so it doesn't float in dead space; the viewBox keeps the
+   aspect ratio, so it just scales up. */
+.charts-panel .chart__svg {
+  width: 100%;
+  height: auto;
+}
+.charts-empty {
+  margin: auto;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.charts-empty strong {
+  display: block;
+  font-size: 15px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
 /* Bottom status bar */
 .dashboard-status {
   display: flex;

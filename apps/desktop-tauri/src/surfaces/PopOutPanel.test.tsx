@@ -278,16 +278,22 @@ describe("PopOutPanel", () => {
       expect(container.querySelector(".dashboard")).not.toBeNull();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Charts" }));
-
-    expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Charts");
+    // Activity is a real section now — switching to it shows the timeline, not
+    // the foundation-phase placeholder.
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Activity");
     expect(
-      screen.getByRole("button", { name: "Charts" }).getAttribute("aria-current"),
+      screen.getByRole("button", { name: "Activity" }).getAttribute("aria-current"),
     ).toBe("page");
     expect(
       screen.getByRole("button", { name: "Overview" }).getAttribute("aria-current"),
     ).toBeNull();
-    // Not-yet-built sections show the foundation-phase placeholder.
+    expect(container.querySelector(".activity-timeline")).not.toBeNull();
+    expect(container.querySelector(".dashboard-placeholder")).toBeNull();
+
+    // Accounts is still a foundation-phase placeholder.
+    fireEvent.click(screen.getByRole("button", { name: "Accounts" }));
+    expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Accounts");
     expect(container.querySelector(".dashboard-placeholder")).not.toBeNull();
   });
 

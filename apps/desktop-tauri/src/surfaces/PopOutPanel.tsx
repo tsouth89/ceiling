@@ -10,6 +10,7 @@ import MenuCard from "../components/MenuCard";
 import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import ActivityTimeline from "./ActivityTimeline";
+import ChartsPanel from "./ChartsPanel";
 import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
 import { orderProviderSnapshots } from "../lib/providerOrder";
@@ -388,6 +389,8 @@ export default function PopOutPanel({
               )
             ) : activeSection === "activity" ? (
               <ActivityTimeline providers={sorted} />
+            ) : activeSection === "charts" ? (
+              <ChartsPanel providers={sorted} />
             ) : (
               <div className="dashboard-placeholder">
                 <strong>{meta.title} — coming soon</strong>
