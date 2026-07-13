@@ -517,7 +517,11 @@ fn fetch_context_claude_session_token_account_uses_web_cookie() {
 
 #[test]
 fn fetch_context_token_account_takes_precedence_over_manual_cookie() {
-    let settings = Settings::default();
+    // Manual-cookie mode: this scenario is specifically about a token-account
+    // cookie overriding a manually-entered one, so pin the source explicitly
+    // rather than depending on Cursor's default cookie source.
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Cursor, "manual");
     let mut cookies = ManualCookies::default();
     cookies.set("cursor", "manual=old");
     let api_keys = ApiKeys::default();
