@@ -6061,7 +6061,7 @@ html:has(.menu-surface--tray) {
   min-height: 0;
 }
 .dashboard-header {
-  padding: 16px 22px 6px;
+  padding: 16px max(22px, calc((100% - 640px) / 2)) 6px;
   flex-shrink: 0;
 }
 .dashboard-header__title {
@@ -6080,16 +6080,13 @@ html:has(.menu-surface--tray) {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 20px 16px;
+  /* Center a comfortable content column (max ~640px) so cards never stretch
+     thin in a wide window and stay aligned with the header — the classic
+     macOS "contained content" read. */
+  padding: 4px max(22px, calc((100% - 640px) / 2)) 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-/* Keep the content in a comfortable column so cards never stretch thin in a
-   wide window — the classic macOS "contained content" read. */
-.dashboard-body > * {
-  width: 100%;
-  max-width: 680px;
 }
 .dashboard-body .provider-grid {
   margin-bottom: 2px;
