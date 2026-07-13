@@ -116,7 +116,7 @@ body.floatbar-window #root {
   -webkit-backdrop-filter: blur(18px) saturate(118%);
   border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.1));
   box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 82%, transparent),
+    inset 2px 0 0 0 color-mix(in srgb, var(--ceiling-accent, #35c2da) 72%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
     0 1px 3px rgba(15, 23, 42, 0.28);
   color: rgba(241, 245, 249, 0.95);
@@ -330,7 +330,7 @@ body.floatbar-window #root {
   );
   border-color: var(--ceiling-glass-border, rgba(15, 23, 42, 0.08));
   box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, var(--ceiling-accent, #1a9bb5)) 72%, transparent),
+    inset 2px 0 0 0 color-mix(in srgb, var(--ceiling-accent, #1a9bb5) 72%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.55),
     0 1px 2px rgba(0, 0, 0, 0.12);
   color: rgba(15, 23, 42, 0.92);
@@ -428,7 +428,7 @@ body.floatbar-window #root {
   -webkit-backdrop-filter: blur(18px) saturate(118%);
   border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.1));
   box-shadow:
-    inset 2px 0 0 0 color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 78%, transparent),
+    inset 2px 0 0 0 color-mix(in srgb, var(--ceiling-accent, #35c2da) 72%, transparent),
     0 1px 3px rgba(0, 0, 0, 0.28);
 }
 .floatbar--floating .floatbar__pill--warn {
@@ -476,4 +476,84 @@ body.floatbar-window #root {
 }
 .floatbar--floating.floatbar--light-bg .floatbar__handle:hover {
   background-color: rgba(20, 22, 26, 0.18);
+}
+
+/* ── Right-click action row (FloatBarMenu) ─────────────────────────────
+ * Renders IN PLACE of the pills, so the window just resizes to fit. Reads as
+ * one compact glass pill of labeled actions. */
+.floatbar__menu {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2px * var(--floatbar-scale, 1));
+  padding: calc(3px * var(--floatbar-scale, 1));
+  border-radius: calc(12px * var(--floatbar-scale, 1));
+  background: color-mix(
+    in srgb,
+    var(--ceiling-glass-bg, rgba(28, 32, 38, 0.72)) 94%,
+    transparent
+  );
+  backdrop-filter: blur(18px) saturate(118%);
+  -webkit-backdrop-filter: blur(18px) saturate(118%);
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.1));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 3px 12px rgba(0, 0, 0, 0.36);
+}
+.floatbar--vertical .floatbar__menu {
+  flex-direction: column;
+  align-items: stretch;
+}
+.floatbar__menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5px * var(--floatbar-scale, 1));
+  padding: calc(4px * var(--floatbar-scale, 1)) calc(9px * var(--floatbar-scale, 1));
+  border: 0;
+  border-radius: calc(8px * var(--floatbar-scale, 1));
+  background: transparent;
+  color: rgba(241, 245, 249, 0.88);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: calc(10.5px * var(--floatbar-scale, 1));
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+.floatbar__menu-item svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.floatbar__menu-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.floatbar__menu-item:focus-visible {
+  outline: 2px solid var(--ceiling-accent, #35c2da);
+  outline-offset: -2px;
+}
+.floatbar__menu-item--active {
+  background: color-mix(in srgb, var(--ceiling-accent, #35c2da) 20%, transparent);
+  color: color-mix(in srgb, var(--ceiling-accent, #35c2da) 55%, white);
+}
+.floatbar--light-bg .floatbar__menu {
+  background: color-mix(
+    in srgb,
+    var(--ceiling-glass-bg, rgba(248, 252, 255, 0.86)) 95%,
+    transparent
+  );
+  border-color: var(--ceiling-glass-border, rgba(15, 23, 42, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 3px 12px rgba(0, 0, 0, 0.16);
+}
+.floatbar--light-bg .floatbar__menu-item {
+  color: rgba(15, 23, 42, 0.85);
+}
+.floatbar--light-bg .floatbar__menu-item:hover {
+  background: rgba(20, 22, 26, 0.1);
+  color: rgba(15, 23, 42, 1);
 }

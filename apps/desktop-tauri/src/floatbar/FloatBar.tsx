@@ -15,7 +15,9 @@ import { useProviders } from "../hooks/useProviders";
 import {
   getProviderLocalUsageSummary,
   getSettingsSnapshot,
+  openSettingsWindow,
   refreshProvidersIfStale,
+  updateSettings,
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
@@ -25,7 +27,13 @@ import type {
   ProviderUsageSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
-import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
+import {
+  FLOAT_BAR_CONFIG_CHANGED_EVENT,
+  hideFloatBar,
+  resizeFloatBar,
+  setFloatBarClickThrough,
+} from "./api";
+import FloatBarMenu from "./FloatBarMenu";
 import {
   capacityFreshness,
   constrainingWindow,
@@ -330,29 +338,45 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   );
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
+  // Right-click opens an in-place action row (see FloatBarMenu). Kept in a ref
+  // too so the capture-phase drag guard can read it without re-subscribing.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpenRef = useRef(menuOpen);
+  menuOpenRef.current = menuOpen;
 
   const startDrag = useCallback((event: MouseEvent<HTMLElement>) => {
-    if (event.button !== 0 || lockedRef.current) return;
+    if (event.button !== 0 || lockedRef.current || menuOpenRef.current) return;
     void getCurrentWindow().startDragging().catch(() => {});
   }, []);
 
-  // Replace the webview's generic right-click menu with a purposeful action:
-  // right-click toggles "lock in place" (persisted). While locked, the native
-  // `data-tauri-drag-region` drag is suppressed so the bar can't be nudged.
+  const toggleLock = useCallback(() => {
+    setLocked((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(FLOATBAR_LOCK_KEY, next ? "1" : "0");
+      } catch {
+        /* storage disabled — the lock just won't persist across restarts */
+      }
+      return next;
+    });
+  }, []);
+
+  // Replace the webview's generic right-click menu with a purposeful action row.
+  // While locked, the native `data-tauri-drag-region` drag is suppressed so the
+  // bar can't be nudged; menu clicks are always let through.
   useEffect(() => {
     const onContextMenu = (event: globalThis.MouseEvent) => {
       event.preventDefault();
-      setLocked((prev) => {
-        const next = !prev;
-        try {
-          localStorage.setItem(FLOATBAR_LOCK_KEY, next ? "1" : "0");
-        } catch {
-          /* storage disabled — the lock just won't persist across restarts */
-        }
-        return next;
-      });
+      setMenuOpen((prev) => !prev);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
     };
     const onMouseDownCapture = (event: globalThis.MouseEvent) => {
+      // Never eat clicks aimed at the action row.
+      if ((event.target as HTMLElement | null)?.closest(".floatbar__menu")) {
+        return;
+      }
       if (lockedRef.current && event.button === 0) {
         // Pre-empt Tauri's drag-region handler before it starts a move.
         event.preventDefault();
@@ -360,9 +384,11 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       }
     };
     document.addEventListener("contextmenu", onContextMenu);
+    document.addEventListener("keydown", onKeyDown);
     document.addEventListener("mousedown", onMouseDownCapture, true);
     return () => {
       document.removeEventListener("contextmenu", onContextMenu);
+      document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("mousedown", onMouseDownCapture, true);
     };
   }, []);
@@ -523,6 +549,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     scale,
     showResetInline,
     settings.resetTimeRelative,
+    menuOpen,
   ]);
 
   useEffect(() => {
@@ -546,9 +573,29 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const critRemaining = 100 - settings.criticalUsageThreshold;
   const opacityFraction = Math.max(0.3, Math.min(1, settings.floatBarOpacity / 100));
 
+  const handleToggleLock = useCallback(() => {
+    toggleLock();
+    setMenuOpen(false);
+  }, [toggleLock]);
+  const handleToggleClickThrough = useCallback(() => {
+    const next = !settings.floatBarClickThrough;
+    void setFloatBarClickThrough(next).catch(() => {});
+    void updateSettings({ floatBarClickThrough: next }).catch(() => {});
+    setMenuOpen(false);
+  }, [settings.floatBarClickThrough]);
+  const handleOpenSettings = useCallback(() => {
+    void openSettingsWindow("menuBar").catch(() => {});
+    setMenuOpen(false);
+  }, []);
+  const handleHide = useCallback(() => {
+    void hideFloatBar().catch(() => {});
+    void updateSettings({ floatBarEnabled: false }).catch(() => {});
+    setMenuOpen(false);
+  }, []);
+
   return (
     <div
-      className={`floatbar floatbar--${orientation} floatbar--${style}${settings.floatBarDarkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}`}
+      className={`floatbar floatbar--${orientation} floatbar--${style}${settings.floatBarDarkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}${menuOpen ? " floatbar--menu-open" : ""}`}
       data-tauri-drag-region
       onMouseDown={startDrag}
       style={
@@ -558,6 +605,17 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
         } as CSSProperties
       }
     >
+      {menuOpen ? (
+        <FloatBarMenu
+          locked={locked}
+          clickThrough={settings.floatBarClickThrough}
+          onToggleLock={handleToggleLock}
+          onToggleClickThrough={handleToggleClickThrough}
+          onOpenSettings={handleOpenSettings}
+          onHide={handleHide}
+        />
+      ) : (
+        <>
       <div className="floatbar__handle" data-tauri-drag-region aria-hidden />
       {locked && (
         <span
@@ -609,6 +667,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               thirtyDayLabel={t("FloatBarThirtyDayShort")}
             />
           ))}
+        </>
+      )}
         </>
       )}
     </div>
