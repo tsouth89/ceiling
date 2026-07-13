@@ -1,7 +1,7 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
-import { openFlyoutWindow, openSettingsWindow, quitApp as quitApplication, reorderProviders } from "../lib/tauri";
+import { openSettingsWindow, quitApp as quitApplication, reorderProviders } from "../lib/tauri";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
@@ -9,17 +9,86 @@ import { useLocale } from "../hooks/useLocale";
 import MenuCard from "../components/MenuCard";
 import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
-import MenuSurface, {
-  MenuEmpty,
-  type MenuFooterRow,
-} from "../components/MenuSurface";
+import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 
+type DashboardSection = "overview" | "activity" | "accounts" | "charts";
+
+const RAIL_ICON = {
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
+
+function IconGrid() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </svg>
+  );
+}
+function IconClock() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+function IconUsers() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 20a5.5 5.5 0 0 1 11 0" />
+      <path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" />
+      <path d="M17.5 20a5.5 5.5 0 0 0-2.3-4.4" />
+    </svg>
+  );
+}
+function IconBars() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <path d="M6 20V10" />
+      <path d="M12 20V4" />
+      <path d="M18 20v-7" />
+    </svg>
+  );
+}
+function IconGear() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+function IconSun() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </svg>
+  );
+}
+function IconMoon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden {...RAIL_ICON}>
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+    </svg>
+  );
+}
+
 /**
- * Pop-out window — overview shows plan-status glance cards; selecting a
- * provider opens the full MenuCard with activity/charts.
+ * Pop-out window — a windowed dashboard: left nav rail, an Overview of
+ * plan-status glance cards (selecting a provider expands its full MenuCard),
+ * and a bottom status bar. Mirrors the promo chrome.
  */
 export default function PopOutPanel({
   state,
@@ -35,7 +104,7 @@ export default function PopOutPanel({
     refresh,
     hasCachedData,
   } = useProviders();
-  const { settings } = useSettings(state.settings);
+  const { settings, update } = useSettings(state.settings);
   const { updateState, checkNow, download, apply, dismiss, openRelease } =
     useUpdateState();
   const { t } = useLocale();
@@ -142,29 +211,16 @@ export default function PopOutPanel({
   const openSettings = useCallback(() => {
     openSettingsWindow("general");
   }, []);
-  const goTray = useCallback(() => {
-    // The flyout ("Pop Out Dashboard") is now its own dedicated OS window
-    // rather than a state of the shared `main` window's surface-mode
-    // machine, so "back to tray" opens it directly instead of switching
-    // `main`'s mode.
-    void openFlyoutWindow().catch(() => {});
-  }, []);
-  const openAbout = useCallback(() => {
-    openSettingsWindow("about");
-  }, []);
   const quitApp = useCallback(() => {
     void quitApplication();
   }, []);
 
-  const headerActions = [
-    { icon: "⊟", title: t("TooltipBackToTray"), onClick: goTray },
-  ];
+  const [activeSection, setActiveSection] = useState<DashboardSection>("overview");
 
-  const footerRows: MenuFooterRow[] = [
-    { icon: "⚙", label: t("TooltipSettings"), shortcut: "Ctrl+,", onClick: openSettings },
-    { icon: "ℹ", label: t("MenuAbout"), onClick: openAbout },
-    { icon: "✕", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
-  ];
+  const isLight = settings.theme === "light";
+  const toggleTheme = useCallback(() => {
+    void update({ theme: isLight ? "dark" : "light" });
+  }, [isLight, update]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -200,87 +256,147 @@ export default function PopOutPanel({
     />
   );
 
-  const surface = sorted.length === 0 ? (
-    <MenuSurface
-      variant="popout"
-      titleBar={<PopOutTitleBar />}
-      onRefresh={refresh}
-      isRefreshing={isRefreshing}
-      actions={headerActions}
-      banner={banner}
-      footerRows={footerRows}
-    >
-      <MenuEmpty
-        isLoading={isRefreshing && !hasCachedData}
-        onSettings={openSettings}
-      />
-    </MenuSurface>
-  ) : (
-    <MenuSurface
-      variant="popout"
-      titleBar={<PopOutTitleBar />}
-      onRefresh={refresh}
-      isRefreshing={isRefreshing}
-      actions={headerActions}
-      banner={banner}
-      footerRows={footerRows}
-    >
-      <ProviderGrid
-        providers={sorted}
-        selectedProviderId={selectedProviderId}
-        showAsUsed={settings.showAsUsed}
-        showProviderIcons={settings.switcherShowsIcons}
-        expanded={gridExpanded}
-        onExpandedChange={setGridExpanded}
-        onSelect={handleGridClick}
-        onReorder={handleReorder}
-      />
-      <div className="provider-grid__divider" />
-      <div className="menu-stack">
-        {visibleProviders.map((p, idx) => (
-          <Fragment key={p.providerId}>
-            {idx > 0 && <div className="menu-stack__sep" />}
-            <div
-              className={`menu-stack__item${selectedProviderId === p.providerId ? " menu-stack__item--selected" : ""}`}
-              ref={(node) => {
-                if (node) {
-                  cardRefs.current.set(p.providerId, node);
-                } else {
-                  cardRefs.current.delete(p.providerId);
-                }
-              }}
-            >
-              {selectedProviderId === null ? (
-                <PlanStatusCard
-                  provider={p}
-                  isRefreshing={refreshingProviderIds.has(p.providerId)}
-                  hideEmail={settings.hidePersonalInfo}
-                  resetTimeRelative={settings.resetTimeRelative}
-                  showResetWhenExhausted={settings.showResetWhenExhausted}
-                  showAsUsed={settings.showAsUsed}
-                  onSelect={() => handleGridClick(p.providerId)}
-                />
-              ) : (
-                <MenuCard
-                  provider={p}
-                  isRefreshing={refreshingProviderIds.has(p.providerId)}
-                  hideEmail={settings.hidePersonalInfo}
-                  resetTimeRelative={settings.resetTimeRelative}
-                  showResetWhenExhausted={settings.showResetWhenExhausted}
-                  showAsUsed={settings.showAsUsed}
-                  showActivitySection
-                />
-              )}
-            </div>
-          </Fragment>
-        ))}
-      </div>
-    </MenuSurface>
-  );
+  const railItems: { id: DashboardSection; label: string; icon: ReactElement }[] = [
+    { id: "overview", label: "Overview", icon: <IconGrid /> },
+    { id: "activity", label: "Activity", icon: <IconClock /> },
+    { id: "accounts", label: "Accounts", icon: <IconUsers /> },
+    { id: "charts", label: "Charts", icon: <IconBars /> },
+  ];
+  const sectionMeta: Record<DashboardSection, { title: string; sub: string }> = {
+    overview: { title: "Overview", sub: "All accounts" },
+    activity: { title: "Activity", sub: "Recent usage" },
+    accounts: { title: "Accounts", sub: "Connected providers" },
+    charts: { title: "Charts", sub: "Usage over time" },
+  };
+  const meta = sectionMeta[activeSection];
 
   return (
-    <div className="popout-scale-shell">
-      {surface}
+    <div className="popout-scale-shell dashboard-shell">
+      <PopOutTitleBar />
+      <div className="dashboard">
+        <nav className="dashboard-rail" aria-label="Sections">
+          {railItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`dashboard-rail__btn${activeSection === item.id ? " dashboard-rail__btn--active" : ""}`}
+              aria-label={item.label}
+              aria-current={activeSection === item.id ? "page" : undefined}
+              title={item.label}
+              onClick={() => setActiveSection(item.id)}
+            >
+              {item.icon}
+            </button>
+          ))}
+          <div className="dashboard-rail__spacer" />
+          <button
+            type="button"
+            className="dashboard-rail__btn"
+            aria-label={t("TooltipSettings")}
+            title={t("TooltipSettings")}
+            onClick={openSettings}
+          >
+            <IconGear />
+          </button>
+        </nav>
+
+        <div className="dashboard-main">
+          <header className="dashboard-header">
+            <div className="dashboard-header__title">{meta.title}</div>
+            <div className="dashboard-header__sub">{meta.sub}</div>
+          </header>
+
+          <div className="dashboard-body">
+            {banner}
+            {activeSection === "overview" ? (
+              sorted.length === 0 ? (
+                <MenuEmpty
+                  isLoading={isRefreshing && !hasCachedData}
+                  onSettings={openSettings}
+                />
+              ) : (
+                <>
+                  <ProviderGrid
+                    providers={sorted}
+                    selectedProviderId={selectedProviderId}
+                    showAsUsed={settings.showAsUsed}
+                    showProviderIcons={settings.switcherShowsIcons}
+                    expanded={gridExpanded}
+                    onExpandedChange={setGridExpanded}
+                    onSelect={handleGridClick}
+                    onReorder={handleReorder}
+                  />
+                  <div className="menu-stack">
+                    {visibleProviders.map((p, idx) => (
+                      <Fragment key={p.providerId}>
+                        {idx > 0 && <div className="menu-stack__sep" />}
+                        <div
+                          className={`menu-stack__item${selectedProviderId === p.providerId ? " menu-stack__item--selected" : ""}`}
+                          ref={(node) => {
+                            if (node) {
+                              cardRefs.current.set(p.providerId, node);
+                            } else {
+                              cardRefs.current.delete(p.providerId);
+                            }
+                          }}
+                        >
+                          {selectedProviderId === null ? (
+                            <PlanStatusCard
+                              provider={p}
+                              isRefreshing={refreshingProviderIds.has(p.providerId)}
+                              hideEmail={settings.hidePersonalInfo}
+                              resetTimeRelative={settings.resetTimeRelative}
+                              showResetWhenExhausted={settings.showResetWhenExhausted}
+                              showAsUsed={settings.showAsUsed}
+                              onSelect={() => handleGridClick(p.providerId)}
+                            />
+                          ) : (
+                            <MenuCard
+                              provider={p}
+                              isRefreshing={refreshingProviderIds.has(p.providerId)}
+                              hideEmail={settings.hidePersonalInfo}
+                              resetTimeRelative={settings.resetTimeRelative}
+                              showResetWhenExhausted={settings.showResetWhenExhausted}
+                              showAsUsed={settings.showAsUsed}
+                              showActivitySection
+                            />
+                          )}
+                        </div>
+                      </Fragment>
+                    ))}
+                  </div>
+                </>
+              )
+            ) : (
+              <div className="dashboard-placeholder">
+                <strong>{meta.title} is coming soon</strong>
+                Ceiling is in its foundation phase. This view lands as the
+                product fills in — the Overview is live today.
+              </div>
+            )}
+          </div>
+
+          <footer className="dashboard-status">
+            <button
+              type="button"
+              className="dashboard-status__toggle"
+              onClick={toggleTheme}
+              title="Toggle light / dark"
+            >
+              {isLight ? <IconSun /> : <IconMoon />}
+              {isLight ? "Light" : "Dark"}
+            </button>
+            <span className="dashboard-status__center">
+              <span
+                className={`dashboard-status__dot${isRefreshing ? " dashboard-status__dot--busy" : ""}`}
+                aria-hidden
+              />
+              {isRefreshing ? t("SummaryRefreshing") : "Updated just now"}
+            </span>
+            <span>All times local</span>
+          </footer>
+        </div>
+      </div>
     </div>
   );
 }
