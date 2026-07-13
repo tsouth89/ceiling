@@ -112,6 +112,23 @@ function nonPrimaryWindows(
   return out;
 }
 
+/**
+ * Every measured rate window for a provider (plan pool + session/weekly/model/
+ * extra lanes), each carrying its display label. Powers the Activity timeline,
+ * which enumerates all reset windows across providers rather than just the
+ * glance hero + companion.
+ */
+export function allMeasuredWindows(
+  provider: ProviderUsageSnapshot,
+): ConstrainingWindow[] {
+  const primary: ConstrainingWindow = {
+    id: "primary",
+    label: provider.primaryLabel?.trim() || "Plan",
+    window: provider.primary,
+  };
+  return [primary, ...nonPrimaryWindows(provider)];
+}
+
 /** Grid / glance status chip from constraining pressure. */
 export function providerGlanceStatus(
   provider: ProviderUsageSnapshot,

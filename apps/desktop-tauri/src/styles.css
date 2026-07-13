@@ -6174,6 +6174,160 @@ body:has(.dashboard-shell) #root {
   font-weight: 600;
 }
 
+/* ── Activity: upcoming-resets timeline ─────────────────────────────── */
+.activity-timeline {
+  display: flex;
+  flex-direction: column;
+}
+.activity-group__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 12px 2px 2px;
+}
+.activity-group {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.activity-row {
+  display: grid;
+  grid-template-columns: 54px 16px minmax(0, 1fr);
+  column-gap: 10px;
+}
+.activity-row__when {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding-top: 9px;
+  line-height: 1.05;
+}
+.activity-row__when-prefix {
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  opacity: 0.65;
+}
+.activity-row__when-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+/* Timeline spine: a vertical line down the track column with a level-colored
+   dot per entry. The dot's ring is painted in the shell bg to mask the line
+   passing behind it. */
+.activity-row__track {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.activity-row__track::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--ceiling-glass-border);
+}
+.activity-row:first-child .activity-row__track::before {
+  top: 15px;
+}
+.activity-row:last-child .activity-row__track::before {
+  bottom: auto;
+  height: 15px;
+}
+.activity-row__dot {
+  position: relative;
+  z-index: 1;
+  width: 9px;
+  height: 9px;
+  margin-top: 11px;
+  border-radius: 50%;
+  background: var(--usage-bar-normal);
+  box-shadow: 0 0 0 3px var(--app-bg);
+}
+.activity-row__dot[data-level="high"] {
+  background: var(--usage-bar-high);
+}
+.activity-row__dot[data-level="critical"] {
+  background: var(--usage-bar-critical);
+}
+.activity-row__dot[data-level="exhausted"] {
+  background: var(--usage-bar-exhausted);
+}
+.activity-row__card {
+  min-width: 0;
+  padding: 6px 0 12px;
+}
+.activity-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.activity-row__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.activity-row__label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-row__pct {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.activity-row__bar {
+  margin-top: 7px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+.activity-row__bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--usage-bar-normal);
+  transition: width 0.25s ease;
+}
+.activity-row__bar-fill[data-level="high"] {
+  background: var(--usage-bar-high);
+}
+.activity-row__bar-fill[data-level="critical"] {
+  background: var(--usage-bar-critical);
+}
+.activity-row__bar-fill[data-level="exhausted"] {
+  background: var(--usage-bar-exhausted);
+}
+.activity-empty {
+  margin: auto;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.activity-empty strong {
+  display: block;
+  font-size: 15px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
 /* Bottom status bar */
 .dashboard-status {
   display: flex;

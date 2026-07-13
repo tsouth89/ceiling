@@ -9,6 +9,7 @@ import { useLocale } from "../hooks/useLocale";
 import MenuCard from "../components/MenuCard";
 import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
+import ActivityTimeline from "./ActivityTimeline";
 import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
 import { orderProviderSnapshots } from "../lib/providerOrder";
@@ -277,7 +278,7 @@ export default function PopOutPanel({
     overview: { title: "Overview", sub: "All accounts", blurb: "" },
     activity: {
       title: "Activity",
-      sub: "Recent usage",
+      sub: "Upcoming resets",
       blurb: "A timeline of usage and resets across your providers.",
     },
     accounts: {
@@ -385,6 +386,8 @@ export default function PopOutPanel({
                   </div>
                 </>
               )
+            ) : activeSection === "activity" ? (
+              <ActivityTimeline providers={sorted} />
             ) : (
               <div className="dashboard-placeholder">
                 <strong>{meta.title} — coming soon</strong>
