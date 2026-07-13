@@ -37,7 +37,6 @@ import FloatBarMenu from "./FloatBarMenu";
 import {
   capacityFreshness,
   constrainingWindow,
-  glanceMeters,
   activePromoBoosts,
   type CapacityFreshness,
 } from "../lib/capacityPresentation";
@@ -193,10 +192,11 @@ function ProviderPill({
   usedSuffix: string;
   remainingSuffix: string;
 }) {
-  const meters = glanceMeters(provider);
+  // Headline the constraining lane (the window closest to its ceiling) so the
+  // single number, its label, and the pill's tone all agree — no tiny companion
+  // chip, no "85% shown but tinted red because a hidden lane is at 99%".
   const constraining = constrainingWindow(provider);
-  const hero = meters.primary;
-  const companion = meters.companion;
+  const hero = constraining;
   const freshness = capacityFreshness(provider);
   const boosts = activePromoBoosts(provider);
   const remaining = Math.max(0, Math.min(100, hero.window.remainingPercent));
@@ -227,23 +227,11 @@ function ProviderPill({
   const resetIconSize = Math.round(10 * scale);
   const stateChip = freshnessChipLabel(freshness);
   const boostTitle = boosts[0]?.title ?? null;
-  const companionPct = companion
-    ? Math.round(
-        showAsUsed
-          ? companion.window.usedPercent
-          : companion.window.remainingPercent,
-      )
-    : null;
-  const companionText =
-    companion && companionPct != null
-      ? `${companion.label} ${companionPct}%`
-      : null;
   // Strip always shows reset when depleted; otherwise honor the setting.
   const showReset = !!inlineReset && (showResetInline || exhausted);
   const titleBits = [
     `${provider.displayName}: ${label} ${displaySuffix}`,
     hero.label,
-    companionText ? `hot ${companionText}` : null,
     boostTitle ? `promo ${boostTitle}` : null,
     stateChip ? `state ${stateChip}` : null,
     resetText,
@@ -274,11 +262,6 @@ function ProviderPill({
         <span className="floatbar__window" data-tauri-drag-region>
           {hero.label}
         </span>
-        {companionText && (
-          <span className="floatbar__companion" data-tauri-drag-region>
-            {companionText}
-          </span>
-        )}
         {stateChip && (
           <span
             className={`floatbar__chip floatbar__chip--${freshness}`}

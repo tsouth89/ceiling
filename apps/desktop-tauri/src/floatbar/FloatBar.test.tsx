@@ -253,7 +253,7 @@ describe("FloatBar", () => {
     });
   });
 
-  it("shows plan-pool hero and a hot companion lane on the strip", async () => {
+  it("headlines the constraining lane instead of a plan-pool hero + companion chip", async () => {
     const live = snapshot("cursor", "Cursor", 20);
     live.updatedAt = new Date().toISOString();
     live.primaryLabel = "Monthly";
@@ -279,11 +279,12 @@ describe("FloatBar", () => {
     );
 
     await waitFor(() => {
-      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Monthly");
-      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("20%");
-      expect(container.querySelector(".floatbar__companion")?.textContent).toBe(
-        "Auto 70%",
-      );
+      // Auto (70% used) is more constrained than Monthly (20%), so it becomes
+      // the single headline — number, label, and tone all agree.
+      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Auto");
+      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("70%");
+      // No tiny companion chip anymore.
+      expect(container.querySelector(".floatbar__companion")).toBeNull();
       expect(container.querySelector(".floatbar__chip--lifted")?.textContent).toBe(
         "lifted",
       );
