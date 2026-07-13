@@ -597,36 +597,37 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
           onOpenSettings={handleOpenSettings}
           onHide={handleHide}
         />
-      ) : (
-        <>
-      <div className="floatbar__handle" data-tauri-drag-region aria-hidden />
-      {locked && (
-        <span
-          className="floatbar__lock"
-          aria-hidden
-          title="Locked in place — right-click to unlock"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="11"
-            height="11"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="5" y="11" width="14" height="9" rx="2" />
-            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-          </svg>
-        </span>
-      )}
-      {visible.length === 0 ? (
+      ) : visible.length === 0 ? (
         <div className="floatbar__empty" data-tauri-drag-region>
           {t("FloatBarNoProviders")}
         </div>
       ) : (
-        <>
+        // One unified glass capsule; each provider is a segment split by a
+        // hairline divider, with the drag grip on the left. Reads as a single
+        // premium widget instead of scattered pills.
+        <div className="floatbar__bar" data-tauri-drag-region>
+          <div className="floatbar__handle" data-tauri-drag-region aria-hidden />
+          {locked && (
+            <span
+              className="floatbar__lock"
+              aria-hidden
+              title="Locked in place — right-click to unlock"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="11"
+                height="11"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="5" y="11" width="14" height="9" rx="2" />
+                <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+              </svg>
+            </span>
+          )}
           {visible.map((p) => (
             <ProviderPill
               key={providerCostKey(p)}
@@ -650,9 +651,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               thirtyDayLabel={t("FloatBarThirtyDayShort")}
             />
           ))}
-        </>
-      )}
-        </>
+        </div>
       )}
     </div>
   );
