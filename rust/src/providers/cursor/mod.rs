@@ -7,8 +7,8 @@ mod api;
 use async_trait::async_trait;
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
+    SourceMode,
 };
 
 pub use api::CursorApi;
@@ -60,37 +60,6 @@ impl CursorProvider {
             self.api.fetch_usage().await
         }
     }
-
-    fn build_usage_snapshot(
-        primary: RateWindow,
-        secondary: Option<RateWindow>,
-        model_specific: Option<RateWindow>,
-        email: Option<String>,
-        plan_type: Option<String>,
-    ) -> UsageSnapshot {
-        let mut usage = UsageSnapshot::new(primary);
-        if let Some(sec) = secondary {
-            usage = usage.with_secondary(sec);
-        }
-        if let Some(ms) = model_specific {
-            usage = usage.with_model_specific(ms);
-        }
-        if let Some(e) = email {
-            usage = usage.with_email(e);
-        }
-        if let Some(plan) = plan_type {
-            usage = usage.with_login_method(plan);
-        }
-        usage
-    }
-
-    fn build_fetch_result(usage: UsageSnapshot, cost: Option<CostSnapshot>) -> ProviderFetchResult {
-        let mut result = ProviderFetchResult::new(usage, "web");
-        if let Some(c) = cost {
-            result = result.with_cost(c);
-        }
-        result
-    }
 }
 
 impl Default for CursorProvider {
@@ -113,15 +82,12 @@ impl Provider for CursorProvider {
         tracing::debug!("Fetching Cursor usage via web API");
 
         match self.fetch_usage_parts(ctx).await {
-            Ok((primary, secondary, model_specific, cost, email, plan_type)) => {
-                let usage = Self::build_usage_snapshot(
-                    primary,
-                    secondary,
-                    model_specific,
-                    email,
-                    plan_type,
-                );
-                Ok(Self::build_fetch_result(usage, cost))
+            Ok((usage, cost)) => {
+                let mut result = ProviderFetchResult::new(usage, "web");
+                if let Some(c) = cost {
+                    result = result.with_cost(c);
+                }
+                Ok(result)
             }
             Err(e) => {
                 tracing::warn!("Cursor API fetch failed: {}", e);

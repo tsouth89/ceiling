@@ -5,8 +5,7 @@ Use this as the starting point for the next implementation session.
 ## Current state
 
 - Repository: `C:\projects\personal\ceiling`
-- Branch: `main`, clean and pushed to `origin` (`tsouth89/ceiling`)
-- Latest commit: `535f693a Model inactive provider limit windows`
+- Branch: work on `tsouth2/sou-124-…` then merge to `main`
 - Upstream remote: `Finesssee/Win-CodexBar`
 - Public project tracker: [Ceiling in Linear](https://linear.app/southforge-ai/project/ceiling-6615aa2c9e6b)
 
@@ -23,11 +22,13 @@ The first product-contract slice is complete and tested.
 - This is explicitly **not** shown as `100% left`, a zero-use bar, or a permanent unlimited entitlement.
 - The Rust-to-Tauri-to-React bridge carries the inactive-window state.
 - `MenuCard` renders inactive windows as text rather than a fabricated progress bar.
+- Cursor usage-summary mapping now preserves the monthly plan meter and renewal, and surfaces provider-reported Auto, API, promotional bonus, and on-demand pools as named windows (with inactive Auto/API/Monthly when those known meters are omitted).
 
 Relevant files:
 
 - `rust/src/core/usage_snapshot.rs` — common usage and inactive-window models.
 - `rust/src/providers/codex/api.rs` — Codex response parsing and regression fixture.
+- `rust/src/providers/cursor/api.rs` — Cursor monthly / promo / on-demand window mapping.
 - `apps/desktop-tauri/src-tauri/src/commands/bridge.rs` — Tauri bridge shape.
 - `apps/desktop-tauri/src/components/MenuCard.tsx` — expanded tray card rendering.
 - `apps/desktop-tauri/src/types/bridge.ts` — TypeScript contract.
@@ -45,17 +46,7 @@ Relevant files:
 
 ## Next implementation order
 
-### 1. Cursor allowances — `SOU-124`
-
-Inspect `rust/src/providers/cursor/api.rs` and map provider-reported values into named windows:
-
-- base monthly allowance and renewal;
-- extra usage or included/free promotional capacity;
-- separately reported overage/cost data.
-
-Only render a value when Cursor returns it. Use `extra_rate_windows` for measurable extra pools and `inactive_rate_windows` when a previously known meter is absent in an otherwise-valid response. Add representative JSON fixtures before touching UI.
-
-### 2. Capacity-event observer — `SOU-125`
+### 1. Capacity-event observer — `SOU-125`
 
 Build a small local persistent observation store, separate from provider fetchers. Its comparison key must include provider, account identity, source, and named window.
 
@@ -68,11 +59,11 @@ Recognize only confirmed events:
 
 Require a second consistent fresh read unless the provider explicitly supplies the transition. Reuse the existing `NotificationManager` only after the detector is independently testable.
 
-### 3. Notifications — `SOU-126`
+### 2. Notifications — `SOU-126`
 
 Add a separate preference for unexpected-capacity events. Update the Windows toast AUMID from the inherited CodexBar identity to Ceiling as part of this work. Notifications must name the provider/window and explain the change, but never announce routine resets.
 
-### 4. Ceiling presentation — `SOU-127`
+### 3. Ceiling presentation — `SOU-127`
 
 Keep the taskbar-adjacent capacity strip compact; use the tray flyout for full detail.
 
@@ -84,10 +75,10 @@ The current float bar is already a transparent, always-on-top, non-activating Wi
 
 ## Linear tracking
 
-- [SOU-122 — Model explicit limit-window enforcement states](https://linear.app/southforge-ai/issue/SOU-122/model-explicit-limit-window-enforcement-states) — in progress; initial data path is committed.
+- [SOU-122 — Model explicit limit-window enforcement states](https://linear.app/southforge-ai/issue/SOU-122/model-explicit-limit-window-enforcement-states) — initial data path committed.
 - [SOU-123 — Codex five-hour, weekly, and lifted-window state](https://linear.app/southforge-ai/issue/SOU-123/track-codex-five-hour-weekly-and-lifted-window-state)
-- [SOU-124 — Cursor monthly, extra usage, and promotional capacity](https://linear.app/southforge-ai/issue/SOU-124/track-cursor-monthly-allowance-extra-usage-and-promotional-capacity)
-- [SOU-125 — Unexpected resets and capacity changes](https://linear.app/southforge-ai/issue/SOU-125/detect-unexpected-resets-and-capacity-changes)
+- [SOU-124 — Cursor monthly, extra usage, and promotional capacity](https://linear.app/southforge-ai/issue/SOU-124/track-cursor-monthly-allowance-extra-usage-and-promotional-capacity) — parser/fixtures done; UI polish deferred to SOU-127.
+- [SOU-125 — Unexpected resets and capacity changes](https://linear.app/southforge-ai/issue/SOU-125/detect-unexpected-resets-and-capacity-changes) — next.
 - [SOU-126 — Unexpected-capacity notifications](https://linear.app/southforge-ai/issue/SOU-126/send-useful-unexpected-capacity-notifications)
 - [SOU-127 — Multi-window tray and capacity strip](https://linear.app/southforge-ai/issue/SOU-127/build-the-ceiling-multi-window-tray-and-capacity-strip)
 
@@ -102,10 +93,11 @@ cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
 cargo test -p codexbar
 ```
 
-The focused regression command for the implemented Codex behavior is:
+The focused regression commands for the implemented provider behavior are:
 
 ```powershell
 cargo test -p codexbar preserves_a_lifted_five_hour_window_when_only_weekly_is_reported
+cargo test -p codexbar cursor
 ```
 
 Use `pnpm --dir apps/desktop-tauri tauri:dev` for the Windows shell. Preserve the MIT license and the upstream attribution; do not rename internal `codexbar` crate identifiers as part of feature work.
