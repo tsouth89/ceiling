@@ -21,6 +21,8 @@ import {
   activePromoInclusions,
 } from "../lib/capacityPresentation";
 import PaceDetailsChart from "./PaceDetailsChart";
+import { ProviderIcon } from "./providers/ProviderIcon";
+import { getProviderIcon } from "./providers/providerIcons";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -560,11 +562,22 @@ export default function MenuCard({
   ]
     .filter(Boolean)
     .join(" ");
+  const brandColor = getProviderIcon(provider.providerId).brandColor;
 
   return (
-    <article className={cardClassName} aria-busy={isRefreshing}>
+    <article
+      className={cardClassName}
+      aria-busy={isRefreshing}
+      style={{ ["--plan-brand" as string]: brandColor }}
+    >
       <header className="menu-card__header">
         <div className="menu-card__title-row">
+          <ProviderIcon
+            providerId={provider.providerId}
+            size={28}
+            className="menu-card__provider-icon"
+            title={provider.displayName}
+          />
           <div className="menu-card__name-group">
             <span className="menu-card__name">{provider.displayName}</span>
             {!provider.error && email && <span className="menu-card__email">{email}</span>}

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   capacityFreshness,
   constrainingWindow,
+  glanceMeters,
   activePromoBoosts,
   activePromoInclusions,
+  providerGlanceStatus,
 } from "./capacityPresentation";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 
@@ -62,6 +64,72 @@ describe("capacityPresentation", () => {
     expect(constraining.id).toBe("secondary");
     expect(constraining.label).toBe("Auto");
     expect(constraining.window.usedPercent).toBe(55);
+  });
+
+  it("keeps plan pool as glance hero and adds hot Auto companion", () => {
+    const meters = glanceMeters(
+      provider({
+        primary: window(62),
+        primaryLabel: "Monthly",
+        secondary: window(90),
+        secondaryLabel: "Auto",
+        extraRateWindows: [
+          { id: "cursor-api", title: "API", window: window(12) },
+        ],
+      }),
+    );
+    expect(meters.primary.label).toBe("Monthly");
+    expect(meters.primary.window.usedPercent).toBe(62);
+    expect(meters.companion?.label).toBe("Auto");
+    expect(meters.companion?.window.usedPercent).toBe(90);
+  });
+
+  it("prefers hotter API companion over quieter Auto", () => {
+    const meters = glanceMeters(
+      provider({
+        primary: window(40),
+        primaryLabel: "Monthly",
+        secondary: window(55),
+        secondaryLabel: "Auto",
+        extraRateWindows: [
+          { id: "cursor-api", title: "API", window: window(88) },
+        ],
+      }),
+    );
+    expect(meters.companion?.label).toBe("API");
+    expect(meters.companion?.window.usedPercent).toBe(88);
+  });
+
+  it("omits quiet weekly companion from glance", () => {
+    const meters = glanceMeters(
+      provider({
+        primary: window(45),
+        primaryLabel: "Session",
+        secondary: window(20),
+        secondaryLabel: "Weekly",
+      }),
+    );
+    expect(meters.companion).toBeNull();
+  });
+
+  it("reports glance status from constraining pressure", () => {
+    expect(providerGlanceStatus(provider({ error: "nope" }))).toBe("error");
+    expect(
+      providerGlanceStatus(
+        provider({
+          primary: window(10),
+          secondary: window(95),
+          secondaryLabel: "Auto",
+        }),
+      ),
+    ).toBe("warning");
+    expect(
+      providerGlanceStatus(
+        provider({
+          primary: window(100),
+        }),
+      ),
+    ).toBe("exhausted");
   });
 
   it("reports freshness precedence error > stale > lifted > live", () => {

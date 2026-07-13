@@ -3,6 +3,10 @@ import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
 import { useLocale } from "../hooks/useLocale";
+import {
+  constrainingWindow,
+  providerGlanceStatus,
+} from "../lib/capacityPresentation";
 
 export default function ProviderGrid({
   providers,
@@ -57,9 +61,10 @@ export default function ProviderGrid({
     onExpandedChange?.(next);
   };
   const gridPercent = (provider: ProviderUsageSnapshot) => {
+    const constraining = constrainingWindow(provider).window;
     const pct = showAsUsed
-      ? provider.primary.usedPercent
-      : provider.primary.remainingPercent;
+      ? constraining.usedPercent
+      : constraining.remainingPercent;
     return Math.max(0, Math.min(100, pct));
   };
   const totalItems = providers.length + 1;
@@ -98,65 +103,81 @@ export default function ProviderGrid({
         {showProviderIcons && <span className="provider-grid__icon-overview">⊞</span>}
         <span className="provider-grid__label">{t("PanelAllProvidersShort")}</span>
       </button>
-      {visibleProviders.map((p) => (
-        <button
-          key={p.providerId}
-          type="button"
-          className={`provider-grid__item${p.providerId === selectedProviderId ? " provider-grid__item--active" : ""}${dragId === p.providerId ? " provider-grid__item--dragging" : ""}${canReorder && overId === p.providerId && dragId && dragId !== p.providerId ? " provider-grid__item--drop-target" : ""}`}
-          onClick={() => onSelect(p.providerId)}
-          aria-label={p.displayName}
-          draggable={canReorder}
-          onMouseDown={canReorder ? () => onGestureStart?.() : undefined}
-          onMouseUp={canReorder ? () => onGestureEnd?.() : undefined}
-          onDragStart={
-            canReorder
-              ? (e) => {
-                  setDragId(p.providerId);
-                  e.dataTransfer.effectAllowed = "move";
+      {visibleProviders.map((p) => {
+        const status = providerGlanceStatus(p);
+        const brand = getProviderIcon(p.providerId).brandColor;
+        return (
+          <button
+            key={p.providerId}
+            type="button"
+            className={`provider-grid__item${p.providerId === selectedProviderId ? " provider-grid__item--active" : ""}${dragId === p.providerId ? " provider-grid__item--dragging" : ""}${canReorder && overId === p.providerId && dragId && dragId !== p.providerId ? " provider-grid__item--drop-target" : ""}`}
+            style={{ "--provider-brand": brand } as CSSProperties}
+            onClick={() => onSelect(p.providerId)}
+            aria-label={p.displayName}
+            draggable={canReorder}
+            onMouseDown={canReorder ? () => onGestureStart?.() : undefined}
+            onMouseUp={canReorder ? () => onGestureEnd?.() : undefined}
+            onDragStart={
+              canReorder
+                ? (e) => {
+                    setDragId(p.providerId);
+                    e.dataTransfer.effectAllowed = "move";
+                  }
+                : undefined
+            }
+            onDragOver={
+              canReorder
+                ? (e) => {
+                    if (!dragId) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (overId !== p.providerId) setOverId(p.providerId);
+                  }
+                : undefined
+            }
+            onDrop={
+              canReorder
+                ? (e) => {
+                    e.preventDefault();
+                    applyReorder(p.providerId);
+                    endDrag();
+                  }
+                : undefined
+            }
+            onDragEnd={
+              canReorder
+                ? () => {
+                    onGestureEnd?.();
+                    endDrag();
+                  }
+                : undefined
+            }
+          >
+            {showProviderIcons && (
+              <span className="provider-grid__icon-wrap">
+                <ProviderIcon providerId={p.providerId} size={20} />
+                <span
+                  className="provider-grid__dot"
+                  data-status={status}
+                  aria-hidden
+                />
+              </span>
+            )}
+            <span className="provider-grid__label">{labelFor(p.displayName)}</span>
+            {!p.error && (
+              <span
+                className="provider-grid__weekly-track"
+                style={
+                  {
+                    "--weekly-pct": `${gridPercent(p)}%`,
+                    "--weekly-color": brand,
+                  } as CSSProperties
                 }
-              : undefined
-          }
-          onDragOver={
-            canReorder
-              ? (e) => {
-                  if (!dragId) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (overId !== p.providerId) setOverId(p.providerId);
-                }
-              : undefined
-          }
-          onDrop={
-            canReorder
-              ? (e) => {
-                  e.preventDefault();
-                  applyReorder(p.providerId);
-                  endDrag();
-                }
-              : undefined
-          }
-          onDragEnd={
-            canReorder
-              ? () => {
-                  onGestureEnd?.();
-                  endDrag();
-                }
-              : undefined
-          }
-        >
-          {showProviderIcons && <ProviderIcon providerId={p.providerId} size={16} />}
-          <span className="provider-grid__label">{labelFor(p.displayName)}</span>
-          {!p.error && (
-            <span
-              className="provider-grid__weekly-track"
-              style={{
-                "--weekly-pct": `${gridPercent(p)}%`,
-                "--weekly-color": getProviderIcon(p.providerId).brandColor,
-              } as CSSProperties}
-            />
-          )}
-        </button>
-      ))}
+              />
+            )}
+          </button>
+        );
+      })}
       {shouldCollapse && (
         <button
           type="button"

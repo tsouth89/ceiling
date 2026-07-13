@@ -20,6 +20,7 @@ import { useLocale } from "../hooks/useLocale";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import MenuCard from "../components/MenuCard";
+import PlanStatusCard from "../components/PlanStatusCard";
 import MenuSurface, {
   MenuEmpty,
   type MenuFooterRow,
@@ -73,20 +74,10 @@ function clampTrayScalePercent(value: number): number {
   );
 }
 
-function getProviderStatus(
-  p: ProviderUsageSnapshot,
-): "ok" | "warning" | "exhausted" | "error" {
-  if (p.error) return "error";
-  if (p.primary.isExhausted) return "exhausted";
-  if (p.primary.usedPercent > 80) return "warning";
-  return "ok";
-}
-void getProviderStatus;
-
 /**
  * Tray popover surface — two modes like macOS CodexBar:
- * 1. Overview (default): provider grid + all cards stacked
- * 2. Detail: click a provider in grid → show only that provider's card
+ * 1. Overview (default): provider grid + plan-status glance cards
+ * 2. Detail: click a provider in grid → show only that provider's full card
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);
@@ -425,23 +416,35 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
     const isSelected =
       selectedProviderId !== null && p.providerId === selectedProviderId;
+    const isOverview = selectedProviderId === null;
     return (
       <div
         className={`menu-stack__item${isSelected ? " menu-stack__item--selected" : ""}`}
         id={`card-${p.providerId}`}
         key={p.providerId}
       >
-        <MenuCard
-          provider={p}
-          isRefreshing={refreshingProviderIds.has(p.providerId)}
-          hideEmail={settings.hidePersonalInfo}
-          resetTimeRelative={settings.resetTimeRelative}
-          showResetWhenExhausted={settings.showResetWhenExhausted}
-          showAsUsed={settings.showAsUsed}
-          compactMetrics={selectedProviderId === null}
-          showActivitySection={selectedProviderId !== null}
-          onLayoutChange={requestLayout}
-        />
+        {isOverview ? (
+          <PlanStatusCard
+            provider={p}
+            isRefreshing={refreshingProviderIds.has(p.providerId)}
+            hideEmail={settings.hidePersonalInfo}
+            resetTimeRelative={settings.resetTimeRelative}
+            showResetWhenExhausted={settings.showResetWhenExhausted}
+            showAsUsed={settings.showAsUsed}
+            onSelect={() => handleGridClick(p.providerId)}
+          />
+        ) : (
+          <MenuCard
+            provider={p}
+            isRefreshing={refreshingProviderIds.has(p.providerId)}
+            hideEmail={settings.hidePersonalInfo}
+            resetTimeRelative={settings.resetTimeRelative}
+            showResetWhenExhausted={settings.showResetWhenExhausted}
+            showAsUsed={settings.showAsUsed}
+            showActivitySection
+            onLayoutChange={requestLayout}
+          />
+        )}
       </div>
     );
   };

@@ -3605,11 +3605,7 @@ html:has(.menu-surface--tray) {
   color: var(--text-secondary);
 }
 
-/* Hide status dots in tray grid — macOS shows weekly indicators only on hover,
-   not persistent colored dots under every icon */
-.menu-surface--tray .provider-grid__dot {
-  display: none;
-}
+/* Status dots sit on the brand mark in both tray and pop-out grids. */
 
 /* ── Context actions (detail mode) ──────────────────────────────────
    Matches macOS actionsSection: "Usage Dashboard" + "Status Page"
@@ -3809,8 +3805,11 @@ html:has(.menu-surface--tray) {
   padding: var(--menu-card-header-only-y) var(--menu-card-x);
   text-align: left;
   align-items: stretch;
-  border-radius: var(--radius-pill, 8px);
-  border: 1px solid transparent;
+  border-radius: var(--radius-panel, 12px);
+  border: 1px solid var(--ceiling-glass-border, transparent);
+  background: color-mix(in srgb, var(--ceiling-glass-bg, transparent) 55%, transparent);
+  box-shadow: inset 3px 0 0 0 color-mix(in srgb, var(--plan-brand, var(--ceiling-accent)) 72%, transparent);
+  transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
 
 .menu-card--with-details {
@@ -3831,7 +3830,7 @@ html:has(.menu-surface--tray) {
 .menu-card__title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: var(--menu-card-header-column-gap);
 }
 
@@ -3847,6 +3846,222 @@ html:has(.menu-surface--tray) {
 
 .menu-card__provider-icon {
   flex-shrink: 0;
+}
+
+/* ── Plan status glance card (overview) ─────────────────────────────── */
+
+.plan-status-card {
+  --menu-card-x: 14px;
+  width: 100%;
+  gap: 10px;
+  padding: 12px 14px 12px 16px;
+  cursor: default;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  animation: plan-status-enter 0.22s ease both;
+}
+
+.plan-status-card--interactive {
+  cursor: pointer;
+}
+
+.plan-status-card--interactive:hover {
+  background: color-mix(in srgb, var(--ceiling-glass-bg, transparent) 72%, transparent);
+  transform: translateY(-1px);
+}
+
+.plan-status-card--interactive:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--plan-brand, var(--ceiling-accent)) 70%, white);
+  outline-offset: 2px;
+}
+
+@keyframes plan-status-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.plan-status-card__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.plan-status-card__identity {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plan-status-card__title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.plan-status-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-status-card__plan {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--ceiling-glass-border, rgba(255, 255, 255, 0.08));
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.plan-status-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-status-card__email {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+
+.plan-status-card__chip {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.plan-status-card__chip--stale {
+  color: var(--state-stale);
+  border-color: color-mix(in srgb, var(--state-stale) 35%, transparent);
+}
+
+.plan-status-card__chip--error {
+  color: var(--state-error);
+  border-color: color-mix(in srgb, var(--state-error) 35%, transparent);
+}
+
+.plan-status-card__chip--lifted {
+  color: var(--state-lifted);
+  border-color: color-mix(in srgb, var(--state-lifted) 35%, transparent);
+}
+
+.plan-status-card__chip--boost {
+  color: var(--ceiling-accent);
+  border-color: color-mix(in srgb, var(--ceiling-accent) 40%, transparent);
+}
+
+.plan-status-card__error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--state-error, var(--provider-status-error));
+  word-break: break-word;
+}
+
+.plan-status-card__meters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-status-card__meter-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-status-card__meter-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-status-card__meter-pct {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.plan-status-card__meter:not(.plan-status-card__meter--hero) .plan-status-card__meter-pct {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.plan-status-card__meter-reset {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+.plan-status-card__bar {
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+
+.plan-status-card__meter:not(.plan-status-card__meter--hero) .plan-status-card__bar {
+  height: 3px;
+}
+
+.plan-status-card__bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--plan-brand, var(--ceiling-accent)) 78%, #94a3b8);
+  transition: width 0.25s ease;
+}
+
+.plan-status-card__bar-fill[data-level="high"] {
+  background: #f59e0b;
+}
+
+.plan-status-card__bar-fill[data-level="critical"],
+.plan-status-card__bar-fill[data-level="exhausted"] {
+  background: #f87171;
+}
+
+[data-theme="light"] .plan-status-card__plan {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+[data-theme="light"] .plan-status-card__bar {
+  background: rgba(15, 23, 42, 0.08);
 }
 
 /* providerName: Font.headline + .semibold — use 500 on Windows for parity */
@@ -4606,7 +4821,7 @@ html:has(.menu-surface--tray) {
   color: #fff;
 }
 
-/* Provider icon inside grid — template-style like macOS (white silhouettes) */
+/* Provider icon inside grid — brand-tinted marks (not flat white silhouettes) */
 .provider-grid__icon-overview {
   font-size: 16px;
   line-height: 17px;
@@ -4616,20 +4831,29 @@ html:has(.menu-surface--tray) {
   opacity: 1;
 }
 
+.provider-grid__icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .provider-grid__item .provider-icon {
-  width: 17px !important;
-  height: 17px !important;
-  background: none;
-  box-shadow: none;
-  border-radius: 0;
-  filter: brightness(0) invert(1);
-  opacity: 0.7;
+  width: 20px !important;
+  height: 20px !important;
+  background: color-mix(in srgb, var(--provider-brand, var(--ceiling-accent)) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--provider-brand, var(--ceiling-accent)) 35%, transparent);
+  border-radius: 6px;
+  filter: none;
+  opacity: 0.95;
+  color: var(--provider-brand, var(--ceiling-accent));
 }
 .provider-grid__item--active .provider-icon {
   opacity: 1;
+  background: color-mix(in srgb, var(--provider-brand, var(--ceiling-accent)) 28%, transparent);
 }
 .provider-grid__item:hover .provider-icon {
-  opacity: 0.9;
+  opacity: 1;
 }
 
 /* Weekly indicator bar — macOS ProviderSwitcherView addWeeklyIndicator()
@@ -4664,10 +4888,14 @@ html:has(.menu-surface--tray) {
 }
 
 .provider-grid__dot {
-  width: 5px;
-  height: 5px;
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ceiling-glass-bg, #1c2026) 80%, #000);
 }
 .provider-grid__dot[data-status="ok"] {
   background: #34c759;

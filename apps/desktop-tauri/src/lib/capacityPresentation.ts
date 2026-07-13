@@ -11,6 +11,15 @@ export type ConstrainingWindow = {
   window: RateWindowSnapshot;
 };
 
+export type GlanceMeters = {
+  /** Account plan pool — always the overview hero. */
+  primary: ConstrainingWindow;
+  /** Hottest non-primary lane when materially hot; otherwise omitted. */
+  companion: ConstrainingWindow | null;
+};
+
+export type ProviderGlanceStatus = "ok" | "warning" | "exhausted" | "error";
+
 export type ActivePromoBoost = {
   id: string;
   title: string;
@@ -18,6 +27,8 @@ export type ActivePromoBoost = {
 };
 
 const STALE_AFTER_MS = 10 * 60 * 1000;
+/** Companion lanes appear on overview when used reaches this share. */
+export const GLANCE_COMPANION_HOT_PERCENT = 70;
 
 /** Pick the measured window with the highest used percent (constraining). */
 export function constrainingWindow(
@@ -29,30 +40,92 @@ export function constrainingWindow(
     window: provider.primary,
   };
 
-  const consider = (
+  for (const candidate of nonPrimaryWindows(provider)) {
+    if (candidate.window.usedPercent > best.window.usedPercent) {
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Overview glance model: primary plan pool as hero, plus an optional hot
+ * companion lane (Auto/API/5-hour/etc.). Clicking never toggles meters —
+ * detail mode lists every window.
+ */
+export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
+  const primary: ConstrainingWindow = {
+    id: "primary",
+    label: provider.primaryLabel?.trim() || "Plan",
+    window: provider.primary,
+  };
+
+  let companion: ConstrainingWindow | null = null;
+  for (const candidate of nonPrimaryWindows(provider)) {
+    if (!isCompanionHot(candidate.window, primary.window)) continue;
+    if (
+      !companion ||
+      candidate.window.usedPercent > companion.window.usedPercent
+    ) {
+      companion = candidate;
+    }
+  }
+
+  return { primary, companion };
+}
+
+function isCompanionHot(
+  companion: RateWindowSnapshot,
+  primary: RateWindowSnapshot,
+): boolean {
+  return (
+    companion.usedPercent >= GLANCE_COMPANION_HOT_PERCENT ||
+    companion.usedPercent >= primary.usedPercent
+  );
+}
+
+function nonPrimaryWindows(
+  provider: ProviderUsageSnapshot,
+): ConstrainingWindow[] {
+  const out: ConstrainingWindow[] = [];
+  const push = (
     id: string,
     label: string | null | undefined,
     window: RateWindowSnapshot | null | undefined,
     fallback: string,
   ) => {
     if (!window) return;
-    if (window.usedPercent > best.window.usedPercent) {
-      best = {
-        id,
-        label: label?.trim() || fallback,
-        window,
-      };
-    }
+    out.push({
+      id,
+      label: label?.trim() || fallback,
+      window,
+    });
   };
 
-  consider("secondary", provider.secondaryLabel, provider.secondary, "Weekly");
-  consider("model", null, provider.modelSpecific, "Model");
-  consider("tertiary", null, provider.tertiary, "Extra");
+  push("secondary", provider.secondaryLabel, provider.secondary, "Weekly");
+  push("model", null, provider.modelSpecific, "Model");
+  push("tertiary", null, provider.tertiary, "Extra");
   for (const extra of provider.extraRateWindows ?? []) {
-    consider(`extra-${extra.id}`, extra.title, extra.window, extra.title);
+    push(`extra-${extra.id}`, extra.title, extra.window, extra.title);
   }
+  return out;
+}
 
-  return best;
+/** Grid / glance status chip from constraining pressure. */
+export function providerGlanceStatus(
+  provider: ProviderUsageSnapshot,
+): ProviderGlanceStatus {
+  if (provider.error) return "error";
+  const constraining = constrainingWindow(provider);
+  if (
+    constraining.window.isExhausted ||
+    constraining.window.usedPercent >= 100
+  ) {
+    return "exhausted";
+  }
+  if (constraining.window.usedPercent > 80) return "warning";
+  return "ok";
 }
 
 /** Strip/flyout freshness: error > stale > lifted > live. */

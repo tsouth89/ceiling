@@ -7,6 +7,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
 import { useLocale } from "../hooks/useLocale";
 import MenuCard from "../components/MenuCard";
+import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import MenuSurface, {
   MenuEmpty,
@@ -17,9 +18,8 @@ import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 
 /**
- * Pop-out window — dashboard and provider deep-links both keep the full card
- * stack. A provider target only scrolls/focuses the requested card so the
- * layout stays consistent with the tray/menu surface.
+ * Pop-out window — overview shows plan-status glance cards; selecting a
+ * provider opens the full MenuCard with activity/charts.
  */
 export default function PopOutPanel({
   state,
@@ -250,16 +250,27 @@ export default function PopOutPanel({
                 }
               }}
             >
-              <MenuCard
-                provider={p}
-                isRefreshing={refreshingProviderIds.has(p.providerId)}
-                hideEmail={settings.hidePersonalInfo}
-                resetTimeRelative={settings.resetTimeRelative}
-                showResetWhenExhausted={settings.showResetWhenExhausted}
-                showAsUsed={settings.showAsUsed}
-                compactMetrics={selectedProviderId === null}
-                showActivitySection={selectedProviderId !== null}
-              />
+              {selectedProviderId === null ? (
+                <PlanStatusCard
+                  provider={p}
+                  isRefreshing={refreshingProviderIds.has(p.providerId)}
+                  hideEmail={settings.hidePersonalInfo}
+                  resetTimeRelative={settings.resetTimeRelative}
+                  showResetWhenExhausted={settings.showResetWhenExhausted}
+                  showAsUsed={settings.showAsUsed}
+                  onSelect={() => handleGridClick(p.providerId)}
+                />
+              ) : (
+                <MenuCard
+                  provider={p}
+                  isRefreshing={refreshingProviderIds.has(p.providerId)}
+                  hideEmail={settings.hidePersonalInfo}
+                  resetTimeRelative={settings.resetTimeRelative}
+                  showResetWhenExhausted={settings.showResetWhenExhausted}
+                  showAsUsed={settings.showAsUsed}
+                  showActivitySection
+                />
+              )}
             </div>
           </Fragment>
         ))}

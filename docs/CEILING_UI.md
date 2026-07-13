@@ -42,11 +42,27 @@ Usage bars keep calm slate→cyan progression; warn/crit stay amber/red without 
 - Live pills omit the chip.
 - Optional reset countdown stays secondary, not a second percentage.
 
-## Flyout card anatomy
+## Flyout overview anatomy (plan-status cards)
+
+```
+┌──────────────────────────────────────────────┐
+│ [logo]  Cursor                    Pro        │
+│         62% left · Monthly        resets 12d │
+│         ████████░░                           │
+│         Auto 90%  ████████████░░  (if hot)   │
+└──────────────────────────────────────────────┘
+```
+
+- Overview cards lead with **primary plan pool** (not Auto alone).
+- Optional **companion** lane only when hot (≥ ~70% used, or hotter than the pool).
+- Clicking a card opens detail — it does not toggle which meter is shown.
+- Provider switcher uses brand-tinted icons + status dots; bar = constraining %.
+
+## Flyout detail anatomy
 
 ```
 ┌──────────────────────────────────────┐
-│ Cursor          you@…        Pro     │
+│ [logo] Cursor   you@…        Pro     │
 │ web · updated 2m ago                 │
 │──────────────────────────────────────│
 │ Monthly     ████████░░  62%   12d    │
@@ -59,7 +75,7 @@ Usage bars keep calm slate→cyan progression; warn/crit stay amber/red without 
 └──────────────────────────────────────┘
 ```
 
-Overview and detail both list **every** measured window plus inactive rows. Do not truncate to two metrics.
+Detail lists **every** measured window plus inactive rows. Do not truncate to two metrics.
 
 ## State chip rules
 
