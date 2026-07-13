@@ -222,6 +222,19 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool) {
         );
         tracing::info!("dwm: dark_mode={r1:#x} caption_color={r2:#x}");
 
+        // Windows 11 rounded corners for our borderless windows (so the top
+        // doesn't read as a hard, cut-off rectangle).
+        const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+        const DWMWCP_ROUND: u32 = 2;
+        let corner: u32 = DWMWCP_ROUND;
+        let r_corner = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &raw const corner as *const c_void,
+            4,
+        );
+        tracing::info!("dwm: corner_round={r_corner:#x}");
+
         // Extend DWM frame fully into client area
         let margins = Margins {
             left: -1,

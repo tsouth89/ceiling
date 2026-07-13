@@ -72,12 +72,13 @@ impl SurfaceMode {
                 visible: true,
                 decorations: false,
                 resizable: true,
-                // Wide "dashboard" proportions (rail + roomy cards), matching
-                // the promo — not the narrow flyout width it used to inherit.
-                width: 900.0,
-                height: 620.0,
-                min_width: Some(560.0),
-                min_height: Some(420.0),
+                // Dashboard proportions sized so the rail + cards fill the
+                // window without a large dead zone (snugger than the first
+                // pass, which left a lot of unused space).
+                width: 720.0,
+                height: 560.0,
+                min_width: Some(520.0),
+                min_height: Some(400.0),
                 always_on_top: false,
                 blur_dismiss: false,
                 skip_taskbar: false,
@@ -294,7 +295,7 @@ mod tests {
     #[test]
     fn pop_out_min_size() {
         let props = SurfaceMode::PopOut.window_properties();
-        assert_eq!(props.min_width, Some(560.0));
-        assert_eq!(props.min_height, Some(420.0));
+        assert_eq!(props.min_width, Some(520.0));
+        assert_eq!(props.min_height, Some(400.0));
     }
 }
