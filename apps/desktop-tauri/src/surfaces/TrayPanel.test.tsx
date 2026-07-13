@@ -491,7 +491,7 @@ describe("TrayPanel provider grid", () => {
       "Gemini",
     ]);
     expect(
-      Array.from(container.querySelectorAll(".menu-card__name")).map(
+      Array.from(container.querySelectorAll(".plan-status-card__name")).map(
         (node) => node.textContent,
       ),
     ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
@@ -674,7 +674,8 @@ describe("TrayPanel provider grid", () => {
     const grid = container.querySelector(".provider-grid");
     expect(grid?.getAttribute("data-show-icons")).toBe("false");
     expect(grid?.classList.contains("provider-grid--no-icons")).toBe(true);
-    expect(container.querySelector(".provider-icon")).toBeNull();
+    // The setting hides the grid switcher icons only; card header icons remain.
+    expect(grid?.querySelector(".provider-icon")).toBeNull();
     expect(container.querySelector(".provider-grid__icon-overview")).toBeNull();
   });
 
