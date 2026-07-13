@@ -456,7 +456,9 @@ pub fn update_tray_icon_and_tooltip(
     let _ = tray.set_icon(Some(icon));
 
     // ── Tooltip ───────────────────────────────────────────────────────────
-    let tooltip = build_tooltip(&snapshots, settings.ui_language);
+    // Use the same dashboard-ordered set as the icon so the tooltip lists
+    // providers in the window's order and never omits one to a tail clip.
+    let tooltip = build_tooltip(&ordered_snapshots, settings.ui_language);
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
@@ -679,8 +681,20 @@ fn max_metric_percent<const N: usize>(values: [Option<f64>; N]) -> Option<f64> {
 }
 
 /// Build a compact multi-line tooltip string from provider snapshots.
+///
+/// The hard constraint: Windows Shell only reliably *displays* ~64 characters
+/// of a tray icon's tooltip (the struct field holds 128, but the shell clips
+/// the visible text far shorter). At that budget, "Name P% Label · reset" for
+/// three-plus providers overflows and the tail providers silently disappear —
+/// which is exactly the "not showing all subscriptions" bug.
+///
+/// So the rule here is completeness first: EVERY configured provider gets a
+/// line, and we spend the remaining budget on the richest per-line detail that
+/// still fits — degrading label+reset → reset → percent uniformly rather than
+/// dropping anyone. Callers pass snapshots already in dashboard order so the
+/// tooltip reads the same top-to-bottom as the window.
 fn build_tooltip(
-    snapshots: &[crate::commands::ProviderUsageSnapshot],
+    snapshots: &[&crate::commands::ProviderUsageSnapshot],
     lang: codexbar::settings::Language,
 ) -> String {
     use codexbar::locale::{LocaleKey, get_text};
@@ -690,36 +704,61 @@ fn build_tooltip(
     }
 
     let error_label = get_text(lang, LocaleKey::TrayStatusRowError);
-    let mut lines = Vec::with_capacity(snapshots.len() + 1);
-    for s in snapshots {
+
+    // Per-line detail levels, richest first. The reset ("when do I get more?")
+    // is the actionable glance value, so it outranks the window label when only
+    // one fits; the label stays visible in the dashboard and tray menu.
+    //   0: "Name  85% Weekly · 24d 11h"
+    //   1: "Name  85% · 24d 11h"   (drop the window label)
+    //   2: "Name  85%"             (percent only)
+    let render_line = |s: &crate::commands::ProviderUsageSnapshot, detail: u8| -> String {
         if s.error.is_some() {
-            lines.push(format!("{}  {}", s.display_name, error_label));
-            continue;
+            return format!("{}  {}", s.display_name, error_label);
         }
-        // Compact: "Name  85% Plan · 24d 11h" — percent, the window label (the
-        // key "which limit is this?" detail), and a short reset when known.
-        // Kept terse so every configured provider fits Windows' tooltip cap.
         let mut line = format!("{}  {:.0}%", s.display_name, s.primary.used_percent);
-        if let Some(label) = s
-            .primary_label
-            .as_deref()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
+        if detail == 0
+            && let Some(label) = s
+                .primary_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
         {
             line.push(' ');
             line.push_str(&truncate_tooltip_text(label, 12));
         }
-        if let Some(reset) = tooltip_short_reset(
-            s.primary.resets_at.as_deref(),
-            s.primary.reset_description.as_deref(),
-        ) {
+        if detail <= 1
+            && let Some(reset) = tooltip_short_reset(
+                s.primary.resets_at.as_deref(),
+                s.primary.reset_description.as_deref(),
+            )
+        {
             line.push_str(" · ");
             line.push_str(&reset);
         }
-        lines.push(line);
-    }
+        line
+    };
 
-    format!("Ceiling\n{}", lines.join("\n"))
+    // Windows' visible tooltip budget. Kept conservative so every provider
+    // survives the shell's clip even on the strictest builds.
+    const BUDGET: usize = 62;
+    for detail in 0u8..=2 {
+        let body = snapshots
+            .iter()
+            .map(|s| render_line(s, detail))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if body.chars().count() <= BUDGET {
+            return body;
+        }
+    }
+    // Even percent-only overflows (many providers): return it anyway — all
+    // providers are present; let the shell clip the overflow rather than us
+    // hiding anyone.
+    snapshots
+        .iter()
+        .map(|s| render_line(s, 2))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Compact reset duration for the tooltip ("24d 11h" / "2h 21m" / "12m"), or
@@ -1251,12 +1290,41 @@ mod tests {
         let mut codex = fake_snapshot("codex", "Codex", 8.0);
         codex.primary.reset_description = Some("4h 10m".to_string());
 
-        let tooltip = build_tooltip(&[claude, codex], codexbar::settings::Language::English);
+        let tooltip = build_tooltip(&[&claude, &codex], codexbar::settings::Language::English);
 
-        assert_eq!(
-            tooltip,
-            "Ceiling\nClaude  13% · 2h 05m\nCodex  8% · 4h 10m"
+        // No "Ceiling" header (it would cost budget every provider needs), and
+        // percent + reset per provider since both providers + resets fit.
+        assert_eq!(tooltip, "Claude  13% · 2h 05m\nCodex  8% · 4h 10m");
+    }
+
+    #[test]
+    fn tooltip_keeps_every_provider_within_the_budget() {
+        // Three providers with labels + resets can't ALL fit at full detail in
+        // Windows' ~64-char tooltip, so the builder must degrade detail rather
+        // than drop a provider — every name must still appear.
+        let mut codex = fake_snapshot("codex", "Codex", 80.0);
+        codex.primary_label = Some("Weekly".to_string());
+        codex.primary.reset_description = Some("6d 13h".to_string());
+        let mut claude = fake_snapshot("claude", "Claude", 57.0);
+        claude.primary_label = Some("Session (5h)".to_string());
+        claude.primary.reset_description = Some("1h 27m".to_string());
+        let mut cursor = fake_snapshot("cursor", "Cursor", 85.0);
+        cursor.primary_label = Some("Plan".to_string());
+        cursor.primary.reset_description = Some("24d 8h".to_string());
+
+        let tooltip = build_tooltip(
+            &[&codex, &claude, &cursor],
+            codexbar::settings::Language::English,
         );
+
+        assert!(tooltip.chars().count() <= 62, "over budget: {tooltip}");
+        for name in ["Codex", "Claude", "Cursor"] {
+            assert!(tooltip.contains(name), "missing {name}: {tooltip}");
+        }
+        // Each provider keeps its percent.
+        for pct in ["80%", "57%", "85%"] {
+            assert!(tooltip.contains(pct), "missing {pct}: {tooltip}");
+        }
     }
 
     #[test]
@@ -1265,9 +1333,9 @@ mod tests {
         claude.primary.reset_description =
             Some("resets in Jun 10 at 3:00PM with extra noisy suffix".to_string());
 
-        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::English);
+        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English);
 
-        let line = tooltip.lines().nth(1).expect("provider tooltip line");
+        let line = tooltip.lines().next().expect("provider tooltip line");
         assert!(line.starts_with("Claude  13% · Jun 10 at 3:00"), "{line}");
         assert!(line.ends_with("..."), "{line}");
         assert!(line.chars().count() <= 40, "{line}");
@@ -1278,7 +1346,7 @@ mod tests {
         let mut claude = fake_snapshot("claude", "Claude", 13.0);
         claude.error = Some("network timeout".to_string());
 
-        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::Japanese);
+        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::Japanese);
 
         assert!(tooltip.contains("エラー"), "{tooltip}");
         assert!(!tooltip.contains(": error ("), "{tooltip}");
@@ -1293,8 +1361,7 @@ mod tests {
         // The native tooltip is intentionally compact and language-neutral
         // (percent + a universal d/h/m reset) so every provider fits, so it no
         // longer carries the localized "Resets in" text.
-        let english_tooltip =
-            build_tooltip(&[claude.clone()], codexbar::settings::Language::English);
+        let english_tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English);
         assert!(english_tooltip.contains("Claude  13%"), "{english_tooltip}");
         assert!(
             !english_tooltip.to_ascii_lowercase().contains("resets in"),
