@@ -10,15 +10,60 @@ use super::icon::UsageLevel;
 /// Side length of the generated tray icon in pixels.
 pub const TRAY_ICON_SIZE: u32 = 32;
 
-/// Render a usage-bar tray icon as raw RGBA bytes.
+/// Ceiling brand colour for a usage level: cyan while healthy, warming toward
+/// red as capacity fills toward the ceiling.
+fn brand_usage_color(percent: f64) -> (u8, u8, u8) {
+    match UsageLevel::from_percent(percent) {
+        UsageLevel::Low => (53, 194, 218),     // Ceiling cyan
+        UsageLevel::Medium => (224, 163, 60),  // amber
+        UsageLevel::High => (240, 150, 70),    // orange
+        UsageLevel::Critical => (240, 98, 90), // red
+        UsageLevel::Unknown => (140, 146, 156),
+    }
+}
+
+/// Dark app-icon tile colour (matches `rust/icons/icon.*` / the `<CeilingMark>`).
+const TILE: (u8, u8, u8) = (15, 18, 22);
+/// Brand green for the ceiling line.
+const CEILING: (u8, u8, u8) = (166, 227, 92);
+/// Track colour behind an unfilled usage bar.
+const TRACK: (u8, u8, u8) = (44, 50, 58);
+
+fn desat(rgb: (u8, u8, u8), has_error: bool) -> (u8, u8, u8) {
+    if has_error {
+        let g = ((rgb.0 as u16 + rgb.1 as u16 + rgb.2 as u16) / 3) as u8;
+        (g, g, g)
+    } else {
+        rgb
+    }
+}
+
+fn fill_tile(img: &mut RgbaImage, has_error: bool) {
+    const SZ: u32 = TRAY_ICON_SIZE;
+    let a: u8 = if has_error { 190 } else { 255 };
+    let tile = Rgba([TILE.0, TILE.1, TILE.2, a]);
+    for y in 1..SZ - 1 {
+        for x in 1..SZ - 1 {
+            img.put_pixel(x, y, tile);
+        }
+    }
+    // The signature ceiling line near the top.
+    let (r, g, b) = desat(CEILING, has_error);
+    for y in 6..9 {
+        for x in 6..SZ - 6 {
+            img.put_pixel(x, y, Rgba([r, g, b, 255]));
+        }
+    }
+}
+
+/// Render a Ceiling-branded usage tray icon as raw RGBA bytes.
 ///
-/// - `session_percent`: primary bar fill (0–100), colour-coded by [`UsageLevel`]
-/// - `weekly_percent`: optional secondary bar fill (0–100). When `Some`, two thin
-///   bars are drawn (session top, weekly bottom). When `None`, a single thick bar
-///   is drawn instead.
-/// - `has_error`: desaturate all bar colours to grey to signal an error/unknown state.
+/// A dark app-icon tile with the green ceiling line on top and one or two usage
+/// bars below, filled in the brand cyan→amber→red ramp.
 ///
-/// Returns `(rgba_bytes, width, height)` for a [`TRAY_ICON_SIZE`]×[`TRAY_ICON_SIZE`] icon.
+/// - `session_percent`: primary bar fill (0–100)
+/// - `weekly_percent`: optional secondary bar fill; two bars when `Some`, one when `None`
+/// - `has_error`: desaturate to grey to signal an error/unknown state.
 pub fn render_bar_icon_rgba(
     session_percent: f64,
     weekly_percent: Option<f64>,
@@ -26,41 +71,23 @@ pub fn render_bar_icon_rgba(
 ) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
     let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
-
     for pixel in img.pixels_mut() {
         *pixel = Rgba([0, 0, 0, 0]);
     }
+    fill_tile(&mut img, has_error);
 
-    let bg_alpha: u8 = if has_error { 180 } else { 255 };
-    let bg_color = Rgba([60, 60, 70, bg_alpha]);
-    for y in 2..SZ - 2 {
-        for x in 2..SZ - 2 {
-            img.put_pixel(x, y, bg_color);
-        }
-    }
-
-    let color_for = |percent: f64| -> (u8, u8, u8) {
-        let (r, g, b) = UsageLevel::from_percent(percent).color();
-        if has_error {
-            let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
-            (gray, gray, gray)
-        } else {
-            (r, g, b)
-        }
-    };
-
-    let bar_left = 4u32;
-    let bar_right = SZ - 4;
+    let bar_left = 6u32;
+    let bar_right = SZ - 6;
     let bar_width = bar_right - bar_left;
-
     let fill_px = |pct: f64| ((pct.clamp(0.0, 100.0) / 100.0) * bar_width as f64) as u32;
+    let track = Rgba([TRACK.0, TRACK.1, TRACK.2, 255]);
 
     let mut draw_bar = |y_start: u32, y_end: u32, pct: f64| {
-        let (r, g, b) = color_for(pct);
+        let (r, g, b) = desat(brand_usage_color(pct), has_error);
         let fill_end = (bar_left + fill_px(pct)).min(bar_right);
         for y in y_start..y_end {
             for x in bar_left..bar_right {
-                img.put_pixel(x, y, Rgba([80, 80, 90, 255]));
+                img.put_pixel(x, y, track);
             }
         }
         for y in y_start..y_end {
@@ -72,32 +99,25 @@ pub fn render_bar_icon_rgba(
 
     match weekly_percent {
         Some(weekly) => {
-            draw_bar(8, 15, session_percent); // session bar (top, thicker)
-            draw_bar(18, 23, weekly); // weekly bar (bottom, thinner)
+            draw_bar(13, 18, session_percent); // session bar (top)
+            draw_bar(21, 25, weekly); // weekly bar (bottom)
         }
         None => {
-            draw_bar(10, 22, session_percent); // single thick bar (centred)
+            draw_bar(15, 23, session_percent); // single thick bar
         }
     }
 
     (img.into_raw(), SZ, SZ)
 }
 
-/// Render a compact numeric percent tray icon as raw RGBA bytes.
+/// Render a Ceiling-branded numeric-percent tray icon as raw RGBA bytes.
 pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
     let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
-
     for pixel in img.pixels_mut() {
         *pixel = Rgba([0, 0, 0, 0]);
     }
-
-    let bg_alpha: u8 = if has_error { 180 } else { 255 };
-    for y in 2..SZ - 2 {
-        for x in 2..SZ - 2 {
-            img.put_pixel(x, y, Rgba([60, 60, 70, bg_alpha]));
-        }
-    }
+    fill_tile(&mut img, has_error);
 
     let pct = percent.clamp(0.0, 100.0).round() as u32;
     let text = if pct >= 100 {
@@ -111,15 +131,11 @@ pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32,
     let text_width = text.len() as u32 * glyph_width * scale + (text.len() as u32 - 1) * glyph_gap;
     let text_height = 5 * scale;
     let start_x = (SZ.saturating_sub(text_width)) / 2;
-    let start_y = (SZ.saturating_sub(text_height)) / 2;
+    // Sit the number below the ceiling line rather than dead-centre.
+    let start_y = ((SZ.saturating_sub(text_height)) / 2 + 3).min(SZ - text_height - 1);
 
-    let (r, g, b) = UsageLevel::from_percent(percent).color();
-    let color = if has_error {
-        let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
-        Rgba([gray, gray, gray, 255])
-    } else {
-        Rgba([r, g, b, 255])
-    };
+    let (r, g, b) = desat(brand_usage_color(percent), has_error);
+    let color = Rgba([r, g, b, 255]);
 
     let mut x = start_x;
     for ch in text.chars() {
@@ -189,22 +205,19 @@ mod tests {
     }
 
     #[test]
-    fn zero_fill_gives_gray_only_bar() {
+    fn zero_fill_gives_track_only_bar() {
         let (rgba, w, _h) = render_bar_icon_rgba(0.0, None, false);
-        // Sample a pixel near the centre of the bar track area (y=16, x=8)
+        // Sample a pixel in the single bar's track area (y=16, x=8).
         let idx = ((16 * w + 8) * 4) as usize;
-        // Should be the gray track colour, not a usage colour
-        assert_eq!(rgba[idx], 80); // R
-        assert_eq!(rgba[idx + 1], 80); // G
-        assert_eq!(rgba[idx + 2], 90); // B
+        assert_eq!((rgba[idx], rgba[idx + 1], rgba[idx + 2]), TRACK);
     }
 
     #[test]
     fn full_fill_gives_colored_bar() {
         let (rgba, w, _h) = render_bar_icon_rgba(100.0, None, false);
-        // At 100% used the bar is at Critical level
+        // At 100% used the bar fills with the brand critical colour.
         let idx = ((16 * w + 8) * 4) as usize;
-        let (er, eg, eb) = UsageLevel::Critical.color();
+        let (er, eg, eb) = brand_usage_color(100.0);
         assert_eq!(rgba[idx], er);
         assert_eq!(rgba[idx + 1], eg);
         assert_eq!(rgba[idx + 2], eb);
@@ -232,7 +245,10 @@ mod tests {
     #[test]
     fn percent_icon_draws_visible_text() {
         let (rgba, _, _) = render_percent_icon_rgba(72.0, false);
-        assert!(rgba.chunks_exact(4).any(|px| px[3] == 255 && px[0] != 60));
+        // A visible glyph pixel: opaque, and neither the tile nor the ceiling line.
+        assert!(rgba
+            .chunks_exact(4)
+            .any(|px| px[3] == 255 && px[0] != TILE.0 && px[0] != CEILING.0));
     }
 
     #[test]
