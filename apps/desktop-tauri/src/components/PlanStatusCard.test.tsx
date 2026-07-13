@@ -78,4 +78,26 @@ describe("PlanStatusCard", () => {
     expect(screen.getByText("Auto")).toBeTruthy();
     expect(screen.getByText(/10% left/)).toBeTruthy();
   });
+
+  it("still shows reset timing when the session is exhausted", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "claude",
+          displayName: "Claude",
+          primary: window(100),
+          primaryLabel: "Session (5h)",
+          secondary: null,
+          secondaryLabel: null,
+          planName: "Claude Max 5x",
+        })}
+        hideEmail
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText(/100% used/)).toBeTruthy();
+    expect(screen.getByText("Resets in 12d")).toBeTruthy();
+  });
 });

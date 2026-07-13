@@ -4040,6 +4040,44 @@ html:has(.menu-surface--tray) {
   opacity: 0.9;
 }
 
+/* At 100%, reset timing is the primary question — keep it readable. */
+.plan-status-card__meter-reset--emphasis {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  opacity: 1;
+}
+
+.plan-status-card__meter-reset--hero {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  opacity: 1;
+  white-space: nowrap;
+}
+
+.plan-status-card__meter:not(.plan-status-card__meter--hero)
+  .plan-status-card__meter-reset--hero {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plan-status-card__meter-pct--quiet {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: var(--text-secondary) !important;
+  letter-spacing: 0 !important;
+  margin-left: 0;
+}
+
+.plan-status-card__meter--awaiting-reset .plan-status-card__meter-top {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
 .plan-status-card__bar {
   height: 5px;
   border-radius: 999px;

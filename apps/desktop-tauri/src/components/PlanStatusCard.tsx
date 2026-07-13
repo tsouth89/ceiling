@@ -51,19 +51,48 @@ function MeterRow({
     snap.resetDescription,
     resetTimeRelative,
   );
-  const showReset =
-    !!formattedReset &&
-    (!snap.isExhausted || showResetWhenExhausted);
+  // Overview always surfaces reset when known — at 100% that is the answer.
+  const showReset = !!formattedReset;
+  const awaitingReset = snap.isExhausted && showReset;
+  // Optional setting: promote reset into the hero slot when depleted.
+  const resetAsHero = awaitingReset && showResetWhenExhausted;
 
   return (
-    <div className={`plan-status-card__meter${hero ? " plan-status-card__meter--hero" : ""}`}>
+    <div
+      className={[
+        "plan-status-card__meter",
+        hero ? "plan-status-card__meter--hero" : null,
+        awaitingReset ? "plan-status-card__meter--awaiting-reset" : null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <div className="plan-status-card__meter-top">
         <span className="plan-status-card__meter-label">{meter.label}</span>
-        <strong className="plan-status-card__meter-pct">
-          {Math.round(displayPct)}% {suffix}
-        </strong>
-        {showReset && (
-          <span className="plan-status-card__meter-reset">{formattedReset}</span>
+        {resetAsHero ? (
+          <>
+            <span className="plan-status-card__meter-pct plan-status-card__meter-pct--quiet">
+              {Math.round(displayPct)}% {suffix}
+            </span>
+            <strong className="plan-status-card__meter-reset plan-status-card__meter-reset--hero">
+              {formattedReset}
+            </strong>
+          </>
+        ) : (
+          <>
+            <strong className="plan-status-card__meter-pct">
+              {Math.round(displayPct)}% {suffix}
+            </strong>
+            {showReset && (
+              <span
+                className={`plan-status-card__meter-reset${
+                  awaitingReset ? " plan-status-card__meter-reset--emphasis" : ""
+                }`}
+              >
+                {formattedReset}
+              </span>
+            )}
+          </>
         )}
       </div>
       <div className="plan-status-card__bar" aria-hidden>
