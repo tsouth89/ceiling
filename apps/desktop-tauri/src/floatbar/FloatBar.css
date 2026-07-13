@@ -66,6 +66,26 @@ body.floatbar-window #root {
   opacity: 1;
   background-color: rgba(255, 255, 255, 0.22);
 }
+
+/* Locked in place: no drag affordance, dimmed grip, and a small lock glyph. */
+.floatbar--locked,
+.floatbar--locked .floatbar__handle,
+.floatbar--locked [data-tauri-drag-region] {
+  cursor: default;
+}
+.floatbar--locked .floatbar__handle,
+.floatbar--locked .floatbar__handle:hover {
+  opacity: 0.28;
+  background-color: transparent;
+}
+.floatbar__lock {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--ceiling-accent, #35c2da);
+  opacity: 0.85;
+  margin: 0 calc(1px * var(--floatbar-scale, 1));
+}
 .floatbar--vertical .floatbar__handle {
   width: calc(16px * var(--floatbar-scale, 1));
   height: calc(10px * var(--floatbar-scale, 1));

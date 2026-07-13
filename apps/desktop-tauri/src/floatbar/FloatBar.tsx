@@ -317,14 +317,54 @@ function freshnessChipLabel(freshness: CapacityFreshness): string | null {
  * refresh cycle as the rest of the app via `useProviders`, and reacts to
  * setting changes (filter list, orientation) live without a reload.
  */
+/** localStorage key persisting the float bar's "lock in place" state. */
+const FLOATBAR_LOCK_KEY = "ceiling.floatbar.locked";
+
 export default function FloatBar({ state }: { state: BootstrapState }) {
   const { t } = useLocale();
   const { providers } = useProviders({
     refreshOnMount: false,
   });
+  const [locked, setLocked] = useState(
+    () => localStorage.getItem(FLOATBAR_LOCK_KEY) === "1",
+  );
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+
   const startDrag = useCallback((event: MouseEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || lockedRef.current) return;
     void getCurrentWindow().startDragging().catch(() => {});
+  }, []);
+
+  // Replace the webview's generic right-click menu with a purposeful action:
+  // right-click toggles "lock in place" (persisted). While locked, the native
+  // `data-tauri-drag-region` drag is suppressed so the bar can't be nudged.
+  useEffect(() => {
+    const onContextMenu = (event: globalThis.MouseEvent) => {
+      event.preventDefault();
+      setLocked((prev) => {
+        const next = !prev;
+        try {
+          localStorage.setItem(FLOATBAR_LOCK_KEY, next ? "1" : "0");
+        } catch {
+          /* storage disabled — the lock just won't persist across restarts */
+        }
+        return next;
+      });
+    };
+    const onMouseDownCapture = (event: globalThis.MouseEvent) => {
+      if (lockedRef.current && event.button === 0) {
+        // Pre-empt Tauri's drag-region handler before it starts a move.
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("contextmenu", onContextMenu);
+    document.addEventListener("mousedown", onMouseDownCapture, true);
+    return () => {
+      document.removeEventListener("contextmenu", onContextMenu);
+      document.removeEventListener("mousedown", onMouseDownCapture, true);
+    };
   }, []);
 
   // Mark the body so our CSS can strip the dark theme background — the
@@ -508,7 +548,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
 
   return (
     <div
-      className={`floatbar floatbar--${orientation} floatbar--${style}${settings.floatBarDarkText ? " floatbar--light-bg" : ""}`}
+      className={`floatbar floatbar--${orientation} floatbar--${style}${settings.floatBarDarkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}`}
       data-tauri-drag-region
       onMouseDown={startDrag}
       style={
@@ -519,6 +559,27 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       }
     >
       <div className="floatbar__handle" data-tauri-drag-region aria-hidden />
+      {locked && (
+        <span
+          className="floatbar__lock"
+          aria-hidden
+          title="Locked in place — right-click to unlock"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="11"
+            height="11"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2.2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="5" y="11" width="14" height="9" rx="2" />
+            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+          </svg>
+        </span>
+      )}
       {visible.length === 0 ? (
         <div className="floatbar__empty" data-tauri-drag-region>
           {t("FloatBarNoProviders")}
