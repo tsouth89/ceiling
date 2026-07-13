@@ -6133,6 +6133,31 @@ body:has(.dashboard-shell) #root {
 .dashboard-body .provider-grid {
   margin-bottom: 2px;
 }
+
+/* Consistent, calm cards. Provider identity is already carried by the logo and
+   the name, so the per-provider brand accent stripe down the left edge is just
+   noise — three different accent colors is what made the list read "busy".
+   Drop it, and stop brand-tinting the bars. Color is reserved for the ONE
+   thing it should mean here: how close you are to the ceiling. */
+.dashboard-body .plan-status-card {
+  box-shadow: none;
+}
+/* One shared usage scale for every provider (the design-system tokens the
+   menu-metric bars already use): accent = headroom, amber = getting close,
+   orange = nearly out, red = at the ceiling. No --plan-brand, so all cards
+   match. */
+.dashboard-body .plan-status-card__bar-fill {
+  background: var(--usage-bar-normal);
+}
+.dashboard-body .plan-status-card__bar-fill[data-level="high"] {
+  background: var(--usage-bar-high);
+}
+.dashboard-body .plan-status-card__bar-fill[data-level="critical"] {
+  background: var(--usage-bar-critical);
+}
+.dashboard-body .plan-status-card__bar-fill[data-level="exhausted"] {
+  background: var(--usage-bar-exhausted);
+}
 .dashboard-placeholder {
   margin: auto;
   padding: 48px 24px;
