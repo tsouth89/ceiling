@@ -25,7 +25,7 @@ pub struct AutostartArgs {
 pub async fn run(args: AutostartArgs) -> anyhow::Result<()> {
     if args.enable {
         enable_autostart()?;
-        println!("Auto-start enabled. CodexBar will start when Windows boots.");
+        println!("Auto-start enabled. Ceiling will start when Windows boots.");
     } else if args.disable {
         disable_autostart()?;
         println!("Auto-start disabled.");

@@ -370,7 +370,7 @@ impl CookieExtractor {
             Err(CookieError::Dpapi(
                 "DPAPI is not available in WSL. Chromium cookies cannot be automatically \
                  extracted. Use manual cookies (Settings → Cookies) or CLI-based authentication \
-                 instead. Run CodexBar natively on Windows for automatic cookie extraction."
+                 instead. Run Ceiling natively on Windows for automatic cookie extraction."
                     .to_string(),
             ))
         } else {

@@ -22,7 +22,7 @@ pub struct ServeArgs {
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
     eprintln!(
-        "CodexBar server listening on http://127.0.0.1:{}",
+        "Ceiling server listening on http://127.0.0.1:{}",
         args.port
     );
 

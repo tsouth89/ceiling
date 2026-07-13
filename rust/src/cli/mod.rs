@@ -30,7 +30,7 @@ pub mod exit_codes {
     pub const USAGE_ERROR: i32 = 64;
 }
 
-/// CodexBar - Monitor AI provider usage limits
+/// Ceiling - Monitor AI provider usage limits
 ///
 /// CLI for inspecting provider usage and managing local config. The desktop
 /// menubar shell now lives in `apps/desktop-tauri/`; this binary is CLI-only.

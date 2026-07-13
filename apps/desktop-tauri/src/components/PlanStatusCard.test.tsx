@@ -88,7 +88,7 @@ describe("PlanStatusCard", () => {
           primary: window(100),
           primaryLabel: "Session (5h)",
           secondary: null,
-          secondaryLabel: null,
+          secondaryLabel: undefined,
           planName: "Claude Max 5x",
         })}
         hideEmail

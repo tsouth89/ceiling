@@ -393,15 +393,15 @@ pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
     }
 
     if lower.contains("claude oauth credentials not found") {
-        return "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Win-CodexBar.".to_string();
+        return "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Ceiling.".to_string();
     }
 
     if lower.contains("oauth token expired") || lower.contains("token invalid or expired") {
-        return "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Win-CodexBar.".to_string();
+        return "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Ceiling.".to_string();
     }
 
     if trimmed == "Authentication required" {
-        return "Claude needs sign-in before Win-CodexBar can read usage. Run `claude` once, or add Claude cookies in Provider settings.".to_string();
+        return "Claude needs sign-in before Ceiling can read usage. Run `claude` once, or add Claude cookies in Provider settings.".to_string();
     }
 
     if lower.starts_with("claude usage failed from all configured sources.") {

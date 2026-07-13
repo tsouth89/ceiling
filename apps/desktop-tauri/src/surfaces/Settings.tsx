@@ -16,6 +16,7 @@ import DisplayTab from "./settings/tabs/DisplayTab";
 import AdvancedTab from "./settings/tabs/AdvancedTab";
 import AboutTab from "./settings/tabs/AboutTab";
 import ProvidersTab from "./settings/tabs/ProvidersTab";
+import { CeilingMark } from "../components/CeilingMark";
 
 // ── tab types ────────────────────────────────────────────────────────
 
@@ -199,7 +200,14 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     >
       {/* custom title bar (decorations disabled for guaranteed dark theme) */}
       <div className="settings-titlebar" data-tauri-drag-region>
-        <span className="settings-titlebar__title" data-tauri-drag-region>Ceiling Settings</span>
+        <span
+          className="settings-titlebar__title"
+          data-tauri-drag-region
+          style={{ display: "flex", alignItems: "center", gap: 8 }}
+        >
+          <CeilingMark size={16} />
+          Ceiling Settings
+        </span>
         <div className="settings-titlebar__controls">
           <button
             className="settings-titlebar__control settings-titlebar__control--minimize"

@@ -810,7 +810,7 @@ fn claude_error_message_explains_missing_sign_in() {
 
     assert_eq!(
         message,
-        "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Win-CodexBar."
+        "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Ceiling."
     );
 }
 

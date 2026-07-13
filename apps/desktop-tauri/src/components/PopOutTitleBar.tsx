@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useLocale } from "../hooks/useLocale";
+import { CeilingMark } from "./CeilingMark";
 
 /**
  * Draggable title bar for the PopOut window mode. The app runs borderless (no
@@ -66,7 +67,12 @@ export default function PopOutTitleBar() {
         void getCurrentWindow().toggleMaximize();
       }}
     >
-      <span className="popout-titlebar__title" data-tauri-drag-region>
+      <span
+        className="popout-titlebar__title"
+        data-tauri-drag-region
+        style={{ display: "flex", alignItems: "center", gap: 8 }}
+      >
+        <CeilingMark size={16} />
         Ceiling
       </span>
       <div className="popout-titlebar__controls">
