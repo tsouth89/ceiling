@@ -23,6 +23,7 @@ The first product-contract slice is complete and tested.
 - The Rust-to-Tauri-to-React bridge carries the inactive-window state.
 - `MenuCard` renders inactive windows as text rather than a fabricated progress bar.
 - Cursor usage-summary mapping now preserves the monthly plan meter and renewal, and surfaces provider-reported Auto, API, promotional bonus, and on-demand pools as named windows (with inactive Auto/API/Monthly when those known meters are omitted).
+- Ceiling presentation (SOU-127): mica/glass tokens, full-window flyout cards, constraining-window capacity strip with state chips, and user-visible Ceiling branding. See `docs/CEILING_UI.md`.
 
 Relevant files:
 
@@ -80,7 +81,7 @@ The current float bar is already a transparent, always-on-top, non-activating Wi
 - [SOU-124 — Cursor monthly, extra usage, and promotional capacity](https://linear.app/southforge-ai/issue/SOU-124/track-cursor-monthly-allowance-extra-usage-and-promotional-capacity) — parser/fixtures done; UI polish deferred to SOU-127.
 - [SOU-125 — Unexpected resets and capacity changes](https://linear.app/southforge-ai/issue/SOU-125/detect-unexpected-resets-and-capacity-changes) — next.
 - [SOU-126 — Unexpected-capacity notifications](https://linear.app/southforge-ai/issue/SOU-126/send-useful-unexpected-capacity-notifications)
-- [SOU-127 — Multi-window tray and capacity strip](https://linear.app/southforge-ai/issue/SOU-127/build-the-ceiling-multi-window-tray-and-capacity-strip)
+- [SOU-127 — Multi-window tray and capacity strip](https://linear.app/southforge-ai/issue/SOU-127/build-the-ceiling-multi-window-tray-and-capacity-strip) — done; see `docs/CEILING_UI.md`.
 
 ## Verification
 

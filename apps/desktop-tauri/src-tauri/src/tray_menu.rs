@@ -291,7 +291,7 @@ mod tests {
                 "Providers",
                 "Settings...",
                 "Check for Updates",
-                "About CodexBar",
+                "About Ceiling",
                 "Quit",
             ]
         );
@@ -317,7 +317,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(menu_path, "tray");
-        assert!(items.iter().any(|item| item == "About CodexBar"));
+        assert!(items.iter().any(|item| item == "About Ceiling"));
     }
 
     #[test]

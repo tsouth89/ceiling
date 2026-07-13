@@ -199,7 +199,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     >
       {/* custom title bar (decorations disabled for guaranteed dark theme) */}
       <div className="settings-titlebar" data-tauri-drag-region>
-        <span className="settings-titlebar__title" data-tauri-drag-region>CodexBar Settings</span>
+        <span className="settings-titlebar__title" data-tauri-drag-region>Ceiling Settings</span>
         <div className="settings-titlebar__controls">
           <button
             className="settings-titlebar__control settings-titlebar__control--minimize"

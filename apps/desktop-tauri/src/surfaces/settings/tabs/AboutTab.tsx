@@ -61,7 +61,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
   return (
     <section className="settings-section about-section">
       <div className="about-header">
-        <img className="about-icon" src={codexbarIcon} alt="CodexBar" />
+        <img className="about-icon" src={codexbarIcon} alt="Ceiling" />
         <div className="about-title-block">
           <h2 className="about-title">{appInfo.name}</h2>
           <p className="about-version">

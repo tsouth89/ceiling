@@ -253,6 +253,40 @@ describe("FloatBar", () => {
     });
   });
 
+  it("shows the constraining window and a lifted chip when inactive meters exist", async () => {
+    const live = snapshot("cursor", "Cursor", 20);
+    live.updatedAt = new Date().toISOString();
+    live.primaryLabel = "Monthly";
+    live.secondary = rateWindow(70);
+    live.secondaryLabel = "Auto";
+    live.inactiveRateWindows = [
+      {
+        id: "cursor-api",
+        title: "API",
+        description: "Not currently enforced by Cursor",
+      },
+    ];
+    tauriMocks.getCachedProviders.mockResolvedValue([live]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({
+        showAsUsed: true,
+        enabledProviders: ["cursor"],
+      }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ showAsUsed: true, enabledProviders: ["cursor"] }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Auto");
+      expect(container.querySelector(".floatbar__chip--lifted")?.textContent).toBe(
+        "lifted",
+      );
+      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("70%");
+    });
+  });
+
   it("applies warning tone when remaining drops below the high threshold", async () => {
     // highUsageThreshold = 70 → high-remaining cutoff = 30%.
     // claude at 80% used → 20% remaining → critical (also below crit cutoff 10).

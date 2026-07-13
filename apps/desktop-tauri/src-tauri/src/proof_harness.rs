@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn about_path_snapshot_clears_on_failure() {
         let _guard = MENU_LOCK.lock().unwrap();
-        set_menu_snapshot(Some("tray".into()), vec!["About CodexBar".into()]);
+        set_menu_snapshot(Some("tray".into()), vec!["About Ceiling".into()]);
 
         let result = persist_about_path_snapshot(Err("boom".into()));
 

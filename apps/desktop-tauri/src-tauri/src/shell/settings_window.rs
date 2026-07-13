@@ -23,7 +23,7 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
     let url = WebviewUrl::App(format!("index.html?window=settings&tab={tab}").into());
 
     let win = tauri::WebviewWindowBuilder::new(app, SETTINGS_LABEL, url)
-        .title("CodexBar Settings")
+        .title("Ceiling Settings")
         .inner_size(SETTINGS_WIDTH, SETTINGS_HEIGHT)
         .decorations(false)
         .shadow(false)

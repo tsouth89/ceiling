@@ -221,6 +221,36 @@ describe("MenuCard", () => {
     expect(screen.getByText("58% left")).toBeInTheDocument();
   });
 
+  it("renders inactive windows as text without inventing a percentage", async () => {
+    const snapshot = provider(null, 40);
+    snapshot.secondary = rateWindow(55);
+    snapshot.secondaryLabel = "Weekly lane";
+    snapshot.inactiveRateWindows = [
+      {
+        id: "codex-five-hour",
+        title: "5-hour",
+        description: "Not currently enforced by OpenAI",
+      },
+    ];
+
+    render(
+      <LocaleProvider>
+        <MenuCard
+          provider={snapshot}
+          hideEmail={false}
+          resetTimeRelative={true}
+          compactMetrics={true}
+        />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText("Weekly lane")).toBeInTheDocument();
+    expect(screen.getByText("5-hour")).toBeInTheDocument();
+    expect(screen.getByText("Not currently enforced")).toBeInTheDocument();
+    expect(screen.getByText("Not currently enforced by OpenAI")).toBeInTheDocument();
+    expect(document.querySelector(".menu-metric--inactive")).not.toBeNull();
+  });
+
   it("renders Wayfinder telemetry without quota or identity rows", async () => {
     const snapshot = provider(null);
     snapshot.providerId = "wayfinder";

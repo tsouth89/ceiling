@@ -255,7 +255,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let _tray = TrayIconBuilder::with_id("codexbar-main")
         .icon(icon)
-        .tooltip("CodexBar Desktop")
+        .tooltip("Ceiling")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
@@ -702,7 +702,7 @@ fn build_tooltip(
     use codexbar::locale::{LocaleKey, get_text};
 
     if snapshots.is_empty() {
-        return "CodexBar Desktop".to_string();
+        return "Ceiling".to_string();
     }
 
     let error_label = get_text(lang, LocaleKey::TrayStatusRowError);
@@ -718,7 +718,7 @@ fn build_tooltip(
         lines.push(status);
     }
 
-    format!("CodexBar\n{}", lines.join("\n"))
+    format!("Ceiling\n{}", lines.join("\n"))
 }
 
 fn truncate_tooltip_text(text: &str, max_chars: usize) -> String {
@@ -1233,7 +1233,7 @@ mod tests {
 
         assert_eq!(
             tooltip,
-            "CodexBar\nClaude: 13% • Resets in 2h 05m\nCodex: 8% • Resets in 4h 10m"
+            "Ceiling\nClaude: 13% • Resets in 2h 05m\nCodex: 8% • Resets in 4h 10m"
         );
     }
 

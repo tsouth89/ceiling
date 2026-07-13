@@ -67,7 +67,7 @@ export default function PopOutTitleBar() {
       }}
     >
       <span className="popout-titlebar__title" data-tauri-drag-region>
-        CodexBar
+        Ceiling
       </span>
       <div className="popout-titlebar__controls">
         <button

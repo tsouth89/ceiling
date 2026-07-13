@@ -426,7 +426,7 @@ export default function MenuCard({
   resetTimeRelative,
   showResetWhenExhausted = false,
   showAsUsed = false,
-  compactMetrics = false,
+  compactMetrics: _compactMetrics = false,
   isRefreshing = false,
   onLayoutChange,
 }: MenuCardProps) {
@@ -516,7 +516,7 @@ export default function MenuCard({
       inactive: true,
     });
   }
-  const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
+  const visibleMetrics = metrics;
 
   const hasCostHistory =
     chartData !== null && chartData.costHistory.some((point) => point.value > 0);
@@ -534,9 +534,15 @@ export default function MenuCard({
   const hasDetails =
     !provider.error &&
     (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage || !!wayfinderUsage);
+  const cardAgeMs = Date.parse(provider.updatedAt);
+  const isStale =
+    !provider.error &&
+    Number.isFinite(cardAgeMs) &&
+    Date.now() - cardAgeMs > 10 * 60 * 1000;
   const cardClassName = [
     "menu-card",
     provider.error ? "menu-card--error" : null,
+    isStale ? "menu-card--stale" : null,
     isRefreshing ? "menu-card--refreshing" : null,
     hasDetails ? "menu-card--with-details" : "menu-card--header-only",
   ]
@@ -581,7 +587,9 @@ export default function MenuCard({
                 "inactive" in m ? (
                   <div className="menu-metric menu-metric--inactive" key={m.id}>
                     <span className="menu-metric__title">{m.label}</span>
-                    <strong>Not currently enforced</strong>
+                    <strong className="menu-metric__inactive-label">
+                      Not currently enforced
+                    </strong>
                     <span className="menu-metric__reset">{m.description}</span>
                   </div>
                 ) : (

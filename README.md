@@ -37,7 +37,7 @@ pnpm --dir apps/desktop-tauri tauri:dev
 
 The active desktop app lives in `apps/desktop-tauri`. Shared provider and usage logic lives in `rust`.
 
-For the active implementation state and the next work items, see [docs/HANDOFF.md](docs/HANDOFF.md).
+For the active implementation state and the next work items, see [docs/HANDOFF.md](docs/HANDOFF.md). For the tray and strip visual system, see [docs/CEILING_UI.md](docs/CEILING_UI.md).
 
 ## Credits and license
 

@@ -26,6 +26,11 @@ import type {
   SettingsSnapshot,
 } from "../types/bridge";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
+import {
+  capacityFreshness,
+  constrainingWindow,
+  type CapacityFreshness,
+} from "../lib/capacityPresentation";
 import "./FloatBar.css";
 
 function ResetIcon({ size }: { size: number }) {
@@ -153,9 +158,9 @@ function CostPill({
 /**
  * The capacity pill shown for a single provider.
  *
- * Color follows usage: green default, amber when remaining drops below the
- * high-usage threshold, red when remaining is below the critical threshold
- * or the provider is exhausted.
+ * Shows the constraining measured window (highest used %). Color follows
+ * remaining capacity; a state chip appears when data is stale, errored, or
+ * includes a not-enforced window.
  */
 function ProviderPill({
   provider,
@@ -178,11 +183,16 @@ function ProviderPill({
   usedSuffix: string;
   remainingSuffix: string;
 }) {
-  const remaining = Math.max(0, Math.min(100, provider.primary.remainingPercent));
-  const used = Math.max(0, Math.min(100, provider.primary.usedPercent));
+  const constraining = constrainingWindow(provider);
+  const freshness = capacityFreshness(provider);
+  const remaining = Math.max(
+    0,
+    Math.min(100, constraining.window.remainingPercent),
+  );
+  const used = Math.max(0, Math.min(100, constraining.window.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
-  const exhausted = provider.primary.isExhausted || provider.error;
+  const exhausted = constraining.window.isExhausted || !!provider.error;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (exhausted || remaining <= critRemaining) tone = "crit";
   else if (remaining <= highRemaining) tone = "warn";
@@ -190,19 +200,34 @@ function ProviderPill({
   const brand = getProviderIcon(provider.providerId).brandColor;
   const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
-    provider.primary.resetsAt,
-    provider.primary.resetDescription,
+    constraining.window.resetsAt,
+    constraining.window.resetDescription,
     resetRelative,
   );
   const resetSuffix = resetText ? `\n${resetText}` : "";
   const inlineReset = resetText ? inlineResetTime(resetText) : null;
   const iconSize = Math.round(11 * scale);
   const resetIconSize = Math.round(10 * scale);
+  const stateChip = freshnessChipLabel(freshness);
+  const titleBits = [
+    `${provider.displayName}: ${label} ${displaySuffix}`,
+    constraining.label,
+    stateChip ? `state ${stateChip}` : null,
+    resetText,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div
-      className={`floatbar__pill floatbar__pill--${tone}`}
-      title={`${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`}
+      className={[
+        "floatbar__pill",
+        `floatbar__pill--${tone}`,
+        freshness !== "live" ? `floatbar__pill--${freshness}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      title={titleBits}
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
     >
@@ -213,6 +238,17 @@ function ProviderPill({
         <span className="floatbar__pct" data-tauri-drag-region>
           {label}
         </span>
+        <span className="floatbar__window" data-tauri-drag-region>
+          {constraining.label}
+        </span>
+        {stateChip && (
+          <span
+            className={`floatbar__chip floatbar__chip--${freshness}`}
+            data-tauri-drag-region
+          >
+            {stateChip}
+          </span>
+        )}
         {showResetInline && resetText && inlineReset && (
           <span
             className="floatbar__reset"
@@ -229,6 +265,19 @@ function ProviderPill({
       </span>
     </div>
   );
+}
+
+function freshnessChipLabel(freshness: CapacityFreshness): string | null {
+  switch (freshness) {
+    case "stale":
+      return "stale";
+    case "error":
+      return "error";
+    case "lifted":
+      return "lifted";
+    case "live":
+      return null;
+  }
 }
 
 /**
@@ -300,7 +349,11 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       const wanted = new Set(filterIds);
       list = list.filter((p) => wanted.has(p.providerId));
     }
-    return [...list].sort((a, b) => b.primary.usedPercent - a.primary.usedPercent);
+    return [...list].sort(
+      (a, b) =>
+        constrainingWindow(b).window.usedPercent -
+        constrainingWindow(a).window.usedPercent,
+    );
   }, [providers, settings.enabledProviders, filterIds]);
 
   const visibleCostTargetKey = visible

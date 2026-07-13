@@ -224,7 +224,7 @@ describe("TrayPanel provider grid", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionRefresh: "Refresh",
-        MenuAbout: "About CodexBar",
+        MenuAbout: "About Ceiling",
         MenuQuit: "Quit",
         MenuSettings: "Settings...",
         PanelAllProviders: "All providers",
@@ -319,7 +319,7 @@ describe("TrayPanel provider grid", () => {
       buildBundle(
         {
           ActionRefresh: "更新",
-          MenuAbout: "CodexBar について",
+          MenuAbout: "Ceiling について",
           MenuQuit: "終了",
           MenuSettings: "設定...",
           PanelAllProviders: "すべてのプロバイダー",
@@ -362,7 +362,7 @@ describe("TrayPanel provider grid", () => {
     expect(screen.getByLabelText("ズーム")).toBeInTheDocument();
     expect(screen.getByText("更新")).toBeInTheDocument();
     expect(screen.getByText("設定...")).toBeInTheDocument();
-    expect(screen.getByText("CodexBar について")).toBeInTheDocument();
+    expect(screen.getByText("Ceiling について")).toBeInTheDocument();
     expect(screen.getByText("終了")).toBeInTheDocument();
     expect(await screen.findByText("30日間のコスト")).toBeInTheDocument();
     expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("日前");

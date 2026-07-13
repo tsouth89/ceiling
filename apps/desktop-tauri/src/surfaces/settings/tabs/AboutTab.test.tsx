@@ -90,7 +90,7 @@ describe("AboutTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     tauriMocks.getAppInfo.mockResolvedValue({
-      name: "CodexBar",
+      name: "Ceiling",
       version: "0.30.3",
       buildNumber: "dev",
       updateChannel: "stable",

@@ -309,7 +309,7 @@ describe("PopOutPanel", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle(
         {
-          MenuAbout: "CodexBar について",
+          MenuAbout: "Ceiling について",
           MenuQuit: "終了",
           TooltipSettings: "設定",
         },
@@ -320,7 +320,7 @@ describe("PopOutPanel", () => {
     renderPopOut([provider("codex", "Codex", 80)]);
 
     expect(await screen.findByText("設定")).toBeInTheDocument();
-    expect(screen.getByText("CodexBar について")).toBeInTheDocument();
+    expect(screen.getByText("Ceiling について")).toBeInTheDocument();
     expect(screen.getByText("終了")).toBeInTheDocument();
   });
 
