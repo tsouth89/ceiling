@@ -141,6 +141,29 @@ describe("ActivityTimeline", () => {
     expect(fill?.getAttribute("data-level")).toBe("high");
   });
 
+  it("hides 0%-used windows unless they reset soon", () => {
+    const providers = [
+      provider({
+        providerId: "cursor",
+        displayName: "Cursor",
+        primary: window(40, 2 * HOUR), // active → shown
+        primaryLabel: "Plan",
+        secondary: window(0, 24 * DAY), // 0% + far off → hidden
+        secondaryLabel: "Promotional",
+        extraRateWindows: [
+          // 0% but imminent → kept as a heads-up.
+          { id: "trial", title: "Trial", window: window(0, 3 * HOUR) },
+        ],
+      }),
+    ];
+
+    const { container } = render(<ActivityTimeline providers={providers} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("Plan");
+    expect(text).toContain("Trial");
+    expect(text).not.toContain("Promotional");
+  });
+
   it("shows an empty state when nothing is scheduled", () => {
     const providers = [
       provider({ primary: window(30, null), primaryLabel: "Weekly" }),

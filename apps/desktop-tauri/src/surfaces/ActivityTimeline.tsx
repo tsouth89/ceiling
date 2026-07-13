@@ -72,13 +72,31 @@ function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
   return entries;
 }
 
+/**
+ * A window is "quiet" — not worth a timeline row — when nothing is happening on
+ * it: no usage yet AND no imminent reset. This drops the 0%-used lanes that
+ * would otherwise pad the list (e.g. an untouched Promotional/On-demand pool
+ * resetting weeks out, or a lifted window that reports 0% with no reset). A
+ * 0%-used window still shows if it resets within the next day, since that's a
+ * heads-up worth keeping.
+ */
+function isQuiet(entry: TimelineEntry, nowMs: number): boolean {
+  if (entry.window.usedPercent >= 1) return false;
+  const resettingSoon =
+    entry.resetMs !== null &&
+    entry.resetMs - nowMs >= 0 &&
+    entry.resetMs - nowMs <= DAY_MS;
+  return !resettingSoon;
+}
+
 function bucketEntries(entries: TimelineEntry[], nowMs: number): Bucket[] {
+  const visible = entries.filter((e) => !isQuiet(e, nowMs));
   // Only windows with a known future/near reset appear on the timeline; sort by
   // soonest. Entries without a parseable reset fall to the end under "No reset".
-  const dated = entries
+  const dated = visible
     .filter((e) => e.resetMs !== null)
     .sort((a, b) => (a.resetMs as number) - (b.resetMs as number));
-  const undated = entries.filter((e) => e.resetMs === null);
+  const undated = visible.filter((e) => e.resetMs === null);
 
   const readyNow: TimelineEntry[] = [];
   const today: TimelineEntry[] = [];
