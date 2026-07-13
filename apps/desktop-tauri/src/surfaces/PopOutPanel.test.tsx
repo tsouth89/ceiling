@@ -237,19 +237,19 @@ describe("PopOutPanel", () => {
     eventMocks.listen.mockResolvedValue(() => {});
   });
 
-  it("shows the provider grid and focuses provider targets", async () => {
+  it("focuses the requested provider's detail card", async () => {
     const { container } = renderPopOut(
       [provider("codex", "Codex", 80), provider("claude", "Claude", 30)],
       "claude",
     );
 
     await waitFor(() => {
-      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(3);
+      expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(1);
     });
-
-    expect(container.querySelector(".provider-grid__item--active")?.getAttribute("aria-label")).toBe("Claude");
-    expect(screen.getAllByText("Claude").length).toBeGreaterThanOrEqual(2);
-    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(1);
+    // Only the requested provider's card renders (the switcher was removed;
+    // the rail's Overview returns to all cards).
+    expect(screen.getAllByText("Claude").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Codex")).toBeNull();
   });
 
   it("renders the dashboard chrome: rail, header, and status bar", async () => {
@@ -413,7 +413,7 @@ describe("PopOutPanel", () => {
     ).toEqual(["Codex", "Claude", "Cursor"]);
   });
 
-  it("keeps the popout overview focused until the provider grid expands", async () => {
+  it("renders a card for every provider (no compact cap in the scrolling dashboard)", async () => {
     const providers = TEST_PROVIDER_CATALOG.map(([id, displayName], index) =>
       provider(id, displayName, (index * 7) % 100),
     );
@@ -421,26 +421,14 @@ describe("PopOutPanel", () => {
     const { container } = renderPopOut(providers);
 
     await waitFor(() => {
-      expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
+      expect(container.querySelector(".menu-stack")).not.toBeNull();
     });
 
-    expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(20);
-    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(4);
-
-    const expand = container.querySelector<HTMLButtonElement>(
-      '.provider-grid__item--more[aria-label="Show all providers"]',
-    );
-    expect(expand).not.toBeNull();
-
-    fireEvent.click(expand!);
-
-    await waitFor(() => {
-      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(
-        providers.length + 2,
-      );
-    });
-    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(
+    // The dashboard body scrolls, so every provider gets a card — no 4-card
+    // compact cap or "show more" expander (both belonged to the old switcher).
+    expect(container.querySelectorAll(".menu-stack__item").length).toBe(
       providers.length,
     );
+    expect(container.querySelector(".provider-grid")).toBeNull();
   });
 });

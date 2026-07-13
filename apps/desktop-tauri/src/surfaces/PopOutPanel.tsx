@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
-import { openSettingsWindow, quitApp as quitApplication, reorderProviders } from "../lib/tauri";
+import { openSettingsWindow, quitApp as quitApplication } from "../lib/tauri";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
@@ -11,7 +11,6 @@ import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
-import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 
@@ -121,7 +120,6 @@ export default function PopOutPanel({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     providerId ?? null,
   );
-  const [gridExpanded, setGridExpanded] = useState(false);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const windowScale = useMemo(() => {
     const scalePercent = Number(settings.windowScalePercent);
@@ -163,19 +161,14 @@ export default function PopOutPanel({
     setSelectedProviderId(providerId ?? null);
   }, [providerId]);
 
-  const visibleProviders = useMemo(
-    () => {
-      if (selectedProviderId === null) {
-        if (sorted.length + 1 > 32 && !gridExpanded) {
-          return prioritizeProviders(sorted, null).slice(0, 4);
-        }
-        return sorted;
-      }
-      const match = sorted.find((p) => p.providerId === selectedProviderId);
-      return match ? [match] : sorted;
-    },
-    [sorted, selectedProviderId, gridExpanded],
-  );
+  const visibleProviders = useMemo(() => {
+    if (selectedProviderId === null) {
+      // The dashboard body scrolls, so show every provider (no compact cap).
+      return sorted;
+    }
+    const match = sorted.find((p) => p.providerId === selectedProviderId);
+    return match ? [match] : sorted;
+  }, [sorted, selectedProviderId]);
   const providerOrderKey = useMemo(
     () => sorted.map((provider) => provider.providerId).join(","),
     [sorted],
@@ -183,9 +176,6 @@ export default function PopOutPanel({
 
   const handleGridClick = useCallback((nextProviderId: string | null) => {
     setSelectedProviderId(nextProviderId);
-  }, []);
-  const handleReorder = useCallback((orderedIds: string[]) => {
-    void reorderProviders(orderedIds).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -316,7 +306,12 @@ export default function PopOutPanel({
               aria-label={item.label}
               aria-current={activeSection === item.id ? "page" : undefined}
               title={item.label}
-              onClick={() => setActiveSection(item.id)}
+              onClick={() => {
+                setActiveSection(item.id);
+                // Returning to Overview clears any focused provider so all
+                // cards show again (the switcher used to do this).
+                if (item.id === "overview") setSelectedProviderId(null);
+              }}
             >
               {item.icon}
             </button>
@@ -349,16 +344,6 @@ export default function PopOutPanel({
                 />
               ) : (
                 <>
-                  <ProviderGrid
-                    providers={sorted}
-                    selectedProviderId={selectedProviderId}
-                    showAsUsed={settings.showAsUsed}
-                    showProviderIcons={settings.switcherShowsIcons}
-                    expanded={gridExpanded}
-                    onExpandedChange={setGridExpanded}
-                    onSelect={handleGridClick}
-                    onReorder={handleReorder}
-                  />
                   <div className="menu-stack">
                     {visibleProviders.map((p, idx) => (
                       <Fragment key={p.providerId}>
