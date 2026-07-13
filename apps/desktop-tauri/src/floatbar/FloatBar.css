@@ -136,6 +136,18 @@ body.floatbar-window #root {
   background: rgba(45, 212, 191, 0.18);
   border: 1px dashed rgba(15, 118, 110, 0.45);
 }
+.floatbar__chip--promo {
+  color: #0f766e;
+  background: rgba(38, 181, 206, 0.22);
+  border-color: rgba(38, 181, 206, 0.4);
+}
+.floatbar__pill--promo-boost {
+  border-color: rgba(38, 181, 206, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.58),
+    0 0 0 1px rgba(38, 181, 206, 0.28),
+    0 0 10px rgba(38, 181, 206, 0.22);
+}
 .floatbar__pill--stale {
   opacity: 0.82;
 }

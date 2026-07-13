@@ -439,6 +439,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           showResetWhenExhausted={settings.showResetWhenExhausted}
           showAsUsed={settings.showAsUsed}
           compactMetrics={selectedProviderId === null}
+          showActivitySection={selectedProviderId !== null}
           onLayoutChange={requestLayout}
         />
       </div>

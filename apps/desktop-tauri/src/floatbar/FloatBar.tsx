@@ -29,6 +29,7 @@ import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import {
   capacityFreshness,
   constrainingWindow,
+  activePromoBoosts,
   type CapacityFreshness,
 } from "../lib/capacityPresentation";
 import "./FloatBar.css";
@@ -185,6 +186,7 @@ function ProviderPill({
 }) {
   const constraining = constrainingWindow(provider);
   const freshness = capacityFreshness(provider);
+  const boosts = activePromoBoosts(provider);
   const remaining = Math.max(
     0,
     Math.min(100, constraining.window.remainingPercent),
@@ -209,9 +211,11 @@ function ProviderPill({
   const iconSize = Math.round(11 * scale);
   const resetIconSize = Math.round(10 * scale);
   const stateChip = freshnessChipLabel(freshness);
+  const boostTitle = boosts[0]?.title ?? null;
   const titleBits = [
     `${provider.displayName}: ${label} ${displaySuffix}`,
     constraining.label,
+    boostTitle ? `promo ${boostTitle}` : null,
     stateChip ? `state ${stateChip}` : null,
     resetText,
   ]
@@ -224,6 +228,7 @@ function ProviderPill({
         "floatbar__pill",
         `floatbar__pill--${tone}`,
         freshness !== "live" ? `floatbar__pill--${freshness}` : null,
+        boosts.length > 0 ? "floatbar__pill--promo-boost" : null,
       ]
         .filter(Boolean)
         .join(" ")}
@@ -241,6 +246,11 @@ function ProviderPill({
         <span className="floatbar__window" data-tauri-drag-region>
           {constraining.label}
         </span>
+        {boostTitle && (
+          <span className="floatbar__chip floatbar__chip--promo" data-tauri-drag-region>
+            {boostTitle}
+          </span>
+        )}
         {stateChip && (
           <span
             className={`floatbar__chip floatbar__chip--${freshness}`}

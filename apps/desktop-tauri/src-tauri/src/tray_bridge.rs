@@ -1068,6 +1068,7 @@ mod tests {
             }),
             inactive_rate_windows: Vec::new(),
             extra_rate_windows: Vec::new(),
+            promo_signals: Vec::new(),
             cost: cost.map(|(used, limit)| crate::commands::CostSnapshotBridge {
                 used,
                 limit: Some(limit),

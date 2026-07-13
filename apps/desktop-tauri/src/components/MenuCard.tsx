@@ -16,6 +16,10 @@ import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import { getPaceBudget } from "../lib/paceBudget";
+import {
+  activePromoBoosts,
+  activePromoInclusions,
+} from "../lib/capacityPresentation";
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
@@ -52,6 +56,8 @@ interface MenuCardProps {
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
   compactMetrics?: boolean;
+  /** When false, hide local token/cost activity (overview glance). Default true. */
+  showActivitySection?: boolean;
   isRefreshing?: boolean;
   onLayoutChange?: () => void;
 }
@@ -427,6 +433,7 @@ export default function MenuCard({
   showResetWhenExhausted = false,
   showAsUsed = false,
   compactMetrics: _compactMetrics = false,
+  showActivitySection = true,
   isRefreshing = false,
   onLayoutChange,
 }: MenuCardProps) {
@@ -524,16 +531,21 @@ export default function MenuCard({
     chartData !== null && chartData.creditsHistory.length > 0;
   const hasUsageBreakdown =
     chartData !== null && chartData.usageBreakdown.length > 0;
-  const hasCharts = hasCostHistory || hasCreditsHistory || hasUsageBreakdown;
-  const localUsage = provider.error ? null : chartData?.localUsage ?? null;
-  const localCostHistory = chartData?.costHistory ?? [];
+  const hasCharts =
+    showActivitySection &&
+    (hasCostHistory || hasCreditsHistory || hasUsageBreakdown);
+  const localUsage =
+    showActivitySection && !provider.error ? chartData?.localUsage ?? null : null;
+  const localCostHistory = showActivitySection ? chartData?.costHistory ?? [] : [];
+  const promoBoosts = activePromoBoosts(provider);
+  const promoInclusions = activePromoInclusions(provider);
   const hasMetrics = visibleMetrics.length > 0;
-  const hasCost = !!provider.cost;
+  const hasCost = showActivitySection && !!provider.cost;
   const hasPace = !!provider.pace;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
   const hasDetails =
     !provider.error &&
-    (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage || !!wayfinderUsage);
+    (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage || !!wayfinderUsage || promoBoosts.length > 0);
   const cardAgeMs = Date.parse(provider.updatedAt);
   const isStale =
     !provider.error &&
@@ -570,9 +582,29 @@ export default function MenuCard({
                 ? provider.updatedAt
                 : formatRelativeUpdated(Date.parse(provider.updatedAt), t)}
             </span>
-            {planName && (
-              <span className="menu-card__plan-badge">{planName}</span>
-            )}
+            <div className="menu-card__header-meta">
+              {promoBoosts.map((promo) => (
+                <span
+                  key={promo.id}
+                  className="menu-card__promo-chip menu-card__promo-chip--boost"
+                  title={promo.description}
+                >
+                  {promo.title}
+                </span>
+              ))}
+              {promoInclusions.map((promo) => (
+                <span
+                  key={promo.id}
+                  className="menu-card__promo-chip menu-card__promo-chip--inclusion"
+                  title={promo.description}
+                >
+                  {promo.title}
+                </span>
+              ))}
+              {planName && (
+                <span className="menu-card__plan-badge">{planName}</span>
+              )}
+            </div>
           </div>
         )}
       </header>

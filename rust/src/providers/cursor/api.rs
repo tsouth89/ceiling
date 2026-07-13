@@ -3,7 +3,8 @@
 //! Uses browser cookies to authenticate with cursor.com API
 
 use crate::core::{
-    CostSnapshot, InactiveRateWindow, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot,
+    CostSnapshot, InactiveRateWindow, NamedRateWindow, PromoSignal, ProviderError, RateWindow,
+    UsageSnapshot,
 };
 use crate::providers::browser_cookie_header;
 use chrono::{DateTime, Utc};
@@ -231,6 +232,21 @@ impl CursorApi {
         }
         usage.extra_rate_windows = extras;
         usage.inactive_rate_windows = inactives;
+
+        if let Some(promo) = usage
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "cursor-promotional")
+        {
+            let ends_at = promo.window.resets_at;
+            usage = usage.with_promo_signal(PromoSignal::boost(
+                "cursor-promotional",
+                "Promotional",
+                "Bonus promotional capacity reported by Cursor",
+                Some("cursor-promotional".to_string()),
+                ends_at,
+            ));
+        }
 
         if let Some(email) = user_info.as_ref().and_then(|u| u.email.clone()) {
             usage = usage.with_email(email);

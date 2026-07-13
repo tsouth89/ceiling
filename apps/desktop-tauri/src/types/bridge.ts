@@ -386,6 +386,14 @@ export interface ProviderUsageSnapshot {
     title: string;
     description: string;
   }>;
+  promoSignals?: Array<{
+    id: string;
+    kind: "boost" | "inclusion";
+    title: string;
+    description: string;
+    windowId?: string | null;
+    endsAt?: string | null;
+  }>;
   cost: CostSnapshotBridge | null;
   planName: string | null;
   accountEmail: string | null;

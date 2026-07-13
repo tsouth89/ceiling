@@ -6,7 +6,8 @@ use serde::Deserialize;
 
 use crate::browser::cookies::get_cookie_header;
 use crate::core::{
-    CostSnapshot, NamedRateWindow, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot,
+    CostSnapshot, NamedRateWindow, PromoSignal, ProviderError, ProviderFetchResult, RateWindow,
+    UsageSnapshot,
 };
 
 /// Read the response body as text, then deserialize as JSON. On failure, include
@@ -93,6 +94,8 @@ struct UsageResponse {
     seven_day_sonnet: Option<UsageWindow>,
     seven_day_oauth_apps: Option<UsageWindow>,
     seven_day_design: Option<UsageWindow>,
+    /// Temporary promotional weekly pool when Anthropic reports omelette fields.
+    seven_day_promotional: Option<UsageWindow>,
     seven_day_routines: Option<UsageWindow>,
     extra_usage: Option<ExtraUsageResponse>,
     limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
@@ -140,10 +143,11 @@ impl<'de> Deserialize<'de> for UsageResponse {
                     "seven_day_claude_design",
                     "claude_design",
                     "design",
-                    "seven_day_omelette",
-                    "omelette",
-                    "omelette_promotional",
                 ],
+            )?,
+            seven_day_promotional: take(
+                &mut map,
+                &["omelette_promotional", "omelette", "seven_day_omelette"],
             )?,
             seven_day_routines: take(
                 &mut map,
@@ -354,15 +358,45 @@ impl ClaudeWebApiFetcher {
                     .as_ref()
                     .map(|w| self.to_rate_window(w, Some(10080))),
             ),
+            (
+                "claude-design",
+                "Design",
+                usage
+                    .seven_day_design
+                    .as_ref()
+                    .map(|w| self.to_rate_window(w, Some(10080))),
+            ),
+            (
+                "claude-weekly-promo",
+                "Weekly promo",
+                usage
+                    .seven_day_promotional
+                    .as_ref()
+                    .map(|w| self.to_rate_window(w, Some(10080))),
+            ),
         ] {
             if let Some(window) = window {
                 snapshot
                     .extra_rate_windows
                     .push(NamedRateWindow::new(id, title, window));
             }
-            snapshot
-                .extra_rate_windows
-                .extend(super::scoped_weekly::scoped_weekly_windows(&usage.limits));
+        }
+        snapshot
+            .extra_rate_windows
+            .extend(super::scoped_weekly::scoped_weekly_windows(&usage.limits));
+
+        if let Some(promo) = usage.seven_day_promotional.as_ref() {
+            let ends_at = promo
+                .resets_at
+                .as_deref()
+                .and_then(ClaudeWebApiFetcher::parse_iso8601);
+            snapshot = snapshot.with_promo_signal(PromoSignal::boost(
+                "claude-weekly-promo",
+                "Weekly promo",
+                "Temporary promotional weekly capacity reported by Claude",
+                Some("claude-weekly-promo".to_string()),
+                ends_at,
+            ));
         }
 
         if let Some(ref acc) = account {
@@ -795,6 +829,7 @@ mod tests {
         let usage: super::UsageResponse = serde_json::from_str(
             r#"{
                 "five_hour": { "utilization": 0.1 },
+                "seven_day_design": { "utilization": 31 },
                 "seven_day_omelette": { "utilization": 26 },
                 "seven_day_cowork": { "utilization": 11 }
             }"#,
@@ -807,13 +842,19 @@ mod tests {
             .as_ref()
             .map(|w| fetcher.to_rate_window(w, Some(10080)))
             .expect("design window");
+        let promo = usage
+            .seven_day_promotional
+            .as_ref()
+            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .expect("promotional omelette window");
         let routines = usage
             .seven_day_routines
             .as_ref()
             .map(|w| fetcher.to_rate_window(w, Some(10080)))
             .expect("routines window");
 
-        assert!((design.used_percent - 26.0).abs() < f64::EPSILON);
+        assert!((design.used_percent - 31.0).abs() < f64::EPSILON);
+        assert!((promo.used_percent - 26.0).abs() < f64::EPSILON);
         assert!((routines.used_percent - 11.0).abs() < f64::EPSILON);
     }
 

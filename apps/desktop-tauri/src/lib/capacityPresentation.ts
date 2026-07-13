@@ -11,6 +11,12 @@ export type ConstrainingWindow = {
   window: RateWindowSnapshot;
 };
 
+export type ActivePromoBoost = {
+  id: string;
+  title: string;
+  description: string;
+};
+
 const STALE_AFTER_MS = 10 * 60 * 1000;
 
 /** Pick the measured window with the highest used percent (constraining). */
@@ -63,4 +69,30 @@ export function capacityFreshness(
     return "lifted";
   }
   return "live";
+}
+
+/** Boost promos that affect glance surfaces (strip / overview hero). */
+export function activePromoBoosts(
+  provider: ProviderUsageSnapshot,
+): ActivePromoBoost[] {
+  return (provider.promoSignals ?? [])
+    .filter((signal) => signal.kind === "boost")
+    .map((signal) => ({
+      id: signal.id,
+      title: signal.title,
+      description: signal.description,
+    }));
+}
+
+/** Quieter inclusion notes for detail / overview meta only. */
+export function activePromoInclusions(
+  provider: ProviderUsageSnapshot,
+): ActivePromoBoost[] {
+  return (provider.promoSignals ?? [])
+    .filter((signal) => signal.kind === "inclusion")
+    .map((signal) => ({
+      id: signal.id,
+      title: signal.title,
+      description: signal.description,
+    }));
 }

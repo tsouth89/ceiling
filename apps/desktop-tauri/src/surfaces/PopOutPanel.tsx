@@ -258,6 +258,7 @@ export default function PopOutPanel({
                 showResetWhenExhausted={settings.showResetWhenExhausted}
                 showAsUsed={settings.showAsUsed}
                 compactMetrics={selectedProviderId === null}
+                showActivitySection={selectedProviderId !== null}
               />
             </div>
           </Fragment>

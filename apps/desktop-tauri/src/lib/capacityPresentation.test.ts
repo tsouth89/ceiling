@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   capacityFreshness,
   constrainingWindow,
+  activePromoBoosts,
+  activePromoInclusions,
 } from "./capacityPresentation";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 
@@ -85,5 +87,28 @@ describe("capacityPresentation", () => {
       ),
     ).toBe("lifted");
     expect(capacityFreshness(provider())).toBe("live");
+  });
+
+  it("separates boost promos from inclusion notes", () => {
+    const snap = provider({
+      promoSignals: [
+        {
+          id: "claude-weekly-promo",
+          kind: "boost",
+          title: "Weekly promo",
+          description: "Temporary promotional weekly capacity",
+        },
+        {
+          id: "cursor-grok",
+          kind: "inclusion",
+          title: "Grok in Auto",
+          description: "Model included in Auto pool",
+        },
+      ],
+    });
+    expect(activePromoBoosts(snap).map((p) => p.id)).toEqual([
+      "claude-weekly-promo",
+    ]);
+    expect(activePromoInclusions(snap).map((p) => p.id)).toEqual(["cursor-grok"]);
   });
 });

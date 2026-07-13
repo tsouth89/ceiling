@@ -77,6 +77,17 @@ pub struct InactiveRateWindowSnapshot {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromoSignalSnapshot {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub description: String,
+    pub window_id: Option<String>,
+    pub ends_at: Option<String>,
+}
+
 /// Pace prediction snapshot for tray/bridge display.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +114,7 @@ pub struct ProviderUsageSnapshot {
     pub tertiary: Option<RateWindowSnapshot>,
     pub extra_rate_windows: Vec<NamedRateWindowSnapshot>,
     pub inactive_rate_windows: Vec<InactiveRateWindowSnapshot>,
+    pub promo_signals: Vec<PromoSignalSnapshot>,
     pub cost: Option<CostSnapshotBridge>,
     pub plan_name: Option<String>,
     pub account_email: Option<String>,
@@ -211,6 +223,21 @@ impl ProviderUsageSnapshot {
                     description: window.description.clone(),
                 })
                 .collect(),
+            promo_signals: usage
+                .promo_signals
+                .iter()
+                .map(|signal| PromoSignalSnapshot {
+                    id: signal.id.clone(),
+                    kind: match signal.kind {
+                        codexbar::core::PromoKind::Boost => "boost".to_string(),
+                        codexbar::core::PromoKind::Inclusion => "inclusion".to_string(),
+                    },
+                    title: signal.title.clone(),
+                    description: signal.description.clone(),
+                    window_id: signal.window_id.clone(),
+                    ends_at: signal.ends_at.map(|dt| dt.to_rfc3339()),
+                })
+                .collect(),
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {
                 used: c.used,
                 limit: c.limit,
@@ -258,6 +285,7 @@ impl ProviderUsageSnapshot {
             tertiary: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
+            promo_signals: Vec::new(),
             cost: None,
             plan_name: None,
             account_email: None,

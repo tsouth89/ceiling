@@ -80,6 +80,66 @@ impl NamedRateWindow {
     }
 }
 
+/// Kind of temporary promotional signal surfaced beside normal meters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PromoKind {
+    /// Changes how much capacity is available (e.g. bonus pool / temporary lift).
+    Boost,
+    /// Quieter note about what is included in a pool (e.g. model membership).
+    Inclusion,
+}
+
+/// A provider-reported promotional signal. Never invent these from plan names.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromoSignal {
+    pub id: String,
+    pub kind: PromoKind,
+    pub title: String,
+    pub description: String,
+    /// Optional link to a measured window id (primary/secondary/extra id).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    /// Only set when the provider supplies an explicit end/reset for the promo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ends_at: Option<DateTime<Utc>>,
+}
+
+impl PromoSignal {
+    pub fn boost(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        window_id: Option<String>,
+        ends_at: Option<DateTime<Utc>>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            kind: PromoKind::Boost,
+            title: title.into(),
+            description: description.into(),
+            window_id,
+            ends_at,
+        }
+    }
+
+    pub fn inclusion(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        window_id: Option<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            kind: PromoKind::Inclusion,
+            title: title.into(),
+            description: description.into(),
+            window_id,
+            ends_at: None,
+        }
+    }
+}
+
 /// A snapshot of usage data for a provider at a point in time
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSnapshot {
@@ -105,6 +165,10 @@ pub struct UsageSnapshot {
     /// Known windows that a provider is not currently enforcing or reporting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inactive_rate_windows: Vec<InactiveRateWindow>,
+
+    /// Temporary promotional signals derived only from provider-reported fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promo_signals: Vec<PromoSignal>,
 
     /// When this snapshot was captured
     pub updated_at: DateTime<Utc>,
@@ -132,6 +196,7 @@ impl UsageSnapshot {
             tertiary: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
+            promo_signals: Vec::new(),
             updated_at: Utc::now(),
             account_email: None,
             account_organization: None,
@@ -178,6 +243,12 @@ impl UsageSnapshot {
     ) -> Self {
         self.inactive_rate_windows
             .push(InactiveRateWindow::new(id, title, description));
+        self
+    }
+
+    /// Builder pattern: append a promotional signal.
+    pub fn with_promo_signal(mut self, signal: PromoSignal) -> Self {
+        self.promo_signals.push(signal);
         self
     }
 

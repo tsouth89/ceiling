@@ -667,6 +667,9 @@ impl Settings {
     }
 
     /// Cookie source for `id`, or the default `"manual"` if unset.
+    ///
+    /// Cursor users should switch to Automatic (or Import) after signing into
+    /// cursor.com in a browser — there is no OAuth path for Cursor.
     pub fn cookie_source(&self, id: ProviderId) -> &str {
         self.provider_configs
             .get(&id)

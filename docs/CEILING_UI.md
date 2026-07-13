@@ -72,6 +72,17 @@ Overview and detail both list **every** measured window plus inactive rows. Do n
 
 Never invent `0%` or `100%` for an inactive window.
 
+## Promo signals
+
+Temporary provider-reported promotions use `promoSignals`:
+
+| Kind | Strip | Overview |
+|---|---|---|
+| `boost` | Soft cyan edge + chip | Chip on card header |
+| `inclusion` | Hidden | Quiet chip only |
+
+Never invent promos from marketing copy. Claude omelette / Cursor bonus pools only.
+
 ## Screenshot checklist
 
 Light and dark, with at least one live Codex/Cursor account:
