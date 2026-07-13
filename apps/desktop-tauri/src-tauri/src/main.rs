@@ -344,22 +344,32 @@ fn main() {
                     shell::remember_current_geometry_if_eligible(window);
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    // Close visible shell surfaces → hide instead of quitting.
-                    if matches!(
-                        shell::hide_to_tray_if_current(
-                            window.app_handle(),
-                            should_hide_close_request
-                        ),
-                        Ok(Some(_))
+                    // Never destroy the main window — Ceiling is a tray app.
+                    // Prefer a proper hide transition; fall back to hide() if needed.
+                    match shell::hide_to_tray_if_current(
+                        window.app_handle(),
+                        should_hide_close_request,
                     ) {
-                        api.prevent_close();
+                        Ok(Some(_)) => api.prevent_close(),
+                        Ok(None) | Err(_) => {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
                     }
                 }
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run CodexBar desktop shell");
+        .build(tauri::generate_context!())
+        .expect("failed to build Ceiling desktop shell")
+        .run(|_app, event| {
+            // Tray apps must survive accidental last-window close. `app.exit(code)`
+            // (Quit menu / quit_app) sets Some(code) and is allowed through.
+            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+                tracing::debug!("Keeping Ceiling alive after window close (tray mode)");
+                api.prevent_exit();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -375,6 +385,8 @@ mod tests {
 
     #[test]
     fn close_request_leaves_hidden_surface_alone() {
+        // Hidden is not a "hide transition" target; main CloseRequested still
+        // prevents destruction and just hides the window (see main.rs).
         assert!(!should_hide_close_request(SurfaceMode::Hidden));
     }
 
