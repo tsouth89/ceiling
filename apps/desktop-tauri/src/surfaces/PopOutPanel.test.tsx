@@ -6,6 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
   getSettingsSnapshot: vi.fn(),
+  updateSettings: vi.fn(),
   getUpdateState: vi.fn(),
   checkForUpdates: vi.fn(),
   downloadUpdate: vi.fn(),
@@ -203,6 +204,7 @@ describe("PopOutPanel", () => {
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.updateSettings.mockResolvedValue(settings());
     tauriMocks.getUpdateState.mockResolvedValue({
       status: "idle",
       version: null,
@@ -248,6 +250,72 @@ describe("PopOutPanel", () => {
     expect(container.querySelector(".provider-grid__item--active")?.getAttribute("aria-label")).toBe("Claude");
     expect(screen.getAllByText("Claude").length).toBeGreaterThanOrEqual(2);
     expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(1);
+  });
+
+  it("renders the dashboard chrome: rail, header, and status bar", async () => {
+    const { container } = renderPopOut([provider("codex", "Codex", 80)]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".dashboard")).not.toBeNull();
+    });
+
+    for (const name of ["Overview", "Activity", "Accounts", "Charts"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(
+      screen.getByRole("button", { name: "Overview" }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Overview");
+    expect(container.querySelector(".dashboard-header__sub")?.textContent).toBe("All accounts");
+    expect(container.querySelector(".dashboard-status")).not.toBeNull();
+    expect(screen.getByText("All times local")).toBeInTheDocument();
+  });
+
+  it("switches dashboard sections from the rail", async () => {
+    const { container } = renderPopOut([provider("codex", "Codex", 80)]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".dashboard")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Charts" }));
+
+    expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Charts");
+    expect(
+      screen.getByRole("button", { name: "Charts" }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      screen.getByRole("button", { name: "Overview" }).getAttribute("aria-current"),
+    ).toBeNull();
+    // Not-yet-built sections show the foundation-phase placeholder.
+    expect(container.querySelector(".dashboard-placeholder")).not.toBeNull();
+  });
+
+  it("opens Settings from the rail", async () => {
+    const { container } = renderPopOut([provider("codex", "Codex", 80)]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".dashboard-rail")).not.toBeNull();
+    });
+
+    // The settings action is the last rail button (after the spacer).
+    const railButtons = container.querySelectorAll<HTMLButtonElement>(".dashboard-rail__btn");
+    fireEvent.click(railButtons[railButtons.length - 1]);
+
+    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("general");
+  });
+
+  it("toggles the theme from the status bar", async () => {
+    const { container } = renderPopOut([provider("codex", "Codex", 80)]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".dashboard-status")).not.toBeNull();
+    });
+
+    // Default theme is dark, so the toggle switches to light.
+    fireEvent.click(container.querySelector<HTMLButtonElement>(".dashboard-status__toggle")!);
+
+    expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ theme: "light" });
   });
 
   it("renders cleanly with the flyout-window rewiring for goTray's onClick", async () => {
