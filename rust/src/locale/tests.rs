@@ -125,7 +125,7 @@ fn test_japanese_tray_panel_locale_values_are_translated() {
         (LocaleKey::TrayStatusStale, " (古いデータ)"),
         (LocaleKey::TrayStatusIncident, " (インシデント)"),
         (LocaleKey::TrayStatusPartial, " (一部停止)"),
-        (LocaleKey::TrayLoading, "CodexBar - 読み込み中..."),
+        (LocaleKey::TrayLoading, "Ceiling - 読み込み中..."),
         (LocaleKey::TrayStatusRowLoading, "読み込み中..."),
         (LocaleKey::TrayStatusRowError, "エラー"),
         (LocaleKey::TrayCreditsRemaining, "残りクレジット {}%"),

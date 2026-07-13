@@ -104,15 +104,15 @@ describe("AboutTab", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "GitHub" }));
     fireEvent.click(screen.getByRole("button", { name: "Website" }));
-    fireEvent.click(screen.getByRole("button", { name: "Original Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "CodexBar" }));
 
     expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
       1,
-      "https://github.com/Finesssee/Win-CodexBar",
+      "https://github.com/tsouth89/ceiling",
     );
     expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
       2,
-      "https://codexbar.app",
+      "https://ceiling.win",
     );
     expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
       3,

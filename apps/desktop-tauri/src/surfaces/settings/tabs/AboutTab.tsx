@@ -5,20 +5,16 @@ import { getAppInfo, openExternalUrl } from "../../../lib/tauri";
 import { Field, Select, Toggle } from "../../../components/FormControls";
 import type { AppInfoBridge, UpdateChannel } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
-import codexbarIcon from "../../../assets/codexbar-icon.png";
+import ceilingIcon from "../../../assets/ceiling-icon.png";
 
 const ABOUT_LINKS = [
   {
     label: "GitHub",
-    url: "https://github.com/Finesssee/Win-CodexBar",
+    url: "https://github.com/tsouth89/ceiling",
   },
   {
     label: "Website",
-    url: "https://codexbar.app",
-  },
-  {
-    label: "Original Project",
-    url: "https://github.com/steipete/CodexBar",
+    url: "https://ceiling.win",
   },
 ] as const;
 
@@ -61,7 +57,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
   return (
     <section className="settings-section about-section">
       <div className="about-header">
-        <img className="about-icon" src={codexbarIcon} alt="Ceiling" />
+        <img className="about-icon" src={ceilingIcon} alt="Ceiling" />
         <div className="about-title-block">
           <h2 className="about-title">{appInfo.name}</h2>
           <p className="about-version">
@@ -188,7 +184,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
       </div>
 
       <p className="about-copyright">
-        Windows port by NessZerra. Based on{" "}
+        Ceiling · MIT License · Based on{" "}
         <button
           type="button"
           className="about-link about-link--inline"
@@ -196,7 +192,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
         >
           CodexBar
         </button>{" "}
-        by steipete. MIT License.
+        by Peter Steinberger.
       </p>
     </section>
   );
