@@ -364,11 +364,8 @@ describe("TrayPanel provider grid", () => {
     expect(screen.getByText("設定...")).toBeInTheDocument();
     expect(screen.getByText("Ceiling について")).toBeInTheDocument();
     expect(screen.getByText("終了")).toBeInTheDocument();
-    expect(await screen.findByText("30日間のコスト")).toBeInTheDocument();
-    expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("日前");
-    expect(screen.getByText("最新トークン")).toBeInTheDocument();
-    expect(screen.getByText("トップモデル: gpt-5.5")).toBeInTheDocument();
-    expect(screen.getByText("ローカルログから推定")).toBeInTheDocument();
+    // Provider-detail (cost / token / model) localization is covered by
+    // MenuCard's own tests; the tray overview shows glance cards, not detail.
   });
 
   it("localizes the expanded dense grid collapse label in Japanese", async () => {
@@ -437,21 +434,28 @@ describe("TrayPanel provider grid", () => {
     },
   );
 
-  it("only requests chart data for providers that can render charts", async () => {
-    renderTrayPanel([
+  it("fetches chart data when a chart-capable provider's detail opens", async () => {
+    const { container } = renderTrayPanel([
       provider("codex", "Codex"),
-      provider("claude", "Claude"),
-      provider("copilot", "GitHub Copilot"),
-      provider("cursor", "Cursor"),
       provider("deepseek", "DeepSeek"),
     ]);
 
     await waitFor(() => {
-      expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(2);
+      expect(container.querySelector(".provider-grid")).not.toBeNull();
     });
+    // The glance overview does not prefetch charts it isn't showing.
+    expect(tauriMocks.getProviderChartData).not.toHaveBeenCalled();
 
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("codex", undefined);
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("claude", undefined);
+    // Opening a chart-capable provider's detail fetches its chart data.
+    // (Capability gating itself is unit-tested in providerCharts.test.ts.)
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        '.provider-grid__item[aria-label="Codex"]',
+      )!,
+    );
+    await waitFor(() => {
+      expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("codex", undefined);
+    });
   });
 
   it("renders providers in settings catalog order instead of fetch completion order", async () => {
