@@ -152,6 +152,25 @@ pub(crate) fn pace_stage_str(stage: codexbar::core::PaceStage) -> &'static str {
     }
 }
 
+/// Pick the display label for the primary window from its reset cadence.
+///
+/// `session_label` is the provider's *configured* primary label (Codex
+/// "Session", Cursor "Plan"). But Codex/Claude promote the weekly window into
+/// the primary slot whenever the API omits the 5-hour meter — labeling that
+/// promoted weekly "Session" reads a full week's budget as a 5-hour cap. A
+/// weekly-cadence window in the primary slot therefore uses the weekly label;
+/// session cadence, monthly plans, and unknown cadence keep the configured one.
+fn primary_window_label<'a>(
+    session_label: &'a str,
+    weekly_label: &'a str,
+    window_minutes: Option<u32>,
+) -> &'a str {
+    match window_minutes {
+        Some(m) if m > 720 && m <= 20_160 => weekly_label,
+        _ => session_label,
+    }
+}
+
 impl ProviderUsageSnapshot {
     pub(super) fn from_fetch_result(
         id: ProviderId,
@@ -191,7 +210,14 @@ impl ProviderUsageSnapshot {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
             primary: primary_snap,
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: Some(
+                primary_window_label(
+                    metadata.session_label,
+                    metadata.weekly_label,
+                    usage.primary.window_minutes,
+                )
+                .to_string(),
+            ),
             secondary: secondary_snap,
             secondary_label: usage
                 .secondary
@@ -675,6 +701,21 @@ pub(super) fn parse_metric_preference(s: &str) -> Option<MetricPreference> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (SOU-136): a weekly-cadence window promoted into the primary
+    /// slot (Codex when the 5-hour is lifted) must read as the weekly, not the
+    /// session — otherwise a full week's budget looks like a 5-hour cap.
+    #[test]
+    fn primary_label_follows_window_cadence() {
+        // Codex normal: 5-hour present.
+        assert_eq!(primary_window_label("Session", "Weekly", Some(300)), "Session");
+        // Codex 5-hour lifted: weekly promoted into primary.
+        assert_eq!(primary_window_label("Session", "Weekly", Some(10_080)), "Weekly");
+        // Cursor's monthly plan keeps its configured label.
+        assert_eq!(primary_window_label("Plan", "Weekly", Some(43_200)), "Plan");
+        // Unknown cadence keeps the configured label.
+        assert_eq!(primary_window_label("Session", "Weekly", None), "Session");
+    }
 
     fn snapshot_window_with(
         used_percent: f64,
