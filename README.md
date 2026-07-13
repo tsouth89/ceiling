@@ -37,6 +37,8 @@ pnpm --dir apps/desktop-tauri tauri:dev
 
 The active desktop app lives in `apps/desktop-tauri`. Shared provider and usage logic lives in `rust`.
 
+For the active implementation state and the next work items, see [docs/HANDOFF.md](docs/HANDOFF.md).
+
 ## Credits and license
 
 Ceiling is a fork of [Win-CodexBar](https://github.com/Finesssee/Win-CodexBar), which ports the ideas of [CodexBar](https://github.com/steipete/CodexBar) to Windows. It retains the upstream [MIT license](LICENSE) and attribution.
