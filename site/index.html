@@ -352,7 +352,7 @@
           />
           <span>Ceiling</span>
         </a>
-        <a class="github" href="https://github.com/tsouth89/ceiling">GitHub</a>
+        <a class="github" href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
       </header>
 
       <main class="hero">
@@ -361,6 +361,9 @@
         <a
           class="download"
           href="https://github.com/tsouth89/ceiling/releases/download/v0.43.2/Ceiling-0.43.2-Setup.exe"
+          data-analytics="download_clicked"
+          data-asset="windows-installer"
+          data-release="v0.43.2"
         >
           <span class="windows-mark" aria-hidden="true">
             <span></span><span></span><span></span><span></span>
@@ -395,5 +398,32 @@
         </section>
       </main>
     </div>
+    <script>
+      (() => {
+        const send = (event, details = {}) => {
+          fetch("/api/events", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              event,
+              pathname: location.pathname,
+              referrer: document.referrer,
+              ...details,
+            }),
+          }).catch(() => {});
+        };
+
+        send("$pageview");
+        document.addEventListener("click", (event) => {
+          const link = event.target.closest("[data-analytics]");
+          if (!link) return;
+          send(link.dataset.analytics, {
+            asset: link.dataset.asset || "",
+            release: link.dataset.release || "",
+          });
+        });
+      })();
+    </script>
   </body>
 </html>
