@@ -6,11 +6,11 @@ import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
 
 /**
- * Charts tab: cost / credits / usage-breakdown history per provider.
+ * Charts tab: quota, local token, credits, and usage history per provider.
  *
  * Only a few providers report historical chart data (Codex, Claude, OpenAI),
  * so this shows a provider selector across the supported ones and reuses the
- * existing, tested ChartsSection (which owns the cost/credits/usage sub-tabs)
+ * existing, tested ChartsSection (which owns the limits/credits/usage sub-tabs)
  * for the selected provider. Unlike the Activity timeline — built from the live
  * snapshot — this is genuine time-series history from the backend.
  */
@@ -47,7 +47,7 @@ export default function ChartsPanel({
     return (
       <div className="charts-empty">
         <strong>No charts yet</strong>
-        Cost and usage history shows up here for providers that report it —
+        Limits and local usage history shows up here for providers that report it —
         Codex, Claude, and OpenAI.
       </div>
     );

@@ -3,6 +3,9 @@
 //! Tauri window labeled `floatbar`, independent of the main surface
 //! state machine.
 
+#[cfg(windows)]
+use std::time::Duration;
+
 use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
 
 use crate::geometry_store;
@@ -13,6 +16,8 @@ const FLOATBAR_DEFAULT_WIDTH_H: f64 = 360.0;
 const FLOATBAR_DEFAULT_HEIGHT_H: f64 = 36.0;
 const FLOATBAR_DEFAULT_WIDTH_V: f64 = 80.0;
 const FLOATBAR_DEFAULT_HEIGHT_V: f64 = 280.0;
+#[cfg(windows)]
+const Z_ORDER_GUARD_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Initial dimensions (logical pixels) for the floating bar given an
 /// orientation string. Unknown values fall back to horizontal so callers
@@ -205,12 +210,42 @@ pub fn resize(
     Ok(())
 }
 
+/// Keep the floating bar at the front of Windows' topmost band.
+///
+/// Explorer owns the taskbar and periodically promotes it back to the front
+/// after Start/Search, notifications, display changes, and Explorer restarts.
+/// A one-time `always_on_top` flag therefore is not sufficient for a widget
+/// intentionally placed inside the taskbar's screen area. The guard runs only
+/// while the bar exists and is visible, never activates it, and performs no
+/// geometry work.
+pub fn install_z_order_guard(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(Z_ORDER_GUARD_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                interval.tick().await;
+                let Some(window) = app.get_webview_window(FLOATBAR_LABEL) else {
+                    continue;
+                };
+                if window.is_visible().unwrap_or(false) {
+                    apply_always_on_top(&window);
+                }
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
 /// Re-assert native topmost ordering without activating the window.
 ///
 /// Tauri's `always_on_top(true)` sets the initial intent, but on Windows
-/// resize/style changes and competing topmost windows can still disturb z-order.
-/// This Win32 pass keeps the floatbar visually above normal app windows while
-/// preserving the current foreground app's input focus.
+/// resize/style changes and competing topmost windows (especially Explorer's
+/// taskbar) can still disturb z-order. This Win32 pass promotes the floatbar to
+/// the front of the topmost band while preserving the foreground app's focus.
 pub fn apply_always_on_top(window: &tauri::WebviewWindow) {
     let _ = window;
     #[cfg(windows)]
@@ -227,7 +262,10 @@ pub fn apply_always_on_top(window: &tauri::WebviewWindow) {
             const SWP_NOSIZE: u32 = 0x0001;
             const SWP_NOMOVE: u32 = 0x0002;
             const SWP_NOACTIVATE: u32 = 0x0010;
-            let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE;
+            const SWP_NOOWNERZORDER: u32 = 0x0200;
+            const SWP_NOSENDCHANGING: u32 = 0x0400;
+            let flags =
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING;
             SetWindowPos(h.hwnd.get(), HWND_TOPMOST, 0, 0, 0, 0, flags);
         }
     }

@@ -29,6 +29,7 @@ pub fn install(app: &tauri::AppHandle) {
             persisted.float_bar_click_through,
         );
     }
+    window::install_z_order_guard(app.clone());
 }
 
 /// Handle a `WindowEvent` targeting the floatbar window. Returns `true`

@@ -521,25 +521,35 @@ fn ignored_capacity_window(snapshot: &ProviderUsageSnapshot, id: &str, title: &s
 }
 
 fn semantic_inactive_window_id(provider_id: &str, id: &str, title: &str) -> String {
-    let title_id = semantic_window_id(title, None);
-    if matches!(
-        title_id.as_str(),
-        "auto" | "api" | "total" | "plan" | "weekly" | "monthly" | "session"
-    ) {
+    let title_id = normalize_window_id(title);
+    if let Some(core_id) = core_window_id(&title_id) {
+        return core_id.to_string();
+    }
+    // Named extra allowances must keep their own identity even when their
+    // cadence is weekly/monthly. Otherwise Codex Spark Weekly overwrites the
+    // regular Codex Weekly baseline and hides a real reset.
+    if !title_id.is_empty() {
         return title_id;
     }
     let normalized = normalize_window_id(id);
     let without_provider = normalized
         .strip_prefix(&format!("{}-", normalize_window_id(provider_id)))
         .unwrap_or(&normalized);
-    if without_provider.contains("five-hour") || without_provider.contains("session") {
-        "session".to_string()
-    } else if without_provider.contains("weekly") {
-        "weekly".to_string()
-    } else if without_provider.contains("monthly") {
-        "monthly".to_string()
-    } else {
-        without_provider.to_string()
+    core_window_id(without_provider)
+        .unwrap_or(without_provider)
+        .to_string()
+}
+
+fn core_window_id(normalized: &str) -> Option<&'static str> {
+    match normalized {
+        "auto" => Some("auto"),
+        "api" => Some("api"),
+        "total" => Some("total"),
+        "plan" => Some("plan"),
+        "weekly" => Some("weekly"),
+        "monthly" => Some("monthly"),
+        "session" | "session-5h" | "session-5-hour" | "5-hour" | "five-hour" => Some("session"),
+        _ => None,
     }
 }
 
@@ -791,6 +801,44 @@ mod tests {
         let events = observer.observe(&snapshot(start + Duration::minutes(6), 3.0, new_reset));
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, CapacityEventKind::ScheduledReset);
+    }
+
+    #[test]
+    fn codex_weekly_reset_is_not_hidden_by_spark_weekly() {
+        let start = Utc::now();
+        let old_reset = start + Duration::minutes(5);
+        let new_reset = start + Duration::days(7);
+        let spark_reset = start + Duration::days(6);
+        let mut observer = CapacityEventObserver::default();
+
+        let mut before = with_extra(
+            snapshot(start, 85.0, old_reset),
+            "codex-spark-weekly",
+            "Codex Spark Weekly",
+            0.0,
+            spark_reset,
+        );
+        before.primary_label = Some("Weekly".into());
+        before.primary.window_minutes = Some(10_080);
+        before.extra_rate_windows[0].window.window_minutes = Some(10_080);
+        assert!(observer.observe(&before).is_empty());
+
+        let mut after = with_extra(
+            snapshot(start + Duration::minutes(6), 0.0, new_reset),
+            "codex-spark-weekly",
+            "Codex Spark Weekly",
+            0.0,
+            spark_reset,
+        );
+        after.primary_label = Some("Weekly".into());
+        after.primary.window_minutes = Some(10_080);
+        after.extra_rate_windows[0].window.window_minutes = Some(10_080);
+
+        let events = observer.observe(&after);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, CapacityEventKind::ScheduledReset);
+        assert_eq!(events[0].window_id, "weekly");
+        assert_eq!(events[0].window_label, "Weekly");
     }
 
     #[test]
