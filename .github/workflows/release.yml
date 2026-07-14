@@ -50,6 +50,16 @@ jobs:
           if ($env:GITHUB_REF_NAME -ne $expectedTag) {
             throw "Tag $env:GITHUB_REF_NAME does not match repository version $expectedTag."
           }
+          $marketingLine = Get-Content version.env |
+            Where-Object { $_ -match '^MARKETING_VERSION=(.+)$' } |
+            Select-Object -First 1
+          if (-not $marketingLine -or $marketingLine -notmatch '^MARKETING_VERSION=(.+)$') {
+            throw "Could not read MARKETING_VERSION from version.env."
+          }
+          $marketingVersion = $Matches[1].Trim()
+          if ($marketingVersion -ne $version) {
+            throw "version.env version $marketingVersion does not match repository version $version."
+          }
           git merge-base --is-ancestor $env:GITHUB_SHA origin/main
           if ($LASTEXITCODE -ne 0) {
             throw "Release tag must point to a commit on protected main."
