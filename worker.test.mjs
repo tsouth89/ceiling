@@ -55,7 +55,11 @@ test("admin routes fail closed and accept a valid token", async () => {
     body: JSON.stringify({ token: "test-admin-token" }),
   }), env, ctx);
   assert.equal(session.status, 200);
-  const cookie = session.headers.get("Set-Cookie").split(";")[0];
+  const setCookie = session.headers.get("Set-Cookie");
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /Secure/);
+  assert.match(setCookie, /SameSite=Strict/);
+  const cookie = setCookie.split(";")[0];
 
   const dashboard = await worker.fetch(new Request("https://ceiling.win/admin", {
     headers: { Cookie: cookie },
@@ -63,6 +67,23 @@ test("admin routes fail closed and accept a valid token", async () => {
   assert.equal(dashboard.status, 200);
   assert.equal(dashboard.headers.get("Cache-Control"), "private, no-store");
   assert.equal(await dashboard.text(), "admin dashboard");
+});
+
+test("admin routes reject cross-origin login and direct private assets", async () => {
+  const env = { ADMIN_TOKEN: "test-admin-token" };
+  const crossOrigin = await worker.fetch(new Request("https://ceiling.win/admin/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://example.com" },
+    body: JSON.stringify({ token: "test-admin-token" }),
+  }), env, { waitUntil() {} });
+  assert.equal(crossOrigin.status, 401);
+
+  const privateAsset = await worker.fetch(
+    new Request("https://ceiling.win/_private/admin-dashboard.txt"),
+    env,
+    { waitUntil() {} },
+  );
+  assert.equal(privateAsset.status, 404);
 });
 
 test("event capture is a no-op when analytics is not configured", async () => {
