@@ -11,6 +11,15 @@ use crate::surface_target::SurfaceTarget;
 use super::SHELL_TRANSITION_SERIAL;
 use super::transition::{SurfaceSnapshot, apply_transition, current_surface_snapshot};
 
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetAncestor(hwnd: isize, flags: u32) -> isize;
+    fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    fn BringWindowToTop(hwnd: isize) -> i32;
+    fn SetForegroundWindow(hwnd: isize) -> i32;
+}
+
 pub(super) struct HideToTrayPlan {
     pub previous: SurfaceSnapshot,
     pub transition: Option<SurfaceTransition>,
@@ -152,10 +161,57 @@ fn capped_logical_size(window: &WebviewWindow, width: f64, height: f64) -> (f64,
 /// Make the window visible and give it input focus.
 pub fn show_window(window: &WebviewWindow) -> Result<(), String> {
     let map_err = |e: tauri::Error| e.to_string();
+    let was_minimized = window.is_minimized().unwrap_or(false);
+    if was_minimized {
+        window.unminimize().map_err(map_err)?;
+    }
     window.show().map_err(map_err)?;
     window.set_focus().map_err(map_err)?;
+    request_native_foreground(window, was_minimized);
     Ok(())
 }
+
+/// Tauri's cross-platform `set_focus` can return success while Windows leaves
+/// an already-visible window behind the current foreground application. A tray
+/// icon click is a direct user gesture, so ask Win32 to activate the root HWND
+/// as the final reveal step. Failures remain best-effort because Windows may
+/// still enforce foreground-lock policy in unusual desktop/session states.
+#[cfg(windows)]
+fn request_native_foreground(window: &WebviewWindow, was_minimized: bool) {
+    use raw_window_handle::HasWindowHandle;
+
+    let Ok(handle) = window.window_handle() else {
+        tracing::debug!("shell: no native window handle available for foreground activation");
+        return;
+    };
+    let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+
+    const GA_ROOT: u32 = 2;
+    const SW_RESTORE: i32 = 9;
+    let inner = handle.hwnd.get();
+    let root = unsafe { GetAncestor(inner, GA_ROOT) };
+    let hwnd = if root != 0 { root } else { inner };
+
+    unsafe {
+        if was_minimized {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let raised = BringWindowToTop(hwnd) != 0;
+        let foreground = SetForegroundWindow(hwnd) != 0;
+        if !raised || !foreground {
+            tracing::debug!(
+                raised,
+                foreground,
+                "shell: Windows did not fully grant foreground activation"
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn request_native_foreground(_window: &WebviewWindow, _was_minimized: bool) {}
 
 pub fn hide_to_tray(app: &AppHandle) -> Result<SurfaceMode, String> {
     hide_to_tray_if_current(app, |_| true).map(|mode| mode.unwrap_or(SurfaceMode::Hidden))

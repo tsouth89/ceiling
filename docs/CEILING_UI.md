@@ -37,7 +37,8 @@ Usage bars keep calm slate→cyan progression; warn/crit stay amber/red without 
 └─────────────────────────────┘
 ```
 
-- One glance: provider mark + **constraining** remaining/used %.
+- One glance: provider mark + remaining/used %. Cursor headlines its account-wide
+  **Total** meter; other providers use the constraining window.
 - State chip only when not live: `stale` | `error` | `lifted`.
 - Live pills omit the chip.
 - Optional reset countdown stays secondary, not a second percentage.
@@ -84,7 +85,7 @@ Detail lists **every** measured window plus inactive rows. Do not truncate to tw
 | Live | Normal pill, no chip | Quiet freshness text |
 | Cached / stale | Muted pill + `stale` chip | Dim metrics + stale label |
 | Error | Crit outline + `error` chip | Error line, no fake bars |
-| Not enforced | Hollow / dashed `lifted` chip | Text row via `inactiveRateWindows` |
+| Not enforced | Hollow / dashed `lifted` treatment | Quiet named text row via `inactiveRateWindows` |
 
 Never invent `0%` or `100%` for an inactive window.
 
@@ -94,10 +95,37 @@ Temporary provider-reported promotions use `promoSignals`:
 
 | Kind | Strip | Overview |
 |---|---|---|
-| `boost` | Soft cyan edge + chip | Chip on card header |
-| `inclusion` | Hidden | Quiet chip only |
+| `boost` | Soft cyan edge + chip | Hidden; detail surfaces only |
+| `inclusion` | Hidden | Hidden; detail surfaces only |
+
+Account identity is also hidden from overview cards. Provider settings and the
+Accounts section remain the intentional places for email/source details.
 
 Never invent promos from marketing copy. Claude omelette / Cursor bonus pools only.
+
+## Motion contract
+
+The floating bar is persistent desktop furniture, so its resting state is static.
+Do not add ambient shimmer, breathing, glow loops, or continuously moving gradients.
+
+- Hover: a one-pixel lift and slightly clearer glass edge.
+- Scheduled reset: one calm cyan sweep, then briefly show the replenished value.
+- Confirmed surprise reset or restored capacity: a slightly brighter cyan sweep plus
+  a short success halo around only the affected provider segment.
+- Capacity loss or error: one restrained amber/red edge pulse; never loop.
+- Windows toast and bar animation come from the same confirmed capacity event.
+- Confirmed events cover scheduled and surprise resets, significant reset-time
+  moves, lifted/restored windows, and newly reported extra allowance.
+- Cursor Promotional and On-demand pools are display-only bonus buckets. They
+  never emit capacity events or OS alerts.
+- The dedicated **Reset and Capacity Alerts** preference controls OS alerts;
+  turning it off does not disable the in-bar event treatment.
+- Respect the global animation preference and `prefers-reduced-motion`.
+
+Reset animation must consume the authoritative capacity-event observer output from
+SOU-125. Do not infer resets independently in React from a single percentage drop.
+Legacy threshold and session-transition alerts likewise require two consecutive
+provider readings before notifying.
 
 ## Screenshot checklist
 

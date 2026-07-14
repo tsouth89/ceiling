@@ -237,7 +237,7 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
 
 /// Initialise the system tray icon, context menu, and event handlers.
 ///
-/// - **Left-click** toggles the custom tray panel via the surface state machine.
+/// - **Left-click** reveals and foregrounds the primary dashboard.
 /// - **Right-click** opens the native context menu with shell actions.
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;

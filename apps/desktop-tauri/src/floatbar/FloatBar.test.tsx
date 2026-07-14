@@ -15,6 +15,7 @@ const tauriMocks = vi.hoisted(() => ({
 
 const eventMocks = vi.hoisted(() => ({
   listen: vi.fn(),
+  listeners: new Map<string, Array<(event: { payload: unknown }) => void>>(),
 }));
 
 const windowMocks = vi.hoisted(() => ({
@@ -96,6 +97,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     startAtLogin: false,
     startMinimized: false,
     showNotifications: true,
+    capacityEventNotificationsEnabled: true,
     soundEnabled: true,
     soundVolume: 100,
     highUsageThreshold: 70,
@@ -156,9 +158,16 @@ function renderFloatBar(state: BootstrapState) {
   );
 }
 
+function emitFloatBarEvent(event: string, payload: unknown) {
+  for (const listener of eventMocks.listeners.get(event) ?? []) {
+    listener({ payload });
+  }
+}
+
 describe("FloatBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    eventMocks.listeners.clear();
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue(null);
@@ -174,7 +183,14 @@ describe("FloatBar", () => {
         FloatBarRemainingSuffix: "remaining",
       }),
     );
-    eventMocks.listen.mockResolvedValue(() => {});
+    eventMocks.listen.mockImplementation(
+      (event: string, handler: (event: { payload: unknown }) => void) => {
+        const listeners = eventMocks.listeners.get(event) ?? [];
+        listeners.push(handler);
+        eventMocks.listeners.set(event, listeners);
+        return Promise.resolve(() => {});
+      },
+    );
   });
 
   it("renders a pill per enabled provider, sorted by usage descending", async () => {
@@ -253,7 +269,7 @@ describe("FloatBar", () => {
     });
   });
 
-  it("headlines the constraining lane instead of a plan-pool hero + companion chip", async () => {
+  it("headlines Cursor total usage instead of the Auto lane", async () => {
     const live = snapshot("cursor", "Cursor", 20);
     live.updatedAt = new Date().toISOString();
     live.primaryLabel = "Monthly";
@@ -279,16 +295,48 @@ describe("FloatBar", () => {
     );
 
     await waitFor(() => {
-      // Auto (70% used) is more constrained than Monthly (20%), so it becomes
-      // the single headline — number, label, and tone all agree.
-      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Auto");
-      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("70%");
+      // Cursor's account-wide total remains the headline even when Auto is
+      // more constrained. The tray detail still exposes both lanes.
+      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Total");
+      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("20%");
+      expect(container.querySelector(".floatbar__pill--crit")).toBeNull();
       // No tiny companion chip anymore.
       expect(container.querySelector(".floatbar__companion")).toBeNull();
       expect(container.querySelector(".floatbar__chip--lifted")?.textContent).toBe(
         "lifted",
       );
     });
+  });
+
+  it("animates only the provider named by a confirmed capacity event", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 30),
+      snapshot("codex", "Codex", 40),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => expect(container.querySelectorAll(".floatbar__pill")).toHaveLength(2));
+
+    act(() => {
+      emitFloatBarEvent("capacity-event", {
+        providerId: "codex",
+        displayName: "Codex",
+        windowId: "session",
+        windowLabel: "Session",
+        kind: "surpriseReset",
+        previousUsedPercent: 92,
+        currentUsedPercent: 4,
+        previousResetAt: "2026-07-13T20:00:00Z",
+        currentResetAt: "2026-07-14T01:00:00Z",
+        occurredAt: "2026-07-13T16:00:00Z",
+      });
+    });
+
+    const pills = Array.from(container.querySelectorAll(".floatbar__pill"));
+    const codexPill = pills.find((pill) => pill.getAttribute("title")?.includes("Codex"));
+    const claudePill = pills.find((pill) => pill.getAttribute("title")?.includes("Claude"));
+    expect(codexPill).toHaveClass("floatbar__pill--surpriseReset");
+    expect(claudePill).not.toHaveClass("floatbar__pill--capacity-event");
   });
 
   it("applies warning tone when remaining drops below the high threshold", async () => {

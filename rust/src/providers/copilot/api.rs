@@ -117,7 +117,7 @@ impl CopilotApi {
             .get(url)
             .header("Authorization", format!("token {}", token.trim()))
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "Win-CodexBar")
+            .header("User-Agent", "Ceiling")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await

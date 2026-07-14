@@ -20,6 +20,17 @@ pub fn dismiss_tray_panel(app: tauri::AppHandle) -> Result<(), String> {
     crate::shell::flyout_window::hide(&app)
 }
 
+/// Hide the primary dashboard while keeping Ceiling alive in the system tray.
+///
+/// The dashboard's custom minimize control uses this instead of native
+/// minimization so a tray-first utility does not leave a dormant taskbar
+/// button behind. The surface state is updated to `Hidden`, which also makes
+/// the next tray click a normal Hidden -> PopOut reveal.
+#[tauri::command]
+pub fn hide_dashboard_to_tray(app: tauri::AppHandle) -> Result<(), String> {
+    crate::shell::hide_to_tray(&app).map(|_| ())
+}
+
 /// Arm the gesture blur guard before a resize-grip drag or drag-reorder
 /// gesture starts its Win32/OLE modal loop, so the transient
 /// `Focused(false)` that loop produces doesn't auto-hide the flyout.

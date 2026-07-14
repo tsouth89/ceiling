@@ -4,9 +4,13 @@ param(
 
     [string]$ExpectedVersion = "",
 
-    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\CodexBar",
+    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Ceiling",
 
-    [switch]$LeaveInstalled
+    [switch]$LeaveInstalled,
+
+    [switch]$RequireValidSignature,
+
+    [string]$ExpectedSigner = "CN=Brandon South"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,8 +52,19 @@ if ($signature.Status -eq "Valid") {
 } else {
     Write-Step "installer signature: $($signature.Status)"
 }
+if ($RequireValidSignature) {
+    if ($signature.Status -ne "Valid") {
+        throw "Installer Authenticode signature is not valid. Status: $($signature.Status)"
+    }
+    if ($signature.SignerCertificate.Subject -notlike "*$ExpectedSigner*") {
+        throw "Unexpected installer signer: $($signature.SignerCertificate.Subject)"
+    }
+    if ($null -eq $signature.TimeStamperCertificate) {
+        throw "Installer is missing an RFC 3161 timestamp."
+    }
+}
 
-foreach ($name in @("codexbar", "codexbar-desktop", "codexbar-desktop-tauri")) {
+foreach ($name in @("ceiling", "codexbar", "codexbar-desktop", "codexbar-desktop-tauri")) {
     Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
@@ -69,21 +84,33 @@ if ($install.ExitCode -notin @(0, 3010)) {
     throw "Installer exited with $($install.ExitCode). Log: $installLog"
 }
 
-$desktopExe = Join-Path $InstallDir "codexbar.exe"
+$desktopExe = Join-Path $InstallDir "ceiling.exe"
 $cliExe = Join-Path $InstallDir "codexbar-cli.exe"
-$legacyDesktopExe = Join-Path $InstallDir "codexbar-desktop.exe"
 $icon = Join-Path $InstallDir "icon.ico"
 Assert-Path -Path $desktopExe -Label "installed desktop executable"
 Assert-Path -Path $cliExe -Label "installed CLI executable"
-Assert-Path -Path $legacyDesktopExe -Label "installed desktop compatibility executable"
 Assert-Path -Path $icon -Label "icon"
 
+if ($RequireValidSignature) {
+    foreach ($installedExe in @($desktopExe, $cliExe)) {
+        $installedSignature = Get-AuthenticodeSignature -FilePath $installedExe
+        if ($installedSignature.Status -ne "Valid") {
+            throw "Installed executable signature is not valid: $installedExe ($($installedSignature.Status))"
+        }
+        if ($installedSignature.SignerCertificate.Subject -notlike "*$ExpectedSigner*") {
+            throw "Unexpected installed executable signer: $($installedSignature.SignerCertificate.Subject)"
+        }
+        if ($null -eq $installedSignature.TimeStamperCertificate) {
+            throw "Installed executable is missing an RFC 3161 timestamp: $installedExe"
+        }
+        Write-Step "installed signature: valid ($(Split-Path $installedExe -Leaf))"
+    }
+}
+
 $desktopHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $desktopExe).Hash.ToLowerInvariant()
-Write-Step "installed codexbar.exe sha256: $desktopHash"
+Write-Step "installed ceiling.exe sha256: $desktopHash"
 $cliHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $cliExe).Hash.ToLowerInvariant()
 Write-Step "installed codexbar-cli.exe sha256: $cliHash"
-$legacyDesktopHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $legacyDesktopExe).Hash.ToLowerInvariant()
-Write-Step "installed codexbar-desktop.exe sha256: $legacyDesktopHash"
 
 $verifyExecutablesScript = Join-Path (Split-Path -Parent $PSScriptRoot) "scripts\verify-windows-executables.ps1"
 if (-not (Test-Path -LiteralPath $verifyExecutablesScript)) {
@@ -92,7 +119,6 @@ if (-not (Test-Path -LiteralPath $verifyExecutablesScript)) {
 & $verifyExecutablesScript `
     -DesktopExe $desktopExe `
     -CliExe $cliExe `
-    -LegacyDesktopExe $legacyDesktopExe `
     -CheckCliStdout
 
 if ($ExpectedVersion) {
@@ -116,9 +142,9 @@ if ($helpOutput -notmatch "Usage:" -or $helpOutput -notmatch "diagnose") {
 Write-Step "CLI help output: ok"
 
 $uninstallKeys = @(
-    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCodexBar_is1",
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCodexBar_is1",
-    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\WinCodexBar_is1"
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\io.github.tsouth89.ceiling_is1",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\io.github.tsouth89.ceiling_is1",
+    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\io.github.tsouth89.ceiling_is1"
 )
 $uninstallEntry = $null
 foreach ($key in $uninstallKeys) {
@@ -128,7 +154,7 @@ foreach ($key in $uninstallKeys) {
     }
 }
 if ($null -eq $uninstallEntry) {
-    throw "Missing WinCodexBar uninstall registry entry."
+    throw "Missing Ceiling uninstall registry entry."
 }
 
 Write-Step "registry display name: $($uninstallEntry.DisplayName)"
@@ -138,8 +164,8 @@ if ($ExpectedVersion -and $uninstallEntry.DisplayVersion -ne $ExpectedVersion) {
 
 $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $shortcutCandidates = @(
-    (Join-Path $startMenu "CodexBar.lnk"),
-    (Join-Path $startMenu "CodexBar\CodexBar.lnk")
+    (Join-Path $startMenu "Ceiling.lnk"),
+    (Join-Path $startMenu "Ceiling\Ceiling.lnk")
 )
 $shortcut = $shortcutCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $shortcut) {
@@ -166,7 +192,7 @@ if (-not $LeaveInstalled) {
     if ($uninstall.ExitCode -notin @(0, 3010)) {
         throw "Uninstaller exited with $($uninstall.ExitCode). Log: $uninstallLog"
     }
-    foreach ($leftover in @($desktopExe, $cliExe, $legacyDesktopExe)) {
+    foreach ($leftover in @($desktopExe, $cliExe)) {
         if (Test-Path -LiteralPath $leftover) {
             throw "Executable still exists after uninstall: $leftover"
         }

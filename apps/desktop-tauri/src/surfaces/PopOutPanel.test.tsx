@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -19,11 +19,14 @@ const tauriMocks = vi.hoisted(() => ({
   getProviderChartData: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
+  getDetectedProviderAccounts: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
   listen: vi.fn(),
 }));
+
+const eventListeners = new Map<string, (event: unknown) => void>();
 
 const windowMocks = vi.hoisted(() => {
   const setSize = vi.fn().mockResolvedValue(undefined);
@@ -123,6 +126,7 @@ function settings(): SettingsSnapshot {
     startAtLogin: false,
     startMinimized: false,
     showNotifications: true,
+    capacityEventNotificationsEnabled: true,
     soundEnabled: true,
     soundVolume: 100,
     highUsageThreshold: 70,
@@ -201,10 +205,12 @@ function renderPopOut(
 describe("PopOutPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    eventListeners.clear();
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
     tauriMocks.updateSettings.mockResolvedValue(settings());
+    tauriMocks.getDetectedProviderAccounts.mockResolvedValue([]);
     tauriMocks.getUpdateState.mockResolvedValue({
       status: "idle",
       version: null,
@@ -234,7 +240,12 @@ describe("PopOutPanel", () => {
       }),
     );
     tauriMocks.openFlyoutWindow.mockResolvedValue(undefined);
-    eventMocks.listen.mockResolvedValue(() => {});
+    eventMocks.listen.mockImplementation(
+      (eventName: string, handler: (event: unknown) => void) => {
+        eventListeners.set(eventName, handler);
+        return Promise.resolve(() => eventListeners.delete(eventName));
+      },
+    );
   });
 
   it("focuses the requested provider's detail card", async () => {
@@ -266,7 +277,9 @@ describe("PopOutPanel", () => {
       screen.getByRole("button", { name: "Overview" }).getAttribute("aria-current"),
     ).toBe("page");
     expect(container.querySelector(".dashboard-header__title")?.textContent).toBe("Overview");
-    expect(container.querySelector(".dashboard-header__sub")?.textContent).toBe("All accounts");
+    expect(container.querySelector(".dashboard-header__sub")?.textContent).toBe(
+      "Usage at a glance",
+    );
     expect(container.querySelector(".dashboard-status")).not.toBeNull();
     expect(screen.getByText("All times local")).toBeInTheDocument();
   });
@@ -408,6 +421,7 @@ describe("PopOutPanel", () => {
       ],
       undefined,
       catalog,
+      { enabledProviders: ["codex", "claude", "cursor"] },
     );
 
     await waitFor(() => {
@@ -426,7 +440,9 @@ describe("PopOutPanel", () => {
       provider(id, displayName, (index * 7) % 100),
     );
 
-    const { container } = renderPopOut(providers);
+    const { container } = renderPopOut(providers, undefined, [], {
+      enabledProviders: providers.map((snapshot) => snapshot.providerId),
+    });
 
     await waitFor(() => {
       expect(container.querySelector(".menu-stack")).not.toBeNull();
@@ -438,5 +454,48 @@ describe("PopOutPanel", () => {
       providers.length,
     );
     expect(container.querySelector(".provider-grid")).toBeNull();
+  });
+
+  it("removes a cached provider when settings stop tracking it", async () => {
+    const initialSettings = {
+      ...settings(),
+      enabledProviders: ["codex", "gemini"],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(initialSettings);
+    tauriMocks.getDetectedProviderAccounts.mockResolvedValue([
+      {
+        providerId: "gemini",
+        displayName: "Gemini",
+        status: "ready",
+        sourceLabel: "Gemini CLI",
+        detail: "Signed in and ready to track",
+      },
+    ]);
+
+    const { container } = renderPopOut(
+      [provider("codex", "Codex"), provider("gemini", "Gemini")],
+      undefined,
+      [],
+      { enabledProviders: initialSettings.enabledProviders },
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(2);
+    });
+
+    tauriMocks.getSettingsSnapshot.mockResolvedValue({
+      ...initialSettings,
+      enabledProviders: ["codex"],
+    });
+    await act(async () => {
+      eventListeners.get("settings-changed")?.({});
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(1);
+    });
+    expect(container.querySelector(".plan-status-card__name")?.textContent).toBe("Codex");
+    expect(screen.queryByText("Gemini")).toBeNull();
+    expect(screen.queryByText("Available to track")).toBeNull();
   });
 });

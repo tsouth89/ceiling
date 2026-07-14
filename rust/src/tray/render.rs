@@ -246,9 +246,10 @@ mod tests {
     fn percent_icon_draws_visible_text() {
         let (rgba, _, _) = render_percent_icon_rgba(72.0, false);
         // A visible glyph pixel: opaque, and neither the tile nor the ceiling line.
-        assert!(rgba
-            .chunks_exact(4)
-            .any(|px| px[3] == 255 && px[0] != TILE.0 && px[0] != CEILING.0));
+        assert!(
+            rgba.chunks_exact(4)
+                .any(|px| px[3] == 255 && px[0] != TILE.0 && px[0] != CEILING.0)
+        );
     }
 
     #[test]

@@ -1,5 +1,29 @@
 # Changelog
 
+## [Ceiling] 0.43.0 - Unreleased
+
+### Added
+- Add a persistent, taskbar-adjacent capacity strip with provider-aware usage lanes.
+- Add reset and capacity-change detection with restrained strip animations and Windows alerts.
+- Add dedicated Overview, Activity, Accounts, and Charts surfaces.
+- Add first-class setup and credential discovery for Codex, Claude, Cursor, Gemini, and Copilot.
+- Add Cursor plan, Auto, and API usage lanes.
+
+### Changed
+- Rebrand the Windows app, tray, dashboard, icons, installer, and release assets as Ceiling.
+- Rework the Windows UI around a calm, glanceable capacity model with explicit freshness and unavailable states.
+- Make the installer and release pipeline independent from Win-CodexBar packaging identity.
+
+### Fixed
+- Hide the dashboard to the system tray on minimize and reliably foreground it from the tray icon.
+- Update the frontend development dependency chain to patched Vite, Vitest, Babel, form-data, and ws releases.
+- Update the Rust dependency chain to patched anyhow, crossbeam-epoch, quick-xml, and quinn-proto releases.
+- Prevent Rust test fixtures and debug builds from dispatching real Windows notifications, and add a hard toast burst circuit breaker.
+- Require time-separated confirmation for surprise capacity changes and reserve Windows alerts for scheduled or surprise resets only.
+- Prevent stale usage history and provider-window swaps from replaying incorrect usage, depletion, restoration, or promotional notifications at startup.
+- Avoid notifications for Cursor promotional and on-demand capacity pools.
+- Refresh current Gemini CLI credentials and detect eligible Claude Desktop sessions without exposing secrets.
+
 ## [Windows] 0.42.0 - 2026-07-12
 
 ### Added

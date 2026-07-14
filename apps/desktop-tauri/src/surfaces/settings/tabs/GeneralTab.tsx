@@ -172,6 +172,18 @@ export default function GeneralTab({
             />
           </Field>
           <Field
+            label={t("CapacityEventNotifications")}
+            description={t("CapacityEventNotificationsHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.capacityEventNotificationsEnabled}
+              ariaLabel={t("CapacityEventNotifications")}
+              disabled={saving || !settings.showNotifications}
+              onChange={(v) => set({ capacityEventNotificationsEnabled: v })}
+            />
+          </Field>
+          <Field
             label={t("PredictivePaceWarnings")}
             description={t("PredictivePaceWarningsHelper")}
             leading

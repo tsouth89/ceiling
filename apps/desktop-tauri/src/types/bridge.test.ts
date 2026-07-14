@@ -45,6 +45,7 @@ describe("Language type", () => {
       startAtLogin: false,
       startMinimized: false,
       showNotifications: true,
+      capacityEventNotificationsEnabled: true,
       soundEnabled: true,
       soundVolume: 100,
       highUsageThreshold: 70,

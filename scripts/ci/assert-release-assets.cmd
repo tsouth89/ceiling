@@ -11,14 +11,14 @@ if not defined VERSION (
   exit /b 1
 )
 
-set "ASSETS_DIR=C:\code\Win-CodexBar-release\assets"
+set "ASSETS_DIR=C:\code\Ceiling-release\assets"
 set "MISSING=0"
 
 for %%F in (
-  "CodexBar-%VERSION%-Setup.exe"
-  "CodexBar-%VERSION%-Setup.exe.sha256"
-  "CodexBar-%VERSION%-portable.exe"
-  "CodexBar-%VERSION%-portable.exe.sha256"
+  "Ceiling-%VERSION%-Setup.exe"
+  "Ceiling-%VERSION%-Setup.exe.sha256"
+  "Ceiling-%VERSION%-portable.exe"
+  "Ceiling-%VERSION%-portable.exe.sha256"
 ) do (
   if not exist "%ASSETS_DIR%\%%~F" (
     echo Missing release artifact: %ASSETS_DIR%\%%~F

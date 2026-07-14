@@ -23,6 +23,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import type {
   BootstrapState,
+  CapacityEventPayload,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
   SettingsSnapshot,
@@ -39,6 +40,7 @@ import {
   constrainingWindow,
   activePromoBoosts,
   type CapacityFreshness,
+  type ConstrainingWindow,
 } from "../lib/capacityPresentation";
 import "./FloatBar.css";
 
@@ -105,6 +107,22 @@ function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is Pro
 function formatUsd(value: number | null): string | null {
   if (value == null || !Number.isFinite(value)) return null;
   return `$${value.toFixed(2)}`;
+}
+
+/**
+ * Cursor exposes a total plan meter alongside Auto/API lanes. The compact
+ * strip should headline that account-wide total; the tray detail remains the
+ * place to compare the individual lanes.
+ */
+function floatBarWindow(provider: ProviderUsageSnapshot): ConstrainingWindow {
+  if (provider.providerId === "cursor") {
+    return {
+      id: "primary",
+      label: "Total",
+      window: provider.primary,
+    };
+  }
+  return constrainingWindow(provider);
 }
 
 function CostPill({
@@ -181,6 +199,7 @@ function ProviderPill({
   resetRelative,
   usedSuffix,
   remainingSuffix,
+  capacityEventKind,
 }: {
   provider: ProviderUsageSnapshot;
   highRemaining: number;
@@ -191,12 +210,10 @@ function ProviderPill({
   resetRelative: boolean;
   usedSuffix: string;
   remainingSuffix: string;
+  capacityEventKind?: CapacityEventPayload["kind"];
 }) {
-  // Headline the constraining lane (the window closest to its ceiling) so the
-  // single number, its label, and the pill's tone all agree — no tiny companion
-  // chip, no "85% shown but tinted red because a hidden lane is at 99%".
-  const constraining = constrainingWindow(provider);
-  const hero = constraining;
+  // Keep the number, label, and tone tied to the same displayed window.
+  const hero = floatBarWindow(provider);
   const freshness = capacityFreshness(provider);
   const boosts = activePromoBoosts(provider);
   const remaining = Math.max(0, Math.min(100, hero.window.remainingPercent));
@@ -205,12 +222,10 @@ function ProviderPill({
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
   const pressureRemaining = Math.max(
     0,
-    Math.min(100, constraining.window.remainingPercent),
+    Math.min(100, hero.window.remainingPercent),
   );
   const exhausted =
-    constraining.window.isExhausted ||
-    hero.window.isExhausted ||
-    !!provider.error;
+    hero.window.isExhausted || !!provider.error;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (exhausted || pressureRemaining <= critRemaining) tone = "crit";
   else if (pressureRemaining <= highRemaining) tone = "warn";
@@ -245,6 +260,8 @@ function ProviderPill({
         "floatbar__pill",
         `floatbar__pill--${tone}`,
         freshness !== "live" ? `floatbar__pill--${freshness}` : null,
+        capacityEventKind ? "floatbar__pill--capacity-event" : null,
+        capacityEventKind ? `floatbar__pill--${capacityEventKind}` : null,
       ]
         .filter(Boolean)
         .join(" ")}
@@ -390,6 +407,10 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   // and re-pull the snapshot when fired.
   const [settings, setSettings] = useState<SettingsSnapshot>(state.settings);
   const [localCosts, setLocalCosts] = useState<Record<string, FloatBarCostSummary>>({});
+  const [capacityEvents, setCapacityEvents] = useState<
+    Record<string, CapacityEventPayload["kind"]>
+  >({});
+  const capacityEventTimers = useRef<Record<string, number>>({});
 
   // The detached floatbar should keep usage fresh, but it must not open or
   // focus any other surface. Refresh data only; provider-updated events feed
@@ -413,6 +434,36 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     };
   }, []);
 
+  useEffect(() => {
+    const unlisten = listen<CapacityEventPayload>("capacity-event", ({ payload }) => {
+      if (!settings.enableAnimations) return;
+      const providerId = payload.providerId;
+      const previousTimer = capacityEventTimers.current[providerId];
+      if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+      setCapacityEvents((current) => ({ ...current, [providerId]: payload.kind }));
+      capacityEventTimers.current[providerId] = window.setTimeout(() => {
+        setCapacityEvents((current) => {
+          const next = { ...current };
+          delete next[providerId];
+          return next;
+        });
+        delete capacityEventTimers.current[providerId];
+      }, 2200);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [settings.enableAnimations]);
+
+  useEffect(
+    () => () => {
+      for (const timer of Object.values(capacityEventTimers.current)) {
+        window.clearTimeout(timer);
+      }
+    },
+    [],
+  );
+
   // Orientation flips re-lay-out the bar without recreating the window.
   const orientation: "horizontal" | "vertical" =
     settings.floatBarOrientation === "vertical" ? "vertical" : "horizontal";
@@ -430,8 +481,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     }
     return [...list].sort(
       (a, b) =>
-        constrainingWindow(b).window.usedPercent -
-        constrainingWindow(a).window.usedPercent,
+        floatBarWindow(b).window.usedPercent -
+        floatBarWindow(a).window.usedPercent,
     );
   }, [providers, settings.enabledProviders, filterIds]);
 
@@ -640,6 +691,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               resetRelative={settings.resetTimeRelative}
               usedSuffix={t("PanelUsedSuffix")}
               remainingSuffix={t("FloatBarRemainingSuffix")}
+              capacityEventKind={capacityEvents[p.providerId]}
             />
           ))}
           {visibleCosts.map((summary) => (

@@ -54,6 +54,10 @@ pub struct Settings {
     /// Whether to show notifications
     pub show_notifications: bool,
 
+    /// Whether reset and provider-reported capacity changes may raise OS alerts.
+    #[serde(default = "default_true")]
+    pub capacity_event_notifications_enabled: bool,
+
     /// Whether to play sound effects for threshold alerts
     pub sound_enabled: bool,
 
@@ -367,6 +371,7 @@ impl Default for Settings {
             start_minimized: false,
             start_at_login: false,
             show_notifications: true,
+            capacity_event_notifications_enabled: true,
             sound_enabled: true,
             sound_volume: 100,
             high_usage_threshold: 70.0,
@@ -466,7 +471,7 @@ impl Settings {
                 || name.eq_ignore_ascii_case("codexbar-desktop.exe")
         }) && let Some(desktop_exe) = current_exe
             .parent()
-            .map(|dir| dir.join("codexbar.exe"))
+            .map(|dir| dir.join("ceiling.exe"))
             .filter(|path| path.exists())
         {
             return desktop_exe;

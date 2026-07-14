@@ -29,6 +29,15 @@
     Build the desktop binary and stop before installer packaging. Use this to
     warm the Windows Cargo and pnpm caches after a large port.
 
+.PARAMETER BuildOnly
+    Build and verify the desktop and CLI binaries, then stop before packaging.
+    This is used by CI so the binaries can be signed before they are embedded
+    in the installer.
+
+.PARAMETER PackageOnly
+    Reuse previously built binaries in WorkRoot and package the installer
+    without rebuilding. Pair this with BuildOnly after signing the binaries.
+
 .PARAMETER WarmCliCache
     Also build the CLI in a separate Cargo target cache. This keeps CLI warming
     from invalidating or competing with desktop release artifacts.
@@ -50,10 +59,12 @@
 
 param(
     [string]$Ref = "HEAD",
-    [string]$RepoUrl = "https://github.com/Finesssee/Win-CodexBar.git",
-    [string]$WorkRoot = "C:\code\Win-CodexBar-release",
+    [string]$RepoUrl = "https://github.com/tsouth89/ceiling.git",
+    [string]$WorkRoot = "C:\code\Ceiling-release",
     [switch]$RefreshInstallerDependencies,
     [switch]$WarmCacheOnly,
+    [switch]$BuildOnly,
+    [switch]$PackageOnly,
     [switch]$WarmCliCache,
     [switch]$SmokeInstall,
     [string]$UploadRelease = ""
@@ -67,6 +78,16 @@ $env:NO_COLOR = "1"
 trap {
     Write-Host $_
     [Environment]::Exit(1)
+}
+
+if (($BuildOnly -and $PackageOnly) -or ($WarmCacheOnly -and $PackageOnly)) {
+    throw "-PackageOnly cannot be combined with -BuildOnly or -WarmCacheOnly."
+}
+if ($BuildOnly -and ($SmokeInstall -or $UploadRelease)) {
+    throw "-BuildOnly cannot smoke-test or upload a release. Package the signed binaries first."
+}
+if ($PackageOnly -and ($SmokeInstall -or $UploadRelease)) {
+    throw "-PackageOnly produces an unsigned installer. Sign and finalize it before smoke-testing or uploading."
 }
 
 $SourceDir = Join-Path $WorkRoot "source"
@@ -188,9 +209,9 @@ function Get-ObjdumpImportsWebView2Loader {
 }
 
 $git = Require-Command "git"
-$cargo = Require-Command "cargo"
-$pnpm = Require-Command "pnpm"
-$rustup = Get-Command rustup -ErrorAction SilentlyContinue
+$cargo = if ($PackageOnly) { $null } else { Require-Command "cargo" }
+$pnpm = if ($PackageOnly) { $null } else { Require-Command "pnpm" }
+$rustup = if ($PackageOnly) { $null } else { Get-Command rustup -ErrorAction SilentlyContinue }
 
 New-Item -ItemType Directory -Force $WorkRoot, $CacheDir, $DesktopCargoTargetDir, $CliCargoTargetDir, $PnpmStoreDir, $InstallerDepsDir, $AssetsDir | Out-Null
 
@@ -218,7 +239,7 @@ try {
     )) {
         $env:CARGO_BUILD_TARGET = "x86_64-pc-windows-msvc"
     }
-    if ($env:CARGO_BUILD_TARGET -and $rustup) {
+    if (-not $PackageOnly -and $env:CARGO_BUILD_TARGET -and $rustup) {
         $toolchain = "stable-x86_64-pc-windows-msvc"
         & $rustup.Source set auto-self-update disable
         if ($LASTEXITCODE -ne 0) {
@@ -232,21 +253,31 @@ try {
     }
     $env:PNPM_HOME = if ($env:PNPM_HOME) { $env:PNPM_HOME } else { Join-Path $CacheDir "pnpm-home" }
 
-    Write-Host "Building Win-CodexBar $version from $commit"
+    Write-Host "Building Ceiling $version from $commit"
     Write-Host "Source: $SourceDir"
     Write-Host "Cargo target cache: $DesktopCargoTargetDir"
     Write-Host "pnpm store cache: $PnpmStoreDir"
+
+    $releaseBinDir = if ($env:CARGO_BUILD_TARGET) {
+        Join-Path $DesktopCargoTargetDir "$($env:CARGO_BUILD_TARGET)\release"
+    } else {
+        Join-Path $DesktopCargoTargetDir "release"
+    }
+    $desktopExe = Join-Path $releaseBinDir "ceiling.exe"
+    $legacyDesktopExe = Join-Path $releaseBinDir "codexbar-desktop.exe"
+    $releaseExe = Join-Path $releaseBinDir "codexbar-cli.exe"
 
     if ($WarmCliCache) {
         Write-Host "WarmCliCache requested; the CLI is now built during every release packaging run."
     }
 
-    Invoke-Native $pnpm.Source @(
+    if (-not $PackageOnly) {
+        Invoke-Native $pnpm.Source @(
         "--dir", "apps\desktop-tauri",
         "install",
         "--frozen-lockfile",
         "--store-dir", $PnpmStoreDir
-    )
+        )
 
     $tauriBuildLog = Join-Path $AssetsDir "tauri-build.log"
     $tauriBuildErrLog = Join-Path $AssetsDir "tauri-build.err.log"
@@ -285,11 +316,6 @@ try {
     }
     $process.WaitForExit()
     $process.Refresh()
-    $releaseBinDir = if ($env:CARGO_BUILD_TARGET) {
-        Join-Path $DesktopCargoTargetDir "$($env:CARGO_BUILD_TARGET)\release"
-    } else {
-        Join-Path $DesktopCargoTargetDir "release"
-    }
     $sourceExe = Join-Path $releaseBinDir "codexbar-desktop-tauri.exe"
     if ($null -eq $process.ExitCode) {
         if (Test-Path $sourceExe) {
@@ -319,9 +345,6 @@ try {
         throw "pnpm tauri build exited with code $tauriExitCode"
     }
 
-    $desktopExe = Join-Path $releaseBinDir "codexbar.exe"
-    $legacyDesktopExe = Join-Path $releaseBinDir "codexbar-desktop.exe"
-    $releaseExe = Join-Path $releaseBinDir "codexbar-cli.exe"
     if (-not (Test-Path $sourceExe)) {
         throw "Missing expected Tauri binary: $sourceExe"
     }
@@ -329,7 +352,7 @@ try {
     Copy-Item $sourceExe $desktopExe -Force
     Copy-Item $sourceExe $legacyDesktopExe -Force
     if (Get-ObjdumpImportsWebView2Loader -ExePath $desktopExe) {
-        throw "codexbar.exe imports WebView2Loader.dll, but release builds are expected to statically link the loader."
+        throw "ceiling.exe imports WebView2Loader.dll, but release builds are expected to statically link the loader."
     }
 
     $env:CARGO_TARGET_DIR = $CliCargoTargetDir
@@ -353,6 +376,9 @@ try {
         throw "Missing expected CLI binary: $sourceCliExe"
     }
     Copy-Item $sourceCliExe $releaseExe -Force
+    } else {
+        Write-Host "Reusing signed binaries from $releaseBinDir"
+    }
 
     $verifyExecutablesScript = Join-Path $SourceDir "scripts\verify-windows-executables.ps1"
     if (-not (Test-Path $verifyExecutablesScript)) {
@@ -364,8 +390,17 @@ try {
         -LegacyDesktopExe $legacyDesktopExe `
         -CheckCliStdout
 
+    if ($BuildOnly) {
+        Write-Host ""
+        Write-Host "Unsigned binaries ready for signing:"
+        Write-Host "  $desktopExe"
+        Write-Host "  $releaseExe"
+        Write-Host "Build completed. Skipping installer packaging because -BuildOnly was supplied."
+        return
+    }
+
     if ($WarmCacheOnly) {
-        $warmExe = Join-Path $AssetsDir "CodexBar-$version-warm.exe"
+        $warmExe = Join-Path $AssetsDir "Ceiling-$version-warm.exe"
         Copy-Item $desktopExe $warmExe -Force
         Write-Host ""
         Write-Host "Warm build artifact: $warmExe"
@@ -400,16 +435,16 @@ try {
             "/DVCRedistPath=$vcRedistPath",
             "/DWebView2BootstrapperPath=$webView2BootstrapperPath",
             "/DOutputDir=$installerOut",
-            "/DOutputBaseFilename=CodexBar-$version-Setup",
+            "/DOutputBaseFilename=Ceiling-$version-Setup",
             "codexbar.iss"
         )
     } finally {
         Pop-Location
     }
 
-    $installer = Join-Path $installerOut "CodexBar-$version-Setup.exe"
-    $portableExe = Join-Path $AssetsDir "CodexBar-$version-portable.exe"
-    $installerAsset = Join-Path $AssetsDir "CodexBar-$version-Setup.exe"
+    $installer = Join-Path $installerOut "Ceiling-$version-Setup.exe"
+    $portableExe = Join-Path $AssetsDir "Ceiling-$version-portable.exe"
+    $installerAsset = Join-Path $AssetsDir "Ceiling-$version-Setup.exe"
 
     foreach ($path in @($desktopExe, $releaseExe, $installer)) {
         if (-not (Test-Path $path)) {
@@ -424,6 +459,11 @@ try {
         $fileName = Split-Path $asset -Leaf
         $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
         "$hash  $fileName" | Set-Content -Encoding ascii "$asset.sha256"
+    }
+
+    if ($PackageOnly) {
+        Write-Host "Unsigned installer ready for signing: $installerAsset"
+        Write-Host "Run scripts\finalize-windows-release.ps1 after signing the installer."
     }
 
     if ($SmokeInstall) {
@@ -457,7 +497,7 @@ try {
 
     Write-Host ""
     Write-Host "Release assets:"
-    Get-ChildItem $AssetsDir -Filter "CodexBar-$version-*" |
+    Get-ChildItem $AssetsDir -Filter "Ceiling-$version-*" |
         Sort-Object Name |
         Select-Object Name, Length, LastWriteTime |
         Format-Table -AutoSize

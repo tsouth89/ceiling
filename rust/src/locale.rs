@@ -178,6 +178,8 @@ locale_keys! {
 
     // Notification settings (Preferences)
     ShowNotificationsHelper,
+    CapacityEventNotifications,
+    CapacityEventNotificationsHelper,
     SoundEnabledHelper,
     HighUsageThresholdHelper,
     CriticalUsageThresholdHelper,
@@ -436,6 +438,7 @@ locale_keys! {
     ProviderWeeklyLabel,
     ProviderCodeReviewLabel,
     ResetsInShort,
+    ResetsInDays,
     ResetsInDaysHours,
     ResetsInHoursMinutes,
     ResetsInMinutes,

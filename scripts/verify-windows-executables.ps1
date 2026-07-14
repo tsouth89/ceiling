@@ -5,8 +5,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CliExe,
 
-    [Parameter(Mandatory = $true)]
-    [string]$LegacyDesktopExe,
+    [string]$LegacyDesktopExe = "",
 
     [switch]$CheckCliStdout
 )
@@ -51,28 +50,32 @@ function Get-Sha256 {
 
 $desktop = Resolve-RequiredPath -Path $DesktopExe -Label "desktop executable"
 $cli = Resolve-RequiredPath -Path $CliExe -Label "CLI executable"
-$legacyDesktop = Resolve-RequiredPath -Path $LegacyDesktopExe -Label "desktop compatibility executable"
+$legacyDesktop = if ($LegacyDesktopExe) {
+    Resolve-RequiredPath -Path $LegacyDesktopExe -Label "desktop compatibility executable"
+} else {
+    $null
+}
 
 $desktopHash = Get-Sha256 $desktop
 $cliHash = Get-Sha256 $cli
-$legacyDesktopHash = Get-Sha256 $legacyDesktop
+$legacyDesktopHash = if ($legacyDesktop) { Get-Sha256 $legacyDesktop } else { "" }
 
 if ($desktopHash -eq $cliHash) {
-    throw "codexbar.exe and codexbar-cli.exe must not be byte-identical; the CLI must be the console binary."
+    throw "The Ceiling desktop executable and codexbar-cli.exe must not be byte-identical; the CLI must be the console binary."
 }
-if ($desktopHash -ne $legacyDesktopHash) {
-    throw "codexbar.exe and codexbar-desktop.exe should be identical desktop binaries."
+if ($legacyDesktop -and $desktopHash -ne $legacyDesktopHash) {
+    throw "The Ceiling desktop executable and compatibility desktop executable should be identical."
 }
 
 $desktopSubsystem = Get-PeSubsystem $desktop
 $cliSubsystem = Get-PeSubsystem $cli
-$legacyDesktopSubsystem = Get-PeSubsystem $legacyDesktop
+$legacyDesktopSubsystem = if ($legacyDesktop) { Get-PeSubsystem $legacyDesktop } else { $null }
 
 if ($desktopSubsystem -ne 2) {
-    throw "codexbar.exe must be a Windows GUI-subsystem desktop binary; got subsystem $desktopSubsystem."
+    throw "The Ceiling desktop executable must be a Windows GUI-subsystem binary; got subsystem $desktopSubsystem."
 }
-if ($legacyDesktopSubsystem -ne 2) {
-    throw "codexbar-desktop.exe must be a Windows GUI-subsystem desktop binary; got subsystem $legacyDesktopSubsystem."
+if ($legacyDesktop -and $legacyDesktopSubsystem -ne 2) {
+    throw "The compatibility desktop executable must use the Windows GUI subsystem; got subsystem $legacyDesktopSubsystem."
 }
 if ($cliSubsystem -ne 3) {
     throw "codexbar-cli.exe must be a Windows console-subsystem CLI binary; got subsystem $cliSubsystem."

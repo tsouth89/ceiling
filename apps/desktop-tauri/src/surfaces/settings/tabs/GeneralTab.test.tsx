@@ -27,6 +27,7 @@ const settings: SettingsSnapshot = {
   startAtLogin: false,
   startMinimized: false,
   showNotifications: true,
+  capacityEventNotificationsEnabled: true,
   soundEnabled: true,
   soundVolume: 100,
   highUsageThreshold: 70,
@@ -116,6 +117,24 @@ describe("GeneralTab language picker", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }));
 
     expect(set).toHaveBeenCalledWith({ predictivePaceWarningEnabled: true });
+  });
+
+  it("updates the reset and capacity alert preference", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={settings}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "CapacityEventNotifications" }),
+    );
+
+    expect(set).toHaveBeenCalledWith({ capacityEventNotificationsEnabled: false });
   });
 
   it("saves a window override on blur and clears it to resume inheritance", () => {

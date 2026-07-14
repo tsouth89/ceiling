@@ -67,6 +67,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     startAtLogin: false,
     startMinimized: false,
     showNotifications: true,
+    capacityEventNotificationsEnabled: true,
     soundEnabled: true,
     soundVolume: 100,
     highUsageThreshold: 70,

@@ -14,6 +14,10 @@ use crate::core::{NamedRateWindow, ProviderError, ProviderFetchResult, RateWindo
 mod credentials_store;
 mod refresh;
 
+pub(super) fn credentials_file_available() -> bool {
+    credentials_store::credentials_file_available()
+}
+
 /// OAuth credentials from Claude CLI
 #[derive(Debug, Clone)]
 pub struct ClaudeOAuthCredentials {

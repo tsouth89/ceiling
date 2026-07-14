@@ -5,17 +5,24 @@ import { getProviderIcon } from "./providers/providerIcons";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
 import {
-  activePromoBoosts,
   capacityFreshness,
   glanceMeters,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
 
-function displayPlanName(planName: string | null): string | null {
+function displayPlanName(
+  planName: string | null,
+  providerName: string,
+): string | null {
   if (!planName) return null;
-  const normalized = planName.trim().toLowerCase();
+  const trimmed = planName.trim();
+  const normalized = trimmed.toLowerCase();
   if (normalized === "default_claude_ai") return "Claude AI";
-  return planName;
+  const prefix = `${providerName.trim()} `;
+  if (trimmed.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return trimmed.slice(prefix.length).trim() || trimmed;
+  }
+  return trimmed;
 }
 
 function levelOf(remainPct: number, exhausted: boolean): string {
@@ -23,6 +30,18 @@ function levelOf(remainPct: number, exhausted: boolean): string {
   if (remainPct <= 5) return "critical";
   if (remainPct <= 25) return "high";
   return "normal";
+}
+
+function inactiveWindowSummary(provider: ProviderUsageSnapshot): string | null {
+  const labels = [...new Set(
+    (provider.inactiveRateWindows ?? [])
+      .map((window) => window.title.trim())
+      .filter(Boolean),
+  )];
+  if (labels.length === 0) return null;
+  const visible = labels.slice(0, 2).join(", ");
+  const remaining = labels.length - 2;
+  return remaining > 0 ? `${visible} +${remaining}` : visible;
 }
 
 function MeterRow({
@@ -108,7 +127,6 @@ function MeterRow({
 
 export default function PlanStatusCard({
   provider,
-  hideEmail,
   resetTimeRelative,
   showResetWhenExhausted = false,
   showAsUsed = false,
@@ -116,7 +134,6 @@ export default function PlanStatusCard({
   onSelect,
 }: {
   provider: ProviderUsageSnapshot;
-  hideEmail: boolean;
   resetTimeRelative: boolean;
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
@@ -126,14 +143,8 @@ export default function PlanStatusCard({
   const brand = getProviderIcon(provider.providerId).brandColor;
   const meters = glanceMeters(provider);
   const freshness = capacityFreshness(provider);
-  const promos = activePromoBoosts(provider);
-  const planName = displayPlanName(provider.planName);
-  const email =
-    provider.accountEmail && !hideEmail
-      ? provider.accountEmail
-      : provider.accountEmail
-        ? `${provider.accountEmail[0]}•••`
-        : null;
+  const planName = displayPlanName(provider.planName, provider.displayName);
+  const inactiveSummary = inactiveWindowSummary(provider);
 
   const className = [
     "plan-status-card",
@@ -162,25 +173,15 @@ export default function PlanStatusCard({
               <span className="plan-status-card__plan">{planName}</span>
             )}
           </div>
-          <div className="plan-status-card__meta">
-            {email && <span className="plan-status-card__email">{email}</span>}
-            {freshness !== "live" && !provider.error && (
+          {freshness === "stale" && !provider.error && (
+            <div className="plan-status-card__meta">
               <span
                 className={`plan-status-card__chip plan-status-card__chip--${freshness}`}
               >
                 {freshness}
               </span>
-            )}
-            {promos.map((promo) => (
-              <span
-                key={promo.id}
-                className="plan-status-card__chip plan-status-card__chip--boost"
-                title={promo.description}
-              >
-                {promo.title}
-              </span>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
       </header>
 
@@ -195,14 +196,24 @@ export default function PlanStatusCard({
             showResetWhenExhausted={showResetWhenExhausted}
             hero
           />
-          {meters.companion && (
+          {meters.companions.map((meter) => (
             <MeterRow
-              meter={meters.companion}
+              key={meter.id}
+              meter={meter}
               showAsUsed={showAsUsed}
               resetTimeRelative={resetTimeRelative}
               showResetWhenExhausted={showResetWhenExhausted}
               hero={false}
             />
+          ))}
+          {inactiveSummary && (
+            <div className="plan-status-card__inactive">
+              <span className="plan-status-card__inactive-mark" aria-hidden />
+              <span className="plan-status-card__inactive-name">
+                {inactiveSummary}
+              </span>
+              <span>not currently enforced</span>
+            </div>
           )}
         </div>
       )}

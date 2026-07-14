@@ -14,6 +14,7 @@ import {
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
 import { reorderProviders } from "../../../lib/tauri";
+import { setDetectedProviderIgnored } from "../../../lib/detectedProviderPreferences";
 import { useProviders } from "../../../hooks/useProviders";
 
 interface ProvidersTabProps {
@@ -53,6 +54,7 @@ export default function ProvidersTab({
     const next = new Set(enabled);
     if (on) next.add(id);
     else next.delete(id);
+    setDetectedProviderIgnored(id, !on);
     set({
       enabledProviders: orderedProviders
         .map((provider) => provider.id)

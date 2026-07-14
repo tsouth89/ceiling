@@ -13,6 +13,7 @@ pub struct SettingsUpdate {
     pub start_at_login: Option<bool>,
     pub start_minimized: Option<bool>,
     pub show_notifications: Option<bool>,
+    pub capacity_event_notifications_enabled: Option<bool>,
     pub sound_enabled: Option<bool>,
     pub sound_volume: Option<u8>,
     pub high_usage_threshold: Option<f64>,
@@ -192,6 +193,9 @@ impl SettingsUpdate {
     fn apply_notification_settings(self, settings: &mut Settings) -> Self {
         if let Some(v) = self.show_notifications {
             settings.show_notifications = v;
+        }
+        if let Some(v) = self.capacity_event_notifications_enabled {
+            settings.capacity_event_notifications_enabled = v;
         }
         if let Some(v) = self.sound_enabled {
             settings.sound_enabled = v;

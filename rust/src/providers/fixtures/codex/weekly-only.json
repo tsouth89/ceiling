@@ -1,0 +1,24 @@
+{
+  "plan_type": "pro_lite",
+  "rate_limit": {
+    "primary_window": null,
+    "secondary_window": {
+      "used_percent": 47,
+      "limit_window_seconds": 604800,
+      "reset_at": 1893888000
+    }
+  },
+  "additional_rate_limits": [
+    {
+      "limit_name": "Codex Spark Weekly",
+      "metered_feature": "codex_spark",
+      "rate_limit": {
+        "secondary_window": {
+          "used_percent": 21,
+          "limit_window_seconds": 604800,
+          "reset_at": 1893888000
+        }
+      }
+    }
+  ]
+}

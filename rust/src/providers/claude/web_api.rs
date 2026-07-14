@@ -3,12 +3,117 @@
 use chrono::{DateTime, Utc};
 use reqwest::{Client, header};
 use serde::Deserialize;
+use std::path::PathBuf;
 
-use crate::browser::cookies::get_cookie_header;
+use crate::browser::cookies::{get_cookie_header, get_cookie_header_from_browser};
+use crate::browser::detection::{BrowserProfile, BrowserType, DetectedBrowser};
 use crate::core::{
     CostSnapshot, NamedRateWindow, PromoSignal, ProviderError, ProviderFetchResult, RateWindow,
     UsageSnapshot,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeDesktopSessionStatus {
+    Ready,
+    Locked,
+    SignedOut,
+    Unavailable,
+}
+
+/// Locate Claude Desktop's Chromium profile without reading any credential
+/// values. Windows Store builds keep Electron data under the package's
+/// redirected Roaming directory; older standalone builds use `%APPDATA%`.
+fn claude_desktop_data_dirs() -> Vec<PathBuf> {
+    let mut candidates = std::env::var_os("CLAUDE_DESKTOP_DATA_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect::<Vec<_>>();
+    for candidate in claude_desktop_data_dirs_from(dirs::data_local_dir(), dirs::data_dir()) {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+fn claude_desktop_data_dirs_from(
+    local_app_data: Option<PathBuf>,
+    roaming_app_data: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(local) = local_app_data {
+        candidates.push(
+            local
+                .join("Packages")
+                .join("Claude_pzs8sxrjxfjjc")
+                .join("LocalCache")
+                .join("Roaming")
+                .join("Claude"),
+        );
+    }
+    if let Some(roaming) = roaming_app_data {
+        candidates.push(roaming.join("Claude"));
+    }
+    candidates.dedup();
+    candidates
+}
+
+fn claude_desktop_session() -> Result<String, ClaudeDesktopSessionStatus> {
+    let mut found_profile = false;
+    for data_dir in claude_desktop_data_dirs() {
+        if !data_dir.join("Network").join("Cookies").is_file()
+            || !data_dir.join("Local State").is_file()
+        {
+            continue;
+        }
+        found_profile = true;
+
+        let desktop = DetectedBrowser {
+            browser_type: BrowserType::Chromium,
+            user_data_dir: data_dir.clone(),
+            profiles: vec![BrowserProfile {
+                name: "Claude Desktop".to_string(),
+                path: data_dir,
+                is_default: true,
+            }],
+        };
+
+        match get_cookie_header_from_browser("claude.ai", &desktop) {
+            Ok(header) if cookie_value(&header, "sessionKey").is_some() => {
+                tracing::debug!("Using Claude Desktop session for usage fetch");
+                return Ok(header);
+            }
+            Ok(_) => tracing::debug!("Claude Desktop is present but has no active session"),
+            Err(error) => {
+                tracing::debug!("Claude Desktop session unavailable: {error}");
+                let message = error.to_string().to_ascii_lowercase();
+                if message.contains("os error 32")
+                    || message.contains("being used by another process")
+                    || message.contains("sharing violation")
+                {
+                    return Err(ClaudeDesktopSessionStatus::Locked);
+                }
+            }
+        }
+    }
+    Err(if found_profile {
+        ClaudeDesktopSessionStatus::SignedOut
+    } else {
+        ClaudeDesktopSessionStatus::Unavailable
+    })
+}
+
+pub fn claude_desktop_session_status() -> ClaudeDesktopSessionStatus {
+    match claude_desktop_session() {
+        Ok(_) => ClaudeDesktopSessionStatus::Ready,
+        Err(status) => status,
+    }
+}
+
+fn claude_desktop_cookie_header() -> Option<String> {
+    claude_desktop_session().ok()
+}
 
 /// Read the response body as text, then deserialize as JSON. On failure, include
 /// non-sensitive shape metadata so auth redirects, error envelopes, and schema
@@ -260,6 +365,15 @@ impl ClaudeWebApiFetcher {
             tracing::debug!("Using Claude session key from environment variable");
             let cookie_header = format!("sessionKey={session_key}");
             return self.fetch_with_cookie_header(&cookie_header).await;
+        }
+
+        // Reuse the signed-in Claude Desktop session before probing browsers.
+        // This keeps Automatic genuinely zero-setup for desktop users and does
+        // not persist or log the extracted cookie value in Ceiling.
+        if let Some(cookie_header) = claude_desktop_cookie_header() {
+            let mut result = self.fetch_with_cookie_header(&cookie_header).await?;
+            result.source_label = "desktop".to_string();
+            return Ok(result);
         }
 
         // Try multiple domains - Claude uses different domains for different services
@@ -675,8 +789,12 @@ fn cookie_value(cookie_header: &str, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountResponse, ClaudeWebApiFetcher, UsageWindow, cookie_value};
+    use super::{
+        AccountResponse, ClaudeWebApiFetcher, UsageWindow, claude_desktop_data_dirs_from,
+        cookie_value,
+    };
     use reqwest::header;
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
@@ -717,6 +835,24 @@ mod tests {
         assert_eq!(
             ClaudeWebApiFetcher::tier_to_plan_name("v2_default_claude_max_20x"),
             "Claude Max 20x"
+        );
+    }
+
+    #[test]
+    fn discovers_packaged_and_legacy_claude_desktop_profiles() {
+        let paths = claude_desktop_data_dirs_from(
+            Some(PathBuf::from(r"C:\Users\person\AppData\Local")),
+            Some(PathBuf::from(r"C:\Users\person\AppData\Roaming")),
+        );
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from(
+                    r"C:\Users\person\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude"
+                ),
+                PathBuf::from(r"C:\Users\person\AppData\Roaming\Claude"),
+            ]
         );
     }
 

@@ -11,7 +11,7 @@ use crate::commands::{
 };
 use crate::state::AppState;
 
-pub const STATUS_PIPE_NAME: &str = r"\\.\pipe\WinCodexBar.Status";
+pub const STATUS_PIPE_NAME: &str = r"\\.\pipe\Ceiling.Status";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

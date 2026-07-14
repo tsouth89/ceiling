@@ -31,11 +31,6 @@ pub const FLYOUT_LABEL: &str = "flyout";
 /// their remembered flyout size.
 const FLYOUT_SIZE_KEY: &str = "flyout";
 
-/// Same window used to close a same-click blur-dismiss/reopen race as the
-/// pre-split tray panel handling (formerly `shell::transition::handle_tray_panel_click`,
-/// removed once its only caller — the tray-icon left-click handler — was
-/// retargeted to call this module directly).
-const BLUR_DISMISS_CLICK_WINDOW: Duration = Duration::from_millis(250);
 /// Grace period after showing the flyout during which a spurious Windows
 /// blur (tray click focus race) is ignored — mirrors `main.rs`'s 500ms
 /// `was_tray_panel_recently_shown` guard for the old shared window.
@@ -50,14 +45,6 @@ pub fn stored_size() -> Option<(u32, u32)> {
 /// Persist a user-chosen flyout size. Size-only — no fabricated position.
 pub fn save_stored_size(width: u32, height: u32) {
     geometry_store::save_size(FLYOUT_SIZE_KEY, StoredSize { width, height });
-}
-
-/// Whether the flyout window currently exists and is visible. Canonical
-/// replacement for the pre-split `surface_machine.current() == TrayPanel`
-/// check, now that the flyout is not a state of the shared machine.
-pub fn is_open(app: &AppHandle) -> bool {
-    app.get_webview_window(FLYOUT_LABEL)
-        .is_some_and(|w| w.is_visible().unwrap_or(false))
 }
 
 /// Build (first open) or show + focus (subsequent opens) the flyout window at
@@ -149,31 +136,6 @@ fn arm_reveal(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Toggle the flyout: hide if open, open (or focus) otherwise. Consumes a
-/// same-click blur-dismissal first (see `handle_window_event`'s
-/// `Focused(false)` path) so a tray click that just blur-dismissed the
-/// flyout cleanly closes it instead of instantly reopening.
-///
-/// Must be called from an async context — see [`open_or_focus`].
-pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
-    let consumed_blur_dismissal = {
-        let st = app.state::<Mutex<AppState>>();
-        st.lock()
-            .unwrap()
-            .take_recent_blur_dismissal(Instant::now(), BLUR_DISMISS_CLICK_WINDOW)
-    };
-
-    if consumed_blur_dismissal {
-        return;
-    }
-
-    if is_open(app) {
-        let _ = hide(app);
-    } else {
-        let _ = open_or_focus(app, position);
-    }
-}
-
 /// Hide (never close) the flyout window. Hiding — rather than closing —
 /// keeps the window's WebView2 instance alive across opens, matching
 /// `settings_window::dismiss`'s rationale: closing risks Tauri's
@@ -236,9 +198,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                     return true;
                 }
             }
-            if hide(app).is_ok() {
-                st.lock().unwrap().mark_blur_dismissed(Instant::now());
-            }
+            let _ = hide(app);
             true
         }
         tauri::WindowEvent::Focused(true) => {

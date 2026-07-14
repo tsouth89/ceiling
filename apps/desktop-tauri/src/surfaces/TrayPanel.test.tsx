@@ -108,6 +108,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     startAtLogin: false,
     startMinimized: false,
     showNotifications: true,
+    capacityEventNotificationsEnabled: true,
     soundEnabled: true,
     soundVolume: 100,
     highUsageThreshold: 70,
@@ -384,7 +385,9 @@ describe("TrayPanel provider grid", () => {
       provider(id, displayName, (index * 7) % 100),
     );
 
-    const { container } = renderTrayPanel(providers);
+    const { container } = renderTrayPanel(providers, {
+      enabledProviders: providers.map((snapshot) => snapshot.providerId),
+    });
 
     await waitFor(() => {
       expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
@@ -421,7 +424,9 @@ describe("TrayPanel provider grid", () => {
         provider("kimi", "Kimi"),
       ].slice(0, providerCount);
 
-      const { container } = renderTrayPanel(providers);
+      const { container } = renderTrayPanel(providers, {
+        enabledProviders: providers.map((snapshot) => snapshot.providerId),
+      });
 
       await waitFor(() => {
         expect(container.querySelector(".provider-grid")).not.toBeNull();
@@ -558,7 +563,9 @@ describe("TrayPanel provider grid", () => {
       provider(id, displayName, (index * 7) % 100),
     );
 
-    const { container } = renderTrayPanel(providers);
+    const { container } = renderTrayPanel(providers, {
+      enabledProviders: providers.map((snapshot) => snapshot.providerId),
+    });
 
     await waitFor(() => {
       expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(
@@ -605,7 +612,9 @@ describe("TrayPanel provider grid", () => {
       ([id, displayName], index) => provider(id, displayName, (index * 7) % 100),
     );
 
-    const { container } = renderTrayPanel(providers);
+    const { container } = renderTrayPanel(providers, {
+      enabledProviders: providers.map((snapshot) => snapshot.providerId),
+    });
 
     await waitFor(() => {
       expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
@@ -822,7 +831,9 @@ describe("TrayPanel provider grid", () => {
       error: "Source mode `Cli` not supported for this provider",
     };
 
-    const { container } = renderTrayPanel([errorProvider]);
+    const { container } = renderTrayPanel([errorProvider], {
+      enabledProviders: ["abacus"],
+    });
 
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
