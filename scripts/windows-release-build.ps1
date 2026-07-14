@@ -378,6 +378,10 @@ try {
     Copy-Item $sourceCliExe $releaseExe -Force
     } else {
         Write-Host "Reusing signed binaries from $releaseBinDir"
+        # Signing changes the canonical desktop executable after BuildOnly has
+        # created the compatibility copy. Keep both installer inputs identical
+        # by refreshing the legacy name from the signed canonical binary.
+        Copy-Item $desktopExe $legacyDesktopExe -Force
     }
 
     $verifyExecutablesScript = Join-Path $SourceDir "scripts\verify-windows-executables.ps1"
