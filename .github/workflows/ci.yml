@@ -19,30 +19,61 @@ jobs:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.18.1
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
+      - run: node --test worker.test.mjs
       - run: pnpm --dir apps/desktop-tauri install --frozen-lockfile
       - run: pnpm --dir apps/desktop-tauri test
       - run: pnpm --dir apps/desktop-tauri run build
 
-  rust:
-    name: Rust
+  rust-shared:
+    name: Rust / shared
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          shared-key: ci-shared
       - run: cargo fmt --all --check
       - run: cargo test --manifest-path rust/Cargo.toml
-      - run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+
+  rust-desktop:
+    name: Rust / desktop
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          shared-key: ci-desktop
+      - run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
       - run: cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  rust:
+    name: Rust
+    needs: [rust-shared, rust-desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Rust checks passed."

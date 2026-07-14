@@ -1,6 +1,22 @@
 # Changelog
 
-## [Ceiling] 0.43.2 - Unreleased
+## [Unreleased]
+
+### Added
+- Add private, first-party website analytics for visitors, downloads, and GitHub traffic.
+- Add persistent quota history and factual processed-token summaries to Charts.
+
+### Changed
+- Replace API-equivalent dollar estimates with processed-token and cache-traffic breakdowns.
+- Polish the repository README around the released app and current Windows UI.
+- Pin release and CI actions to immutable commits and test the website Worker in CI.
+
+### Fixed
+- Keep Codex's regular weekly limit distinct from Codex Spark Weekly so scheduled resets notify reliably.
+- Correct malformed chart time labels and keep provider charts responsive while history loads.
+- Keep the floating bar above normal taskbar activity without taking focus.
+
+## [Ceiling] 0.43.2 - 2026-07-14
 
 ### Added
 - Add a persistent, taskbar-adjacent capacity strip with provider-aware usage lanes.
