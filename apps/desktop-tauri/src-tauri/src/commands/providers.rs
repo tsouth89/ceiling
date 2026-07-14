@@ -294,6 +294,7 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
     } else {
         (snapshot, Vec::new(), false)
     };
+    crate::usage_history::record_snapshot(&snapshot);
     events::emit_provider_updated(&app, &snapshot);
     let notification_settings = Settings::load();
     for event in capacity_events {
@@ -527,7 +528,7 @@ fn notify_usage_thresholds(
             if snapshot.error.is_none()
                 && let Some(&provider) = cli_map.get(snapshot.provider_id.as_str())
             {
-                let (alerts, session_percent) = plan_threshold_alerts(
+                let (alerts, _session_percent) = plan_threshold_alerts(
                     provider,
                     snapshot.primary_label.as_deref(),
                     &snapshot.primary,
@@ -542,14 +543,9 @@ fn notify_usage_thresholds(
                         settings,
                     );
                 }
-                // Session depleted/restored tracks the real 5-hour window only.
-                // When the API omits it, the promoted weekly must not be read as
-                // the session — that was the depleted/restored spam.
-                if let Some(percent) = session_percent {
-                    guard
-                        .notification_manager
-                        .check_session_transition(provider, percent, settings);
-                }
+                // Depleted/restored notifications are deliberately omitted.
+                // Confirmed resets provide the useful "quota is back" signal
+                // without adding a second, noisier state machine.
                 notify_predictive_pace(
                     &mut guard.notification_manager,
                     provider,

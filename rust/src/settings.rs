@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use crate::core::ProviderId;
 
+const NOTIFICATION_POLICY_VERSION: u8 = 1;
+
 mod api_keys;
 mod manual_cookies;
 mod provider_workspace;
@@ -54,7 +56,7 @@ pub struct Settings {
     /// Whether to show notifications
     pub show_notifications: bool,
 
-    /// Whether reset and provider-reported capacity changes may raise OS alerts.
+    /// Whether confirmed scheduled and early resets may raise OS alerts.
     #[serde(default = "default_true")]
     pub capacity_event_notifications_enabled: bool,
 
@@ -67,8 +69,13 @@ pub struct Settings {
     /// High usage threshold for warnings (percentage)
     pub high_usage_threshold: f64,
 
-    /// Critical usage threshold for alerts (percentage)
+    /// Critical usage threshold for visual severity (percentage)
     pub critical_usage_threshold: f64,
+
+    /// Internal migration marker for notification defaults. This is not a UI
+    /// preference; it prevents old default values from surviving policy fixes.
+    #[serde(default)]
+    pub notification_policy_version: u8,
 
     pub provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
 
@@ -228,7 +235,7 @@ pub struct Settings {
     #[serde(default)]
     pub float_bar_show_reset_inline: bool,
 
-    /// When true, show local cost summaries in the floating bar.
+    /// Legacy compatibility field; the current UI no longer renders local cost pills.
     #[serde(default)]
     pub float_bar_show_cost: bool,
 }
@@ -374,8 +381,9 @@ impl Default for Settings {
             capacity_event_notifications_enabled: true,
             sound_enabled: true,
             sound_volume: 100,
-            high_usage_threshold: 70.0,
+            high_usage_threshold: 85.0,
             critical_usage_threshold: 90.0,
+            notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: HashMap::new(),
             merge_tray_icons: false, // Show single provider by default
             tray_icon_mode: TrayIconMode::default(), // Single icon by default

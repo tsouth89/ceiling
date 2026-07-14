@@ -20,6 +20,8 @@ export interface LineChartProps {
   color?: string;
   height?: number;
   valueFormatter?: (n: number) => string;
+  axisLabelFormatter?: (label: string) => string;
+  tooltipLabelFormatter?: (label: string) => string;
   ariaLabel: string;
   /** When true, render a faint filled area under the line. Defaults true. */
   area?: boolean;
@@ -35,12 +37,16 @@ export function LineChart({
   color = DEFAULT_COLOR,
   height = 56,
   valueFormatter,
+  axisLabelFormatter,
+  tooltipLabelFormatter,
   ariaLabel,
   area = true,
   animations = true,
   emptyMessage,
 }: LineChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
+  const axisFmt = axisLabelFormatter ?? ((label: string) => label.slice(-5));
+  const tooltipFmt = tooltipLabelFormatter ?? ((label: string) => label);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
 
@@ -138,15 +144,15 @@ export function LineChart({
             onMouseLeave={onLeave}
           >
             <title>
-              {p.label}: {fmt(p.value)}
+              {tooltipFmt(p.label)}: {fmt(p.value)}
             </title>
           </circle>
         ))}
       </svg>
       <div className="chart__axis">
-        <span>{data[0].label.slice(-5)}</span>
+        <span>{axisFmt(data[0].label)}</span>
         <span className="chart__axis-max">{fmt(max)}</span>
-        <span>{data[data.length - 1].label.slice(-5)}</span>
+        <span>{axisFmt(data[data.length - 1].label)}</span>
       </div>
       {hover && !anim.running && (
         <div
@@ -154,7 +160,7 @@ export function LineChart({
           style={{ left: hover.x, top: hover.y }}
           role="tooltip"
         >
-          <span className="chart__tooltip-label">{data[hover.i].label}</span>
+          <span className="chart__tooltip-label">{tooltipFmt(data[hover.i].label)}</span>
           <strong>{fmt(data[hover.i].value)}</strong>
         </div>
       )}

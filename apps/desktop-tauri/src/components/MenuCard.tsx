@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
-  DailyCostPoint,
   PaceSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
@@ -58,7 +57,7 @@ interface MenuCardProps {
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
   compactMetrics?: boolean;
-  /** When false, hide local token/cost activity (overview glance). Default true. */
+  /** When false, hide local token activity (overview glance). Default true. */
   showActivitySection?: boolean;
   isRefreshing?: boolean;
   onLayoutChange?: () => void;
@@ -121,71 +120,42 @@ function formatCompactCount(value: number | null): string {
 }
 
 function LocalUsageBlock({
-  providerId,
   summary,
-  costHistory,
 }: {
-  providerId: string;
   summary: ProviderLocalUsageSummary;
-  costHistory: DailyCostPoint[];
 }) {
-  const { t } = useLocale();
-  const isCodex = providerId === "codex";
-  const visibleHistory = costHistory
-    .slice(-30)
-    .filter((point) => point.value > 0);
-  const maxCost = Math.max(...visibleHistory.map((point) => point.value), 0);
+  const breakdown = summary.sevenDayTokenBreakdown;
+  const cachedTokens = breakdown
+    ? breakdown.cacheReadTokens + breakdown.cacheWriteTokens
+    : 0;
+  const cacheShare = breakdown && breakdown.processedTokens > 0
+    ? `${((cachedTokens / breakdown.processedTokens) * 100).toFixed(1)}%`
+    : "—";
 
   return (
     <section className="menu-card__group menu-card__local-usage">
       <div className="menu-card__local-grid">
         <div>
-          <span className="menu-card__local-label">{t("PanelToday")}</span>
-          <strong>
-            {summary.todayCost != null
-              ? formatCurrency(summary.todayCost, "USD")
-              : "—"}
-          </strong>
+          <span className="menu-card__local-label">Last session</span>
+          <strong>{formatCompactCount(summary.lastSessionTokens)}</strong>
         </div>
         <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayCost")}</span>
-          <strong>
-            {summary.thirtyDayCost != null
-              ? formatCurrency(summary.thirtyDayCost, "USD")
-              : "—"}
-          </strong>
+          <span className="menu-card__local-label">Last 7 days</span>
+          <strong>{formatCompactCount(summary.sevenDayTokens)}</strong>
         </div>
         <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayTokens")}</span>
+          <span className="menu-card__local-label">Last 30 days</span>
           <strong>{formatCompactCount(summary.thirtyDayTokens)}</strong>
         </div>
         <div>
-          <span className="menu-card__local-label">{t("PanelLatestTokens")}</span>
-          <strong>{formatCompactCount(summary.latestTokens)}</strong>
+          <span className="menu-card__local-label">7-day cache share</span>
+          <strong>{cacheShare}</strong>
         </div>
       </div>
 
-      {isCodex && visibleHistory.length > 0 && (
-        <div className="menu-card__local-chart" aria-label={t("PanelThirtyDayCostHistogram")}>
-          {visibleHistory.map((point, index) => (
-            <span
-              key={`${point.date}-${index}`}
-              style={{
-                height: `${Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
-              }}
-              title={`${point.date}: ${formatCurrency(point.value, "USD")}`}
-            />
-          ))}
-        </div>
-      )}
-
       <div className="menu-card__local-note">
-        {summary.topModel && <strong>{t("PanelTopModelPrefix")}: {summary.topModel}</strong>}
-        <span>
-          {summary.estimateNote === "Estimated from local logs"
-            ? t("PanelEstimatedFromLocalLogs")
-            : summary.estimateNote}
-        </span>
+        {summary.topModel && <strong>Most used model: {summary.topModel}</strong>}
+        <span>Processed tokens from local logs, including cache traffic.</span>
       </div>
     </section>
   );
@@ -527,18 +497,15 @@ export default function MenuCard({
   }
   const visibleMetrics = metrics;
 
-  const hasCostHistory =
-    chartData !== null && chartData.costHistory.some((point) => point.value > 0);
   const hasCreditsHistory =
     chartData !== null && chartData.creditsHistory.length > 0;
   const hasUsageBreakdown =
     chartData !== null && chartData.usageBreakdown.length > 0;
   const hasCharts =
     showActivitySection &&
-    (hasCostHistory || hasCreditsHistory || hasUsageBreakdown);
+    (hasCreditsHistory || hasUsageBreakdown);
   const localUsage =
     showActivitySection && !provider.error ? chartData?.localUsage ?? null : null;
-  const localCostHistory = showActivitySection ? chartData?.costHistory ?? [] : [];
   const promoBoosts = activePromoBoosts(provider);
   const promoInclusions = activePromoInclusions(provider);
   const hasMetrics = visibleMetrics.length > 0;
@@ -663,9 +630,7 @@ export default function MenuCard({
 
           {localUsage && (
             <LocalUsageBlock
-              providerId={provider.providerId}
               summary={localUsage}
-              costHistory={localCostHistory}
             />
           )}
 
@@ -755,14 +720,6 @@ export default function MenuCard({
 
           {hasCharts && (
             <section className="menu-card__group menu-card__charts">
-              {hasCostHistory && (
-                <SimpleBarChart
-                  points={chartData!.costHistory}
-                  label={t("DetailChartCost")}
-                  color="var(--accent)"
-                  formatValue={(v) => `$${v.toFixed(2)}`}
-                />
-              )}
               {hasCreditsHistory && (
                 <SimpleBarChart
                   points={chartData!.creditsHistory}

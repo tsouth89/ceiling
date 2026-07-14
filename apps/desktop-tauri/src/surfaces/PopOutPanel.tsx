@@ -315,7 +315,7 @@ export default function PopOutPanel({
     charts: {
       title: "Charts",
       sub: "Usage over time",
-      blurb: "Usage and cost trends, per provider.",
+      blurb: "Limits and local usage trends, per provider.",
     },
   };
   const meta = sectionMeta[activeSection];

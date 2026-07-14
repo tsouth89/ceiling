@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use super::models_dev_pricing;
+use chrono::{NaiveDate, Utc};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -366,6 +367,23 @@ static CLAUDE_PRICING: LazyLock<HashMap<&'static str, ClaudePricing>> = LazyLock
         },
     );
 
+    // Sonnet 5 introductory pricing through August 31, 2026. The scanner
+    // selects the standard rates for records on or after September 1.
+    m.insert(
+        "claude-sonnet-5",
+        ClaudePricing {
+            input_cost_per_token: 2e-6,
+            output_cost_per_token: 1e-5,
+            cache_creation_input_cost_per_token: 2.5e-6,
+            cache_read_input_cost_per_token: 2e-7,
+            threshold_tokens: None,
+            input_cost_per_token_above_threshold: None,
+            output_cost_per_token_above_threshold: None,
+            cache_creation_input_cost_per_token_above_threshold: None,
+            cache_read_input_cost_per_token_above_threshold: None,
+        },
+    );
+
     // Haiku 4.5
     m.insert(
         "claude-haiku-4-5",
@@ -518,7 +536,7 @@ static CLAUDE_PRICING: LazyLock<HashMap<&'static str, ClaudePricing>> = LazyLock
         },
     );
 
-    // Sonnet 4.6 (same pricing as Sonnet 4.5, with 200k tier)
+    // Sonnet 4.6 includes the full 1M context window at standard pricing.
     m.insert(
         "claude-sonnet-4-6",
         ClaudePricing {
@@ -526,11 +544,11 @@ static CLAUDE_PRICING: LazyLock<HashMap<&'static str, ClaudePricing>> = LazyLock
             output_cost_per_token: 1.5e-5,
             cache_creation_input_cost_per_token: 3.75e-6,
             cache_read_input_cost_per_token: 3e-7,
-            threshold_tokens: Some(200_000),
-            input_cost_per_token_above_threshold: Some(6e-6),
-            output_cost_per_token_above_threshold: Some(2.25e-5),
-            cache_creation_input_cost_per_token_above_threshold: Some(7.5e-6),
-            cache_read_input_cost_per_token_above_threshold: Some(6e-7),
+            threshold_tokens: None,
+            input_cost_per_token_above_threshold: None,
+            output_cost_per_token_above_threshold: None,
+            cache_creation_input_cost_per_token_above_threshold: None,
+            cache_read_input_cost_per_token_above_threshold: None,
         },
     );
 
@@ -602,6 +620,20 @@ fn codex_cost_from_rates(
 pub struct CostUsagePricing;
 
 impl CostUsagePricing {
+    fn claude_pricing_for_date(model: &str, usage_date: NaiveDate) -> Option<ClaudePricing> {
+        let key = Self::normalize_claude_model(model);
+        let mut pricing = *CLAUDE_PRICING.get(key.as_str())?;
+        if key == "claude-sonnet-5"
+            && usage_date >= NaiveDate::from_ymd_opt(2026, 9, 1).expect("valid pricing date")
+        {
+            pricing.input_cost_per_token = 3e-6;
+            pricing.output_cost_per_token = 1.5e-5;
+            pricing.cache_creation_input_cost_per_token = 3.75e-6;
+            pricing.cache_read_input_cost_per_token = 3e-7;
+        }
+        Some(pricing)
+    }
+
     /// Normalize a Codex model name for pricing lookup
     pub fn normalize_codex_model(raw: &str) -> String {
         let mut trimmed = raw.trim().to_string();
@@ -761,8 +793,27 @@ impl CostUsagePricing {
         cache_creation_input_tokens: i32,
         output_tokens: i32,
     ) -> Option<f64> {
+        Self::claude_cost_usd_on_date(
+            model,
+            input_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            output_tokens,
+            Utc::now().date_naive(),
+        )
+    }
+
+    /// Calculate Claude cost using the rates effective on the usage date.
+    pub fn claude_cost_usd_on_date(
+        model: &str,
+        input_tokens: i32,
+        cache_read_input_tokens: i32,
+        cache_creation_input_tokens: i32,
+        output_tokens: i32,
+        usage_date: NaiveDate,
+    ) -> Option<f64> {
         let key = Self::normalize_claude_model(model);
-        if let Some(pricing) = CLAUDE_PRICING.get(key.as_str()) {
+        if let Some(pricing) = Self::claude_pricing_for_date(&key, usage_date) {
             /// Calculate tiered cost
             fn tiered(tokens: i32, base: f64, above: Option<f64>, threshold: Option<i32>) -> f64 {
                 let tokens = tokens.max(0);
@@ -858,8 +909,13 @@ impl CostUsagePricing {
     /// need a rate the standard cost function doesn't model — e.g. the usage
     /// scanner's one-hour cache-write premium, billed at 2x the input rate.
     pub fn claude_input_cost_per_token(model: &str) -> Option<f64> {
+        Self::claude_input_cost_per_token_on_date(model, Utc::now().date_naive())
+    }
+
+    /// Return the Claude input rate effective on the usage date.
+    pub fn claude_input_cost_per_token_on_date(model: &str, usage_date: NaiveDate) -> Option<f64> {
         let key = Self::normalize_claude_model(model);
-        if let Some(pricing) = CLAUDE_PRICING.get(key.as_str()) {
+        if let Some(pricing) = Self::claude_pricing_for_date(&key, usage_date) {
             return Some(pricing.input_cost_per_token);
         }
         models_dev_pricing::lookup("anthropic", model).map(|p| p.input_cost_per_token)

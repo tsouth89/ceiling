@@ -6,10 +6,12 @@
 //! reads to the right cached bundle.
 
 use codexbar::core::OpenAIDashboardCacheStore;
-use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history};
+use codexbar::cost_scanner::{CostScanner, CostSummary, CostUsageReport, get_cost_usage_report};
 use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -17,6 +19,8 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
+const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const CHART_CACHE_VERSION: u8 = 2;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,12 +52,41 @@ pub struct DailyUsageBreakdown {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderLocalUsageSummary {
     pub today_cost: Option<f64>,
+    #[serde(default)]
+    pub last_session_cost: Option<f64>,
+    #[serde(default)]
+    pub last_session_tokens: Option<u64>,
+    #[serde(default)]
+    pub last_session_token_breakdown: Option<LocalTokenBreakdown>,
+    #[serde(default)]
+    pub seven_day_cost: Option<f64>,
+    #[serde(default)]
+    pub seven_day_tokens: Option<u64>,
+    #[serde(default)]
+    pub seven_day_token_breakdown: Option<LocalTokenBreakdown>,
     pub thirty_day_cost: Option<f64>,
     pub thirty_day_tokens: Option<u64>,
+    #[serde(default)]
+    pub thirty_day_token_breakdown: Option<LocalTokenBreakdown>,
+    /// Legacy alias retained for older UI surfaces. This now means the latest
+    /// transcript/session, rather than today's aggregate.
     pub latest_tokens: Option<u64>,
     pub top_model: Option<String>,
     pub estimate_note: String,
     pub token_cost_updated_at_ms: i64,
+}
+
+/// Provider-normalized token categories. Codex reports cached input as a
+/// subset of input, while Claude reports cache reads and writes separately;
+/// this shape makes the frontend comparison consistent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalTokenBreakdown {
+    pub processed_tokens: u64,
+    pub fresh_input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
 }
 
 /// Full chart data bundle for one provider.
@@ -65,6 +98,22 @@ pub struct ProviderChartData {
     pub credits_history: Vec<DailyCostPoint>,
     pub usage_breakdown: Vec<DailyUsageBreakdown>,
     pub local_usage: Option<ProviderLocalUsageSummary>,
+    #[serde(default)]
+    pub quota_history: Vec<crate::usage_history::UsageHistoryPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedProviderChartData {
+    refreshed_at_ms: i64,
+    data: ProviderChartData,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct PersistedChartCache {
+    #[serde(default)]
+    version: u8,
+    #[serde(default)]
+    entries: HashMap<String, CachedProviderChartData>,
 }
 
 #[tauri::command]
@@ -72,16 +121,153 @@ pub async fn get_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
+    let cache_key = chart_cache_key(&provider_id, account_email.as_deref());
+    if let Some(mut cached) = cached_chart_data(&cache_key) {
+        cached.data.quota_history =
+            crate::usage_history::provider_history(&provider_id, account_email.as_deref());
+        if current_unix_ms().saturating_sub(cached.refreshed_at_ms)
+            > CHART_CACHE_TTL.as_millis() as i64
+        {
+            schedule_chart_cache_refresh(cache_key, provider_id, account_email);
+        }
+        return cached.data;
+    }
+
+    let quota_history =
+        crate::usage_history::provider_history(&provider_id, account_email.as_deref());
+    if !quota_history.is_empty() {
+        let mut immediate = ProviderChartData::empty(provider_id.clone());
+        immediate.quota_history = quota_history;
+        schedule_chart_cache_refresh(cache_key, provider_id, account_email);
+        return immediate;
+    }
+
     let fallback_provider_id = provider_id.clone();
     let cancel = register_chart_scan(&provider_id);
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         build_provider_chart_data_with_cancel(provider_id, account_email, Some(cancel))
     })
     .await
     .unwrap_or_else(|err| {
         tracing::warn!("Provider chart data worker failed: {}", err);
         ProviderChartData::empty(fallback_provider_id)
+    });
+    store_chart_data(cache_key, result.clone());
+    result
+}
+
+fn chart_cache() -> &'static Mutex<PersistedChartCache> {
+    static CACHE: OnceLock<Mutex<PersistedChartCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(load_persisted_chart_cache()))
+}
+
+fn active_cache_refreshes() -> &'static Mutex<HashSet<String>> {
+    static ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn cached_chart_data(key: &str) -> Option<CachedProviderChartData> {
+    chart_cache().lock().ok()?.entries.get(key).cloned()
+}
+
+fn store_chart_data(key: String, data: ProviderChartData) {
+    let Ok(mut guard) = chart_cache().lock() else {
+        return;
+    };
+    guard.version = CHART_CACHE_VERSION;
+    guard.entries.insert(
+        key,
+        CachedProviderChartData {
+            refreshed_at_ms: current_unix_ms(),
+            data,
+        },
+    );
+    persist_chart_cache(&guard);
+}
+
+fn schedule_chart_cache_refresh(key: String, provider_id: String, account_email: Option<String>) {
+    let Ok(mut active) = active_cache_refreshes().lock() else {
+        return;
+    };
+    if !active.insert(key.clone()) {
+        return;
+    }
+    drop(active);
+
+    tauri::async_runtime::spawn(async move {
+        let refresh_key = key.clone();
+        let refreshed = tauri::async_runtime::spawn_blocking(move || {
+            build_provider_chart_data_with_cancel(provider_id, account_email, None)
+        })
+        .await;
+        match refreshed {
+            Ok(data) => store_chart_data(key, data),
+            Err(error) => tracing::warn!("Provider chart cache refresh failed: {error}"),
+        }
+        if let Ok(mut active) = active_cache_refreshes().lock() {
+            active.remove(&refresh_key);
+        }
+    });
+}
+
+fn chart_cache_key(provider_id: &str, account_email: Option<&str>) -> String {
+    let identity = account_email
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("anonymous")
+        .to_ascii_lowercase();
+    format!(
+        "{}:{:016x}",
+        provider_id.to_ascii_lowercase(),
+        fnv1a64(identity.as_bytes())
+    )
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn chart_cache_path() -> Option<PathBuf> {
+    codexbar::settings::Settings::settings_path().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join("chart-data-cache.json"))
     })
+}
+
+fn load_persisted_chart_cache() -> PersistedChartCache {
+    let Some(path) = chart_cache_path() else {
+        return PersistedChartCache::default();
+    };
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .filter(|cache: &PersistedChartCache| cache.version == CHART_CACHE_VERSION)
+        .unwrap_or_default()
+}
+
+fn persist_chart_cache(cache: &PersistedChartCache) {
+    let Some(path) = chart_cache_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        tracing::warn!("failed to create chart cache directory: {error}");
+        return;
+    }
+    match serde_json::to_vec(cache) {
+        Ok(bytes) => {
+            if let Err(error) = fs::write(path, bytes) {
+                tracing::warn!("failed to persist chart cache: {error}");
+            }
+        }
+        Err(error) => tracing::warn!("failed to serialize chart cache: {error}"),
+    }
 }
 
 #[tauri::command]
@@ -111,11 +297,20 @@ fn build_provider_chart_data_with_cancel(
     account_email: Option<String>,
     cancel: Option<Arc<AtomicBool>>,
 ) -> ProviderChartData {
-    let raw_cost = get_daily_cost_history(&provider_id, 30);
-    let cost_history: Vec<DailyCostPoint> = raw_cost
-        .into_iter()
-        .map(|(date, value)| DailyCostPoint { date, value })
-        .collect();
+    let report = get_cost_usage_report(&provider_id, 30);
+    let cost_history: Vec<DailyCostPoint> = report
+        .as_ref()
+        .map(|report| {
+            report
+                .daily_costs
+                .iter()
+                .map(|(date, value)| DailyCostPoint {
+                    date: date.clone(),
+                    value: *value,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
@@ -125,16 +320,68 @@ fn build_provider_chart_data_with_cancel(
     {
         None
     } else {
-        load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+        report
+            .as_ref()
+            .and_then(|report| local_usage_summary_from_report(&provider_id, report))
+            .or_else(|| load_local_usage_summary_cached(&provider_id, cancel.as_deref()))
     };
 
     ProviderChartData {
+        quota_history: crate::usage_history::provider_history(
+            &provider_id,
+            account_email.as_deref(),
+        ),
         provider_id,
         cost_history,
         credits_history,
         usage_breakdown,
         local_usage,
     }
+}
+
+fn local_usage_summary_from_report(
+    provider_id: &str,
+    report: &CostUsageReport,
+) -> Option<ProviderLocalUsageSummary> {
+    let thirty_day_breakdown = token_breakdown(provider_id, &report.thirty_days);
+    let seven_day_breakdown = token_breakdown(provider_id, &report.seven_days);
+    let last_session_breakdown = report
+        .latest_session
+        .as_ref()
+        .map(|summary| token_breakdown(provider_id, summary));
+    let thirty_day_tokens = thirty_day_breakdown.processed_tokens;
+    let seven_day_tokens = seven_day_breakdown.processed_tokens;
+    let last_session_tokens = last_session_breakdown
+        .as_ref()
+        .map(|breakdown| breakdown.processed_tokens)
+        .unwrap_or(0);
+    let has_usage = report.thirty_days.sessions_count > 0
+        || report.thirty_days.total_cost_usd > 0.0
+        || thirty_day_tokens > 0;
+    if !has_usage {
+        return None;
+    }
+
+    let lang = locale::current_language();
+    Some(ProviderLocalUsageSummary {
+        today_cost: non_zero_f64(report.today.total_cost_usd),
+        last_session_cost: report
+            .latest_session
+            .as_ref()
+            .and_then(|summary| non_zero_f64(summary.total_cost_usd)),
+        last_session_tokens: non_zero_u64(last_session_tokens),
+        last_session_token_breakdown: last_session_breakdown,
+        seven_day_cost: non_zero_f64(report.seven_days.total_cost_usd),
+        seven_day_tokens: non_zero_u64(seven_day_tokens),
+        seven_day_token_breakdown: Some(seven_day_breakdown),
+        thirty_day_cost: non_zero_f64(report.thirty_days.total_cost_usd),
+        thirty_day_tokens: non_zero_u64(thirty_day_tokens),
+        thirty_day_token_breakdown: Some(thirty_day_breakdown),
+        latest_tokens: non_zero_u64(last_session_tokens),
+        top_model: top_model(&report.thirty_days),
+        estimate_note: localized_estimate_note(provider_id, lang),
+        token_cost_updated_at_ms: current_unix_ms(),
+    })
 }
 
 impl ProviderChartData {
@@ -145,6 +392,7 @@ impl ProviderChartData {
             credits_history: Vec::new(),
             usage_breakdown: Vec::new(),
             local_usage: None,
+            quota_history: Vec::new(),
         }
     }
 }
@@ -188,8 +436,10 @@ fn load_local_usage_summary_with_unknown_models(
         .cloned()
         .collect();
 
-    let thirty_day_tokens = total_tokens(&thirty_day);
-    let latest_tokens = total_tokens(&today);
+    let thirty_day_breakdown = token_breakdown(provider_id, &thirty_day);
+    let latest_breakdown = token_breakdown(provider_id, &today);
+    let thirty_day_tokens = thirty_day_breakdown.processed_tokens;
+    let latest_tokens = latest_breakdown.processed_tokens;
     let has_usage =
         thirty_day.sessions_count > 0 || thirty_day.total_cost_usd > 0.0 || thirty_day_tokens > 0;
     if !has_usage {
@@ -200,8 +450,15 @@ fn load_local_usage_summary_with_unknown_models(
     (
         Some(ProviderLocalUsageSummary {
             today_cost: non_zero_f64(today.total_cost_usd),
+            last_session_cost: None,
+            last_session_tokens: non_zero_u64(latest_tokens),
+            last_session_token_breakdown: Some(latest_breakdown),
+            seven_day_cost: None,
+            seven_day_tokens: None,
+            seven_day_token_breakdown: None,
             thirty_day_cost: non_zero_f64(thirty_day.total_cost_usd),
             thirty_day_tokens: non_zero_u64(thirty_day_tokens),
+            thirty_day_token_breakdown: Some(thirty_day_breakdown),
             latest_tokens: non_zero_u64(latest_tokens),
             top_model: top_model(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
@@ -404,8 +661,29 @@ fn scan_local_cost(
     }
 }
 
-fn total_tokens(summary: &CostSummary) -> u64 {
-    summary.input_tokens + summary.output_tokens
+fn token_breakdown(provider_id: &str, summary: &CostSummary) -> LocalTokenBreakdown {
+    let is_codex = provider_id.eq_ignore_ascii_case("codex");
+    let cache_read_tokens =
+        summary
+            .cache_read_tokens
+            .max(if is_codex { summary.cached_tokens } else { 0 });
+    let cache_write_tokens = summary.cache_write_tokens;
+    let fresh_input_tokens = if is_codex {
+        summary.input_tokens.saturating_sub(cache_read_tokens)
+    } else {
+        summary.input_tokens
+    };
+    let processed_tokens = fresh_input_tokens
+        .saturating_add(summary.output_tokens)
+        .saturating_add(cache_read_tokens)
+        .saturating_add(cache_write_tokens);
+    LocalTokenBreakdown {
+        processed_tokens,
+        fresh_input_tokens,
+        output_tokens: summary.output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+    }
 }
 
 fn non_zero_f64(value: f64) -> Option<f64> {
@@ -492,10 +770,12 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, ProviderLocalUsageSummary, cost_fetch_failure_allows_early_retry,
-        localized_estimate_note, token_cost_cache_is_fresh,
+        CostFetchFailure, LocalTokenBreakdown, ProviderLocalUsageSummary,
+        cost_fetch_failure_allows_early_retry, localized_estimate_note, token_breakdown,
+        token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
+    use codexbar::cost_scanner::CostSummary;
     use codexbar::settings::Language;
     use std::time::{Duration, Instant};
 
@@ -529,8 +809,15 @@ mod tests {
     fn local_usage_summary_serializes_token_cost_timestamp() {
         let summary = ProviderLocalUsageSummary {
             today_cost: Some(1.0),
+            last_session_cost: Some(0.5),
+            last_session_tokens: Some(40),
+            last_session_token_breakdown: None,
+            seven_day_cost: Some(1.5),
+            seven_day_tokens: Some(200),
+            seven_day_token_breakdown: None,
             thirty_day_cost: Some(2.0),
             thirty_day_tokens: Some(300),
+            thirty_day_token_breakdown: None,
             latest_tokens: Some(40),
             top_model: Some("gpt-5".to_string()),
             estimate_note: "estimated".to_string(),
@@ -541,6 +828,51 @@ mod tests {
         assert_eq!(
             json.get("tokenCostUpdatedAtMs").and_then(|v| v.as_i64()),
             Some(1234)
+        );
+    }
+
+    #[test]
+    fn claude_token_breakdown_includes_cache_reads_and_writes() {
+        let summary = CostSummary {
+            input_tokens: 2_000_000,
+            output_tokens: 14_000_000,
+            cached_tokens: 4_930_000_000,
+            cache_read_tokens: 4_810_000_000,
+            cache_write_tokens: 120_000_000,
+            ..CostSummary::default()
+        };
+
+        assert_eq!(
+            token_breakdown("claude", &summary),
+            LocalTokenBreakdown {
+                processed_tokens: 4_946_000_000,
+                fresh_input_tokens: 2_000_000,
+                output_tokens: 14_000_000,
+                cache_read_tokens: 4_810_000_000,
+                cache_write_tokens: 120_000_000,
+            }
+        );
+    }
+
+    #[test]
+    fn codex_token_breakdown_does_not_double_count_cached_input() {
+        let summary = CostSummary {
+            input_tokens: 835_000_000,
+            output_tokens: 2_000_000,
+            cached_tokens: 808_000_000,
+            cache_read_tokens: 808_000_000,
+            ..CostSummary::default()
+        };
+
+        assert_eq!(
+            token_breakdown("codex", &summary),
+            LocalTokenBreakdown {
+                processed_tokens: 837_000_000,
+                fresh_input_tokens: 27_000_000,
+                output_tokens: 2_000_000,
+                cache_read_tokens: 808_000_000,
+                cache_write_tokens: 0,
+            }
         );
     }
 
@@ -560,11 +892,11 @@ mod tests {
     fn english_estimate_note_is_localized() {
         assert_eq!(
             localized_estimate_note("codex", Language::English),
-            "Estimated from local logs; may differ from your bill"
+            "API-equivalent estimate from local logs; not subscription spend"
         );
         assert_eq!(
             localized_estimate_note("claude", Language::English),
-            "Estimated from local Claude logs at API rates; token totals may differ from your bill"
+            "API-equivalent estimate from local Claude logs; not subscription spend"
         );
     }
 }
