@@ -134,6 +134,17 @@ describe("MenuCard", () => {
       usageBreakdown: [],
       localUsage: {
         todayCost: null,
+        lastSessionCost: null,
+        lastSessionTokens: 21_000,
+        sevenDayCost: 0.8,
+        sevenDayTokens: 420_000,
+        sevenDayTokenBreakdown: {
+          processedTokens: 420_000,
+          freshInputTokens: 20_000,
+          outputTokens: 40_000,
+          cacheReadTokens: 350_000,
+          cacheWriteTokens: 10_000,
+        },
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
         latestTokens: null,
@@ -297,16 +308,17 @@ describe("MenuCard", () => {
     });
   });
 
-  it("renders local token and cost totals after chart data loads", async () => {
+  it("renders factual local token totals without API-equivalent dollars", async () => {
     const { container } = renderCard(provider(null));
 
-    expect(await screen.findByText("30d cost")).toBeInTheDocument();
+    expect(await screen.findByText("Last 30 days")).toBeInTheDocument();
     expect(container.querySelector(".menu-card--with-details")).toBeInTheDocument();
     expect(container.querySelector(".menu-card--header-only")).not.toBeInTheDocument();
-    expect(screen.getAllByText("$1.23").length).toBeGreaterThan(0);
-    expect(screen.getByText("30d tokens")).toBeInTheDocument();
     expect(screen.getByText("584K")).toBeInTheDocument();
-    expect(screen.getByText("Estimated from local logs")).toBeInTheDocument();
+    expect(screen.getByText("420K")).toBeInTheDocument();
+    expect(screen.getByText("85.7%")).toBeInTheDocument();
+    expect(screen.getByText("Processed tokens from local logs, including cache traffic.")).toBeInTheDocument();
+    expect(screen.queryByText("$1.23")).not.toBeInTheDocument();
   });
 
   it("shows on-pace budgets and expands projection details", async () => {

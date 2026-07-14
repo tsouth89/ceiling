@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
 use crate::codex_costs::{
-    add_codex_records_to_summary, codex_period_start, codex_scan_dates,
-    scan_codex_file_cost_for_range,
+    add_codex_record_to_summary, add_codex_records_to_summary, codex_period_start,
+    codex_scan_dates, scan_codex_file_cost_for_range,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
@@ -31,6 +31,10 @@ pub struct CostSummary {
     pub output_tokens: u64,
     /// Total cached input tokens
     pub cached_tokens: u64,
+    /// Cached input tokens read by the provider.
+    pub cache_read_tokens: u64,
+    /// Input tokens written into a provider cache.
+    pub cache_write_tokens: u64,
     /// Number of sessions/conversations scanned
     pub sessions_count: u32,
     /// Cost breakdown by model
@@ -47,6 +51,20 @@ pub struct CostSummary {
     pub period_start: Option<NaiveDate>,
     /// Period end date
     pub period_end: Option<NaiveDate>,
+}
+
+/// Cost and token usage assembled from one pass over a provider's local logs.
+///
+/// This is intentionally richer than `get_daily_cost_history`: callers can
+/// render the chart and the period summary without rereading large transcript
+/// trees for each number.
+#[derive(Debug, Clone, Default)]
+pub struct CostUsageReport {
+    pub daily_costs: Vec<(String, f64)>,
+    pub today: CostSummary,
+    pub seven_days: CostSummary,
+    pub thirty_days: CostSummary,
+    pub latest_session: Option<CostSummary>,
 }
 
 /// Per-model token counts
@@ -87,6 +105,7 @@ const FALLBACK_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 struct ClaudePricing;
 
 impl ClaudePricing {
+    #[cfg(test)]
     fn cost_usd_with_cache_ttl(
         model: &str,
         input: u64,
@@ -95,6 +114,26 @@ impl ClaudePricing {
         cache_read: u64,
         output: u64,
     ) -> f64 {
+        Self::cost_usd_with_cache_ttl_on_date(
+            model,
+            input,
+            cache_create,
+            cache_create_1h,
+            cache_read,
+            output,
+            Utc::now().date_naive(),
+        )
+    }
+
+    fn cost_usd_with_cache_ttl_on_date(
+        model: &str,
+        input: u64,
+        cache_create: u64,
+        cache_create_1h: u64,
+        cache_read: u64,
+        output: u64,
+        usage_date: NaiveDate,
+    ) -> f64 {
         let cache_create_1h = cache_create_1h.min(cache_create);
         let cache_create_5m = cache_create.saturating_sub(cache_create_1h);
 
@@ -102,27 +141,34 @@ impl ClaudePricing {
         // including any long-context tiering, come from the canonical table.
         // Unknown/retired models fall back to Sonnet pricing.
         let clamp = |v: u64| v.min(i32::MAX as u64) as i32;
-        let base = CostUsagePricing::claude_cost_usd(
+        let base = CostUsagePricing::claude_cost_usd_on_date(
             model,
             clamp(input),
             clamp(cache_read),
             clamp(cache_create_5m),
             clamp(output),
+            usage_date,
         )
         .or_else(|| {
-            CostUsagePricing::claude_cost_usd(
+            CostUsagePricing::claude_cost_usd_on_date(
                 FALLBACK_CLAUDE_MODEL,
                 clamp(input),
                 clamp(cache_read),
                 clamp(cache_create_5m),
                 clamp(output),
+                usage_date,
             )
         })
         .unwrap_or(0.0);
 
         // Scanner-specific: one-hour cache writes bill at 2x the input rate.
-        let input_rate = CostUsagePricing::claude_input_cost_per_token(model)
-            .or_else(|| CostUsagePricing::claude_input_cost_per_token(FALLBACK_CLAUDE_MODEL))
+        let input_rate = CostUsagePricing::claude_input_cost_per_token_on_date(model, usage_date)
+            .or_else(|| {
+                CostUsagePricing::claude_input_cost_per_token_on_date(
+                    FALLBACK_CLAUDE_MODEL,
+                    usage_date,
+                )
+            })
             .unwrap_or(0.0);
 
         base + (cache_create_1h as f64) * input_rate * 2.0
@@ -475,18 +521,23 @@ fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageReco
     }
 
     let cache_create_1h = usage.one_hour_cache_creation_tokens(cache_create);
-    let cost = ClaudePricing::cost_usd_with_cache_ttl(
+    let timestamp = event.parsed_timestamp();
+    let usage_date = timestamp
+        .map(|recorded_at| recorded_at.date_naive())
+        .unwrap_or_else(|| Utc::now().date_naive());
+    let cost = ClaudePricing::cost_usd_with_cache_ttl_on_date(
         model,
         input,
         cache_create,
         cache_create_1h,
         cache_read,
         output,
+        usage_date,
     );
 
     Some(ClaudeUsageRecord {
         model: model.to_string(),
-        timestamp: event.parsed_timestamp(),
+        timestamp,
         dedup_key: claude_usage_dedup_key(message.id.as_deref(), event.request_id.as_deref()),
         input,
         output,
@@ -533,6 +584,8 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
     summary.input_tokens += record.input;
     summary.output_tokens += record.output;
     summary.cached_tokens += record.cache_create + record.cache_read;
+    summary.cache_read_tokens += record.cache_read;
+    summary.cache_write_tokens += record.cache_create;
     summary.total_cost_usd += record.cost;
 
     *summary.by_model.entry(record.model.clone()).or_insert(0.0) += record.cost;
@@ -575,6 +628,278 @@ pub fn has_cost_usage_sources() -> bool {
         .iter()
         .any(|dir| dir.exists())
         || scanner.get_claude_projects_dir().exists()
+}
+
+/// Build chart history and period summaries with one transcript pass.
+///
+/// Codex and Claude logs can grow into gigabytes. The older chart path read
+/// the same files once for the bars, again for the 30-day summary, and again
+/// for today's values. This report keeps those views consistent and makes the
+/// initial load bounded by a single scan.
+pub fn get_cost_usage_report(provider: &str, days: u32) -> Option<CostUsageReport> {
+    let days = days.max(1);
+    let scanner = CostScanner::new(days);
+    match provider {
+        "codex" => Some(scan_codex_report(&scanner, days)),
+        "claude" => Some(scan_claude_report(&scanner, days)),
+        _ => None,
+    }
+}
+
+fn empty_daily_summaries(days: u32) -> HashMap<String, CostSummary> {
+    let today = Local::now().date_naive();
+    (0..days)
+        .map(|days_ago| {
+            let date = today - Duration::days(days_ago as i64);
+            (date.format("%Y-%m-%d").to_string(), CostSummary::default())
+        })
+        .collect()
+}
+
+fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
+    target.total_cost_usd += source.total_cost_usd;
+    target.input_tokens += source.input_tokens;
+    target.output_tokens += source.output_tokens;
+    target.cached_tokens += source.cached_tokens;
+    target.cache_read_tokens += source.cache_read_tokens;
+    target.cache_write_tokens += source.cache_write_tokens;
+    target.sessions_count += source.sessions_count;
+    for (model, cost) in &source.by_model {
+        *target.by_model.entry(model.clone()).or_insert(0.0) += cost;
+    }
+    for (model, tokens) in &source.by_model_tokens {
+        let entry = target.by_model_tokens.entry(model.clone()).or_default();
+        entry.input_tokens += tokens.input_tokens;
+        entry.output_tokens += tokens.output_tokens;
+        entry.cached_tokens += tokens.cached_tokens;
+    }
+    for (speed, cost) in &source.by_speed {
+        *target.by_speed.entry(speed.clone()).or_insert(0.0) += cost;
+    }
+    for (speed, tokens) in &source.by_speed_tokens {
+        let entry = target.by_speed_tokens.entry(speed.clone()).or_default();
+        entry.input_tokens += tokens.input_tokens;
+        entry.output_tokens += tokens.output_tokens;
+        entry.cached_tokens += tokens.cached_tokens;
+    }
+    target
+        .unknown_models
+        .extend(source.unknown_models.iter().cloned());
+}
+
+fn finish_report(
+    mut daily: HashMap<String, CostSummary>,
+    days: u32,
+    latest_session: Option<CostSummary>,
+    sessions: (u32, u32, u32),
+    undated: Option<&CostSummary>,
+) -> CostUsageReport {
+    let today = Local::now().date_naive();
+    let seven_day_start = today - Duration::days(6);
+    let period_start = codex_period_start(today, days);
+    let mut today_summary = CostSummary::default();
+    let mut seven_day_summary = CostSummary::default();
+    let mut period_summary = CostSummary::default();
+
+    for (day, summary) in &daily {
+        let Some(date) = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok() else {
+            continue;
+        };
+        merge_summary(&mut period_summary, summary);
+        if date >= seven_day_start {
+            merge_summary(&mut seven_day_summary, summary);
+        }
+        if date == today {
+            merge_summary(&mut today_summary, summary);
+        }
+    }
+    if let Some(undated) = undated {
+        merge_summary(&mut period_summary, undated);
+    }
+
+    today_summary.sessions_count = sessions.0;
+    seven_day_summary.sessions_count = sessions.1;
+    period_summary.sessions_count = sessions.2;
+    for summary in [
+        &mut today_summary,
+        &mut seven_day_summary,
+        &mut period_summary,
+    ] {
+        summary.period_end = Some(today);
+    }
+    today_summary.period_start = Some(today);
+    seven_day_summary.period_start = Some(seven_day_start);
+    period_summary.period_start = Some(period_start);
+
+    let mut daily_costs: Vec<_> = daily
+        .drain()
+        .map(|(day, summary)| (day, summary.total_cost_usd))
+        .collect();
+    daily_costs.sort_by(|left, right| left.0.cmp(&right.0));
+
+    CostUsageReport {
+        daily_costs,
+        today: today_summary,
+        seven_days: seven_day_summary,
+        thirty_days: period_summary,
+        latest_session,
+    }
+}
+
+fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
+    let today = Local::now().date_naive();
+    let start = codex_period_start(today, days);
+    let seven_day_start = today - Duration::days(6);
+    let range = CostUsageDayRange::new(start, today);
+    let mut daily = empty_daily_summaries(days);
+    let mut latest: Option<(std::time::SystemTime, CostSummary)> = None;
+    let mut today_sessions = 0;
+    let mut seven_day_sessions = 0;
+    let mut period_sessions = 0;
+
+    for sessions_dir in scanner.get_codex_sessions_dirs() {
+        if !sessions_dir.exists() {
+            continue;
+        }
+        for scan_date in codex_scan_dates(&range) {
+            let day_dir = sessions_dir
+                .join(scan_date.format("%Y").to_string())
+                .join(scan_date.format("%m").to_string())
+                .join(scan_date.format("%d").to_string());
+            let Ok(entries) = fs::read_dir(day_dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .is_none_or(|extension| extension != "jsonl")
+                {
+                    continue;
+                }
+                let Ok(parsed) = JsonlScanner::parse_codex_file(&path, &range, 0, None, None)
+                else {
+                    continue;
+                };
+                let mut file_summary = CostSummary::default();
+                let mut contributed_today = false;
+                let mut contributed_seven_days = false;
+                for record in parsed.records.iter().filter(|record| {
+                    CostUsageDayRange::is_in_range(
+                        &record.day_key,
+                        &range.since_key,
+                        &range.until_key,
+                    )
+                }) {
+                    let Some(day_summary) = daily.get_mut(&record.day_key) else {
+                        continue;
+                    };
+                    if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
+                        day_summary.total_cost_usd += cost;
+                    }
+                    if let Some(cost) = add_codex_record_to_summary(&mut file_summary, record) {
+                        file_summary.total_cost_usd += cost;
+                    }
+                    if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
+                        contributed_today |= date == today;
+                        contributed_seven_days |= date >= seven_day_start;
+                    }
+                }
+                if file_summary.input_tokens == 0 && file_summary.output_tokens == 0 {
+                    continue;
+                }
+                file_summary.sessions_count = 1;
+                period_sessions += 1;
+                today_sessions += u32::from(contributed_today);
+                seven_day_sessions += u32::from(contributed_seven_days);
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                if latest.as_ref().is_none_or(|(seen, _)| modified > *seen) {
+                    latest = Some((modified, file_summary));
+                }
+            }
+        }
+    }
+
+    finish_report(
+        daily,
+        days,
+        latest.map(|(_, summary)| summary),
+        (today_sessions, seven_day_sessions, period_sessions),
+        None,
+    )
+}
+
+fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
+    let projects_dir = scanner.get_claude_projects_dir();
+    let mut daily = empty_daily_summaries(days);
+    if !projects_dir.exists() {
+        return finish_report(daily, days, None, (0, 0, 0), None);
+    }
+
+    let today = Local::now().date_naive();
+    let seven_day_start = today - Duration::days(6);
+    let cutoff = Utc::now() - Duration::days(days as i64);
+    let mut seen = HashSet::new();
+    let mut undated = CostSummary::default();
+    let mut latest: Option<(DateTime<Utc>, CostSummary)> = None;
+    let mut today_sessions = 0;
+    let mut seven_day_sessions = 0;
+    let mut period_sessions = 0;
+
+    let mut handle_file = |path: &Path| {
+        let mut file_summary = CostSummary::default();
+        let mut latest_recorded_at: Option<DateTime<Utc>> = None;
+        let mut contributed_today = false;
+        let mut contributed_seven_days = false;
+        let counted = for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
+            add_claude_record_to_summary(&mut file_summary, record);
+            if let Some(timestamp) = record.timestamp {
+                let date = timestamp.with_timezone(&Local).date_naive();
+                let day = date.format("%Y-%m-%d").to_string();
+                if let Some(day_summary) = daily.get_mut(&day) {
+                    add_claude_record_to_summary(day_summary, record);
+                }
+                contributed_today |= date == today;
+                contributed_seven_days |= date >= seven_day_start;
+                if latest_recorded_at.is_none_or(|seen_at| timestamp > seen_at) {
+                    latest_recorded_at = Some(timestamp);
+                }
+            } else {
+                add_claude_record_to_summary(&mut undated, record);
+            }
+        });
+        if counted == 0 {
+            return;
+        }
+        file_summary.sessions_count = 1;
+        period_sessions += 1;
+        today_sessions += u32::from(contributed_today);
+        seven_day_sessions += u32::from(contributed_seven_days);
+        let fallback_modified = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .map(DateTime::<Utc>::from)
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+        let recorded_at = latest_recorded_at.unwrap_or(fallback_modified);
+        if latest
+            .as_ref()
+            .is_none_or(|(seen_at, _)| recorded_at > *seen_at)
+        {
+            latest = Some((recorded_at, file_summary));
+        }
+    };
+    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+
+    finish_report(
+        daily,
+        days,
+        latest.map(|(_, summary)| summary),
+        (today_sessions, seven_day_sessions, period_sessions),
+        Some(&undated),
+    )
 }
 
 /// Get daily cost history for the last N days
@@ -699,12 +1024,33 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_sonnet_46_honors_200k_tier() {
-        // Delegating to the canonical table means the scanner now honors the
-        // 200k long-context tier: 200k @ $3/M + 40k @ $6/M = 0.60 + 0.24 = 0.84
-        // (the scanner's old inline table applied a flat $3/M = 0.72).
+    fn test_claude_sonnet_46_uses_standard_rate_across_full_context() {
         let cost = ClaudePricing::cost_usd_with_cache_ttl("claude-sonnet-4-6", 240_000, 0, 0, 0, 0);
-        assert!((cost - 0.84).abs() < 0.001);
+        assert!((cost - 0.72).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_claude_sonnet_5_pricing_is_date_aware() {
+        let promo = ClaudePricing::cost_usd_with_cache_ttl_on_date(
+            "claude-sonnet-5",
+            1_000_000,
+            0,
+            0,
+            0,
+            1_000_000,
+            NaiveDate::from_ymd_opt(2026, 8, 31).unwrap(),
+        );
+        let standard = ClaudePricing::cost_usd_with_cache_ttl_on_date(
+            "claude-sonnet-5",
+            1_000_000,
+            0,
+            0,
+            0,
+            1_000_000,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        );
+        assert!((promo - 12.0).abs() < 0.001);
+        assert!((standard - 18.0).abs() < 0.001);
     }
 
     #[test]
@@ -788,6 +1134,8 @@ mod tests {
         assert_eq!(summary.sessions_count, 1);
         assert_eq!(summary.input_tokens, 125);
         assert_eq!(summary.cached_tokens, 30);
+        assert_eq!(summary.cache_read_tokens, 30);
+        assert_eq!(summary.cache_write_tokens, 0);
         assert_eq!(summary.output_tokens, 15);
         assert_eq!(
             summary

@@ -57,7 +57,7 @@ describe("ChartsPanel", () => {
   it("shows an empty state when no provider reports chart data", () => {
     const { container, getByText } = render(
       <ChartsPanel
-        providers={[provider({ providerId: "cursor", displayName: "Cursor" })]}
+        providers={[provider({ providerId: "copilot", displayName: "Copilot" })]}
       />,
     );
     expect(getByText("No charts yet")).toBeTruthy();
@@ -70,13 +70,12 @@ describe("ChartsPanel", () => {
         providers={[
           provider({ providerId: "codex", displayName: "Codex" }),
           provider({ providerId: "claude", displayName: "Claude" }),
-          provider({ providerId: "cursor", displayName: "Cursor" }), // unsupported
+          provider({ providerId: "cursor", displayName: "Cursor" }),
         ]}
       />,
     );
     const tabs = getAllByRole("tab");
-    // Only the two supported providers get a chip.
-    expect(tabs).toHaveLength(2);
+    expect(tabs).toHaveLength(3);
     expect(getByTestId("charts-section").textContent).toBe("codex");
   });
 
@@ -99,7 +98,7 @@ describe("ChartsPanel", () => {
       <ChartsPanel
         providers={[
           provider({ providerId: "claude", displayName: "Claude" }),
-          provider({ providerId: "cursor", displayName: "Cursor" }),
+          provider({ providerId: "copilot", displayName: "Copilot" }),
         ]}
       />,
     );

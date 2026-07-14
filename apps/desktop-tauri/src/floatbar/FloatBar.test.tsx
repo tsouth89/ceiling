@@ -216,26 +216,19 @@ describe("FloatBar", () => {
     expect(titles[1]).toMatch(/Claude: 20% used/);
   });
 
-  it("loads local cost summaries without using the foreground chart endpoint", async () => {
+  it("does not render hypothetical local costs from the legacy setting", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("codex", "Codex", 75),
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
-    tauriMocks.getProviderLocalUsageSummary.mockResolvedValue({
-      todayCost: 1.25,
-      thirtyDayCost: 12.5,
-      thirtyDayTokens: 1000,
-      latestTokens: 200,
-      topModel: "gpt-5",
-      estimateNote: "Estimated from local logs",
-      tokenCostUpdatedAtMs: 1234,
-    });
 
-    renderFloatBar(bootstrap({ floatBarShowCost: true }));
+    const { container } = renderFloatBar(bootstrap({ floatBarShowCost: true }));
 
     await waitFor(() => {
-      expect(tauriMocks.getProviderLocalUsageSummary).toHaveBeenCalledWith("codex");
+      expect(tauriMocks.getCachedProviders).toHaveBeenCalled();
     });
+    expect(container.querySelector(".floatbar__cost-pill")).not.toBeInTheDocument();
+    expect(tauriMocks.getProviderLocalUsageSummary).not.toHaveBeenCalled();
     expect(tauriMocks.getProviderChartData).not.toHaveBeenCalled();
   });
 

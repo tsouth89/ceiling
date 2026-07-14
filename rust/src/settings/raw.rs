@@ -26,6 +26,8 @@ pub(super) struct RawSettings {
     sound_volume: u8,
     high_usage_threshold: f64,
     critical_usage_threshold: f64,
+    #[serde(default)]
+    notification_policy_version: Option<u8>,
     provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
     merge_tray_icons: bool,
     tray_icon_mode: TrayIconMode,
@@ -160,6 +162,7 @@ impl Default for RawSettings {
             sound_volume: s.sound_volume,
             high_usage_threshold: s.high_usage_threshold,
             critical_usage_threshold: s.critical_usage_threshold,
+            notification_policy_version: Some(s.notification_policy_version),
             provider_usage_thresholds: HashMap::new(),
             merge_tray_icons: s.merge_tray_icons,
             tray_icon_mode: s.tray_icon_mode,
@@ -438,6 +441,15 @@ impl From<RawSettings> for Settings {
                 .avoid_keychain_prompts = true;
         }
 
+        let notification_policy_version = raw.notification_policy_version.unwrap_or_default();
+        let high_usage_threshold = if notification_policy_version < NOTIFICATION_POLICY_VERSION
+            && (raw.high_usage_threshold - 70.0).abs() < f64::EPSILON
+        {
+            85.0
+        } else {
+            raw.high_usage_threshold
+        };
+
         Settings {
             enabled_providers: raw.enabled_providers,
             refresh_interval_secs: raw.refresh_interval_secs,
@@ -448,8 +460,9 @@ impl From<RawSettings> for Settings {
             capacity_event_notifications_enabled: raw.capacity_event_notifications_enabled,
             sound_enabled: raw.sound_enabled,
             sound_volume: raw.sound_volume,
-            high_usage_threshold: raw.high_usage_threshold,
+            high_usage_threshold,
             critical_usage_threshold: raw.critical_usage_threshold,
+            notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: normalize_usage_threshold_overrides(
                 raw.provider_usage_thresholds,
             ),

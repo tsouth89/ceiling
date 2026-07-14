@@ -72,7 +72,7 @@ Usage bars keep calm slate→cyan progression; warn/crit stay amber/red without 
 │ Promotional ░░░░░░░░░░   0%   12d    │
 │ 5-hour · Not currently enforced      │  ← inactive text row
 │──────────────────────────────────────│
-│ cost / charts (detail only)          │
+│ token history / limits (detail only) │
 └──────────────────────────────────────┘
 ```
 
@@ -132,6 +132,6 @@ provider readings before notifying.
 Light and dark, with at least one live Codex/Cursor account:
 
 1. Tray overview showing multiple windows + one inactive row.
-2. Tray provider detail with cost/charts if available.
+2. Tray provider detail with token history/limits if available.
 3. Capacity strip with a live pill and a stale/error/lifted pill.
 4. Settings / About showing Ceiling branding.

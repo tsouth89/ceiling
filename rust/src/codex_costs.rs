@@ -48,6 +48,19 @@ pub(crate) fn add_codex_records_to_summary(
     (total_cost, has_tokens)
 }
 
+/// Add one already-parsed Codex usage record to an aggregate.
+///
+/// The chart scanner uses this while building daily, weekly, and session
+/// buckets from a single JSONL pass. Keeping pricing here avoids duplicating
+/// the canonical Codex token semantics in the scanner.
+pub(crate) fn add_codex_record_to_summary(
+    summary: &mut CostSummary,
+    record: &CodexUsageRecord,
+) -> Option<f64> {
+    let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
+    add_codex_tokens_to_summary(summary, &record.model, tokens)
+}
+
 pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
     let parse_result = match JsonlScanner::parse_codex_file(path, range, 0, None, None) {
         Ok(result) => result,
@@ -111,6 +124,7 @@ fn add_codex_tokens_to_summary(
 
     summary.input_tokens += tokens.input;
     summary.cached_tokens += tokens.cached;
+    summary.cache_read_tokens += tokens.cached;
     summary.output_tokens += tokens.output;
     *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
 

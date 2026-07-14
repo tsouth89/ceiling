@@ -116,6 +116,12 @@ const MIN_TOAST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5
 const TOAST_BURST_WINDOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const MAX_TOASTS_PER_BURST_WINDOW: usize = 3;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToastPriority {
+    Normal,
+    Reset,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ThresholdAlertKey {
     provider: ProviderId,
@@ -204,12 +210,23 @@ impl NotificationManager {
     }
 
     /// Route confirmed reset events through the same startup gate and circuit
-    /// breaker used by threshold and session notifications.
+    /// breaker used by threshold notifications. Resets are the one event users
+    /// should never miss, so they may bypass the rolling cooldown while still
+    /// respecting the one-toast-per-refresh ceiling.
     pub fn notify_capacity_event(&mut self, title: &str, body: &str) -> bool {
-        self.emit_toast(title, body)
+        self.emit_toast_with_priority(title, body, ToastPriority::Reset)
     }
 
     fn emit_toast(&mut self, title: &str, body: &str) -> bool {
+        self.emit_toast_with_priority(title, body, ToastPriority::Normal)
+    }
+
+    fn emit_toast_with_priority(
+        &mut self,
+        title: &str,
+        body: &str,
+        priority: ToastPriority,
+    ) -> bool {
         if !self.notifications_armed {
             tracing::debug!(
                 "Suppressing toast while establishing startup baseline: {} — {}",
@@ -238,12 +255,13 @@ impl NotificationManager {
             let too_soon = self
                 .last_toast_at
                 .is_some_and(|sent_at| now.duration_since(sent_at) < MIN_TOAST_INTERVAL);
-            if self.toast_emitted_this_refresh
-                || too_soon
-                || self.recent_toasts.len() >= MAX_TOASTS_PER_BURST_WINDOW
-            {
+            let rolling_limit_reached = self.recent_toasts.len() >= MAX_TOASTS_PER_BURST_WINDOW;
+            let normal_rate_limited =
+                priority == ToastPriority::Normal && (too_soon || rolling_limit_reached);
+            if self.toast_emitted_this_refresh || normal_rate_limited {
                 tracing::warn!(
                     title,
+                    ?priority,
                     per_refresh_limit = self.toast_emitted_this_refresh,
                     minimum_interval_limit = too_soon,
                     rolling_count = self.recent_toasts.len(),
@@ -392,7 +410,7 @@ impl NotificationManager {
         used_percent: f64,
         settings: &Settings,
     ) {
-        if !settings.show_notifications {
+        if !settings.show_notifications || !matches!(window, "session" | "weekly") {
             return;
         }
 
@@ -403,15 +421,9 @@ impl NotificationManager {
             window: window.to_string(),
         };
 
-        // Session depletion/restoration is owned by `check_session_transition` so
-        // we do not double-toast Exhausted + SessionDepleted for the same crossing.
-        let notification_type = if window == "session" && used_percent >= 100.0 {
-            None
-        } else if used_percent >= 100.0 {
-            Some(NotificationType::Exhausted)
-        } else if used_percent >= thresholds.critical {
-            Some(NotificationType::CriticalUsage)
-        } else if used_percent >= thresholds.high {
+        // A window gets one calm warning per cycle. Crossing critical or
+        // exhausted later must not produce a second toast for the same limit.
+        let notification_type = if used_percent >= thresholds.high {
             Some(NotificationType::HighUsage)
         } else if used_percent < rearm_below {
             self.clear_window_alerts(provider, window);
@@ -425,14 +437,9 @@ impl NotificationManager {
         // Treat the first live value for every provider/window as its baseline.
         // A slow launch must not reinterpret already-high usage as a crossing.
         if self.observed_threshold_windows.insert(window_key.clone()) {
-            for kind in [
-                (used_percent >= thresholds.high).then_some(NotificationType::HighUsage),
-                (used_percent >= thresholds.critical).then_some(NotificationType::CriticalUsage),
-                (window != "session" && used_percent >= 100.0)
-                    .then_some(NotificationType::Exhausted),
-            ]
-            .into_iter()
-            .flatten()
+            for kind in [(used_percent >= thresholds.high).then_some(NotificationType::HighUsage)]
+                .into_iter()
+                .flatten()
             {
                 self.sent_notifications.insert(ThresholdAlertKey {
                     provider,
@@ -995,14 +1002,14 @@ mod tests {
         let settings = Settings::default();
 
         manager.check_and_notify(ProviderId::Cursor, "session", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 80.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, "session", 86.0, &settings);
         manager.check_and_notify(ProviderId::Cursor, "weekly", 20.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 82.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
 
         // Simulate many refreshes with the same split (high session, quiet weekly).
         for _ in 0..10 {
-            manager.check_and_notify(ProviderId::Cursor, "session", 82.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, "session", 87.0, &settings);
             manager.check_and_notify(ProviderId::Cursor, "weekly", 25.0, &settings);
         }
         assert_eq!(
@@ -1018,13 +1025,13 @@ mod tests {
 
         manager.check_and_notify(ProviderId::Claude, "session", 40.0, &settings);
         manager.check_and_notify(ProviderId::Claude, "weekly", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "session", 75.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, "session", 86.0, &settings);
         manager.check_and_notify(ProviderId::Claude, "weekly", 92.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "session", 76.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, "session", 87.0, &settings);
         manager.check_and_notify(ProviderId::Claude, "weekly", 93.0, &settings);
         assert_eq!(manager.toasts_shown, 2);
 
-        manager.check_and_notify(ProviderId::Claude, "session", 76.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, "session", 87.0, &settings);
         manager.check_and_notify(ProviderId::Claude, "weekly", 93.0, &settings);
         assert_eq!(manager.toasts_shown, 2);
     }
@@ -1035,19 +1042,19 @@ mod tests {
         let settings = Settings::default();
 
         manager.check_and_notify(ProviderId::Codex, "session", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 81.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
 
         // Still near the high threshold — do not re-arm.
-        manager.check_and_notify(ProviderId::Codex, "session", 68.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 83.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 86.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
 
         // Drop clearly below high-hysteresis, then climb again.
-        manager.check_and_notify(ProviderId::Codex, "session", 60.0, &settings);
         manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 81.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 2);
     }
 
@@ -1084,8 +1091,8 @@ mod tests {
         assert_eq!(manager.toasts_shown, 0);
 
         manager.check_and_notify(ProviderId::Cursor, "session", 60.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 80.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 81.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
     }
 
@@ -1145,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_circuit_breaker_drops_bursts_without_replay() {
+    fn reset_notifications_bypass_cooldown_but_not_per_refresh_limit() {
         let mut manager = NotificationManager::new_armed();
 
         manager.begin_refresh_cycle();
@@ -1153,10 +1160,38 @@ mod tests {
         assert!(!manager.notify_capacity_event("Second", "Same refresh"));
         assert_eq!(manager.toasts_shown, 1);
 
-        // A new refresh resets the per-refresh budget, but the process-wide
-        // minimum interval still suppresses immediate follow-on alerts.
+        // A confirmed reset in a later refresh is more important than the
+        // general cooldown and must remain dependable.
         manager.begin_refresh_cycle();
-        assert!(!manager.notify_capacity_event("Third", "Next refresh"));
+        assert!(manager.notify_capacity_event("Third", "Next refresh"));
+        assert_eq!(manager.toasts_shown, 2);
+    }
+
+    #[test]
+    fn monthly_and_unknown_windows_never_raise_usage_toasts() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings::default();
+
+        for window in ["monthly", "primary"] {
+            manager.check_and_notify(ProviderId::Cursor, window, 40.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, window, 100.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, window, 100.0, &settings);
+        }
+
+        assert_eq!(manager.toasts_shown, 0);
+    }
+
+    #[test]
+    fn critical_and_exhausted_usage_do_not_add_more_toasts() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings::default();
+
+        manager.check_and_notify(ProviderId::Codex, "weekly", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "weekly", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "weekly", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "weekly", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, "weekly", 100.0, &settings);
+
         assert_eq!(manager.toasts_shown, 1);
     }
 }

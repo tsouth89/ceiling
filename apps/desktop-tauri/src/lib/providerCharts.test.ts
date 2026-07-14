@@ -6,10 +6,10 @@ describe("providerSupportsChartData", () => {
     expect(providerSupportsChartData("codex")).toBe(true);
     expect(providerSupportsChartData("claude")).toBe(true);
     expect(providerSupportsChartData("openai")).toBe(true);
+    expect(providerSupportsChartData("cursor")).toBe(true);
     expect(providerSupportsChartData("OpenAI")).toBe(true);
 
     expect(providerSupportsChartData("copilot")).toBe(false);
-    expect(providerSupportsChartData("cursor")).toBe(false);
     expect(providerSupportsChartData("deepseek")).toBe(false);
   });
 });

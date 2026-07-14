@@ -8,8 +8,12 @@ fn test_settings_default() {
     assert_eq!(settings.refresh_interval_secs, 300);
     assert!(settings.show_notifications);
     assert!(settings.capacity_event_notifications_enabled);
-    assert_eq!(settings.high_usage_threshold, 70.0);
+    assert_eq!(settings.high_usage_threshold, 85.0);
     assert_eq!(settings.critical_usage_threshold, 90.0);
+    assert_eq!(
+        settings.notification_policy_version,
+        NOTIFICATION_POLICY_VERSION
+    );
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
     assert!(!settings.float_bar_show_cost);
@@ -28,6 +32,39 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
     assert!(!loaded.show_reset_when_exhausted);
     assert!(!loaded.predictive_pace_warning_enabled);
     assert!(loaded.capacity_event_notifications_enabled);
+}
+
+#[test]
+fn legacy_default_warning_threshold_migrates_to_85_percent() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{
+            "high_usage_threshold": 70.0,
+            "critical_usage_threshold": 90.0
+        }"#,
+    )
+    .expect("parse pre-policy settings");
+
+    assert_eq!(loaded.high_usage_threshold, 85.0);
+    assert_eq!(
+        loaded.notification_policy_version,
+        NOTIFICATION_POLICY_VERSION
+    );
+}
+
+#[test]
+fn notification_threshold_migration_preserves_custom_and_current_values() {
+    let custom: Settings = serde_json::from_str(r#"{"high_usage_threshold": 75.0}"#)
+        .expect("parse custom legacy threshold");
+    assert_eq!(custom.high_usage_threshold, 75.0);
+
+    let current: Settings = serde_json::from_str(
+        r#"{
+            "high_usage_threshold": 70.0,
+            "notification_policy_version": 1
+        }"#,
+    )
+    .expect("parse current policy threshold");
+    assert_eq!(current.high_usage_threshold, 70.0);
 }
 
 #[test]
@@ -58,7 +95,7 @@ fn usage_thresholds_inherit_from_window_provider_and_global_levels() {
     assert_eq!(
         settings.usage_thresholds(ProviderId::Claude, "session"),
         UsageThresholds {
-            high: 70.0,
+            high: 85.0,
             critical: 90.0,
         }
     );

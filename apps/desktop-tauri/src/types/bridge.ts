@@ -234,7 +234,7 @@ export interface SettingsSnapshot {
   autoDownloadUpdates: boolean;
   installUpdatesOnQuit: boolean;
   globalShortcut: string;
-  /** Extra Codex home or sessions directories scanned for local cost estimates. */
+  /** Extra Codex home or sessions directories scanned for local usage history. */
   codexCustomSessionsDirs: string[];
   agentSessionsEnabled?: boolean;
   agentSessionSshHosts?: string[];
@@ -264,7 +264,7 @@ export interface SettingsSnapshot {
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
-  /** When true, scan and render local cost summaries. */
+  /** Legacy compatibility field; API-equivalent cost pills are no longer rendered. */
   floatBarShowCost: boolean;
 }
 
@@ -578,12 +578,27 @@ export interface DailyUsageBreakdown {
 
 export interface ProviderLocalUsageSummary {
   todayCost: number | null;
+  lastSessionCost: number | null;
+  lastSessionTokens: number | null;
+  lastSessionTokenBreakdown?: LocalTokenBreakdown | null;
+  sevenDayCost: number | null;
+  sevenDayTokens: number | null;
+  sevenDayTokenBreakdown?: LocalTokenBreakdown | null;
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
+  thirtyDayTokenBreakdown?: LocalTokenBreakdown | null;
   latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+}
+
+export interface LocalTokenBreakdown {
+  processedTokens: number;
+  freshInputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 export interface ProviderChartData {
@@ -592,6 +607,18 @@ export interface ProviderChartData {
   creditsHistory: DailyCostPoint[];
   usageBreakdown: DailyUsageBreakdown[];
   localUsage: ProviderLocalUsageSummary | null;
+  quotaHistory: UsageHistoryPoint[];
+}
+
+export interface UsageHistoryWindow {
+  id: string;
+  label: string;
+  usedPercent: number;
+}
+
+export interface UsageHistoryPoint {
+  recordedAt: string;
+  windows: UsageHistoryWindow[];
 }
 
 // ── Token account types ──────────────────────────────────────────────

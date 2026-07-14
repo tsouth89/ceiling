@@ -866,6 +866,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
             total_credits_used: 13.5,
         }],
         local_usage: None,
+        quota_history: Vec::new(),
     };
 
     let json = serde_json::to_string(&original).expect("serialize");
@@ -877,6 +878,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert!(json.contains("\"creditsHistory\""));
     assert!(json.contains("\"usageBreakdown\""));
     assert!(json.contains("\"localUsage\":null"));
+    assert!(json.contains("\"quotaHistory\":[]"));
     assert!(json.contains("\"creditsUsed\":10.0"));
     assert!(json.contains("\"totalCreditsUsed\":13.5"));
 

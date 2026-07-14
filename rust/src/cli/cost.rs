@@ -146,6 +146,13 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
                 format_number(result.summary.output_tokens),
                 format_number(result.summary.cached_tokens)
             );
+            if result.summary.cache_read_tokens > 0 || result.summary.cache_write_tokens > 0 {
+                println!(
+                    "  Cache:    {} read, {} written",
+                    format_number(result.summary.cache_read_tokens),
+                    format_number(result.summary.cache_write_tokens)
+                );
+            }
 
             // Sessions
             println!("  Sessions: {}", result.summary.sessions_count);
@@ -205,7 +212,9 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     "tokens": {
                         "input": r.summary.input_tokens,
                         "output": r.summary.output_tokens,
-                        "cached": r.summary.cached_tokens
+                        "cached": r.summary.cached_tokens,
+                        "cache_read": r.summary.cache_read_tokens,
+                        "cache_write": r.summary.cache_write_tokens
                     },
                     "sessions_count": r.summary.sessions_count,
                     "by_model": r.summary.by_model,

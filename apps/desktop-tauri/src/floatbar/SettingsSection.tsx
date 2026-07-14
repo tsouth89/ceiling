@@ -135,17 +135,6 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           />
         </Field>
         <Field
-          label={t("FloatBarShowCost")}
-          description={t("FloatBarShowCostDescription")}
-          leading
-        >
-          <Toggle
-            checked={settings.floatBarShowCost}
-            disabled={saving || !settings.floatBarEnabled}
-            onChange={(v) => set({ floatBarShowCost: v })}
-          />
-        </Field>
-        <Field
           label="Show Reset Time Inline"
           description="Shows countdown beside each percentage. Depleted providers always show reset when known."
           leading

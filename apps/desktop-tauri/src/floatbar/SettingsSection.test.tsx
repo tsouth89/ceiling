@@ -20,11 +20,11 @@ const settings = {
 } as unknown as SettingsSnapshot;
 
 describe("FloatBar settings", () => {
-  it("renders one cost toggle", () => {
+  it("does not offer the legacy API-equivalent cost toggle", () => {
     render(
       <FloatBarSettingsSection settings={settings} saving={false} set={vi.fn()} />,
     );
 
-    expect(screen.getAllByText("FloatBarShowCost")).toHaveLength(1);
+    expect(screen.queryByText("FloatBarShowCost")).not.toBeInTheDocument();
   });
 });
