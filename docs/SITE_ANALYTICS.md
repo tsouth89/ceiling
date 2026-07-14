@@ -36,7 +36,9 @@ Set these Worker variables in the Cloudflare dashboard, or add non-secret values
 | `POSTHOG_CAPTURE_HOST` | Optional. Defaults to `https://us.i.posthog.com`. |
 | `GITHUB_REPO` | Optional. Defaults to `tsouth89/ceiling`. |
 
-Use a separate PostHog project for Ceiling. `POSTHOG_PUBLIC_KEY` is that project's `phc_...` project key. `POSTHOG_QUERY_KEY` is a personal `phx_...` API key with Query Read access to the project.
+Production currently uses the shared SouthForge PostHog project (`493711`) with a pinned [Ceiling dashboard](https://us.posthog.com/project/493711/dashboard/1846024). Ceiling events and queries are isolated with `$host = 'ceiling.win'` and `source = 'ceiling.win'`; Toolport events remain separate. `POSTHOG_PUBLIC_KEY` is the project's `phc_...` capture key. `POSTHOG_QUERY_KEY` is a personal `phx_...` API key with Query Read access to the project.
+
+The public key, project ID, and a generated analytics salt are configured as Cloudflare Worker secrets. The PostHog MCP OAuth connection cannot create or reveal personal API keys, so `POSTHOG_QUERY_KEY` must be created from [PostHog user API key settings](https://us.posthog.com/settings/user-api-keys) and entered directly with `wrangler secret put`; do not paste it into an issue or commit it.
 
 For `GITHUB_TOKEN`, use a fine-grained token limited to the Ceiling repository with **Administration: Read** permission. GitHub's public API does not need this token for release counts, but the protected Traffic API does.
 
