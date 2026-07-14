@@ -2,6 +2,7 @@ const REPO = "tsouth89/ceiling";
 const CACHE_SECONDS = 300;
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 const SESSION_MESSAGE = "ceiling-admin-session-v1";
+const VISITOR_ID_ROTATION_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_EVENTS = new Set(["$pageview", "download_clicked", "github_clicked"]);
 
 export default {
@@ -108,7 +109,7 @@ async function createSession(request, env) {
   );
 }
 
-async function hasAdminSession(request, env) {
+export async function hasAdminSession(request, env, nowSeconds = Math.floor(Date.now() / 1000)) {
   if (!env.ADMIN_TOKEN) return false;
   const cookie = request.headers.get("Cookie") || "";
   const actual = cookie
@@ -117,7 +118,13 @@ async function hasAdminSession(request, env) {
     .find((part) => part.startsWith("ceiling_admin="))
     ?.slice("ceiling_admin=".length);
   if (!actual) return false;
-  return secureEqual(actual, await sessionValue(env.ADMIN_TOKEN));
+  const separator = actual.indexOf(".");
+  if (separator <= 0 || separator !== actual.lastIndexOf(".")) return false;
+  const expiresText = actual.slice(0, separator);
+  if (!/^\d+$/.test(expiresText)) return false;
+  const expiresAt = Number(expiresText);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= nowSeconds) return false;
+  return secureEqual(actual, await sessionValue(env.ADMIN_TOKEN, expiresAt));
 }
 
 async function metricsResponse(env, ctx, forceRefresh) {
@@ -160,7 +167,7 @@ async function getGitHubMetrics(env) {
         name: repository.full_name,
         stars: numberValue(repository.stargazers_count),
         forks: numberValue(repository.forks_count),
-        openIssues: numberValue(repository.open_issues_count),
+        openIssuesAndPullRequests: numberValue(repository.open_issues_count),
         subscribers: numberValue(repository.subscribers_count),
       },
       downloads,
@@ -408,18 +415,21 @@ function safeReferrer(value, ownOrigin) {
   }
 }
 
-async function anonymousVisitorId(request, salt) {
+export async function anonymousVisitorId(request, salt, nowMs = Date.now()) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const agent = request.headers.get("User-Agent") || "unknown";
-  return sha256Hex(`${salt}|${ip}|${agent}`);
+  const rotationPeriod = Math.floor(nowMs / VISITOR_ID_ROTATION_MS);
+  return sha256Hex(`${salt}|${rotationPeriod}|${ip}|${agent}`);
 }
 
-async function sessionValue(token) {
-  return hmacHex(token, SESSION_MESSAGE);
+async function sessionValue(token, expiresAt) {
+  const signature = await hmacHex(token, `${SESSION_MESSAGE}:${expiresAt}`);
+  return `${expiresAt}.${signature}`;
 }
 
-async function sessionCookie(token) {
-  return `ceiling_admin=${await sessionValue(token)}; Path=/admin; Max-Age=${SESSION_MAX_AGE}; HttpOnly; Secure; SameSite=Strict`;
+export async function sessionCookie(token, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const expiresAt = nowSeconds + SESSION_MAX_AGE;
+  return `ceiling_admin=${await sessionValue(token, expiresAt)}; Path=/admin; Max-Age=${SESSION_MAX_AGE}; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function expiredSessionCookie() {

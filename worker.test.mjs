@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import worker, { aggregateReleases, safePath } from "./worker.mjs";
+import worker, {
+  aggregateReleases,
+  anonymousVisitorId,
+  hasAdminSession,
+  safePath,
+  sessionCookie,
+} from "./worker.mjs";
 
 test("aggregateReleases counts executable downloads without checksum assets", () => {
   const result = aggregateReleases([
@@ -28,6 +34,30 @@ test("safePath accepts local paths and rejects untrusted values", () => {
   assert.equal(safePath("/download?from=hero"), "/download?from=hero");
   assert.equal(safePath("https://example.com"), "/");
   assert.equal(safePath(null), "/");
+});
+
+test("visitor identifiers are pseudonymous and rotate every 30 days", async () => {
+  const request = new Request("https://ceiling.win", {
+    headers: { "CF-Connecting-IP": "192.0.2.10", "User-Agent": "Ceiling test" },
+  });
+  const first = await anonymousVisitorId(request, "test-salt", 0);
+  const samePeriod = await anonymousVisitorId(request, "test-salt", 29 * 24 * 60 * 60 * 1000);
+  const nextPeriod = await anonymousVisitorId(request, "test-salt", 30 * 24 * 60 * 60 * 1000);
+
+  assert.equal(first, samePeriod);
+  assert.notEqual(first, nextPeriod);
+});
+
+test("admin session signatures enforce their server-side expiry", async () => {
+  const issuedAt = 1_000_000;
+  const setCookie = await sessionCookie("test-admin-token", issuedAt);
+  const cookie = setCookie.split(";")[0];
+  const request = new Request("https://ceiling.win/admin", { headers: { Cookie: cookie } });
+  const expiresAt = Number(cookie.split("=")[1].split(".")[0]);
+
+  assert.equal(await hasAdminSession(request, { ADMIN_TOKEN: "test-admin-token" }, expiresAt - 1), true);
+  assert.equal(await hasAdminSession(request, { ADMIN_TOKEN: "test-admin-token" }, expiresAt), false);
+  assert.equal(await hasAdminSession(request, { ADMIN_TOKEN: "different-token" }, expiresAt - 1), false);
 });
 
 test("admin routes fail closed and accept a valid token", async () => {

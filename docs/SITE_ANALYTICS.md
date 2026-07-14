@@ -6,14 +6,14 @@ Ceiling's Cloudflare Worker serves the static site, records a small set of first
 
 - Website visitors, pageviews, download clicks, paths, and referrers for the trailing 30 days through PostHog.
 - Cumulative GitHub release asset downloads, split between installer and portable builds.
-- Repository stars, forks, and open issues.
+- Repository stars, forks, and open issues plus pull requests.
 - GitHub repository visitors, clones, referrers, and popular paths for GitHub's trailing 14-day window.
 
 GitHub release downloads are download events, not unique users. GitHub does not expose historical repository traffic beyond its rolling 14-day window.
 
 ## Privacy
 
-The landing page does not load a third-party analytics script or set analytics cookies. It sends pageview and link-click events to Ceiling's own Worker. The Worker creates an anonymous visitor identifier by hashing the request IP, user agent, and a private salt before sending the event to PostHog. Raw IP addresses and user agents are not included in the analytics event.
+The landing page does not load a third-party analytics script or set analytics cookies. It sends pageview and link-click events to Ceiling's own Worker. The Worker creates a pseudonymous visitor identifier by hashing the request IP, user agent, a private salt, and a 30-day rotation period before sending the event to PostHog. The identifier changes every 30 days; raw IP addresses and user agents are not included in the analytics event. Counts that span a rotation boundary may count the same visitor twice.
 
 ## Cloudflare configuration
 
@@ -24,6 +24,7 @@ npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put ANALYTICS_SALT
 npx wrangler secret put POSTHOG_PUBLIC_KEY
 npx wrangler secret put POSTHOG_QUERY_KEY
+npx wrangler secret put POSTHOG_PROJECT_ID
 npx wrangler secret put GITHUB_TOKEN
 ```
 
@@ -31,14 +32,13 @@ Set these Worker variables in the Cloudflare dashboard, or add non-secret values
 
 | Variable | Purpose |
 | --- | --- |
-| `POSTHOG_PROJECT_ID` | Numeric ID of the Ceiling PostHog project. |
 | `POSTHOG_QUERY_HOST` | Optional. Defaults to `https://us.posthog.com`. |
 | `POSTHOG_CAPTURE_HOST` | Optional. Defaults to `https://us.i.posthog.com`. |
 | `GITHUB_REPO` | Optional. Defaults to `tsouth89/ceiling`. |
 
 Production currently uses the shared SouthForge PostHog project (`493711`) with a pinned [Ceiling dashboard](https://us.posthog.com/project/493711/dashboard/1846024). Ceiling events and queries are isolated with `$host = 'ceiling.win'` and `source = 'ceiling.win'`; Toolport events remain separate. `POSTHOG_PUBLIC_KEY` is the project's `phc_...` capture key. `POSTHOG_QUERY_KEY` is a personal `phx_...` API key with Query Read access to the project.
 
-The public key, project ID, and a generated analytics salt are configured as Cloudflare Worker secrets. The PostHog MCP OAuth connection cannot create or reveal personal API keys, so `POSTHOG_QUERY_KEY` must be created from [PostHog user API key settings](https://us.posthog.com/settings/user-api-keys) and entered directly with `wrangler secret put`; do not paste it into an issue or commit it.
+The public key, numeric project ID, and a generated analytics salt are configured as Cloudflare Worker secrets. The PostHog MCP OAuth connection cannot create or reveal personal API keys, so `POSTHOG_QUERY_KEY` must be created from [PostHog user API key settings](https://us.posthog.com/settings/user-api-keys) and entered directly with `wrangler secret put`; do not paste it into an issue or commit it.
 
 For `GITHUB_TOKEN`, use a fine-grained token limited to the Ceiling repository with **Administration: Read** permission. GitHub's public API does not need this token for release counts, but the protected Traffic API does.
 

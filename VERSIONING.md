@@ -1,6 +1,6 @@
 # Ceiling versioning
 
-Ceiling uses [Semantic Versioning 2.0.0](https://semver.org/) and publishes immutable `vX.Y.Z` tags from protected `main`.
+Ceiling uses [Semantic Versioning 2.0.0](https://semver.org/) and publishes `vX.Y.Z` release tags from protected `main`.
 
 ## Choosing a version
 
