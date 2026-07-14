@@ -44,6 +44,8 @@ For `GITHUB_TOKEN`, use a fine-grained token limited to the Ceiling repository w
 
 Generate long random values for `ADMIN_TOKEN` and `ANALYTICS_SALT`; do not commit either value. If PostHog is not configured, GitHub release and repository totals still work and the dashboard shows a setup note in place of website traffic. If the GitHub token is absent, public repository and download totals still work while the 14-day traffic panel remains disabled.
 
+Cloudflare pull-request previews do not receive production secrets, so the shared `wrangler.jsonc` cannot declare them as required without breaking every preview build. After a production deployment, verify the active Worker version still lists all six secret names and that `/admin` returns the protected login page before treating the deployment as healthy.
+
 ## Local validation
 
 Create a `.dev.vars` file that is excluded from git:
