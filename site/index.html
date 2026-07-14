@@ -3,41 +3,42 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Ceiling — AI usage, without the noise.</title>
+    <title>Ceiling — Stay below the ceiling.</title>
     <meta
       name="description"
-      content="Ceiling keeps Codex, Claude, Cursor, Gemini, and Copilot usage visible from one quiet Windows app."
+      content="Ceiling keeps your AI usage visible in one quiet, local-first Windows app."
     />
-    <meta name="theme-color" content="#020302" />
+    <meta name="theme-color" content="#050607" />
     <link rel="canonical" href="https://ceiling.win/" />
     <link rel="icon" href="/favicon.png" type="image/png" />
 
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Ceiling — AI usage, without the noise." />
+    <meta property="og:title" content="Ceiling — Stay below the ceiling." />
     <meta
       property="og:description"
-      content="Codex, Claude, Cursor, Gemini, and Copilot usage in one quiet Windows app."
+      content="AI usage in one quiet, local-first Windows app."
     />
     <meta property="og:url" content="https://ceiling.win/" />
     <meta property="og:image" content="https://ceiling.win/ceiling-ui.png" />
     <meta property="og:image:width" content="659" />
     <meta property="og:image:height" content="821" />
-    <meta property="og:image:alt" content="Ceiling's capacity strip and usage overview on Windows" />
+    <meta property="og:image:alt" content="Ceiling's floating capacity bar and usage overview" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Ceiling — AI usage, without the noise." />
-    <meta
-      name="twitter:description"
-      content="Codex, Claude, Cursor, Gemini, and Copilot usage in one quiet Windows app."
-    />
+    <meta name="twitter:title" content="Ceiling — Stay below the ceiling." />
+    <meta name="twitter:description" content="AI usage in one quiet Windows app." />
     <meta name="twitter:image" content="https://ceiling.win/ceiling-ui.png" />
 
     <style>
       :root {
         color-scheme: dark;
-        --black: #020302;
-        --white: #eceeea;
-        --muted: #777b76;
-        --line: #20221f;
+        --black: #050607;
+        --panel: #111315;
+        --white: #e9ebe8;
+        --muted: #858987;
+        --edge: rgba(236, 239, 235, 0.3);
+        --edge-soft: rgba(255, 255, 255, 0.08);
+        font-family: "Helvetica Neue", "Arial Nova", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+        font-synthesis: none;
       }
 
       * {
@@ -47,202 +48,293 @@
       html,
       body {
         margin: 0;
+        min-height: 100%;
         background: var(--black);
         color: var(--white);
-        -webkit-font-smoothing: antialiased;
       }
 
       body {
         min-height: 100svh;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
 
       a {
         color: inherit;
       }
 
-      .shell {
-        width: min(1040px, calc(100% - 44px));
+      .page {
+        width: min(1440px, 100%);
+        min-height: 100svh;
         margin: 0 auto;
+        padding-inline: clamp(20px, 3vw, 36px);
       }
 
-      header {
-        height: 64px;
+      .topbar {
+        height: 78px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+      }
+
+      .brand,
+      .github {
+        display: inline-flex;
+        align-items: center;
+        color: #d7dad6;
+        font-size: 15px;
+        font-weight: 450;
+        letter-spacing: -0.015em;
+        text-decoration: none;
       }
 
       .brand {
-        display: inline-flex;
-        align-items: center;
-        gap: 9px;
-        font-size: 16px;
-        font-weight: 600;
-        text-decoration: none;
+        gap: 10px;
       }
 
       .brand img {
-        width: 22px;
-        height: 22px;
-        border-radius: 5px;
+        width: 25px;
+        height: 25px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
       }
 
       .github {
-        color: var(--muted);
+        color: #8d918e;
         font-size: 13px;
-        text-decoration: none;
+        letter-spacing: 0;
+        transition: color 150ms ease;
       }
 
       .github:hover {
         color: var(--white);
       }
 
-      main {
-        min-height: calc(100svh - 64px);
+      .hero {
         display: flex;
         align-items: center;
         flex-direction: column;
-        padding-top: clamp(18px, 4svh, 44px);
+        padding-top: clamp(10px, 3svh, 30px);
         text-align: center;
       }
 
       h1 {
         margin: 0;
-        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
-        font-size: clamp(25px, 3vw, 34px);
+        color: #a9adaa;
+        font-size: clamp(16px, 1.35vw, 19px);
         font-weight: 400;
-        line-height: 1.25;
-        letter-spacing: -0.025em;
-      }
-
-      .actions {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 17px;
-        margin-top: 18px;
-        font-family: Arial, Helvetica, sans-serif;
+        line-height: 1.3;
+        letter-spacing: -0.018em;
       }
 
       .download {
-        min-height: 39px;
+        min-height: 48px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 0 15px;
-        border: 1px solid #dfe2dc;
-        border-radius: 6px;
-        background: #dfe2dc;
-        color: #080908;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.01em;
+        gap: 11px;
+        margin-top: 24px;
+        padding: 0 20px;
+        border: 1px solid rgba(222, 226, 222, 0.28);
+        border-radius: 7px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+        color: #f0f2ef;
+        font-size: 15px;
+        font-weight: 450;
+        letter-spacing: -0.012em;
         text-decoration: none;
+        transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
       }
 
       .download:hover {
-        background: transparent;
-        color: var(--white);
+        border-color: rgba(240, 243, 239, 0.52);
+        background: rgba(255, 255, 255, 0.055);
+        transform: translateY(-1px);
+      }
+
+      .windows-mark {
+        width: 18px;
+        height: 18px;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        grid-template-rows: repeat(2, 1fr);
+        gap: 1.5px;
+        transform: perspective(20px) rotateY(-6deg);
+      }
+
+      .windows-mark span {
+        display: block;
+        background: currentColor;
       }
 
       .release {
+        margin-top: 14px;
         color: var(--muted);
         font-size: 12px;
-        text-underline-offset: 4px;
-        text-decoration-color: #3d403c;
+        font-weight: 400;
+        letter-spacing: -0.005em;
+        text-decoration: none;
+        transition: color 150ms ease;
       }
 
       .release:hover {
-        color: var(--white);
+        color: #aaaeaa;
       }
 
       .product {
-        height: min(821px, calc(100svh - 196px));
-        margin-top: 22px;
-      }
-
-      .product img {
-        width: auto;
-        max-width: 100%;
-        height: 100%;
-        display: block;
-        object-fit: contain;
-        -webkit-mask-image: radial-gradient(ellipse 98% 98% at center, #000 76%, transparent 100%);
-        mask-image: radial-gradient(ellipse 98% 98% at center, #000 76%, transparent 100%);
-      }
-
-      footer {
-        min-height: 70px;
+        width: 100%;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 20px;
-        border-top: 1px solid var(--line);
-        color: #565a55;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: 11px;
+        flex-direction: column;
+        margin-top: 27px;
       }
 
-      .footer-links {
-        display: flex;
-        gap: 16px;
+      .floatbar {
+        width: min(540px, 86vw);
+        overflow: hidden;
+        border-radius: 999px;
+        filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.55));
       }
 
-      .footer-links a {
-        color: #656963;
-        text-decoration: none;
+      .floatbar img {
+        width: 100%;
+        height: auto;
+        display: block;
       }
 
-      .footer-links a:hover {
-        color: var(--white);
+      .dashboard-frame {
+        width: min(525px, 92vw);
+        margin-top: 24px;
+        padding: 7px;
+        border: 1px solid var(--edge);
+        border-radius: 24px;
+        background:
+          linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.018) 28%, rgba(255, 255, 255, 0.04) 100%),
+          var(--panel);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.11),
+          inset 0 -1px 0 rgba(0, 0, 0, 0.65),
+          0 28px 70px rgba(0, 0, 0, 0.62),
+          0 3px 10px rgba(0, 0, 0, 0.7);
+      }
+
+      .dashboard-inner {
+        overflow: hidden;
+        border: 1px solid var(--edge-soft);
+        border-radius: 17px;
+        background: #1b1f23;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      }
+
+      .dashboard-inner img {
+        width: 100%;
+        height: auto;
+        display: block;
       }
 
       :focus-visible {
-        outline: 2px solid var(--white);
-        outline-offset: 4px;
-        border-radius: 3px;
+        outline: 2px solid #dce0dc;
+        outline-offset: 5px;
+        border-radius: 5px;
       }
 
-      @media (max-width: 560px) {
-        .shell {
-          width: min(100% - 24px, 1040px);
+      @media (max-height: 920px) and (min-width: 600px) {
+        .topbar {
+          height: 64px;
         }
 
-        header {
-          height: 56px;
+        .hero {
+          padding-top: 4px;
         }
 
-        main {
-          min-height: calc(100svh - 56px);
-          padding-top: 20px;
-        }
-
-        h1 {
-          font-size: clamp(23px, 7.4vw, 30px);
-        }
-
-        .actions {
-          margin-top: 16px;
-        }
-
-        .product {
-          height: min(821px, calc(100svh - 178px));
+        .download {
+          min-height: 43px;
           margin-top: 17px;
         }
 
-        footer {
-          align-items: flex-start;
-          flex-direction: column;
-          padding: 20px 0 26px;
+        .release {
+          margin-top: 10px;
+        }
+
+        .product {
+          margin-top: 18px;
+        }
+
+        .floatbar {
+          width: min(475px, 76vw);
+        }
+
+        .dashboard-frame {
+          width: min(455px, 78vw);
+          margin-top: 17px;
+        }
+      }
+
+      @media (max-height: 800px) and (min-width: 600px) {
+        .dashboard-frame {
+          width: min(390px, 70vw);
+        }
+
+        .floatbar {
+          width: min(420px, 72vw);
+        }
+      }
+
+      @media (max-width: 599px) {
+        .page {
+          padding-inline: 14px;
+        }
+
+        .topbar {
+          height: 60px;
+        }
+
+        .hero {
+          padding-top: 14px;
+        }
+
+        .download {
+          min-height: 44px;
+          margin-top: 19px;
+          padding-inline: 17px;
+          font-size: 14px;
+        }
+
+        .product {
+          margin-top: 24px;
+        }
+
+        .floatbar {
+          width: min(440px, 95vw);
+        }
+
+        .dashboard-frame {
+          width: min(525px, 96vw);
+          margin-top: 18px;
+          padding: 5px;
+          border-radius: 18px;
+        }
+
+        .dashboard-inner {
+          border-radius: 13px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .download,
+        .github,
+        .release {
+          transition: none;
         }
       }
     </style>
   </head>
 
   <body>
-    <div class="shell">
-      <header>
+    <div class="page">
+      <header class="topbar">
         <a class="brand" href="/" aria-label="Ceiling home">
           <img src="/favicon.png" alt="" />
           <span>Ceiling</span>
@@ -250,36 +342,45 @@
         <a class="github" href="https://github.com/tsouth89/ceiling">GitHub</a>
       </header>
 
-      <main>
-        <h1>AI usage, without the noise.</h1>
+      <main class="hero">
+        <h1>Stay below the ceiling.</h1>
 
-        <div class="actions">
-          <a
-            class="download"
-            href="https://github.com/tsouth89/ceiling/releases/download/v0.43.2/Ceiling-0.43.2-Setup.exe"
-          >Download for Windows</a>
-          <a class="release" href="https://github.com/tsouth89/ceiling/releases/tag/v0.43.2">
-            v0.43.2 + portable
-          </a>
-        </div>
+        <a
+          class="download"
+          href="https://github.com/tsouth89/ceiling/releases/download/v0.43.2/Ceiling-0.43.2-Setup.exe"
+        >
+          <span class="windows-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </span>
+          Download for Windows
+        </a>
 
-        <div class="product">
-          <img
-            src="/ceiling-ui.png"
-            width="659"
-            height="821"
-            alt="Ceiling's floating capacity strip and Windows dashboard showing Codex, Claude, and Cursor usage"
-          />
-        </div>
+        <a class="release" href="https://github.com/tsouth89/ceiling/releases/tag/v0.43.2">
+          v0.43.2 · Windows · local-first
+        </a>
+
+        <section class="product" aria-label="Ceiling interface preview">
+          <div class="floatbar">
+            <img
+              src="/ceiling-floatbar.png"
+              width="406"
+              height="38"
+              alt="Ceiling's floating capacity bar showing Claude, Cursor, and Codex usage"
+            />
+          </div>
+
+          <div class="dashboard-frame">
+            <div class="dashboard-inner">
+              <img
+                src="/ceiling-dashboard.png"
+                width="577"
+                height="689"
+                alt="Ceiling's Windows dashboard showing Codex, Claude, and Cursor usage"
+              />
+            </div>
+          </div>
+        </section>
       </main>
-
-      <footer>
-        <span>Windows · Local-first · Open source</span>
-        <div class="footer-links">
-          <a href="https://github.com/tsouth89/ceiling/releases/tag/v0.43.2">Release notes</a>
-          <a href="https://github.com/tsouth89/ceiling/issues">Issues</a>
-        </div>
-      </footer>
     </div>
   </body>
 </html>
