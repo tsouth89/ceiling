@@ -56,8 +56,9 @@ jobs:
           if (-not $marketingLine -or $marketingLine -notmatch '^MARKETING_VERSION=(.+)$') {
             throw "Could not read MARKETING_VERSION from version.env."
           }
-          if ($Matches[1] -ne $version) {
-            throw "version.env version $($Matches[1]) does not match repository version $version."
+          $marketingVersion = $Matches[1].Trim()
+          if ($marketingVersion -ne $version) {
+            throw "version.env version $marketingVersion does not match repository version $version."
           }
           git merge-base --is-ancestor $env:GITHUB_SHA origin/main
           if ($LASTEXITCODE -ne 0) {
