@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build and run the CodexBar Tauri desktop shell for Windows.
+    Build and run the Ceiling Tauri desktop shell for Windows.
 
 .DESCRIPTION
     Checks that build prerequisites are installed, then builds the Tauri desktop
@@ -122,10 +122,10 @@ if (-not $SkipBuild) {
     Push-Location $TauriFrontendDir
     try {
         if ($Release) {
-            Write-Host "Building CodexBar Desktop (release, no bundle)..." -ForegroundColor Cyan
+            Write-Host "Building Ceiling (release, no bundle)..." -ForegroundColor Cyan
             & $pnpmCommand.Source run tauri:build
         } else {
-            Write-Host "Building CodexBar Desktop (debug, no bundle)..." -ForegroundColor Cyan
+            Write-Host "Building Ceiling (debug, no bundle)..." -ForegroundColor Cyan
             & $pnpmCommand.Source run tauri:build:debug
         }
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -172,5 +172,5 @@ if (-not $env:TAURI_DEV) {
 }
 
 Write-Host ""
-Write-Host "Starting CodexBar Desktop..." -ForegroundColor Green
+Write-Host "Starting Ceiling..." -ForegroundColor Green
 & $binary

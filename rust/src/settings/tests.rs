@@ -7,6 +7,7 @@ fn test_settings_default() {
     assert!(settings.enabled_providers.contains("codex"));
     assert_eq!(settings.refresh_interval_secs, 300);
     assert!(settings.show_notifications);
+    assert!(settings.capacity_event_notifications_enabled);
     assert_eq!(settings.high_usage_threshold, 70.0);
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
@@ -26,6 +27,7 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 
     assert!(!loaded.show_reset_when_exhausted);
     assert!(!loaded.predictive_pace_warning_enabled);
+    assert!(loaded.capacity_event_notifications_enabled);
 }
 
 #[test]
@@ -438,12 +440,9 @@ fn api_key_display_mask_is_utf8_safe() {
 
 #[test]
 fn test_start_at_login_command_uses_only_the_executable_path() {
-    let path = std::path::PathBuf::from(r"C:\Program Files\CodexBar\codexbar-desktop-tauri.exe");
+    let path = std::path::PathBuf::from(r"C:\Program Files\Ceiling\ceiling.exe");
     let command = Settings::start_at_login_command(&path);
-    assert_eq!(
-        command,
-        "\"C:\\Program Files\\CodexBar\\codexbar-desktop-tauri.exe\""
-    );
+    assert_eq!(command, "\"C:\\Program Files\\Ceiling\\ceiling.exe\"");
     assert!(!command.contains("menubar"));
 }
 
@@ -451,7 +450,7 @@ fn test_start_at_login_command_uses_only_the_executable_path() {
 fn test_start_at_login_prefers_desktop_sibling_when_called_from_cli() {
     let temp = tempfile::tempdir().expect("temp dir");
     let cli_path = temp.path().join("codexbar-cli.exe");
-    let desktop_path = temp.path().join("codexbar.exe");
+    let desktop_path = temp.path().join("ceiling.exe");
     std::fs::write(&cli_path, b"cli").expect("write cli");
     std::fs::write(&desktop_path, b"desktop").expect("write desktop");
 
@@ -475,7 +474,7 @@ fn test_start_at_login_keeps_current_exe_when_desktop_sibling_missing() {
 fn test_start_at_login_repairs_stale_cli_command_after_update() {
     let temp = tempfile::tempdir().expect("temp dir");
     let cli_path = temp.path().join("codexbar-cli.exe");
-    let desktop_path = temp.path().join("codexbar.exe");
+    let desktop_path = temp.path().join("ceiling.exe");
     std::fs::write(&cli_path, b"cli").expect("write cli");
     std::fs::write(&desktop_path, b"desktop").expect("write desktop");
     let stale_command = format!("\"{}\"", cli_path.display());
@@ -489,7 +488,7 @@ fn test_start_at_login_repairs_stale_cli_command_after_update() {
 #[test]
 fn test_start_at_login_keeps_current_desktop_command_after_update() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let desktop_path = temp.path().join("codexbar.exe");
+    let desktop_path = temp.path().join("ceiling.exe");
     std::fs::write(&desktop_path, b"desktop").expect("write desktop");
     let current_command = format!("\"{}\"", desktop_path.display());
 
@@ -502,7 +501,7 @@ fn test_start_at_login_keeps_current_desktop_command_after_update() {
 #[test]
 fn test_start_at_login_repairs_legacy_desktop_command_after_update() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let desktop_path = temp.path().join("codexbar.exe");
+    let desktop_path = temp.path().join("ceiling.exe");
     let legacy_desktop_path = temp.path().join("codexbar-desktop.exe");
     std::fs::write(&desktop_path, b"desktop").expect("write desktop");
     std::fs::write(&legacy_desktop_path, b"legacy desktop").expect("write legacy desktop");

@@ -21,6 +21,7 @@ pub const LOGIN_PHASE_CHANGED: &str = "login-phase-changed";
 pub const PROOF_STATE_CHANGED: &str = "proof-state-changed";
 pub const LOCALE_CHANGED: &str = "locale-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
+pub const CAPACITY_EVENT: &str = "capacity-event";
 
 // ── Payloads ─────────────────────────────────────────────────────────
 
@@ -104,4 +105,11 @@ pub fn emit_proof_state_changed(app: &AppHandle, payload: &ProofStatePayload) {
 /// do not share React state. Payload-less; listeners re-fetch the snapshot.
 pub fn emit_settings_changed(app: &AppHandle) {
     let _ = app.emit(SETTINGS_CHANGED, ());
+}
+
+pub fn emit_capacity_event(
+    app: &AppHandle,
+    payload: &crate::capacity_events::CapacityEventPayload,
+) {
+    let _ = app.emit(CAPACITY_EVENT, payload);
 }

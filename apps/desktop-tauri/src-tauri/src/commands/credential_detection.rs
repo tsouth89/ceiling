@@ -32,6 +32,25 @@ pub struct KiroStatus {
     pub hint: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DetectedAccountStatus {
+    Ready,
+    Locked,
+    Installed,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedProviderAccount {
+    pub provider_id: String,
+    pub display_name: String,
+    pub status: DetectedAccountStatus,
+    pub source_label: String,
+    pub detail: String,
+}
+
 fn gemini_cli_credentials_path() -> Option<std::path::PathBuf> {
     codexbar::host::session::gemini_cli_credentials_path()
 }
@@ -52,6 +71,127 @@ pub fn get_gemini_cli_signed_in() -> Result<GeminiCliStatus, String> {
         signed_in,
         credentials_path: path.map(|p| p.to_string_lossy().into_owned()),
     })
+}
+
+#[tauri::command]
+pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
+    use codexbar::providers::claude::ClaudeDesktopSessionStatus;
+    use codexbar::providers::cursor::CursorIdeSessionStatus;
+
+    let codex_ready = codexbar::providers::codex::local_credentials_available();
+    let codex_installed = codexbar::providers::codex::cli_installed();
+
+    let claude_code_ready = codexbar::providers::claude::claude_code_credentials_available();
+    let claude_desktop = codexbar::providers::claude::claude_desktop_session_status();
+
+    let cursor = codexbar::providers::cursor::ide_session_status();
+
+    let gemini_ready = codexbar::host::session::gemini_cli_signed_in();
+    let gemini_installed = codexbar::providers::gemini::cli_installed();
+
+    vec![
+        detected_account(
+            "codex",
+            "Codex",
+            if codex_ready {
+                DetectedAccountStatus::Ready
+            } else if codex_installed {
+                DetectedAccountStatus::Installed
+            } else {
+                DetectedAccountStatus::Unavailable
+            },
+            "Codex CLI",
+        ),
+        detected_account(
+            "claude",
+            "Claude",
+            if claude_code_ready || claude_desktop == ClaudeDesktopSessionStatus::Ready {
+                DetectedAccountStatus::Ready
+            } else {
+                match claude_desktop {
+                    ClaudeDesktopSessionStatus::Locked => DetectedAccountStatus::Locked,
+                    ClaudeDesktopSessionStatus::SignedOut => DetectedAccountStatus::Installed,
+                    ClaudeDesktopSessionStatus::Unavailable => DetectedAccountStatus::Unavailable,
+                    ClaudeDesktopSessionStatus::Ready => DetectedAccountStatus::Ready,
+                }
+            },
+            if claude_code_ready {
+                "Claude Code"
+            } else {
+                "Claude Desktop"
+            },
+        ),
+        detected_account(
+            "cursor",
+            "Cursor",
+            match cursor {
+                CursorIdeSessionStatus::Ready => DetectedAccountStatus::Ready,
+                CursorIdeSessionStatus::Locked => DetectedAccountStatus::Locked,
+                CursorIdeSessionStatus::SignedOut => DetectedAccountStatus::Installed,
+                CursorIdeSessionStatus::Unavailable => DetectedAccountStatus::Unavailable,
+            },
+            "Cursor for Windows",
+        ),
+        detected_account(
+            "gemini",
+            "Gemini",
+            if gemini_ready {
+                DetectedAccountStatus::Ready
+            } else if gemini_installed {
+                DetectedAccountStatus::Installed
+            } else {
+                DetectedAccountStatus::Unavailable
+            },
+            "Gemini CLI",
+        ),
+    ]
+}
+
+fn detected_account(
+    provider_id: &str,
+    display_name: &str,
+    status: DetectedAccountStatus,
+    source_label: &str,
+) -> DetectedProviderAccount {
+    let detail = match status {
+        DetectedAccountStatus::Ready => "Signed in and ready to track",
+        DetectedAccountStatus::Locked => "Close the desktop app once to finish connecting",
+        DetectedAccountStatus::Installed => "Installed; sign in to start tracking",
+        DetectedAccountStatus::Unavailable => "Not found on this PC",
+    };
+    DetectedProviderAccount {
+        provider_id: provider_id.to_string(),
+        display_name: display_name.to_string(),
+        status,
+        source_label: source_label.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod detected_account_tests {
+    use super::*;
+
+    #[test]
+    fn discovery_payload_contains_status_but_no_identity_or_secret_fields() {
+        let account = detected_account(
+            "gemini",
+            "Gemini",
+            DetectedAccountStatus::Ready,
+            "Gemini CLI",
+        );
+        let value = serde_json::to_value(account).unwrap();
+
+        assert_eq!(value["providerId"], "gemini");
+        assert_eq!(value["status"], "ready");
+        assert_eq!(value["sourceLabel"], "Gemini CLI");
+        for forbidden in ["email", "path", "token", "cookie", "accountId"] {
+            assert!(
+                value.get(forbidden).is_none(),
+                "unexpected {forbidden} field"
+            );
+        }
+    }
 }
 
 #[tauri::command]

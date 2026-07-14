@@ -18,6 +18,37 @@ use crate::core::{
 pub use api::CursorApi;
 pub use session::normalize_cookie_header;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorIdeSessionStatus {
+    Ready,
+    Locked,
+    SignedOut,
+    Unavailable,
+}
+
+/// Probe Cursor's local IDE session while keeping the access token inside the
+/// provider boundary.
+pub fn ide_session_status() -> CursorIdeSessionStatus {
+    match session::disk_session_cookie() {
+        Ok(_) => CursorIdeSessionStatus::Ready,
+        Err(ProviderError::NotInstalled(_)) => CursorIdeSessionStatus::Unavailable,
+        Err(ProviderError::AuthRequired) | Err(ProviderError::Parse(_)) => {
+            CursorIdeSessionStatus::SignedOut
+        }
+        Err(ProviderError::Other(message)) if is_windows_file_lock_error(&message) => {
+            CursorIdeSessionStatus::Locked
+        }
+        Err(_) => CursorIdeSessionStatus::SignedOut,
+    }
+}
+
+fn is_windows_file_lock_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("os error 32")
+        || lower.contains("being used by another process")
+        || lower.contains("sharing violation")
+}
+
 /// Cursor provider for fetching AI usage limits
 pub struct CursorProvider {
     metadata: ProviderMetadata,

@@ -1,4 +1,4 @@
-//! Auto-update checker for CodexBar
+//! Auto-update checker for Ceiling
 //! Checks GitHub releases for new versions and handles background downloads
 
 use crate::settings::UpdateChannel;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
-const GITHUB_REPO: &str = "Finesssee/Win-CodexBar";
+const GITHUB_REPO: &str = "tsouth89/ceiling";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// State of the update download process
@@ -115,7 +115,7 @@ fn release_url(channel: UpdateChannel) -> String {
 
 fn update_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent("CodexBar")
+        .user_agent("Ceiling")
         .build()
         .ok()
 }
@@ -245,7 +245,7 @@ pub fn current_version() -> &'static str {
 
 /// Get the download directory for updates
 fn get_download_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|p| p.join("CodexBar").join("updates"))
+    dirs::cache_dir().map(|p| p.join("Ceiling").join("updates"))
 }
 
 /// Download an update with progress reporting
@@ -291,7 +291,7 @@ fn download_filename(download_url: &str) -> String {
     download_url
         .split('/')
         .next_back()
-        .unwrap_or("CodexBar-Setup.exe")
+        .unwrap_or("Ceiling-Setup.exe")
         .to_string()
 }
 
@@ -304,7 +304,7 @@ fn expected_update_sha256(update_info: &UpdateInfo) -> Result<&str, String> {
 
 fn update_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("CodexBar")
+        .user_agent("Ceiling")
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))
 }
@@ -506,7 +506,7 @@ fn windows_update_relaunch_path(current_exe: &Path) -> PathBuf {
     if file_name.is_some_and(|name| name.eq_ignore_ascii_case("codexbar-desktop.exe"))
         && let Some(primary_desktop_exe) = current_exe
             .parent()
-            .map(|dir| dir.join("codexbar.exe"))
+            .map(|dir| dir.join("ceiling.exe"))
             .filter(|path| path.exists())
     {
         return primary_desktop_exe;
@@ -563,9 +563,9 @@ fn windows_installer_launch_plan(
         });
     }
 
-    // CodexBar release setup executables are built by rust/installer/codexbar.iss
+    // Ceiling release setup executables are built by rust/installer/codexbar.iss
     // (Inno Setup). Silent installs skip the installer's postinstall [Run]
-    // entry, so the update helper relaunches CodexBar after setup exits.
+    // entry, so the update helper relaunches Ceiling after setup exits.
     Ok(WindowsInstallerLaunchPlan {
         program: installer_path.to_path_buf(),
         args: vec![
@@ -693,18 +693,18 @@ mod tests {
     fn prefers_installer_asset_for_auto_update() {
         let release = GitHubRelease {
             tag_name: "v1.2.6".to_string(),
-            html_url: "https://github.com/Finesssee/Win-CodexBar/releases/tag/v1.2.6".to_string(),
+            html_url: "https://github.com/tsouth89/ceiling/releases/tag/v1.2.6".to_string(),
             body: None,
             assets: vec![
                 GitHubAsset {
-                    name: "codexbar.exe".to_string(),
-                    browser_download_url: "https://example.com/codexbar.exe".to_string(),
+                    name: "Ceiling-1.2.6-portable.exe".to_string(),
+                    browser_download_url: "https://example.com/Ceiling-1.2.6-portable.exe"
+                        .to_string(),
                     digest: None,
                 },
                 GitHubAsset {
-                    name: "CodexBar-1.2.6-Setup.exe".to_string(),
-                    browser_download_url: "https://example.com/CodexBar-1.2.6-Setup.exe"
-                        .to_string(),
+                    name: "Ceiling-1.2.6-Setup.exe".to_string(),
+                    browser_download_url: "https://example.com/Ceiling-1.2.6-Setup.exe".to_string(),
                     digest: Some(
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                             .to_string(),
@@ -719,7 +719,7 @@ mod tests {
 
         assert_eq!(
             update.download_url,
-            "https://example.com/CodexBar-1.2.6-Setup.exe"
+            "https://example.com/Ceiling-1.2.6-Setup.exe"
         );
         assert!(update.supports_auto_apply());
         assert!(update.supports_auto_download());
@@ -729,11 +729,11 @@ mod tests {
     fn falls_back_to_manual_release_when_only_portable_exe_exists() {
         let release = GitHubRelease {
             tag_name: "v1.2.6".to_string(),
-            html_url: "https://github.com/Finesssee/Win-CodexBar/releases/tag/v1.2.6".to_string(),
+            html_url: "https://github.com/tsouth89/ceiling/releases/tag/v1.2.6".to_string(),
             body: None,
             assets: vec![GitHubAsset {
-                name: "codexbar.exe".to_string(),
-                browser_download_url: "https://example.com/codexbar.exe".to_string(),
+                name: "Ceiling-1.2.6-portable.exe".to_string(),
+                browser_download_url: "https://example.com/Ceiling-1.2.6-portable.exe".to_string(),
                 digest: None,
             }],
             draft: false,
@@ -744,7 +744,7 @@ mod tests {
 
         assert_eq!(
             update.download_url,
-            "https://github.com/Finesssee/Win-CodexBar/releases/tag/v1.2.6"
+            "https://github.com/tsouth89/ceiling/releases/tag/v1.2.6"
         );
         assert!(!update.supports_auto_apply());
     }
@@ -753,12 +753,12 @@ mod tests {
     fn finds_newest_pending_installer_and_ignores_portable_exe() {
         let temp = tempfile::tempdir().expect("temp dir");
         let (major, minor, patch) = parse_version_triplet(CURRENT_VERSION);
-        let portable = temp.path().join("codexbar.exe");
+        let portable = temp.path().join("ceiling.exe");
         let older = temp
             .path()
-            .join(format!("CodexBar-{}.{}.{}-Setup.exe", major, minor, patch));
+            .join(format!("Ceiling-{}.{}.{}-Setup.exe", major, minor, patch));
         let newer = temp.path().join(format!(
-            "CodexBar-{}.{}.{}-Setup.exe",
+            "Ceiling-{}.{}.{}-Setup.exe",
             major,
             minor,
             patch + 1
@@ -779,9 +779,9 @@ mod tests {
         let (major, minor, patch) = parse_version_triplet(CURRENT_VERSION);
         let current = temp
             .path()
-            .join(format!("CodexBar-{}.{}.{}-Setup.exe", major, minor, patch));
+            .join(format!("Ceiling-{}.{}.{}-Setup.exe", major, minor, patch));
         let older = temp.path().join(format!(
-            "CodexBar-{}.{}.{}-Setup.exe",
+            "Ceiling-{}.{}.{}-Setup.exe",
             major,
             minor,
             patch.saturating_sub(1)
@@ -798,7 +798,7 @@ mod tests {
         let (major, minor, patch) = parse_version_triplet(CURRENT_VERSION);
         assert_eq!(
             installer_version_from_name(&format!(
-                "CodexBar-{}.{}.{}-beta.1-Setup.exe",
+                "Ceiling-{}.{}.{}-beta.1-Setup.exe",
                 major,
                 minor,
                 patch + 1
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn verify_installer_hash_accepts_matching_sha256() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = temp.path().join("CodexBar-1.2.3-Setup.exe");
+        let path = temp.path().join("Ceiling-1.2.3-Setup.exe");
         std::fs::write(&path, b"installer bytes").expect("write installer");
 
         let expected = sha256_file(&path).expect("hash");
@@ -820,7 +820,7 @@ mod tests {
     #[test]
     fn verify_installer_hash_rejects_mismatched_sha256() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = temp.path().join("CodexBar-1.2.3-Setup.exe");
+        let path = temp.path().join("Ceiling-1.2.3-Setup.exe");
         std::fs::write(&path, b"installer bytes").expect("write installer");
 
         let wrong = "0".repeat(64);
@@ -831,7 +831,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_setup_exe_uses_inno_silent_flags() {
-        let path = PathBuf::from(r"C:\Temp\CodexBar-1.2.3-Setup.exe");
+        let path = PathBuf::from(r"C:\Temp\Ceiling-1.2.3-Setup.exe");
 
         let plan = windows_installer_launch_plan(&path).expect("launch plan");
 
@@ -850,26 +850,26 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_apply_script_waits_for_current_process_before_installing() {
-        let path = PathBuf::from(r"C:\Temp\CodexBar-1.2.3-Setup.exe");
-        let relaunch_path = PathBuf::from(r"C:\Program Files\CodexBar\codexbar.exe");
+        let path = PathBuf::from(r"C:\Temp\Ceiling-1.2.3-Setup.exe");
+        let relaunch_path = PathBuf::from(r"C:\Program Files\Ceiling\ceiling.exe");
         let plan = windows_installer_launch_plan(&path).expect("launch plan");
 
         let script = windows_installer_apply_script(&plan, 12345, &relaunch_path);
 
         assert!(script.contains("Wait-Process -Id 12345"));
-        assert!(script.contains(r"Start-Process -FilePath 'C:\Temp\CodexBar-1.2.3-Setup.exe'"));
+        assert!(script.contains(r"Start-Process -FilePath 'C:\Temp\Ceiling-1.2.3-Setup.exe'"));
         assert!(script.contains(
             "-ArgumentList @('/SILENT','/SUPPRESSMSGBOXES','/CLOSEAPPLICATIONS','/NORESTART')"
         ));
         assert!(script.contains("-PassThru -Wait"));
-        assert!(script.contains(r"Start-Process -FilePath 'C:\Program Files\CodexBar\codexbar.exe' -ArgumentList @('menubar')"));
+        assert!(script.contains(r"Start-Process -FilePath 'C:\Program Files\Ceiling\ceiling.exe' -ArgumentList @('menubar')"));
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_update_relaunch_path_prefers_primary_desktop_exe_from_legacy_alias() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let desktop_path = temp.path().join("codexbar.exe");
+        let desktop_path = temp.path().join("ceiling.exe");
         let legacy_desktop_path = temp.path().join("codexbar-desktop.exe");
         std::fs::write(&desktop_path, b"desktop").expect("write desktop");
         std::fs::write(&legacy_desktop_path, b"legacy desktop").expect("write legacy desktop");
@@ -883,7 +883,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_msi_uses_msiexec_quiet_install() {
-        let path = PathBuf::from(r"C:\Temp\CodexBar-1.2.3.msi");
+        let path = PathBuf::from(r"C:\Temp\Ceiling-1.2.3.msi");
 
         let plan = windows_installer_launch_plan(&path).expect("launch plan");
 
@@ -903,8 +903,8 @@ mod tests {
     #[test]
     fn powershell_quoting_escapes_single_quotes() {
         assert_eq!(
-            powershell_single_quoted(r"C:\Temp\CodexBar's Setup.exe"),
-            r"'C:\Temp\CodexBar''s Setup.exe'"
+            powershell_single_quoted(r"C:\Temp\Ceiling's Setup.exe"),
+            r"'C:\Temp\Ceiling''s Setup.exe'"
         );
     }
 }

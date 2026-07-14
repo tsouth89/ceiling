@@ -28,7 +28,13 @@ use cli_reset::{
     parse_percent_line, starts_next_usage_section,
 };
 pub use oauth::ClaudeOAuthFetcher;
-pub use web_api::ClaudeWebApiFetcher;
+pub use web_api::{ClaudeDesktopSessionStatus, ClaudeWebApiFetcher, claude_desktop_session_status};
+
+/// Detect a usable Claude Code credentials file without returning its
+/// contents or account identity.
+pub fn claude_code_credentials_available() -> bool {
+    oauth::credentials_file_available()
+}
 
 /// Claude provider implementation
 pub struct ClaudeProvider {
@@ -768,8 +774,9 @@ fn extract_percent_near_label(text: &str, label: &str) -> Option<f64> {
     let label_normalized = normalized_for_label_search(label);
     let lines: Vec<&str> = text.lines().collect();
 
-    // Find the line containing the label
-    for (idx, line) in lines.iter().enumerate() {
+    // PTY redraws are concatenated in the captured buffer. Read the final
+    // rendered usage screen, not an earlier frame that may contain stale data.
+    for (idx, line) in lines.iter().enumerate().rev() {
         if normalized_for_label_search(line).contains(&label_normalized) {
             // Look in the next few lines for a percentage
             for (offset, next_line) in lines.iter().skip(idx).take(12).enumerate() {
@@ -872,7 +879,8 @@ fn extract_reset_description(text: &str, label: &str) -> Option<String> {
     let label_normalized = normalized_for_label_search(label);
     let lines: Vec<&str> = text.lines().collect();
 
-    for (idx, line) in lines.iter().enumerate() {
+    // Match the last rendered screen for the same reason as percentage parsing.
+    for (idx, line) in lines.iter().enumerate().rev() {
         if normalized_for_label_search(line).contains(&label_normalized) {
             // Look in the next few lines for "Resets"
             for (offset, next_line) in lines.iter().skip(idx).take(14).enumerate() {
@@ -897,7 +905,7 @@ fn extract_reset_description(text: &str, label: &str) -> Option<String> {
 /// Extract a "resets ..." suffix from a short single-line status.
 fn extract_inline_reset_description(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
-    let pos = lower.find("resets")?;
+    let pos = lower.rfind("resets")?;
     Some(text[pos..].trim().to_string())
 }
 
@@ -953,6 +961,36 @@ Status   Config   Usage
             weekly.reset_description.as_deref(),
             Some("Resets Apr 3, 2pm (America/Bogota)")
         );
+    }
+
+    #[test]
+    fn parses_final_cli_redraw_instead_of_stale_terminal_history() {
+        let provider = ClaudeProvider::new();
+        let output = r#"
+  Current session
+  100% used
+  Resets 12pm
+  Current week (all models)
+  75% used
+  Resets Sunday
+
+  Current session
+  5% used
+  Resets 5pm
+  Current week (all models)
+  20% used
+  Resets Monday
+"#;
+
+        let result = provider.parse_cli_output(output).expect("should parse");
+        assert_eq!(result.usage.primary.used_percent, 5.0);
+        assert_eq!(
+            result.usage.primary.reset_description.as_deref(),
+            Some("Resets 5pm")
+        );
+        let weekly = result.usage.secondary.expect("weekly usage");
+        assert_eq!(weekly.used_percent, 20.0);
+        assert_eq!(weekly.reset_description.as_deref(), Some("Resets Monday"));
     }
 
     #[test]

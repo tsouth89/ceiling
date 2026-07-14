@@ -2,19 +2,16 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const windowMocks = vi.hoisted(() => {
-  const minimize = vi.fn().mockResolvedValue(undefined);
   const toggleMaximize = vi.fn().mockResolvedValue(undefined);
   const close = vi.fn().mockResolvedValue(undefined);
   const isMaximized = vi.fn().mockResolvedValue(false);
   const onResized = vi.fn().mockResolvedValue(() => {});
   return {
-    minimize,
     toggleMaximize,
     close,
     isMaximized,
     onResized,
     getCurrentWindow: vi.fn(() => ({
-      minimize,
       toggleMaximize,
       close,
       isMaximized,
@@ -23,7 +20,12 @@ const windowMocks = vi.hoisted(() => {
   };
 });
 
+const bridgeMocks = vi.hoisted(() => ({
+  hideDashboardToTray: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("@tauri-apps/api/window", () => windowMocks);
+vi.mock("../lib/tauri", () => bridgeMocks);
 // Bypass the LocaleProvider: t(key) returns the key, so aria-labels are the
 // key names (e.g. "WindowMinimize").
 vi.mock("../hooks/useLocale", () => ({
@@ -37,14 +39,14 @@ describe("PopOutTitleBar", () => {
     vi.clearAllMocks();
   });
 
-  it("wires the minimize, maximize and close controls to the native window", async () => {
+  it("hides minimize to the tray and keeps maximize and close native", async () => {
     render(<PopOutTitleBar />);
 
     fireEvent.click(await screen.findByRole("button", { name: "WindowMinimize" }));
     fireEvent.click(screen.getByRole("button", { name: "WindowMaximize" }));
     fireEvent.click(screen.getByRole("button", { name: "WindowClose" }));
 
-    expect(windowMocks.minimize).toHaveBeenCalledTimes(1);
+    expect(bridgeMocks.hideDashboardToTray).toHaveBeenCalledTimes(1);
     expect(windowMocks.toggleMaximize).toHaveBeenCalledTimes(1);
     expect(windowMocks.close).toHaveBeenCalledTimes(1);
   });

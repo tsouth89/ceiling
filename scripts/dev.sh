@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and run the CodexBar Tauri desktop shell on Linux / WSL.
+# Build and run the Ceiling Tauri desktop shell on Linux / WSL.
 #
 # Usage:
 #   ./scripts/dev.sh                 # debug build + run
@@ -119,19 +119,19 @@ find_binary() {
 if [ "$SKIP_BUILD" -eq 0 ]; then
     if [ "$CLI_MODE" -eq 1 ]; then
         if [ "$RELEASE" -eq 1 ]; then
-            echo "Building CodexBar CLI (release, target=$NATIVE_TARGET)..."
+            echo "Building Ceiling CLI (release, target=$NATIVE_TARGET)..."
             cargo build --manifest-path "$RUST_DIR/Cargo.toml" --bin codexbar --release "${TARGET_FLAG[@]}"
         else
-            echo "Building CodexBar CLI (debug, target=$NATIVE_TARGET)..."
+            echo "Building Ceiling CLI (debug, target=$NATIVE_TARGET)..."
             cargo build --manifest-path "$RUST_DIR/Cargo.toml" --bin codexbar "${TARGET_FLAG[@]}"
         fi
     else
         cd "$TAURI_APP_DIR"
         if [ "$RELEASE" -eq 1 ]; then
-            echo "Building CodexBar Desktop (release, no bundle)..."
+            echo "Building Ceiling (release, no bundle)..."
             pnpm run tauri:build
         else
-            echo "Building CodexBar Desktop (debug, no bundle)..."
+            echo "Building Ceiling (debug, no bundle)..."
             pnpm run tauri:build:debug
         fi
         cd "$REPO_ROOT"
@@ -162,7 +162,7 @@ if [ "$CLI_MODE" -eq 1 ]; then
     echo "Running: codexbar usage -p all"
     RUN_ARGS=(usage -p all)
 else
-    echo "Running: CodexBar Desktop"
+    echo "Running: Ceiling"
 fi
 
 if [ "$VERBOSE" -eq 1 ]; then

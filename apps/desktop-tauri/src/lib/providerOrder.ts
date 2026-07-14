@@ -6,6 +6,7 @@ export function orderProviderSnapshots(
   enabledProviderIds: string[],
   providerOrder: string[] = [],
 ): ProviderUsageSnapshot[] {
+  const enabled = new Set(enabledProviderIds);
   const order = new Map<string, number>();
   const orderedIds = providerOrder.length > 0
     ? providerOrder
@@ -19,7 +20,7 @@ export function orderProviderSnapshots(
     }
   }
 
-  return [...providers].sort((a, b) => {
+  return providers.filter((provider) => enabled.has(provider.providerId)).sort((a, b) => {
     const aOrder = order.get(a.providerId);
     const bOrder = order.get(b.providerId);
     if (aOrder != null && bOrder != null && aOrder !== bOrder) return aOrder - bOrder;

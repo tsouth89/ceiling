@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useLocale } from "../hooks/useLocale";
+import { hideDashboardToTray } from "../lib/tauri";
 import { CeilingMark } from "./CeilingMark";
 
 /**
  * Draggable title bar for the PopOut window mode. The app runs borderless (no
  * native caption), so the window is moved via this frontend drag region,
- * mirroring the detached Settings window. Controls map to the native window;
- * close routes through Rust's CloseRequested handler, which hides the window
- * back to the tray instead of quitting.
+ * mirroring the detached Settings window. Minimize and close both hide the
+ * dashboard back to the tray instead of leaving a minimized taskbar button or
+ * quitting the process.
  *
  * This owns the desktop window-chrome concerns (Tauri window APIs, min/max/
  * close, drag region) so the shared `MenuSurface` content container stays a
@@ -79,7 +80,7 @@ export default function PopOutTitleBar() {
         <button
           type="button"
           className="popout-titlebar__control popout-titlebar__control--minimize"
-          onClick={() => void getCurrentWindow().minimize()}
+          onClick={() => void hideDashboardToTray()}
           aria-label={t("WindowMinimize")}
           title={t("WindowMinimize")}
         />

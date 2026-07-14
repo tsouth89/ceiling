@@ -23,6 +23,13 @@ pub struct CodexApi {
 }
 
 impl CodexApi {
+    /// Whether the local Codex CLI credential file contains usable auth
+    /// material. This intentionally returns only a boolean so discovery UI
+    /// never receives account identity or token values.
+    pub fn has_local_credentials(&self) -> bool {
+        self.load_credentials().is_ok()
+    }
+
     pub fn new() -> Self {
         // Build client with proper TLS settings
         let client = crate::core::credentialed_http_client_builder()
@@ -84,20 +91,8 @@ impl CodexApi {
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
 
         let (mut usage, cost) = self.build_result_from_json(&json)?;
-        if let Ok(reset_credits) = self.fetch_rate_limit_reset_credits(&creds, &base_url).await
-            && reset_credits.available_count > 0
-        {
-            let mut window = RateWindow::new(0.0);
-            window.reset_description = Some(format!(
-                "{} reset credit{} available",
-                reset_credits.available_count,
-                if reset_credits.available_count == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ));
-            usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+        if let Ok(reset_credits) = self.fetch_rate_limit_reset_credits(&creds, &base_url).await {
+            usage = with_reset_credits(usage, &reset_credits);
         }
         Ok((usage, cost))
     }
@@ -346,25 +341,20 @@ impl CodexApi {
         if let Some(rate_limit) = json.get("rate_limit") {
             let primary_opt = rate_limit
                 .get("primary_window")
+                .filter(|window| !is_placeholder_window(window))
                 .map(|w| self.parse_window(w));
 
             let secondary_opt = rate_limit
                 .get("secondary_window")
+                .filter(|window| !is_placeholder_window(window))
                 .map(|w| self.parse_window(w));
 
             let code_review = rate_limit
                 .get("code_review_window")
                 .map(|w| self.parse_window(w));
 
-            // If primary is missing, promote secondary to primary (weekly-only plans)
-            let (primary, secondary, five_hour_not_enforced) = match (primary_opt, secondary_opt) {
-                (Some(p), s) => (p, s, false),
-                // OpenAI occasionally removes the session meter while retaining
-                // weekly usage. Preserve the weekly window and surface the absent
-                // five-hour meter explicitly instead of fabricating 100% left.
-                (None, Some(s)) => (s, None, true),
-                (None, None) => (RateWindow::new(0.0), None, false),
-            };
+            let (primary, secondary, five_hour_not_enforced) =
+                normalize_codex_windows(primary_opt, secondary_opt);
 
             return (primary, secondary, code_review, five_hour_not_enforced);
         }
@@ -509,37 +499,18 @@ impl CodexApi {
         &self,
         response: UsageResponse,
     ) -> Result<(UsageSnapshot, Option<CostSnapshot>), ProviderError> {
-        // Extract primary rate window
-        let primary = if let Some(ref rate_limit) = response.rate_limit {
-            if let Some(ref primary_window) = rate_limit.primary_window {
-                let reset_at = timestamp_to_datetime(primary_window.reset_at);
-                RateWindow::with_details(
-                    primary_window.used_percent as f64,
-                    primary_window.limit_window_seconds.map(|s| (s / 60) as u32),
-                    reset_at,
-                    format_reset_countdown(reset_at),
-                )
-            } else {
-                RateWindow::new(0.0)
-            }
-        } else {
-            RateWindow::new(0.0)
-        };
-
-        // Extract secondary rate window
-        let secondary = response
+        let primary_window = response
             .rate_limit
             .as_ref()
-            .and_then(|rl| rl.secondary_window.as_ref())
-            .map(|window| {
-                let reset_at = timestamp_to_datetime(window.reset_at);
-                RateWindow::with_details(
-                    window.used_percent as f64,
-                    window.limit_window_seconds.map(|s| (s / 60) as u32),
-                    reset_at,
-                    format_reset_countdown(reset_at),
-                )
-            });
+            .and_then(|rate_limit| rate_limit.primary_window.as_ref())
+            .map(rate_window_from_snapshot);
+        let secondary_window = response
+            .rate_limit
+            .as_ref()
+            .and_then(|rate_limit| rate_limit.secondary_window.as_ref())
+            .map(rate_window_from_snapshot);
+        let (primary, secondary, five_hour_not_enforced) =
+            normalize_codex_windows(primary_window, secondary_window);
 
         // Extract code review rate window
         let code_review = response
@@ -576,6 +547,13 @@ impl CodexApi {
         }
         if let Some(cr) = code_review {
             usage = usage.with_model_specific(cr);
+        }
+        if five_hour_not_enforced {
+            usage = usage.with_inactive_rate_window(
+                "codex-five-hour",
+                "5-hour",
+                "Not currently enforced by OpenAI",
+            );
         }
         if let Some(method) = login_method {
             usage = usage.with_login_method(method);
@@ -723,6 +701,79 @@ impl SpendControlLimitSnapshot {
 
 fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| Utc.timestamp_opt(ts, 0).single())
+}
+
+fn with_reset_credits(mut usage: UsageSnapshot, reset_credits: &ResetCredits) -> UsageSnapshot {
+    if reset_credits.available_count == 0 {
+        return usage;
+    }
+    let mut window = RateWindow::new(0.0);
+    window.reset_description = Some(format!(
+        "{} reset credit{} available",
+        reset_credits.available_count,
+        if reset_credits.available_count == 1 {
+            ""
+        } else {
+            "s"
+        }
+    ));
+    usage.extra_rate_windows.push(NamedRateWindow::new(
+        "reset-credits",
+        "Reset credits",
+        window,
+    ));
+    usage
+}
+
+fn rate_window_from_snapshot(window: &WindowSnapshot) -> RateWindow {
+    let reset_at = timestamp_to_datetime(window.reset_at);
+    RateWindow::with_details(
+        window.used_percent as f64,
+        window
+            .limit_window_seconds
+            .map(|seconds| (seconds / 60) as u32),
+        reset_at,
+        format_reset_countdown(reset_at),
+    )
+}
+
+fn is_five_hour_window(window: &RateWindow) -> bool {
+    window
+        .window_minutes
+        .is_some_and(|minutes| minutes <= 12 * 60)
+}
+
+fn is_weekly_window(window: &RateWindow) -> bool {
+    window
+        .window_minutes
+        .is_some_and(|minutes| minutes > 12 * 60 && minutes <= 14 * 24 * 60)
+}
+
+/// Keep Codex's semantic windows stable even when OpenAI omits or reorders
+/// `primary_window` and `secondary_window` in an otherwise valid response.
+fn normalize_codex_windows(
+    primary: Option<RateWindow>,
+    secondary: Option<RateWindow>,
+) -> (RateWindow, Option<RateWindow>, bool) {
+    match (primary, secondary) {
+        (Some(primary), Some(secondary))
+            if is_weekly_window(&primary) && is_five_hour_window(&secondary) =>
+        {
+            (secondary, Some(primary), false)
+        }
+        (Some(primary), secondary)
+            if is_weekly_window(&primary)
+                && !secondary.as_ref().is_some_and(is_five_hour_window) =>
+        {
+            (primary, secondary, true)
+        }
+        (Some(primary), secondary) => (primary, secondary, false),
+        (None, Some(secondary)) => {
+            let five_hour_not_enforced = is_weekly_window(&secondary);
+            (secondary, None, five_hour_not_enforced)
+        }
+        (None, None) => (RateWindow::new(0.0), None, false),
+    }
 }
 
 fn json_f64(value: &serde_json::Value) -> Option<f64> {
@@ -961,6 +1012,88 @@ mod tests {
             usage.inactive_rate_windows[0].description,
             "Not currently enforced by OpenAI"
         );
+    }
+
+    #[test]
+    fn codex_window_fixtures_preserve_normal_lifted_and_restored_states() {
+        let api = CodexApi::new();
+        let normal_json: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/codex/normal.json"))
+                .expect("normal fixture");
+        let weekly_only_json: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/codex/weekly-only.json"))
+                .expect("weekly-only fixture");
+        let restored_json: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/codex/restored.json"))
+                .expect("restored fixture");
+
+        let (normal, _) = api
+            .build_result_from_json(&normal_json)
+            .expect("normal usage");
+        assert_eq!(normal.primary.window_minutes, Some(300));
+        assert_eq!(
+            normal
+                .secondary
+                .as_ref()
+                .and_then(|window| window.window_minutes),
+            Some(10_080)
+        );
+        assert!(normal.inactive_rate_windows.is_empty());
+        assert_eq!(normal.extra_rate_windows[0].id, "codex-spark");
+
+        let (weekly_only, _) = api
+            .build_result_from_json(&weekly_only_json)
+            .expect("weekly-only usage");
+        assert_eq!(weekly_only.primary.window_minutes, Some(10_080));
+        assert!(weekly_only.secondary.is_none());
+        assert_eq!(weekly_only.inactive_rate_windows.len(), 1);
+        assert_eq!(weekly_only.inactive_rate_windows[0].id, "codex-five-hour");
+        assert_eq!(weekly_only.extra_rate_windows[0].id, "codex-spark-weekly");
+
+        let weekly_only = with_reset_credits(
+            weekly_only,
+            &ResetCredits {
+                credits: vec![json!({ "id": "credit-1" })],
+                available_count: 1,
+            },
+        );
+        assert_eq!(
+            weekly_only
+                .extra_rate_windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex-spark-weekly", "reset-credits"]
+        );
+
+        let (restored, _) = api
+            .build_result_from_json(&restored_json)
+            .expect("restored usage");
+        assert_eq!(restored.primary.window_minutes, Some(300));
+        assert_eq!(
+            restored
+                .secondary
+                .as_ref()
+                .and_then(|window| window.window_minutes),
+            Some(10_080)
+        );
+        assert!(restored.inactive_rate_windows.is_empty());
+        assert_eq!(restored.extra_rate_windows[0].id, "codex-spark-weekly");
+    }
+
+    #[test]
+    fn normalizes_reordered_codex_windows_by_cadence() {
+        let weekly = RateWindow::with_details(40.0, Some(10_080), None, None);
+        let five_hour = RateWindow::with_details(10.0, Some(300), None, None);
+
+        let (primary, secondary, lifted) = normalize_codex_windows(Some(weekly), Some(five_hour));
+
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(
+            secondary.and_then(|window| window.window_minutes),
+            Some(10_080)
+        );
+        assert!(!lifted);
     }
 
     #[test]

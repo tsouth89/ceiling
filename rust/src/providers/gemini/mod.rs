@@ -14,6 +14,11 @@ use crate::core::{
 
 pub use api::GeminiApi;
 
+/// Whether Gemini CLI is installed on this machine.
+pub fn cli_installed() -> bool {
+    which::which("gemini").is_ok()
+}
+
 /// Gemini provider for fetching AI usage limits
 pub struct GeminiProvider {
     metadata: ProviderMetadata,

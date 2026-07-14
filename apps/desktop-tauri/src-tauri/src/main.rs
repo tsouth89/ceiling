@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 mod auto_refresh;
+mod capacity_events;
 mod commands;
 mod events;
 mod floatbar;
@@ -141,6 +142,7 @@ fn main() {
             commands::update_settings,
             commands::set_surface_mode,
             commands::dismiss_tray_panel,
+            commands::hide_dashboard_to_tray,
             commands::begin_flyout_gesture,
             commands::end_flyout_gesture,
             commands::reveal_tray_panel_window,
@@ -193,6 +195,7 @@ fn main() {
             commands::set_provider_gateway_url,
             commands::get_provider_workspace_id,
             commands::get_gemini_cli_signed_in,
+            commands::get_detected_provider_accounts,
             commands::get_vertexai_status,
             commands::list_jetbrains_detected_ides,
             commands::set_jetbrains_ide_path,
@@ -314,19 +317,12 @@ fn main() {
                     {
                         return;
                     }
-                    // Blur in TrayPanel mode → auto-hide. Record successful
-                    // dismissals so the same tray click cannot reopen it.
-                    if matches!(
-                        shell::hide_to_tray_if_current(window.app_handle(), |mode| {
-                            mode == SurfaceMode::TrayPanel
-                        }),
-                        Ok(Some(_))
-                    ) && let Some(st) = window.app_handle().try_state::<Mutex<AppState>>()
-                    {
-                        st.lock()
-                            .unwrap()
-                            .mark_blur_dismissed(std::time::Instant::now());
-                    }
+                    // Blur in TrayPanel mode auto-hides the panel. Tray
+                    // left-click now opens the dashboard, so no same-click
+                    // reopen marker is needed.
+                    let _ = shell::hide_to_tray_if_current(window.app_handle(), |mode| {
+                        mode == SurfaceMode::TrayPanel
+                    });
                 }
                 tauri::WindowEvent::Focused(true) => {
                     // A genuine refocus (after the gesture's own focus flicker
@@ -337,6 +333,12 @@ fn main() {
                             .unwrap()
                             .clear_gesture_guard_on_refocus(std::time::Instant::now());
                     }
+                }
+                tauri::WindowEvent::Resized(_) if window.is_minimized().unwrap_or(false) => {
+                    // Native taskbar minimization must behave like the custom
+                    // minimize control: remove the dashboard from the taskbar
+                    // and keep Ceiling alive in the system tray.
+                    let _ = shell::hide_to_tray(window.app_handle());
                 }
                 tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                     // Capture geometry for surfaces eligible for persistence.
@@ -365,7 +367,10 @@ fn main() {
         .run(|_app, event| {
             // Tray apps must survive accidental last-window close. `app.exit(code)`
             // (Quit menu / quit_app) sets Some(code) and is allowed through.
-            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
                 tracing::debug!("Keeping Ceiling alive after window close (tray mode)");
                 api.prevent_exit();
             }

@@ -9,6 +9,7 @@ import type {
   ProofStatePayload,
   CookieInfoBridge,
   DetectedBrowserBridge,
+  DetectedProviderAccount,
   Language,
   LocaleStrings,
   ProviderCatalogEntry,
@@ -37,6 +38,10 @@ import type {
 
 export function getBootstrapState(): Promise<BootstrapState> {
   return invoke<BootstrapState>("get_bootstrap_state");
+}
+
+export function getDetectedProviderAccounts(): Promise<DetectedProviderAccount[]> {
+  return invoke<DetectedProviderAccount[]>("get_detected_provider_accounts");
 }
 
 export function getProviderCatalog(): Promise<ProviderCatalogEntry[]> {
@@ -76,6 +81,11 @@ export function setSurfaceMode<M extends VisibleSurfaceMode>(
 
 export function dismissTrayPanel(): Promise<void> {
   return invoke<void>("dismiss_tray_panel");
+}
+
+/** Hide the primary dashboard while Ceiling continues running in the tray. */
+export function hideDashboardToTray(): Promise<void> {
+  return invoke<void>("hide_dashboard_to_tray");
 }
 
 /** Suppress flyout blur-dismiss while a resize/drag gesture is in flight. */

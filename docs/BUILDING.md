@@ -56,8 +56,8 @@ For repeat release builds on a Windows server, prefer the cached release script:
 ```
 
 It builds from a clean managed checkout but keeps Cargo output, the pnpm store,
-and signed installer bootstrapper downloads in `C:\code\Win-CodexBar-release\cache`.
-Release assets land in `C:\code\Win-CodexBar-release\assets`. Keep the
+and signed installer bootstrapper downloads in `C:\code\Ceiling-release\cache`.
+Release assets land in `C:\code\Ceiling-release\assets`. Keep the
 `.sha256` sidecars; they are the copy/paste source for Winget's
 `InstallerSha256`.
 
@@ -65,15 +65,16 @@ Useful release flags:
 
 ```powershell
 .\scripts\windows-release-build.ps1 -Ref v0.27.5 -WarmCacheOnly
+.\scripts\windows-release-build.ps1 -Ref v0.27.5 -BuildOnly
+.\scripts\windows-release-build.ps1 -Ref v0.27.5 -PackageOnly
 .\scripts\windows-release-build.ps1 -Ref v0.27.5 -WarmCliCache
 .\scripts\windows-release-build.ps1 -Ref v0.27.5 -SmokeInstall
 .\scripts\windows-release-build.ps1 -Ref v0.27.5 -UploadRelease v0.27.5
 .\scripts\release-doctor.ps1 -Version 0.27.5
 ```
 
-There is no hosted CI/CD for this repository right now. Run local checks before
-PRs; the Windows release script is the primary path for installer and portable
-artifacts.
+Hosted CI validates pull requests. Pushing an immutable `v*` tag runs the
+Azure-backed signed Windows release workflow and creates a draft GitHub release.
 
 ## macOS Windows Cross Build
 

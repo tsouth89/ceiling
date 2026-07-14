@@ -1,0 +1,216 @@
+name: Signed Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build, sign, and draft release
+    runs-on: windows-latest
+    timeout-minutes: 120
+    environment: release
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Prepare release paths
+        shell: pwsh
+        run: |
+          $workRoot = Join-Path $env:RUNNER_TEMP "Ceiling-release"
+          $releaseBinDir = Join-Path $workRoot "cache\cargo-target\x86_64-pc-windows-msvc\release"
+          $assetsDir = Join-Path $workRoot "assets"
+          "RELEASE_WORK_ROOT=$workRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_BIN_DIR=$releaseBinDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_ASSETS_DIR=$assetsDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Validate tag and version
+        shell: pwsh
+        run: |
+          $line = Get-Content rust\Cargo.toml |
+            Where-Object { $_ -match '^version = "([^"]+)"' } |
+            Select-Object -First 1
+          if (-not $line -or $line -notmatch '^version = "([^"]+)"') {
+            throw "Could not read the release version from rust/Cargo.toml."
+          }
+          $version = $Matches[1]
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Tag $env:GITHUB_REF_NAME does not match repository version $expectedTag."
+          }
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag must point to a commit on protected main."
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Ensure Inno Setup is installed
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          if (-not ($candidates | Where-Object { Test-Path -LiteralPath $_ })) {
+            choco install innosetup --no-progress --yes
+            if ($LASTEXITCODE -ne 0) {
+              throw "Chocolatey failed to install Inno Setup."
+            }
+          }
+
+      - name: Build unsigned application binaries
+        shell: pwsh
+        run: |
+          & .\scripts\windows-release-build.ps1 `
+            -Ref $env:GITHUB_SHA `
+            -RepoUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git" `
+            -WorkRoot $env:RELEASE_WORK_ROOT `
+            -BuildOnly
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign application binaries
+        uses: Azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: |
+            ${{ env.RELEASE_BIN_DIR }}\ceiling.exe
+            ${{ env.RELEASE_BIN_DIR }}\codexbar-cli.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Package signed application binaries
+        shell: pwsh
+        run: |
+          & .\scripts\windows-release-build.ps1 `
+            -Ref $env:GITHUB_SHA `
+            -RepoUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git" `
+            -WorkRoot $env:RELEASE_WORK_ROOT `
+            -PackageOnly
+
+      - name: Sign installer
+        uses: Azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signatures and generate hashes
+        shell: pwsh
+        run: |
+          & .\scripts\finalize-windows-release.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -WorkRoot $env:RELEASE_WORK_ROOT `
+            -ExpectedSigner "CN=Brandon South"
+
+      - name: Smoke-test signed installer
+        shell: pwsh
+        run: |
+          & .\scripts\windows-smoke-install.ps1 `
+            -InstallerPath "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe" `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -RequireValidSignature `
+            -ExpectedSigner "CN=Brandon South"
+
+      - name: Run release doctor
+        shell: pwsh
+        run: |
+          & .\scripts\release-doctor.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -AssetsDir $env:RELEASE_ASSETS_DIR `
+            -ExpectedSigner "CN=Brandon South" `
+            -SkipGitHub
+
+      - name: Upload signed workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Ceiling-${{ env.RELEASE_VERSION }}-windows-signed
+          path: |
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe.sha256
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-portable.exe
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-portable.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or update draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @(
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe.sha256",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-portable.exe",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-portable.exe.sha256"
+          )
+          $releaseJson = gh release view $tag --json isDraft --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $release = $releaseJson | ConvertFrom-Json
+            if (-not $release.isDraft) {
+              throw "Refusing to replace assets on published release $tag."
+            }
+            gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $tag @assets `
+              --verify-tag `
+              --draft `
+              --generate-notes `
+              --title "Ceiling $env:RELEASE_VERSION" `
+              --repo $env:GITHUB_REPOSITORY
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create or update the draft GitHub release."
+          }
+
+      - name: Sign out of Azure
+        if: always()
+        shell: pwsh
+        run: |
+          az logout
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Azure CLI logout did not complete cleanly."
+          }

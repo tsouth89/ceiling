@@ -227,7 +227,39 @@ impl GeminiApi {
         let resolved = std::fs::canonicalize(&gemini_path).unwrap_or(gemini_path);
         let base_dir = resolved.parent()?;
 
+        // Current Gemini CLI releases ship as a bundled npm package instead of
+        // the older standalone gemini-cli-core tree. Search the largest bundle
+        // chunks first; the OAuth constants live in a platform chunk and this
+        // path is only needed when the stored access token expires.
+        if let Some(creds) = Self::try_extract_oauth_from_bundle(
+            &base_dir
+                .join("node_modules")
+                .join("@google")
+                .join("gemini-cli")
+                .join("bundle"),
+        ) {
+            return Some(creds);
+        }
+
         Self::oauth_credentials_from_candidates(Self::binary_oauth_candidates(base_dir))
+    }
+
+    fn try_extract_oauth_from_bundle(bundle_dir: &Path) -> Option<OAuthClientCredentials> {
+        let mut candidates = std::fs::read_dir(bundle_dir)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("js") {
+                    return None;
+                }
+                Some((entry.metadata().ok()?.len(), path))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by_key(|candidate| std::cmp::Reverse(candidate.0));
+        candidates
+            .into_iter()
+            .find_map(|(_, path)| Self::try_extract_oauth_from_js(&path))
     }
 
     fn oauth_credentials_from_candidates<I>(candidates: I) -> Option<OAuthClientCredentials>
@@ -288,6 +320,15 @@ impl GeminiApi {
     fn platform_oauth_credentials() -> Option<OAuthClientCredentials> {
         #[cfg(windows)]
         if let Some(appdata) = dirs::data_dir() {
+            let bundle = appdata
+                .join("npm")
+                .join("node_modules")
+                .join("@google")
+                .join("gemini-cli")
+                .join("bundle");
+            if let Some(creds) = Self::try_extract_oauth_from_bundle(&bundle) {
+                return Some(creds);
+            }
             let npm_path = appdata
                 .join("npm")
                 .join("node_modules")
@@ -642,6 +683,24 @@ fn jwt_payload(token: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_oauth_constants_from_current_cli_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gemini.js"), "console.log('entry');").unwrap();
+        std::fs::write(
+            dir.path().join("chunk-platform.js"),
+            r#"
+                var OAUTH_CLIENT_ID = "bundle-client-id";
+                var OAUTH_CLIENT_SECRET = "bundle-client-secret";
+            "#,
+        )
+        .unwrap();
+
+        let credentials = GeminiApi::try_extract_oauth_from_bundle(dir.path()).unwrap();
+        assert_eq!(credentials.client_id, "bundle-client-id");
+        assert_eq!(credentials.client_secret, "bundle-client-secret");
+    }
 
     #[test]
     fn paid_tier_name_overrides_generic_tier_fallbacks() {

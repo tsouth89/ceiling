@@ -65,7 +65,6 @@ describe("PlanStatusCard", () => {
     render(
       <PlanStatusCard
         provider={provider()}
-        hideEmail={false}
         resetTimeRelative
         showAsUsed={false}
       />,
@@ -77,6 +76,25 @@ describe("PlanStatusCard", () => {
     expect(screen.getByText(/38% left/)).toBeTruthy();
     expect(screen.getByText("Auto")).toBeTruthy();
     expect(screen.getByText(/10% left/)).toBeTruthy();
+  });
+
+  it("shows Cursor API as a compact third allowance row", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          extraRateWindows: [
+            { id: "cursor-api", title: "API", window: window(8) },
+          ],
+        })}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.getByText("Auto")).toBeTruthy();
+    expect(screen.getByText("API")).toBeTruthy();
+    expect(screen.getByText(/8% used/)).toBeTruthy();
   });
 
   it("still shows reset timing when the session is exhausted", () => {
@@ -91,7 +109,6 @@ describe("PlanStatusCard", () => {
           secondaryLabel: undefined,
           planName: "Claude Max 5x",
         })}
-        hideEmail
         resetTimeRelative
         showAsUsed
       />,
@@ -99,5 +116,51 @@ describe("PlanStatusCard", () => {
 
     expect(screen.getByText(/100% used/)).toBeTruthy();
     expect(screen.getByText("Resets in 12d")).toBeTruthy();
+  });
+
+  it("keeps overview identity quiet and strips redundant plan branding", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          planName: "Cursor Pro",
+          promoSignals: [
+            {
+              id: "cursor-promotional",
+              kind: "boost",
+              title: "promotional",
+              description: "Temporary promotional capacity",
+              windowId: "cursor-promotional",
+              endsAt: null,
+            },
+          ],
+        })}
+        resetTimeRelative
+      />,
+    );
+
+    expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.queryByText("you@example.com")).toBeNull();
+    expect(screen.queryByText("promotional")).toBeNull();
+  });
+
+  it("describes inactive limits as a quiet row instead of a vague chip", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          inactiveRateWindows: [
+            {
+              id: "codex-five-hour",
+              title: "5-hour",
+              description: "Not currently enforced by OpenAI",
+            },
+          ],
+        })}
+        resetTimeRelative
+      />,
+    );
+
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("not currently enforced")).toBeTruthy();
+    expect(screen.queryByText("lifted")).toBeNull();
   });
 });

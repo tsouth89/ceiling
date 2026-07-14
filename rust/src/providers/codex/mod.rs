@@ -16,6 +16,15 @@ use crate::core::{
 
 pub use api::CodexApi;
 
+/// Detect a usable local Codex CLI sign-in without exposing credential data.
+pub fn local_credentials_available() -> bool {
+    CodexApi::new().has_local_credentials()
+}
+
+pub fn cli_installed() -> bool {
+    which_codex().is_some()
+}
+
 /// Codex provider for fetching AI usage limits
 pub struct CodexProvider {
     metadata: ProviderMetadata,

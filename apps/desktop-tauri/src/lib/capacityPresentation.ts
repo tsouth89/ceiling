@@ -14,8 +14,8 @@ export type ConstrainingWindow = {
 export type GlanceMeters = {
   /** Account plan pool — always the overview hero. */
   primary: ConstrainingWindow;
-  /** Hottest non-primary lane when materially hot; otherwise omitted. */
-  companion: ConstrainingWindow | null;
+  /** Compact non-primary lanes shown beneath the hero. */
+  companions: ConstrainingWindow[];
 };
 
 export type ProviderGlanceStatus = "ok" | "warning" | "exhausted" | "error";
@@ -50,9 +50,11 @@ export function constrainingWindow(
 }
 
 /**
- * Overview glance model: primary plan pool as hero, plus an optional hot
- * companion lane (Auto/API/5-hour/etc.). Clicking never toggles meters —
- * detail mode lists every window.
+ * Overview glance model: primary plan pool as hero, plus compact companion
+ * lanes. Cursor always shows its reported Auto and API lanes because they are
+ * distinct allowances users need to compare. Other providers keep the single
+ * hottest materially constrained lane. Clicking never toggles meters — detail
+ * mode lists every window.
  */
 export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
   const primary: ConstrainingWindow = {
@@ -61,8 +63,17 @@ export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
     window: provider.primary,
   };
 
+  const candidates = nonPrimaryWindows(provider);
+  if (provider.providerId === "cursor") {
+    const cursorCompanions = [
+      candidates.find((candidate) => candidate.id === "secondary"),
+      candidates.find((candidate) => candidate.id === "extra-cursor-api"),
+    ].filter((candidate): candidate is ConstrainingWindow => Boolean(candidate));
+    return { primary, companions: cursorCompanions };
+  }
+
   let companion: ConstrainingWindow | null = null;
-  for (const candidate of nonPrimaryWindows(provider)) {
+  for (const candidate of candidates) {
     if (!isCompanionHot(candidate.window, primary.window)) continue;
     if (
       !companion ||
@@ -72,7 +83,7 @@ export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
     }
   }
 
-  return { primary, companion };
+  return { primary, companions: companion ? [companion] : [] };
 }
 
 function isCompanionHot(

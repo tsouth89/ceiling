@@ -26,7 +26,9 @@ Additional providers remain available from the underlying foundation while Ceili
 
 ## Current status
 
-Ceiling is in its foundation phase and **coming soon**. The Windows tray, provider, credential, and capacity-strip architecture is in place; the product is being simplified and polished around the providers above.
+Ceiling is preparing its first public Windows release. The tray app, dashboard,
+provider integrations, credential discovery, capacity strip, and reset alerts are
+working; packaging and release hardening are in progress.
 
 ## Development
 
@@ -39,8 +41,17 @@ pnpm --dir apps/desktop-tauri tauri:dev
 
 The active desktop app lives in `apps/desktop-tauri`. Shared provider and usage logic lives in `rust`.
 
-For the active implementation state and the next work items, see [docs/HANDOFF.md](docs/HANDOFF.md). For the tray and strip visual system, see [docs/CEILING_UI.md](docs/CEILING_UI.md).
+For the active implementation state and the next work items, see
+[docs/HANDOFF.md](docs/HANDOFF.md). For the tray and strip visual system, see
+[docs/CEILING_UI.md](docs/CEILING_UI.md). Maintainers should follow the
+[release checklist](docs/RELEASING.md) for public builds.
 
-## License and credits
+## Lineage, license, and credits
 
-Ceiling is released under the [MIT license](LICENSE) and builds on the MIT-licensed [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger. The upstream copyright and license notice are retained in [LICENSE](LICENSE).
+Ceiling is an independent Windows-focused fork of
+[Win-CodexBar](https://github.com/Finesssee/Win-CodexBar), which is itself based
+on Peter Steinberger's [CodexBar](https://github.com/steipete/CodexBar). Ceiling
+is not affiliated with or endorsed by either upstream project.
+
+The project is released under the [MIT license](LICENSE). The original copyright
+and license notice are retained as required by that license.

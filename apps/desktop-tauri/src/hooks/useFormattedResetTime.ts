@@ -46,6 +46,9 @@ export function useFormattedResetTime(
     const hours = Math.floor((totalMinutes % 1440) / 60);
     const minutes = totalMinutes % 60;
     if (days > 0) {
+      if (hours === 0) {
+        return t("ResetsInDays").replace("{}", String(days));
+      }
       return t("ResetsInDaysHours")
         .replace("{}", String(days))
         .replace("{}", String(hours));

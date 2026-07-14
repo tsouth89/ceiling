@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Check whether a Win-CodexBar release is ready or complete.
+    Check whether a Ceiling release is ready or complete.
 
 .DESCRIPTION
     Verifies version-file consistency, changelog presence, optional local
@@ -11,7 +11,8 @@
 
 param(
     [string]$Version = "",
-    [string]$AssetsDir = "C:\code\Win-CodexBar-release\assets",
+    [string]$AssetsDir = "C:\code\Ceiling-release\assets",
+    [string]$ExpectedSigner = "CN=Brandon South",
     [switch]$SkipGitHub
 )
 
@@ -73,6 +74,19 @@ function Assert-Version {
     }
 }
 
+function Assert-FileContains {
+    param(
+        [string]$Label,
+        [string]$Path,
+        [string]$Pattern
+    )
+    if ((Test-Path $Path) -and (Select-String -Path $Path -Pattern $Pattern -Quiet)) {
+        Write-Ok "$Label"
+    } else {
+        Write-Fail "$Label"
+    }
+}
+
 function Test-AssetHash {
     param([string]$AssetPath)
 
@@ -95,6 +109,30 @@ function Test-AssetHash {
     }
 }
 
+function Test-AssetSignature {
+    param([string]$AssetPath)
+
+    if (-not (Test-Path -LiteralPath $AssetPath)) {
+        return
+    }
+
+    $signature = Get-AuthenticodeSignature -FilePath $AssetPath
+    if ($signature.Status -ne "Valid") {
+        Write-Fail "$(Split-Path $AssetPath -Leaf) signature is $($signature.Status)"
+        return
+    }
+    if ($signature.SignerCertificate.Subject -notlike "*$ExpectedSigner*") {
+        Write-Fail "$(Split-Path $AssetPath -Leaf) has unexpected signer $($signature.SignerCertificate.Subject)"
+        return
+    }
+    if ($null -eq $signature.TimeStamperCertificate) {
+        Write-Fail "$(Split-Path $AssetPath -Leaf) is missing an RFC 3161 timestamp"
+        return
+    }
+
+    Write-Ok "$(Split-Path $AssetPath -Leaf) is signed by $ExpectedSigner"
+}
+
 $rustVersion = Get-CargoVersion (Join-Path $RepoRoot "rust\Cargo.toml")
 if (-not $Version) {
     $Version = $rustVersion
@@ -104,7 +142,7 @@ if (-not $Version) {
 }
 
 $tag = "v$Version"
-Write-Host "Release doctor: Win-CodexBar $Version"
+Write-Host "Release doctor: Ceiling $Version"
 Write-Host ""
 
 Assert-Version "rust/Cargo.toml" $rustVersion $Version
@@ -118,6 +156,34 @@ Assert-Version "apps/desktop-tauri/package.json" $packageVersion $Version
 $tauriConfigPath = Join-Path $RepoRoot "apps\desktop-tauri\src-tauri\tauri.conf.json"
 $tauriVersion = ((Get-Content -Raw $tauriConfigPath) | ConvertFrom-Json).version
 Assert-Version "tauri.conf.json" $tauriVersion $Version
+$tauriConfig = Get-Content -Raw $tauriConfigPath | ConvertFrom-Json
+if ($tauriConfig.productName -eq "Ceiling") {
+    Write-Ok "Tauri product name is Ceiling"
+} else {
+    Write-Fail "Tauri product name is '$($tauriConfig.productName)', expected Ceiling"
+}
+
+if ($tauriConfig.identifier -eq "io.github.tsouth89.ceiling") {
+    Write-Ok "Tauri identifier is io.github.tsouth89.ceiling"
+} else {
+    Write-Fail "Tauri identifier is '$($tauriConfig.identifier)', expected io.github.tsouth89.ceiling"
+}
+
+Assert-FileContains "Cargo repository points to Ceiling" `
+    (Join-Path $RepoRoot "rust\Cargo.toml") `
+    'repository = "https://github\.com/tsouth89/ceiling"'
+Assert-FileContains "Installer product name is Ceiling" `
+    (Join-Path $RepoRoot "rust\installer\codexbar.iss") `
+    '#define MyAppName "Ceiling"'
+Assert-FileContains "Installer has Ceiling application id" `
+    (Join-Path $RepoRoot "rust\installer\codexbar.iss") `
+    'AppId=io\.github\.tsouth89\.ceiling'
+Assert-FileContains "README documents upstream lineage" `
+    (Join-Path $RepoRoot "README.md") `
+    'independent Windows-focused fork'
+Assert-FileContains "Security policy exists" `
+    (Join-Path $RepoRoot "SECURITY.md") `
+    '# Security policy'
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if ($git) {
@@ -144,8 +210,12 @@ if ((Test-Path $changelogPath) -and (Select-String -Path $changelogPath -Pattern
 }
 
 if (Test-Path $AssetsDir) {
-    Test-AssetHash (Join-Path $AssetsDir "CodexBar-$Version-Setup.exe")
-    Test-AssetHash (Join-Path $AssetsDir "CodexBar-$Version-portable.exe")
+    $installerAsset = Join-Path $AssetsDir "Ceiling-$Version-Setup.exe"
+    $portableAsset = Join-Path $AssetsDir "Ceiling-$Version-portable.exe"
+    Test-AssetHash $installerAsset
+    Test-AssetSignature $installerAsset
+    Test-AssetHash $portableAsset
+    Test-AssetSignature $portableAsset
 } else {
     Write-Warn "local assets directory not found: $AssetsDir"
 }
@@ -155,18 +225,18 @@ if (-not $SkipGitHub) {
     if ($gh) {
         Push-Location $RepoRoot
         try {
-            $ghJsonPath = Join-Path $env:TEMP "win-codexbar-release-doctor-gh.json"
-            $ghErrPath = Join-Path $env:TEMP "win-codexbar-release-doctor-gh.err"
+            $ghJsonPath = Join-Path $env:TEMP "ceiling-release-doctor-gh.json"
+            $ghErrPath = Join-Path $env:TEMP "ceiling-release-doctor-gh.err"
             & $gh.Source release view $tag --json assets,url 1>$ghJsonPath 2>$ghErrPath
             if ($LASTEXITCODE -eq 0) {
                 $release = Get-Content -Raw $ghJsonPath | ConvertFrom-Json
                 Write-Ok "GitHub release exists: $($release.url)"
                 $assetNames = @($release.assets | ForEach-Object { $_.name })
                 foreach ($name in @(
-                    "CodexBar-$Version-Setup.exe",
-                    "CodexBar-$Version-Setup.exe.sha256",
-                    "CodexBar-$Version-portable.exe",
-                    "CodexBar-$Version-portable.exe.sha256"
+                    "Ceiling-$Version-Setup.exe",
+                    "Ceiling-$Version-Setup.exe.sha256",
+                    "Ceiling-$Version-portable.exe",
+                    "Ceiling-$Version-portable.exe.sha256"
                 )) {
                     if ($assetNames -contains $name) {
                         Write-Ok "GitHub release has $name"

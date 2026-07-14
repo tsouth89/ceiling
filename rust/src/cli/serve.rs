@@ -21,10 +21,7 @@ pub struct ServeArgs {
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
-    eprintln!(
-        "Ceiling server listening on http://127.0.0.1:{}",
-        args.port
-    );
+    eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
 
     loop {
         let (stream, _) = listener.accept().await?;

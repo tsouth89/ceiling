@@ -1,6 +1,9 @@
 # Contributing
 
-Thanks for helping improve Win-CodexBar. This repo is the Windows/Tauri port, so prefer the active Tauri and Rust codepaths over historical upstream macOS material.
+Thanks for helping improve Ceiling. Ceiling is a Windows-focused fork with its
+own product direction, while preserving useful provider and backend work from
+its upstream lineage. Prefer the active Tauri and Rust codepaths over historical
+upstream macOS material.
 
 ## Active project layout
 
@@ -21,9 +24,9 @@ Do not paste secrets, API keys, cookies, OAuth tokens, private account details, 
 
 Keep PRs focused on one behavior change or fix. Link the issue when one exists, and explain what changed in user-facing terms.
 
-For UI, tray, Settings, or visual behavior changes, use CUA Driver for visual proof. If CUA Driver cannot be used, explain why in the PR and include equivalent manual proof. For provider/parser changes, include deterministic samples or tests where practical.
-
-Before submitting a PR, run a thermo-nuclear code quality review against the final diff and address any structural maintainability issues it finds: https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md
+For UI, tray, Settings, or visual behavior changes, include a screenshot, short
+recording, or clear manual validation notes. For provider/parser changes,
+include deterministic samples or tests where practical.
 
 ## Build and test
 
@@ -58,7 +61,7 @@ Raw `cargo build --release` for the Tauri crate is not the preferred desktop bui
 - Avoid logging or storing raw secrets.
 - Add focused tests near the changed code.
 - Keep UI behavior accessible; do not rely only on brittle drag/drop when a button or keyboard path is needed.
-- For UI/tray flows, use CUA Driver proof instead of eyeballing only, especially when interaction reliability matters.
+- For UI/tray flows, include visual or manual proof, especially when interaction reliability matters.
 
 ## Release and packaging changes
 

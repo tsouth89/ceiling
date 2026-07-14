@@ -66,8 +66,7 @@ fn conditional_hide_to_tray_leaves_non_matching_surface_alone() {
 // exercised `should_hide_tray_panel_on_toggle`) was removed here along with
 // its subject function: the tray-icon left-click toggle for the shared
 // `main` window's TrayPanel state no longer exists — the flyout is its own
-// dedicated window now (see `shell::flyout_window::toggle_with_blur_consume`
-// and its own test module in flyout_window.rs).
+// dedicated window, while tray left-click opens the dashboard.
 
 #[test]
 fn tray_reveal_fallback_only_for_hidden_tray_panel() {
@@ -111,36 +110,6 @@ fn tray_show_grace_is_based_on_actual_show_time() {
     assert!(!state.was_tray_panel_recently_shown(
         shown_at + std::time::Duration::from_millis(500),
         std::time::Duration::from_millis(500),
-    ));
-}
-
-#[test]
-fn immediate_tray_click_consumes_blur_dismissal() {
-    let mut state = AppState::new();
-    let dismissed_at = std::time::Instant::now();
-
-    state.mark_blur_dismissed(dismissed_at);
-
-    assert!(state.take_recent_blur_dismissal(
-        dismissed_at + std::time::Duration::from_millis(20),
-        std::time::Duration::from_millis(250),
-    ));
-    assert!(!state.take_recent_blur_dismissal(
-        dismissed_at + std::time::Duration::from_millis(20),
-        std::time::Duration::from_millis(250),
-    ));
-}
-
-#[test]
-fn later_tray_click_does_not_consume_expired_blur_dismissal() {
-    let mut state = AppState::new();
-    let dismissed_at = std::time::Instant::now();
-
-    state.mark_blur_dismissed(dismissed_at);
-
-    assert!(!state.take_recent_blur_dismissal(
-        dismissed_at + std::time::Duration::from_millis(251),
-        std::time::Duration::from_millis(250),
     ));
 }
 

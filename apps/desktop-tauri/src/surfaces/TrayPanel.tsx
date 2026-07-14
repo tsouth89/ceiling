@@ -203,6 +203,16 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     setSelectedProviderId(initialProviderId);
   }, [initialProviderId]);
 
+  useEffect(() => {
+    if (
+      selectedProviderId !== null &&
+      providers.length > 0 &&
+      !sorted.some((provider) => provider.providerId === selectedProviderId)
+    ) {
+      setSelectedProviderId(null);
+    }
+  }, [providers.length, selectedProviderId, sorted]);
+
   // Cards to display based on mode
   // Overview: all providers in the grid — non-error first, then errors
   // Detail: only the selected provider's card (macOS shows single provider)
@@ -427,7 +437,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           <PlanStatusCard
             provider={p}
             isRefreshing={refreshingProviderIds.has(p.providerId)}
-            hideEmail={settings.hidePersonalInfo}
             resetTimeRelative={settings.resetTimeRelative}
             showResetWhenExhausted={settings.showResetWhenExhausted}
             showAsUsed={settings.showAsUsed}

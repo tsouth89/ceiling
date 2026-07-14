@@ -37,8 +37,7 @@ fn os_position(_window: &WebviewWindow, x: i32, y: i32) -> tauri::PhysicalPositi
 // `transition.to != SurfaceMode::TrayPanel` branch always took the `if`
 // side in practice; the check itself was removed as unreachable dead weight
 // once `main`'s transitions were audited for TrayPanel producers (none
-// remain — see `tray_bridge.rs`'s `MenuAction::OpenFlyout` and
-// `flyout_window::toggle_with_blur_consume`).
+// remain; tray left-click now targets the dashboard).
 pub(super) fn should_force_tray_panel_reveal(
     current: SurfaceMode,
     main_window_visible: bool,
@@ -612,6 +611,5 @@ pub(super) fn apply_transition(
 // The old `handle_tray_panel_click` / `toggle_tray_panel` /
 // `should_hide_tray_panel_on_toggle` trio (tray-icon left-click handling for
 // the shared `main` window's TrayPanel state) was removed here: the flyout is
-// now its own dedicated window, and the tray-icon left-click handler in
-// `tray_bridge.rs` calls `shell::flyout_window::toggle_with_blur_consume`
-// directly instead of going through the `main`-window surface machine.
+// now its own dedicated window, while tray-icon left-click opens the
+// dashboard instead of going through the `main`-window tray-panel state.

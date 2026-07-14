@@ -1,4 +1,4 @@
-#define MyAppName "CodexBar"
+#define MyAppName "Ceiling"
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
 #endif
@@ -9,7 +9,7 @@
   #define OutputDir "..\\target\\installer"
 #endif
 #ifndef OutputBaseFilename
-  #define OutputBaseFilename "CodexBar-" + AppVersion + "-Setup"
+  #define OutputBaseFilename "Ceiling-" + AppVersion + "-Setup"
 #endif
 #ifndef VCRedistPath
   #define VCRedistPath "..\\target\\installer-deps\\vc_redist.x64.exe"
@@ -19,16 +19,16 @@
 #endif
 
 [Setup]
-AppId=WinCodexBar
+AppId=io.github.tsouth89.ceiling
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppVerName={#MyAppName} {#AppVersion}
-AppPublisher=CodexBar Contributors
-AppPublisherURL=https://github.com/Finesssee/Win-CodexBar
-AppSupportURL=https://github.com/Finesssee/Win-CodexBar/issues
-AppUpdatesURL=https://github.com/Finesssee/Win-CodexBar/releases
-DefaultDirName={localappdata}\Programs\CodexBar
-DefaultGroupName=CodexBar
+AppPublisher=Brandon South
+AppPublisherURL=https://github.com/tsouth89/ceiling
+AppSupportURL=https://github.com/tsouth89/ceiling/issues
+AppUpdatesURL=https://github.com/tsouth89/ceiling/releases
+DefaultDirName={localappdata}\Programs\Ceiling
+DefaultGroupName=Ceiling
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
@@ -40,7 +40,7 @@ SolidCompression=yes
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile=..\icons\icon.ico
-UninstallDisplayIcon={app}\codexbar.exe
+UninstallDisplayIcon={app}\ceiling.exe
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -48,19 +48,18 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
-Source: "{#TargetBinDir}\codexbar.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TargetBinDir}\ceiling.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#TargetBinDir}\codexbar-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#TargetBinDir}\codexbar-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\icons\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VCRedistPath}"; Flags: dontcopy
 Source: "{#WebView2BootstrapperPath}"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\CodexBar"; Filename: "{app}\codexbar.exe"; Parameters: "menubar"; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"
-Name: "{autodesktop}\CodexBar"; Filename: "{app}\codexbar.exe"; Parameters: "menubar"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"
+Name: "{autoprograms}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"
+Name: "{autodesktop}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"
 
 [Run]
-Filename: "{app}\codexbar.exe"; Parameters: "menubar"; Description: "Launch CodexBar"; Flags: nowait postinstall skipifsilent; Check: CanLaunchCodexBar
+Filename: "{app}\ceiling.exe"; Parameters: "menubar"; Description: "Launch Ceiling"; Flags: nowait postinstall skipifsilent; Check: CanLaunchCeiling
 
 [Code]
 var
@@ -195,7 +194,7 @@ begin
   Result := NeedsVCRedistRestart or NeedsWebView2Restart;
 end;
 
-function CanLaunchCodexBar(): Boolean;
+function CanLaunchCeiling(): Boolean;
 begin
   Result := not NeedsVCRedistRestart and not NeedsWebView2Restart;
 end;

@@ -153,6 +153,10 @@ fn load_from_file() -> Result<ClaudeOAuthCredentials, ProviderError> {
     parse_credentials_json(&content)
 }
 
+pub(super) fn credentials_file_available() -> bool {
+    load_from_file().is_ok()
+}
+
 /// Load credentials from Claude Code's OS keychain / credential manager entry.
 fn load_from_keyring() -> Result<Option<(ClaudeOAuthCredentials, CredentialSource)>, ProviderError>
 {

@@ -188,6 +188,9 @@ async fn do_refresh_providers_with_policy(
 
     let error_count = finish_provider_refresh(&state)?;
     update_tray_and_notifications(app, &state, &inputs.settings, &inputs.token_accounts)?;
+    if let Ok(mut guard) = state.lock() {
+        guard.notification_manager.arm_after_startup_baseline();
+    }
 
     events::emit_refresh_complete(app, enabled_count, error_count);
     crate::auto_refresh::schedule_refresh_enrichment(&inputs.settings);
@@ -209,6 +212,7 @@ fn begin_provider_refresh(
 
     guard.is_refreshing = true;
     guard.provider_refresh_started_at = Some(std::time::Instant::now());
+    guard.notification_manager.begin_refresh_cycle();
     Ok(true)
 }
 
@@ -281,14 +285,47 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
     let snapshot = fetch_provider_snapshot(id, ctx).await;
 
     let state = app.state::<Mutex<AppState>>();
-    let snapshot = if let Ok(mut guard) = state.lock() {
+    let (snapshot, capacity_events, notifications_armed) = if let Ok(mut guard) = state.lock() {
         let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
+        let capacity_events = guard.capacity_event_observer.observe(&snapshot);
+        let notifications_armed = guard.notification_manager.notifications_are_armed();
         upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
-        snapshot
+        (snapshot, capacity_events, notifications_armed)
     } else {
-        snapshot
+        (snapshot, Vec::new(), false)
     };
     events::emit_provider_updated(&app, &snapshot);
+    let notification_settings = Settings::load();
+    for event in capacity_events {
+        if !notifications_armed {
+            tracing::debug!(
+                provider = event.provider_id,
+                kind = ?event.kind,
+                "suppressing capacity event while establishing startup baseline"
+            );
+            continue;
+        }
+        events::emit_capacity_event(&app, &event);
+        if notification_settings.show_notifications
+            && notification_settings.capacity_event_notifications_enabled
+            && capacity_event_uses_windows_notification(event.kind)
+            && let Ok(mut guard) = state.lock()
+        {
+            guard
+                .notification_manager
+                .notify_capacity_event(&event.notification_title(), &event.notification_body());
+        }
+    }
+}
+
+fn capacity_event_uses_windows_notification(
+    kind: crate::capacity_events::CapacityEventKind,
+) -> bool {
+    matches!(
+        kind,
+        crate::capacity_events::CapacityEventKind::ScheduledReset
+            | crate::capacity_events::CapacityEventKind::SurpriseReset
+    )
 }
 
 pub(super) fn preserve_last_good_transient_failure(
@@ -423,7 +460,21 @@ fn update_tray_and_notifications(
 /// brand-new threshold crossing — and drives a false session depleted/restored
 /// cycle on every refresh. Keying by cadence keeps each real window's alert
 /// stable across the swap.
-fn window_notify_key(window_minutes: Option<u32>) -> &'static str {
+fn window_notify_key(
+    provider: ProviderId,
+    label: Option<&str>,
+    window_minutes: Option<u32>,
+) -> &'static str {
+    if provider == ProviderId::Cursor
+        && label.is_some_and(|label| {
+            matches!(
+                label.trim().to_ascii_lowercase().as_str(),
+                "plan" | "total" | "auto" | "api"
+            )
+        })
+    {
+        return "monthly";
+    }
     match window_minutes {
         Some(m) if m <= 720 => "session",   // 5-hour class (<= 12h)
         Some(m) if m <= 20_160 => "weekly", // up to two weeks
@@ -439,15 +490,20 @@ fn window_notify_key(window_minutes: Option<u32>) -> &'static str {
 /// window *only when it is actually present this refresh* — a promoted weekly is
 /// never reported as the session.
 fn plan_threshold_alerts(
+    provider: ProviderId,
+    primary_label: Option<&str>,
     primary: &RateWindowSnapshot,
+    secondary_label: Option<&str>,
     secondary: Option<&RateWindowSnapshot>,
 ) -> (Vec<(&'static str, f64)>, Option<f64>) {
     let mut alerts: Vec<(&'static str, f64)> = Vec::new();
     let mut session_percent: Option<f64> = None;
     let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
-    for window in std::iter::once(primary).chain(secondary) {
-        let key = window_notify_key(window.window_minutes);
+    for (label, window) in std::iter::once((primary_label, primary))
+        .chain(secondary.map(|window| (secondary_label, window)))
+    {
+        let key = window_notify_key(provider, label, window.window_minutes);
         if key == "session" {
             session_percent = Some(window.used_percent);
         }
@@ -471,12 +527,20 @@ fn notify_usage_thresholds(
             if snapshot.error.is_none()
                 && let Some(&provider) = cli_map.get(snapshot.provider_id.as_str())
             {
-                let (alerts, session_percent) =
-                    plan_threshold_alerts(&snapshot.primary, snapshot.secondary.as_ref());
+                let (alerts, session_percent) = plan_threshold_alerts(
+                    provider,
+                    snapshot.primary_label.as_deref(),
+                    &snapshot.primary,
+                    snapshot.secondary_label.as_deref(),
+                    snapshot.secondary.as_ref(),
+                );
                 for (window_key, used_percent) in alerts {
-                    guard
-                        .notification_manager
-                        .check_and_notify(provider, window_key, used_percent, settings);
+                    guard.notification_manager.check_and_notify(
+                        provider,
+                        window_key,
+                        used_percent,
+                        settings,
+                    );
                 }
                 // Session depleted/restored tracks the real 5-hour window only.
                 // When the API omits it, the promoted weekly must not be read as
@@ -683,10 +747,24 @@ mod predictive_warning_tests {
 
     #[test]
     fn window_key_classifies_by_reset_cadence() {
-        assert_eq!(window_notify_key(Some(300)), "session"); // 5-hour
-        assert_eq!(window_notify_key(Some(10_080)), "weekly");
-        assert_eq!(window_notify_key(Some(43_200)), "monthly");
-        assert_eq!(window_notify_key(None), "primary");
+        assert_eq!(
+            window_notify_key(ProviderId::Claude, None, Some(300)),
+            "session"
+        );
+        assert_eq!(
+            window_notify_key(ProviderId::Claude, None, Some(10_080)),
+            "weekly"
+        );
+        assert_eq!(
+            window_notify_key(ProviderId::Claude, None, Some(43_200)),
+            "monthly"
+        );
+        assert_eq!(window_notify_key(ProviderId::Claude, None, None), "primary");
+        assert_eq!(
+            window_notify_key(ProviderId::Cursor, Some("Plan"), Some(300)),
+            "monthly",
+            "Cursor's billing plan must never be described as a session"
+        );
     }
 
     /// Regression: Codex's API intermittently omits the 5-hour meter, so the app
@@ -696,16 +774,50 @@ mod predictive_warning_tests {
     #[test]
     fn promoted_weekly_is_not_treated_as_session() {
         // 5-hour present: primary = 5h (100%), secondary = weekly (75%).
-        let (alerts, session) =
-            plan_threshold_alerts(&rw(Some(300), 100.0), Some(&rw(Some(10_080), 75.0)));
+        let (alerts, session) = plan_threshold_alerts(
+            ProviderId::Codex,
+            Some("Session"),
+            &rw(Some(300), 100.0),
+            Some("Weekly"),
+            Some(&rw(Some(10_080), 75.0)),
+        );
         assert_eq!(session, Some(100.0));
         assert!(alerts.contains(&("session", 100.0)));
         assert!(alerts.contains(&("weekly", 75.0)));
 
         // Next refresh omits the 5-hour, so the weekly is promoted to primary.
         // It must NOT be reported as the session, and it keeps the "weekly" key.
-        let (alerts, session) = plan_threshold_alerts(&rw(Some(10_080), 75.0), None);
-        assert_eq!(session, None, "a promoted weekly must not be read as the session");
+        let (alerts, session) = plan_threshold_alerts(
+            ProviderId::Codex,
+            Some("Weekly"),
+            &rw(Some(10_080), 75.0),
+            None,
+            None,
+        );
+        assert_eq!(
+            session, None,
+            "a promoted weekly must not be read as the session"
+        );
         assert_eq!(alerts, vec![("weekly", 75.0)]);
+    }
+
+    #[test]
+    fn only_confirmed_resets_are_eligible_for_windows_notifications() {
+        use crate::capacity_events::CapacityEventKind;
+
+        assert!(capacity_event_uses_windows_notification(
+            CapacityEventKind::ScheduledReset
+        ));
+        assert!(capacity_event_uses_windows_notification(
+            CapacityEventKind::SurpriseReset
+        ));
+        for visual_only in [
+            CapacityEventKind::ResetTimeShift,
+            CapacityEventKind::WindowLifted,
+            CapacityEventKind::WindowRestored,
+            CapacityEventKind::AllowanceGranted,
+        ] {
+            assert!(!capacity_event_uses_windows_notification(visual_only));
+        }
     }
 }

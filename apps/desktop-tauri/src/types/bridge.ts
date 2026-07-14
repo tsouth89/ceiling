@@ -212,6 +212,7 @@ export interface SettingsSnapshot {
   startAtLogin: boolean;
   startMinimized: boolean;
   showNotifications: boolean;
+  capacityEventNotificationsEnabled: boolean;
   soundEnabled: boolean;
   soundVolume: number;
   highUsageThreshold: number;
@@ -275,6 +276,7 @@ export interface SettingsUpdate {
   startAtLogin?: boolean;
   startMinimized?: boolean;
   showNotifications?: boolean;
+  capacityEventNotificationsEnabled?: boolean;
   soundEnabled?: boolean;
   soundVolume?: number;
   highUsageThreshold?: number;
@@ -330,6 +332,20 @@ export interface BootstrapState {
   contractVersion: string;
   providers: ProviderCatalogEntry[];
   settings: SettingsSnapshot;
+}
+
+export type DetectedAccountStatus =
+  | "ready"
+  | "locked"
+  | "installed"
+  | "unavailable";
+
+export interface DetectedProviderAccount {
+  providerId: string;
+  displayName: string;
+  status: DetectedAccountStatus;
+  sourceLabel: string;
+  detail: string;
 }
 
 // ── Provider usage snapshot types ────────────────────────────────────
@@ -443,6 +459,25 @@ export interface RefreshCompletePayload {
 
 export interface RefreshStartedPayload {
   providerIds: string[];
+}
+
+export interface CapacityEventPayload {
+  providerId: string;
+  displayName: string;
+  windowId: string;
+  windowLabel: string;
+  kind:
+    | "scheduledReset"
+    | "surpriseReset"
+    | "resetTimeShift"
+    | "windowLifted"
+    | "windowRestored"
+    | "allowanceGranted";
+  previousUsedPercent: number;
+  currentUsedPercent: number;
+  previousResetAt: string;
+  currentResetAt: string;
+  occurredAt: string;
 }
 
 export interface SafeDiagnostics {

@@ -14,6 +14,7 @@ import ChartsPanel from "./ChartsPanel";
 import AccountsPanel from "./AccountsPanel";
 import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
+import DetectedAccountsCard from "../components/DetectedAccountsCard";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 
@@ -120,6 +121,10 @@ export default function PopOutPanel({
       settings.providerOrder,
     );
   }, [providers, settings.enabledProviders, settings.providerOrder, state.providers]);
+  const cachedProviderIds = useMemo(
+    () => providers.map((provider) => provider.providerId),
+    [providers],
+  );
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     providerId ?? null,
   );
@@ -163,6 +168,16 @@ export default function PopOutPanel({
   useEffect(() => {
     setSelectedProviderId(providerId ?? null);
   }, [providerId]);
+
+  useEffect(() => {
+    if (
+      selectedProviderId !== null &&
+      providers.length > 0 &&
+      !sorted.some((provider) => provider.providerId === selectedProviderId)
+    ) {
+      setSelectedProviderId(null);
+    }
+  }, [providers.length, selectedProviderId, sorted]);
 
   const visibleProviders = useMemo(() => {
     if (selectedProviderId === null) {
@@ -226,6 +241,15 @@ export default function PopOutPanel({
     void quitApplication();
   }, []);
 
+  const enableDetectedProviders = useCallback(
+    async (providerIds: string[]) => {
+      const next = [...new Set([...settings.enabledProviders, ...providerIds])];
+      await update({ enabledProviders: next });
+      refresh();
+    },
+    [refresh, settings.enabledProviders, update],
+  );
+
   const [activeSection, setActiveSection] = useState<DashboardSection>("overview");
 
   const isLight = settings.theme === "light";
@@ -277,7 +301,7 @@ export default function PopOutPanel({
     DashboardSection,
     { title: string; sub: string; blurb: string }
   > = {
-    overview: { title: "Overview", sub: "All accounts", blurb: "" },
+    overview: { title: "Overview", sub: "Usage at a glance", blurb: "" },
     activity: {
       title: "Activity",
       sub: "Upcoming resets",
@@ -340,13 +364,19 @@ export default function PopOutPanel({
           <div className="dashboard-body">
             {banner}
             {activeSection === "overview" ? (
-              sorted.length === 0 ? (
-                <MenuEmpty
-                  isLoading={isRefreshing && !hasCachedData}
-                  onSettings={openSettings}
+              <>
+                <DetectedAccountsCard
+                  enabledProviderIds={settings.enabledProviders}
+                  previouslyTrackedProviderIds={cachedProviderIds}
+                  onEnable={enableDetectedProviders}
+                  onManage={() => openSettingsWindow("providers")}
                 />
-              ) : (
-                <>
+                {sorted.length === 0 ? (
+                  <MenuEmpty
+                    isLoading={isRefreshing && !hasCachedData}
+                    onSettings={openSettings}
+                  />
+                ) : (
                   <div className="menu-stack">
                     {visibleProviders.map((p, idx) => (
                       <Fragment key={p.providerId}>
@@ -365,7 +395,6 @@ export default function PopOutPanel({
                             <PlanStatusCard
                               provider={p}
                               isRefreshing={refreshingProviderIds.has(p.providerId)}
-                              hideEmail={settings.hidePersonalInfo}
                               resetTimeRelative={settings.resetTimeRelative}
                               showResetWhenExhausted={settings.showResetWhenExhausted}
                               showAsUsed={settings.showAsUsed}
@@ -386,8 +415,8 @@ export default function PopOutPanel({
                       </Fragment>
                     ))}
                   </div>
-                </>
-              )
+                )}
+              </>
             ) : activeSection === "activity" ? (
               <ActivityTimeline providers={sorted} />
             ) : activeSection === "charts" ? (

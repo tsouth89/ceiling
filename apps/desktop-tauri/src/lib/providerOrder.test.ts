@@ -57,4 +57,15 @@ describe("orderProviderSnapshots", () => {
       "codex",
     ]);
   });
+
+  it("excludes cached snapshots for providers the user stopped tracking", () => {
+    const ordered = orderProviderSnapshots(
+      [snapshot("codex", "Codex"), snapshot("gemini", "Gemini")],
+      catalog,
+      ["codex"],
+      ["codex", "gemini"],
+    );
+
+    expect(ordered.map((provider) => provider.providerId)).toEqual(["codex"]);
+  });
 });

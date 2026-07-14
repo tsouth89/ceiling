@@ -66,7 +66,7 @@ describe("capacityPresentation", () => {
     expect(constraining.window.usedPercent).toBe(55);
   });
 
-  it("keeps plan pool as glance hero and adds hot Auto companion", () => {
+  it("keeps Cursor plan as hero and shows reported Auto and API companions", () => {
     const meters = glanceMeters(
       provider({
         primary: window(62),
@@ -80,11 +80,13 @@ describe("capacityPresentation", () => {
     );
     expect(meters.primary.label).toBe("Monthly");
     expect(meters.primary.window.usedPercent).toBe(62);
-    expect(meters.companion?.label).toBe("Auto");
-    expect(meters.companion?.window.usedPercent).toBe(90);
+    expect(meters.companions.map((meter) => meter.label)).toEqual(["Auto", "API"]);
+    expect(meters.companions.map((meter) => meter.window.usedPercent)).toEqual([
+      90, 12,
+    ]);
   });
 
-  it("prefers hotter API companion over quieter Auto", () => {
+  it("keeps Cursor companion order stable when API is hotter than Auto", () => {
     const meters = glanceMeters(
       provider({
         primary: window(40),
@@ -96,20 +98,24 @@ describe("capacityPresentation", () => {
         ],
       }),
     );
-    expect(meters.companion?.label).toBe("API");
-    expect(meters.companion?.window.usedPercent).toBe(88);
+    expect(meters.companions.map((meter) => meter.label)).toEqual(["Auto", "API"]);
+    expect(meters.companions.map((meter) => meter.window.usedPercent)).toEqual([
+      55, 88,
+    ]);
   });
 
   it("omits quiet weekly companion from glance", () => {
     const meters = glanceMeters(
       provider({
+        providerId: "claude",
+        displayName: "Claude",
         primary: window(45),
         primaryLabel: "Session",
         secondary: window(20),
         secondaryLabel: "Weekly",
       }),
     );
-    expect(meters.companion).toBeNull();
+    expect(meters.companions).toEqual([]);
   });
 
   it("reports glance status from constraining pressure", () => {

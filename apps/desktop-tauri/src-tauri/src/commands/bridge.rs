@@ -482,6 +482,7 @@ pub struct SettingsSnapshot {
     start_at_login: bool,
     start_minimized: bool,
     show_notifications: bool,
+    capacity_event_notifications_enabled: bool,
     sound_enabled: bool,
     sound_volume: u8,
     high_usage_threshold: f64,
@@ -576,6 +577,7 @@ impl From<Settings> for SettingsSnapshot {
             start_at_login: settings.start_at_login,
             start_minimized: settings.start_minimized,
             show_notifications: settings.show_notifications,
+            capacity_event_notifications_enabled: settings.capacity_event_notifications_enabled,
             sound_enabled: settings.sound_enabled,
             sound_volume: settings.sound_volume,
             high_usage_threshold: settings.high_usage_threshold,
@@ -708,9 +710,15 @@ mod tests {
     #[test]
     fn primary_label_follows_window_cadence() {
         // Codex normal: 5-hour present.
-        assert_eq!(primary_window_label("Session", "Weekly", Some(300)), "Session");
+        assert_eq!(
+            primary_window_label("Session", "Weekly", Some(300)),
+            "Session"
+        );
         // Codex 5-hour lifted: weekly promoted into primary.
-        assert_eq!(primary_window_label("Session", "Weekly", Some(10_080)), "Weekly");
+        assert_eq!(
+            primary_window_label("Session", "Weekly", Some(10_080)),
+            "Weekly"
+        );
         // Cursor's monthly plan keeps its configured label.
         assert_eq!(primary_window_label("Plan", "Weekly", Some(43_200)), "Plan");
         // Unknown cadence keeps the configured label.
