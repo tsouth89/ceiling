@@ -12,14 +12,14 @@ that covers the change:
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -NoProfile -File scripts\local-check.ps1
 powershell.exe -ExecutionPolicy Bypass -NoProfile -File scripts\local-check.ps1 -Format -Clippy
-powershell.exe -ExecutionPolicy Bypass -NoProfile -File scripts\local-check.ps1 -All -Version 0.43.0
+powershell.exe -ExecutionPolicy Bypass -NoProfile -File scripts\local-check.ps1 -All -Version 0.43.1
 ```
 
 ## Signed release flow
 
 1. Merge the release PR into protected `main` after all required checks pass.
 2. Create and push an annotated tag that exactly matches the repository version,
-   for example `v0.43.0`.
+   for example `v0.43.1`.
 3. The `Signed Windows Release` workflow builds, signs, verifies, smoke-tests,
    and uploads four assets to a draft GitHub release.
 4. Review the draft notes and manually test the downloaded installer and
@@ -39,11 +39,11 @@ subject, so there is no client secret or certificate private key in GitHub.
 The signed workflow deliberately separates compilation from packaging:
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.43.0 -BuildOnly
+.\scripts\windows-release-build.ps1 -Ref v0.43.1 -BuildOnly
 # Sign ceiling.exe and codexbar-cli.exe.
-.\scripts\windows-release-build.ps1 -Ref v0.43.0 -PackageOnly
-# Sign Ceiling-0.43.0-Setup.exe.
-.\scripts\finalize-windows-release.ps1 -Version 0.43.0
+.\scripts\windows-release-build.ps1 -Ref v0.43.1 -PackageOnly
+# Sign Ceiling-0.43.1-Setup.exe.
+.\scripts\finalize-windows-release.ps1 -Version 0.43.1
 ```
 
 `-BuildOnly` prevents unsigned binaries from being packaged. `-PackageOnly`
