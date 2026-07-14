@@ -1,6 +1,6 @@
 # Changelog
 
-## [Ceiling] 0.43.0 - Unreleased
+## [Ceiling] 0.43.1 - Unreleased
 
 ### Added
 - Add a persistent, taskbar-adjacent capacity strip with provider-aware usage lanes.
