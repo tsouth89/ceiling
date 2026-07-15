@@ -8,7 +8,7 @@
 use crate::floatbar::taskbar::{TaskbarLandmarks, TaskbarLayout};
 
 const ENABLE_ENV: &str = "CEILING_NATIVE_TASKBAR_WIDGET";
-const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChildPlacement {
@@ -53,21 +53,63 @@ fn child_placement(
 
     let widgets = landmarks.widgets?;
     let start = landmarks.start?;
+    let bounds = layout.bounds;
+    let overlaps_taskbar_band = |rect: crate::floatbar::placement::Rect| {
+        rect.left >= bounds.left
+            && rect.right <= bounds.right
+            && rect.top < bounds.bottom
+            && rect.bottom > bounds.top
+    };
+    if !overlaps_taskbar_band(widgets)
+        || !overlaps_taskbar_band(start)
+        || widgets.right >= start.left
+    {
+        return None;
+    }
+
     let lane_left = widgets.right.saturating_add(8);
     let lane_right = start.left.saturating_sub(8);
-    let available_width = lane_right.saturating_sub(lane_left);
     let provider_count = i32::try_from(provider_count).ok()?;
     let desired_width = provider_count.saturating_mul(80);
     let minimum_width = provider_count.saturating_mul(62);
-    if available_width < minimum_width {
-        return None;
+
+    // UI Automation can expose Search, Task View, or pinned-app buttons in
+    // the apparent Widgets-to-Start lane. Never cover one: use only a fully
+    // empty sub-gap and hide the proof if no verified gap can fit.
+    let mut obstacles = layout
+        .obstacles
+        .iter()
+        .copied()
+        .filter(|rect| {
+            rect.top < bounds.bottom
+                && rect.bottom > bounds.top
+                && rect.right > lane_left
+                && rect.left < lane_right
+        })
+        .collect::<Vec<_>>();
+    obstacles.sort_by_key(|rect| (rect.left, rect.right));
+
+    let mut gap_left = lane_left;
+    let mut selected = None;
+    for obstacle in obstacles {
+        let obstacle_left = obstacle.left.max(lane_left);
+        if obstacle_left.saturating_sub(gap_left) >= minimum_width {
+            selected = Some((gap_left, obstacle_left));
+            break;
+        }
+        gap_left = gap_left.max(obstacle.right.saturating_add(8));
     }
+    if selected.is_none() && lane_right.saturating_sub(gap_left) >= minimum_width {
+        selected = Some((gap_left, lane_right));
+    }
+    let (gap_left, gap_right) = selected?;
+    let available_width = gap_right.saturating_sub(gap_left);
 
     let taskbar_height = layout.bounds.height();
     let width = desired_width.min(available_width);
 
     Some(ChildPlacement {
-        x: lane_left.saturating_sub(layout.bounds.left),
+        x: gap_left.saturating_sub(layout.bounds.left),
         y: 0,
         width,
         height: taskbar_height,
@@ -89,14 +131,17 @@ pub fn install(app: &tauri::AppHandle) {
 mod windows_host {
     use super::*;
     use crate::{shell, surface::SurfaceMode, surface_target::SurfaceTarget};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    };
     use tauri::Manager;
 
     const CLASS_NAME: &str = "CeilingNativeTaskbarWidget";
     const WINDOW_TITLE: &str = "Ceiling taskbar widget proof";
 
-    const WS_CHILD: u32 = 0x4000_0000;
     const WS_VISIBLE: u32 = 0x1000_0000;
+    const WS_POPUP: u32 = 0x8000_0000;
     const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
     const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
     const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
@@ -125,26 +170,25 @@ mod windows_host {
         model: WidgetModel,
     }
 
+    struct PreparedWidget {
+        taskbar: isize,
+        placement: ChildPlacement,
+        model: WidgetModel,
+    }
+
     static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
     static HOST: OnceLock<Mutex<HostState>> = OnceLock::new();
     static CLASS_REGISTERED: OnceLock<bool> = OnceLock::new();
+    static RECOVERY_PENDING: AtomicBool = AtomicBool::new(false);
 
     pub(super) fn install(app: &tauri::AppHandle) {
         let _ = APP.set(app.clone());
-        if let Err(error) = ensure_widget() {
-            tracing::warn!(%error, "Native taskbar widget proof did not start");
-        }
+        schedule_recovery(app);
 
         let refresh_app = app.clone();
         tauri::async_runtime::spawn(async move {
             let _ = crate::commands::do_refresh_providers_if_stale(&refresh_app).await;
-            let app_for_main = refresh_app.clone();
-            let _ = refresh_app.run_on_main_thread(move || {
-                if let Err(error) = maintain_widget() {
-                    tracing::debug!(%error, "Native taskbar widget is waiting for provider data");
-                }
-                drop(app_for_main);
-            });
+            schedule_recovery(&refresh_app);
         });
 
         let app = app.clone();
@@ -153,50 +197,49 @@ mod windows_host {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                let app_for_main = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    if let Err(error) = maintain_widget() {
-                        tracing::debug!(%error, "Native taskbar widget proof recovery deferred");
-                    }
-                    drop(app_for_main);
-                });
+                schedule_recovery(&app);
             }
         });
     }
 
-    fn maintain_widget() -> Result<(), String> {
-        let taskbar = unsafe { find_primary_taskbar() }
-            .ok_or_else(|| "Explorer primary taskbar is unavailable".to_string())?;
-        let model = widget_model()?;
-        let mut state = HOST
-            .get_or_init(|| Mutex::new(HostState::default()))
-            .lock()
-            .map_err(|_| "Native taskbar widget state is poisoned".to_string())?;
-        let healthy = state.hwnd != 0
-            && unsafe { IsWindow(state.hwnd) } != 0
-            && state.taskbar == taskbar
-            && unsafe { GetParent(state.hwnd) } == taskbar;
-        if healthy {
-            if state.model != model {
-                state.model = model;
-                unsafe { InvalidateRect(state.hwnd, std::ptr::null(), 0) };
-            }
-            return Ok(());
+    fn schedule_recovery(app: &tauri::AppHandle) {
+        if RECOVERY_PENDING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
         }
-        drop(state);
 
-        // UI Automation and taskbar geometry discovery are deliberately only
-        // performed while no healthy injected child exists. Explorer can send
-        // synchronous messages to cross-process child windows; querying its
-        // automation tree from the child owner thread at the same time risks
-        // a circular UI-thread wait.
-        ensure_widget()
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let prepared = tauri::async_runtime::spawn_blocking(prepare_widget).await;
+            let dispatched = app.run_on_main_thread(move || {
+                match prepared {
+                    Ok(Ok(prepared)) => {
+                        if let Err(error) = apply_prepared(prepared) {
+                            tracing::warn!(%error, "Native taskbar widget proof update failed");
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        hide_existing();
+                        tracing::debug!(%error, "Native taskbar widget proof recovery deferred");
+                    }
+                    Err(error) => {
+                        hide_existing();
+                        tracing::warn!(%error, "Native taskbar discovery worker failed");
+                    }
+                }
+                RECOVERY_PENDING.store(false, Ordering::Release);
+            });
+            if dispatched.is_err() {
+                RECOVERY_PENDING.store(false, Ordering::Release);
+            }
+        });
     }
 
-    fn ensure_widget() -> Result<(), String> {
+    fn prepare_widget() -> Result<PreparedWidget, String> {
         let model = widget_model()?;
         if model.providers.is_empty() {
-            hide_existing();
             return Err("No enabled providers are available for the taskbar widget".to_string());
         }
         let taskbar = unsafe { find_primary_taskbar() }
@@ -206,42 +249,51 @@ mod windows_host {
             .ok_or_else(|| "No usable primary taskbar layout was discovered".to_string())?;
         let landmarks = crate::floatbar::taskbar::primary_landmarks();
         let Some(placement) = child_placement(layout, landmarks, model.providers.len()) else {
-            hide_existing();
             return Err(
                 "The Widgets-to-Start taskbar lane cannot fit the native widget".to_string(),
             );
         };
 
+        Ok(PreparedWidget {
+            taskbar,
+            placement,
+            model,
+        })
+    }
+
+    fn apply_prepared(prepared: PreparedWidget) -> Result<(), String> {
         let mut state = HOST
             .get_or_init(|| Mutex::new(HostState::default()))
             .lock()
             .map_err(|_| "Native taskbar widget state is poisoned".to_string())?;
 
         let window_alive = state.hwnd != 0 && unsafe { IsWindow(state.hwnd) } != 0;
-        if !window_alive {
-            state.hwnd = unsafe { create_widget(taskbar)? };
-            state.taskbar = taskbar;
-            tracing::info!("Created native Ceiling taskbar widget proof");
-        } else if state.taskbar != taskbar || unsafe { GetParent(state.hwnd) } != taskbar {
-            let previous = unsafe { SetParent(state.hwnd, taskbar) };
-            if previous == 0 && unsafe { GetParent(state.hwnd) } != taskbar {
-                return Err("Could not reparent native widget after Explorer restart".to_string());
+        let correctly_parented = window_alive
+            && state.taskbar == prepared.taskbar
+            && unsafe { GetParent(state.hwnd) } == prepared.taskbar;
+        if !correctly_parented {
+            // Never reparent a stale foreign child after Explorer restarts.
+            // Destroy it on its owner thread and create a fresh popup host for
+            // the new Shell_TrayWnd instead.
+            if window_alive {
+                unsafe { DestroyWindow(state.hwnd) };
             }
-            state.taskbar = taskbar;
-            tracing::info!("Reparented native Ceiling taskbar widget proof");
+            state.hwnd = unsafe { create_widget(prepared.taskbar)? };
+            state.taskbar = prepared.taskbar;
+            tracing::info!("Created native Ceiling taskbar widget proof");
         }
 
-        let model_changed = state.model != model;
-        state.model = model;
+        let model_changed = state.model != prepared.model;
+        state.model = prepared.model;
         unsafe {
             SetWindowRgn(state.hwnd, 0, 1);
             SetWindowPos(
                 state.hwnd,
                 0,
-                placement.x,
-                placement.y,
-                placement.width,
-                placement.height,
+                prepared.placement.x,
+                prepared.placement.y,
+                prepared.placement.width,
+                prepared.placement.height,
                 SWP_NOACTIVATE | SWP_NOOWNERZORDER,
             );
             ShowWindow(state.hwnd, SW_SHOWNA);
@@ -301,7 +353,7 @@ mod windows_host {
         let Some(host) = HOST.get() else {
             return;
         };
-        let Ok(state) = host.lock() else {
+        let Ok(state) = host.try_lock() else {
             return;
         };
         if state.hwnd != 0 && unsafe { IsWindow(state.hwnd) } != 0 {
@@ -327,12 +379,12 @@ mod windows_host {
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 class.as_ptr(),
                 title.as_ptr(),
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
                 0,
                 0,
                 1,
                 1,
-                taskbar,
+                0,
                 0,
                 instance,
                 std::ptr::null(),
@@ -340,6 +392,11 @@ mod windows_host {
         };
         if hwnd == 0 {
             return Err("CreateWindowExW failed for the taskbar widget".to_string());
+        }
+        let previous = unsafe { SetParent(hwnd, taskbar) };
+        if previous == 0 && unsafe { GetParent(hwnd) } != taskbar {
+            unsafe { DestroyWindow(hwnd) };
+            return Err("Could not attach native widget to the taskbar".to_string());
         }
         Ok(hwnd)
     }
@@ -414,7 +471,7 @@ mod windows_host {
 
         let model = HOST
             .get()
-            .and_then(|host| host.lock().ok().map(|state| state.model.clone()))
+            .and_then(|host| host.try_lock().ok().map(|state| state.model.clone()))
             .unwrap_or_default();
         let mut rect = WinRect::default();
         unsafe { GetClientRect(hwnd, &mut rect) };
@@ -623,6 +680,7 @@ mod windows_host {
         fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
         fn GetParent(hwnd: isize) -> isize;
         fn SetParent(child: isize, new_parent: isize) -> isize;
+        fn DestroyWindow(hwnd: isize) -> i32;
         fn IsWindow(hwnd: isize) -> i32;
         fn SetWindowPos(
             hwnd: isize,
@@ -849,5 +907,81 @@ mod tests {
             child_placement(&taskbar, TaskbarLandmarks::default(), 3),
             None
         );
+    }
+
+    #[test]
+    fn native_widget_rejects_stale_landmarks_outside_the_taskbar() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![],
+        );
+
+        assert_eq!(
+            child_placement(
+                &taskbar,
+                landmarks(
+                    Rect {
+                        left: -160,
+                        top: 1032,
+                        right: 0,
+                        bottom: 1080,
+                    },
+                    Rect {
+                        left: 800,
+                        top: 1032,
+                        right: 848,
+                        bottom: 1080,
+                    },
+                ),
+                3,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn native_widget_uses_only_a_verified_empty_sub_gap() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![Rect {
+                left: 300,
+                top: 1032,
+                right: 420,
+                bottom: 1080,
+            }],
+        );
+
+        let placement = child_placement(
+            &taskbar,
+            landmarks(
+                Rect {
+                    left: 0,
+                    top: 1032,
+                    right: 160,
+                    bottom: 1080,
+                },
+                Rect {
+                    left: 800,
+                    top: 1032,
+                    right: 848,
+                    bottom: 1080,
+                },
+            ),
+            3,
+        )
+        .expect("the verified gap after the obstacle should fit");
+
+        assert_eq!(placement.x, 428);
+        assert_eq!(placement.width, 240);
     }
 }
