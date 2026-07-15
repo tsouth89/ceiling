@@ -1,6 +1,6 @@
 # Changelog
 
-## [Ceiling] 0.43.3-beta.1 - 2026-07-14
+## [Ceiling] 0.43.3-beta.2 - 2026-07-14
 
 ### Added
 - Add private, first-party website analytics for visitors, downloads, and GitHub traffic.
@@ -15,6 +15,7 @@
 - Rework floating-bar recovery around Windows events instead of repeated z-order writes.
 
 ### Fixed
+- Align the Tauri JavaScript API and CLI with the patched Rust runtime so signed release builds validate cleanly.
 - Keep Codex's regular weekly limit distinct from Codex Spark Weekly so scheduled resets notify reliably.
 - Correct malformed chart time labels and keep provider charts responsive while history loads.
 - Keep the floating bar above normal taskbar activity without taking focus.

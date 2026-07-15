@@ -1,7 +1,7 @@
 {
   "name": "desktop-tauri",
   "private": true,
-  "version": "0.43.3-beta.1",
+  "version": "0.43.3-beta.2",
   "packageManager": "pnpm@10.18.1",
   "type": "module",
   "scripts": {
@@ -18,12 +18,12 @@
     "tauri:build:debug": "tauri build --debug --no-bundle"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/api": "2.11.1",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.10.1",
+    "@tauri-apps/cli": "2.11.1",
     "@testing-library/jest-dom": "6.6.3",
     "@testing-library/react": "16.1.0",
     "@types/react": "18.3.12",

@@ -80,6 +80,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
 
+      - name: Check Tauri package versions
+        shell: pwsh
+        run: node scripts/ci/check-tauri-version-sync.mjs
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -221,7 +225,12 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          az logout
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Azure CLI logout did not complete cleanly."
+          az account show *> $null
+          if ($LASTEXITCODE -eq 0) {
+            az logout
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Azure CLI logout did not complete cleanly."
+            }
+          } else {
+            Write-Host "Azure CLI has no active account; skipping logout."
           }
