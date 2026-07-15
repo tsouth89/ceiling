@@ -17,7 +17,9 @@ pub fn install(app: tauri::AppHandle) {
                 .map(|(_, scheduled_at)| scheduled_at)
                 .unwrap_or(now);
             if now >= scheduled_at {
-                let _ = crate::commands::do_refresh_providers_if_stale(&app).await;
+                if let Err(error) = crate::commands::do_refresh_providers_if_stale(&app).await {
+                    tracing::warn!(%error, "Automatic provider refresh failed");
+                }
                 schedule = Some((
                     interval,
                     next_fixed_tick(scheduled_at, Instant::now(), interval),

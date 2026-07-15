@@ -98,6 +98,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           >
             <Toggle
               checked={settings.floatBarShowResetInline}
+              ariaLabel="Show Reset Time Inline"
               disabled={saving || !settings.taskbarWidgetEnabled}
               onChange={(v) => set({ floatBarShowResetInline: v })}
             />
@@ -115,6 +116,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
         >
           <Toggle
             checked={settings.floatBarEnabled}
+            ariaLabel="Show Floating Bar"
             disabled={saving}
             onChange={(v) => set({ floatBarEnabled: v })}
           />
@@ -210,6 +212,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           >
             <Toggle
               checked={settings.floatBarClickThrough}
+              ariaLabel="Click-Through"
               disabled={saving || !settings.floatBarEnabled}
               onChange={(v) => set({ floatBarClickThrough: v })}
             />

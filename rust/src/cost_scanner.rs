@@ -491,6 +491,7 @@ impl CostScanner {
         self.walk_claude_files(projects_dir, cutoff, cancel, &mut |path| {
             files.push(path.to_path_buf())
         });
+        files.sort();
         files
     }
 }
@@ -1378,6 +1379,26 @@ mod tests {
         let mut seen = HashSet::new();
         assert!(should_count_claude_record(&record, &cutoff, &mut seen));
         assert!(!should_count_claude_record(&record, &cutoff, &mut seen));
+    }
+
+    #[test]
+    fn claude_transcript_discovery_is_deterministically_sorted() {
+        let dir = tempfile::tempdir().expect("temp directory");
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(&projects).expect("create projects directory");
+        for name in ["z-last.jsonl", "a-first.jsonl", "m-middle.jsonl"] {
+            std::fs::write(projects.join(name), "{}\n").expect("write transcript");
+        }
+        let scanner = CostScanner::new(30);
+        let cutoff = Utc::now() - Duration::days(1);
+
+        let files = scanner.claude_files_since(&projects, &cutoff, None);
+        let names = files
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["a-first.jsonl", "m-middle.jsonl", "z-last.jsonl"]);
     }
 
     #[test]

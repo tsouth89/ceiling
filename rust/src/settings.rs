@@ -293,7 +293,7 @@ fn default_float_bar_orientation() -> String {
 }
 
 fn default_float_bar_style() -> String {
-    "taskbar".to_string()
+    "floating".to_string()
 }
 
 fn default_float_bar_density() -> String {

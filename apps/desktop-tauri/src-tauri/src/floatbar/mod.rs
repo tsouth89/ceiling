@@ -57,14 +57,17 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
 pub fn toggle(app: &tauri::AppHandle) {
     let mut settings = Settings::load();
     settings.taskbar_widget_enabled = !settings.taskbar_widget_enabled;
-    let _ = settings.save();
+    if let Err(error) = settings.save() {
+        tracing::warn!(%error, "Could not persist taskbar widget visibility");
+        return;
+    }
     crate::taskbar_widget::apply_state(app, &settings);
 }
 
 /// Bring the floating-bar window in line with persisted settings: open,
 /// close, or re-apply opacity / click-through as appropriate. Used after
 /// a settings patch is saved.
-pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
+pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
     let window = app.get_webview_window(FLOATBAR_LABEL);
     let visible = window
         .as_ref()
@@ -72,21 +75,22 @@ pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
         .unwrap_or(false);
     let should_show_overlay = settings.float_bar_enabled;
     if should_show_overlay && !visible {
-        let _ = window::show(
+        window::show(
             app,
             settings.float_bar_opacity,
             &settings.float_bar_orientation,
             "floating",
             settings.float_bar_click_through,
-        );
+        )?;
     } else if !should_show_overlay && visible {
-        let _ = window::hide(app);
+        window::hide(app)?;
     } else if should_show_overlay && let Some(w) = window {
         window::apply_no_activate(&w);
         window::apply_opacity(&w, settings.float_bar_opacity);
         window::apply_click_through(&w, settings.float_bar_click_through);
         window::apply_always_on_top(&w);
     }
+    Ok(())
 }
 
 /// All five settings fields the float bar owns, in a single optional
@@ -194,7 +198,9 @@ pub fn after_settings_saved(
         notify_settings_changed(app);
     }
     if !patch.is_empty() {
-        apply_state(app, settings);
+        if let Err(error) = apply_state(app, settings) {
+            tracing::warn!(%error, "Could not apply floating bar state");
+        }
         crate::taskbar_widget::apply_state(app, settings);
     }
 }
@@ -220,6 +226,7 @@ mod tests {
             float_bar_scale: 100,
             float_bar_orientation: "horizontal".into(),
             float_bar_style: "floating".into(),
+            taskbar_widget_open_on_hover: false,
             float_bar_dark_text: false,
             float_bar_show_reset_inline: false,
             ..Settings::default()
@@ -230,6 +237,7 @@ mod tests {
             opacity: Some(45),
             scale: Some(135),
             style: Some("taskbar".into()),
+            open_on_hover: Some(true),
             dark_text: Some(true),
             show_reset_inline: Some(true),
             ..SettingsPatch::default()
@@ -260,7 +268,7 @@ mod tests {
         assert_eq!(s.float_bar_opacity, 100);
         assert_eq!(s.float_bar_scale, 200);
         assert_eq!(s.float_bar_orientation, "horizontal");
-        assert_eq!(s.float_bar_style, "taskbar");
+        assert_eq!(s.float_bar_style, "floating");
     }
 
     #[test]

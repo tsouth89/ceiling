@@ -15,6 +15,13 @@ struct ChildPlacement {
     height: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlacementOutcome {
+    Place(ChildPlacement),
+    TransientLandmarks,
+    VerifiedNoFit,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProviderReadout {
     provider_id: String,
@@ -65,8 +72,9 @@ fn taskbar_placements(
     layouts: &[TaskbarLayout],
     all_monitors: bool,
     provider_count: usize,
-) -> (Vec<isize>, Vec<(isize, ChildPlacement)>) {
+) -> (Vec<isize>, Vec<isize>, Vec<(isize, ChildPlacement)>) {
     let mut discovered = Vec::new();
+    let mut rejected = Vec::new();
     let mut placements = Vec::new();
     for layout in layouts
         .iter()
@@ -74,23 +82,41 @@ fn taskbar_placements(
         .filter(|layout| layout.window_handle != 0)
     {
         discovered.push(layout.window_handle);
-        if let Some(placement) = child_placement(layout, layout.landmarks, provider_count) {
-            placements.push((layout.window_handle, placement));
+        match placement_outcome(layout, layout.landmarks, provider_count) {
+            PlacementOutcome::Place(placement) => {
+                placements.push((layout.window_handle, placement));
+            }
+            PlacementOutcome::VerifiedNoFit => rejected.push(layout.window_handle),
+            PlacementOutcome::TransientLandmarks => {}
         }
     }
-    (discovered, placements)
+    (discovered, rejected, placements)
 }
 
+#[cfg(test)]
 fn child_placement(
     layout: &TaskbarLayout,
     landmarks: TaskbarLandmarks,
     provider_count: usize,
 ) -> Option<ChildPlacement> {
+    match placement_outcome(layout, landmarks, provider_count) {
+        PlacementOutcome::Place(placement) => Some(placement),
+        PlacementOutcome::TransientLandmarks | PlacementOutcome::VerifiedNoFit => None,
+    }
+}
+
+fn placement_outcome(
+    layout: &TaskbarLayout,
+    landmarks: TaskbarLandmarks,
+    provider_count: usize,
+) -> PlacementOutcome {
     if layout.bounds.width() < layout.bounds.height() || provider_count == 0 {
-        return None;
+        return PlacementOutcome::VerifiedNoFit;
     }
 
-    let start = landmarks.start?;
+    let Some(start) = landmarks.start else {
+        return PlacementOutcome::TransientLandmarks;
+    };
     let bounds = layout.bounds;
     let overlaps_taskbar_band = |rect: crate::floatbar::placement::Rect| {
         rect.left >= bounds.left
@@ -99,19 +125,21 @@ fn child_placement(
             && rect.bottom > bounds.top
     };
     if !overlaps_taskbar_band(start) {
-        return None;
+        return PlacementOutcome::TransientLandmarks;
     }
 
     let lane_left = if let Some(widgets) = landmarks.widgets {
         if !overlaps_taskbar_band(widgets) || widgets.right >= start.left {
-            return None;
+            return PlacementOutcome::TransientLandmarks;
         }
         widgets.right.saturating_add(8)
     } else {
         bounds.left.saturating_add(8)
     };
     let lane_right = start.left.saturating_sub(8);
-    let provider_count = i32::try_from(provider_count).ok()?;
+    let Ok(provider_count) = i32::try_from(provider_count) else {
+        return PlacementOutcome::VerifiedNoFit;
+    };
     // Leave enough room for labels such as "Weekly · 5d 21h" while keeping
     // both lines centered on the same axis. Squeezing 3 providers into 276px
     // put the final reset digits against the divider.
@@ -146,15 +174,18 @@ fn child_placement(
     if lane_right.saturating_sub(gap_left) >= minimum_width {
         gaps.push((gap_left, lane_right));
     }
-    let (gap_left, gap_right) = gaps
+    let Some((gap_left, gap_right)) = gaps
         .into_iter()
-        .max_by_key(|(left, right)| right.saturating_sub(*left))?;
+        .max_by_key(|(left, right)| right.saturating_sub(*left))
+    else {
+        return PlacementOutcome::VerifiedNoFit;
+    };
     let available_width = gap_right.saturating_sub(gap_left);
 
     let taskbar_height = layout.bounds.height();
     let width = desired_width.min(available_width);
 
-    Some(ChildPlacement {
+    PlacementOutcome::Place(ChildPlacement {
         x: gap_left
             .saturating_add(available_width.saturating_sub(width) / 2)
             .saturating_sub(layout.bounds.left),
@@ -256,6 +287,7 @@ mod windows_host {
 
     struct PreparedWidgets {
         widgets: Vec<PreparedWidget>,
+        rejected_taskbars: Vec<isize>,
         all_monitors: bool,
         model: WidgetModel,
     }
@@ -273,7 +305,9 @@ mod windows_host {
 
         let refresh_app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = crate::commands::do_refresh_providers_if_stale(&refresh_app).await;
+            if let Err(error) = crate::commands::do_refresh_providers_if_stale(&refresh_app).await {
+                tracing::warn!(%error, "Initial taskbar provider refresh failed");
+            }
             schedule_recovery(&refresh_app);
         });
 
@@ -387,7 +421,7 @@ mod windows_host {
             return Err("No enabled providers are available for the taskbar widget".to_string());
         }
         let layouts = crate::floatbar::taskbar::discover_all();
-        let (_, placements) = taskbar_placements(
+        let (_, rejected_taskbars, placements) = taskbar_placements(
             &layouts,
             settings.taskbar_widget_all_monitors,
             model.providers.len(),
@@ -396,12 +430,13 @@ mod windows_host {
             .into_iter()
             .map(|(taskbar, placement)| PreparedWidget { taskbar, placement })
             .collect::<Vec<_>>();
-        if widgets.is_empty() {
+        if widgets.is_empty() && rejected_taskbars.is_empty() {
             return Err("No verified taskbar lane can fit the native widget".to_string());
         }
 
         Ok(PreparedWidgets {
             widgets,
+            rejected_taskbars,
             all_monitors: settings.taskbar_widget_all_monitors,
             model,
         })
@@ -432,7 +467,8 @@ mod windows_host {
                 && unsafe { GetParent(widget.hwnd) } == widget.taskbar;
             let selected =
                 taskbar_remains_selected(widget.taskbar, &prepared_taskbars, prepared.all_monitors);
-            let keep = host_is_alive && selected;
+            let conclusively_rejected = prepared.rejected_taskbars.contains(&widget.taskbar);
+            let keep = host_is_alive && selected && !conclusively_rejected;
             if !keep && widget.hwnd != 0 && unsafe { IsWindow(widget.hwnd) } != 0 {
                 unsafe { DestroyWindow(widget.hwnd) };
             }
@@ -552,7 +588,7 @@ mod windows_host {
     }
 
     fn system_uses_light_theme() -> bool {
-        const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as isize;
+        const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
         const RRF_RT_REG_DWORD: u32 = 0x0000_0018;
         let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
         let name = wide("SystemUsesLightTheme");
@@ -603,7 +639,8 @@ mod windows_host {
         let Some(host) = HOST.get() else {
             return;
         };
-        let Ok(state) = host.try_lock() else {
+        let Ok(state) = host.lock() else {
+            tracing::warn!("Native taskbar widget state is poisoned while hiding");
             return;
         };
         for widget in &state.widgets {
@@ -1451,8 +1488,9 @@ mod tests {
             ..layout(secondary_bounds, Vec::new())
         };
 
-        let (discovered, placements) = taskbar_placements(&[primary, secondary], true, 3);
+        let (discovered, rejected, placements) = taskbar_placements(&[primary, secondary], true, 3);
         assert_eq!(discovered, vec![1, 2]);
+        assert!(rejected.is_empty());
         assert_eq!(placements.len(), 2);
         assert!(placements.iter().all(|(_, placement)| placement.x >= 0));
         assert_eq!(placements[0].1.width, 312);
@@ -1606,6 +1644,45 @@ mod tests {
                 3,
             ),
             None
+        );
+        assert_eq!(
+            placement_outcome(
+                &taskbar,
+                landmarks(
+                    Rect {
+                        left: 0,
+                        top: 1032,
+                        right: 200,
+                        bottom: 1080,
+                    },
+                    Rect {
+                        left: 340,
+                        top: 1032,
+                        right: 388,
+                        bottom: 1080,
+                    },
+                ),
+                3,
+            ),
+            PlacementOutcome::VerifiedNoFit
+        );
+    }
+
+    #[test]
+    fn missing_start_landmark_is_transient_instead_of_a_verified_rejection() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![],
+        );
+
+        assert_eq!(
+            placement_outcome(&taskbar, TaskbarLandmarks::default(), 3),
+            PlacementOutcome::TransientLandmarks
         );
     }
 

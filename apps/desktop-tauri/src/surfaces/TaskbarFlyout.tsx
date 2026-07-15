@@ -201,7 +201,11 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
 
   useEffect(() => {
     if (!hasLoadedCache && visibleProviders.length === 0) return;
-    const frame = window.requestAnimationFrame(() => {
+    let frame: number | null = null;
+    const resize = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
       // Windows owns the rounded outer edge; size directly to the content so
       // no transparent or CSS-border gutter can appear around that shape.
       const height = Math.max(174, Math.ceil(surfaceRef.current?.scrollHeight ?? 174));
@@ -210,13 +214,26 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
         await reanchorTrayPanel().catch(() => {});
         await revealTrayPanelWindow().catch(() => {});
       })();
-    });
-    return () => window.cancelAnimationFrame(frame);
+      });
+    };
+    resize();
+    const surface = surfaceRef.current;
+    const observer = surface && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(resize)
+      : null;
+    if (surface) observer?.observe(surface);
+    return () => {
+      observer?.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
   }, [hasLoadedCache, hiddenProviderCount, visibleProviders.length, visibleWindowCount]);
 
   const openCeiling = useCallback(() => {
     void setSurfaceMode("popOut", { kind: "dashboard" })
-      .finally(() => dismissTrayPanel().catch(() => {}));
+      .then(() => dismissTrayPanel())
+      .catch(() => {
+        // Keep the flyout available if the dashboard could not be opened.
+      });
   }, []);
 
   useEffect(() => {

@@ -318,7 +318,9 @@ pub fn install_z_order_guard(app: tauri::AppHandle) {
                     if recover_window {
                         let settings = codexbar::settings::Settings::load();
                         if settings.float_bar_enabled {
-                            super::apply_state(&app, &settings);
+                            if let Err(error) = super::apply_state(&app, &settings) {
+                                tracing::warn!(%error, "Could not recover floating bar window");
+                            }
                             Z_ORDER_DIRTY.store(true, Ordering::Release);
                             TASKBAR_LAYOUT_DIRTY.store(true, Ordering::Release);
                         }

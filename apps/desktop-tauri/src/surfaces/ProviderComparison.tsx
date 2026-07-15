@@ -99,7 +99,11 @@ export default function ProviderComparison({ providers }: {
   const [reloadNonce, setReloadNonce] = useState(0);
   const requestKey = useMemo(() => providers.map((provider) => {
     const windows = providerLocalUsageWindows(provider);
-    return `${provider.providerId}:${windows.map((window) => window.startsAt).join(",")}`;
+    return JSON.stringify({
+      providerId: provider.providerId,
+      accountEmail: provider.accountEmail ?? null,
+      windows,
+    });
   }).join("|"), [providers]);
 
   useEffect(() => {

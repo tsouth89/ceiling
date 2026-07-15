@@ -1410,7 +1410,7 @@ body:has(.taskbar-flyout-frame) #root {
   width: 16px;
   height: 16px;
   fill: none;
-  stroke: currentColor;
+  stroke: currentcolor;
   stroke-width: 1.35;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -5783,7 +5783,6 @@ html:has(.menu-surface--tray) {
   box-sizing: border-box;
   padding: 0 26px 0 10px;
   line-height: 20px;
-  color-scheme: light;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5815,6 +5814,7 @@ html:has(.menu-surface--tray) {
   box-shadow: none;
 }
 [data-theme="light"] .select {
+  color-scheme: light;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23526176'/%3E%3C/svg%3E");
   background-size: 8px 5px;
   background-position: right 9px center;
@@ -6702,7 +6702,7 @@ body:has(.dashboard-shell) #root {
   transition: width 220ms ease;
 }
 .provider-focus__progress-fill[data-level="critical"] {
-  background: var(--usage-bar-high);
+  background: var(--usage-bar-critical);
 }
 .provider-focus__progress-fill[data-level="exhausted"] {
   background: var(--usage-bar-exhausted);
@@ -7362,7 +7362,7 @@ body:has(.dashboard-shell) #root {
   transition: width 0.25s ease;
 }
 .activity-row__bar-fill[data-level="critical"] {
-  background: var(--usage-bar-high);
+  background: var(--usage-bar-critical);
 }
 .activity-row__bar-fill[data-level="exhausted"] {
   background: var(--usage-bar-exhausted);

@@ -125,8 +125,8 @@ pub(super) struct RawSettings {
     #[serde(default)]
     powertoys_status_pipe_enabled: bool,
 
-    #[serde(default = "default_true")]
-    float_bar_enabled: bool,
+    #[serde(default)]
+    float_bar_enabled: Option<bool>,
     #[serde(default)]
     taskbar_widget_enabled: Option<bool>,
     #[serde(default)]
@@ -137,8 +137,8 @@ pub(super) struct RawSettings {
     float_bar_scale: u8,
     #[serde(default = "default_float_bar_orientation")]
     float_bar_orientation: String,
-    #[serde(default = "default_float_bar_style")]
-    float_bar_style: String,
+    #[serde(default)]
+    float_bar_style: Option<String>,
     #[serde(default = "default_true")]
     taskbar_widget_open_on_hover: bool,
     #[serde(default = "default_float_bar_density")]
@@ -231,13 +231,13 @@ impl Default for RawSettings {
             window_scale_percent: s.window_scale_percent,
             tray_scale_percent: s.tray_scale_percent,
             powertoys_status_pipe_enabled: s.powertoys_status_pipe_enabled,
-            float_bar_enabled: s.float_bar_enabled,
+            float_bar_enabled: Some(s.float_bar_enabled),
             taskbar_widget_enabled: Some(s.taskbar_widget_enabled),
             taskbar_widget_all_monitors: s.taskbar_widget_all_monitors,
             float_bar_opacity: s.float_bar_opacity,
             float_bar_scale: s.float_bar_scale,
             float_bar_orientation: s.float_bar_orientation,
-            float_bar_style: s.float_bar_style,
+            float_bar_style: Some(s.float_bar_style),
             taskbar_widget_open_on_hover: s.taskbar_widget_open_on_hover,
             float_bar_density: s.float_bar_density,
             float_bar_contrast: s.float_bar_contrast,
@@ -253,11 +253,20 @@ impl Default for RawSettings {
 impl From<RawSettings> for Settings {
     fn from(raw: RawSettings) -> Self {
         let mut provider_configs = raw.provider_configs;
-        let legacy_float_bar_style = normalize_float_bar_style(&raw.float_bar_style);
+        let legacy_float_bar_style = match raw.float_bar_style.as_deref() {
+            Some("taskbar") => Some("taskbar"),
+            Some("floating") => Some("floating"),
+            _ => None,
+        };
+        let legacy_float_bar_enabled = raw.float_bar_enabled.unwrap_or(false);
         let (taskbar_widget_enabled, float_bar_enabled) = match raw.taskbar_widget_enabled {
-            Some(taskbar_enabled) => (taskbar_enabled, raw.float_bar_enabled),
-            None if legacy_float_bar_style == "taskbar" => (raw.float_bar_enabled, false),
-            None => (false, raw.float_bar_enabled),
+            Some(taskbar_enabled) => (taskbar_enabled, legacy_float_bar_enabled),
+            None if legacy_float_bar_style == Some("taskbar") => (legacy_float_bar_enabled, false),
+            None if legacy_float_bar_style == Some("floating") => (false, legacy_float_bar_enabled),
+            None => {
+                let defaults = Settings::default();
+                (defaults.taskbar_widget_enabled, defaults.float_bar_enabled)
+            }
         };
 
         // Helper closures to lazily insert per-provider configs from legacy

@@ -68,7 +68,7 @@ fn notification_threshold_migration_preserves_custom_and_current_values() {
 }
 
 #[test]
-fn usage_thresholds_use_one_global_warning_policy() {
+fn usage_thresholds_merge_provider_and_window_overrides() {
     let mut settings = Settings::default();
     settings.provider_usage_thresholds.insert(
         "codex".into(),
@@ -88,8 +88,8 @@ fn usage_thresholds_use_one_global_warning_policy() {
     assert_eq!(
         settings.usage_thresholds(ProviderId::Codex, "weekly"),
         UsageThresholds {
-            high: 85.0,
-            critical: 90.0,
+            high: 75.0,
+            critical: 95.0,
         }
     );
     assert_eq!(
@@ -235,9 +235,9 @@ fn float_bar_orientation_normalization_rejects_unknown_values() {
 fn float_bar_style_normalization_rejects_unknown_values() {
     assert_eq!(normalize_float_bar_style("floating"), "floating");
     assert_eq!(normalize_float_bar_style("taskbar"), "taskbar");
-    assert_eq!(normalize_float_bar_style(""), "taskbar");
-    assert_eq!(normalize_float_bar_style("TASKBAR"), "taskbar");
-    assert_eq!(normalize_float_bar_style("glass"), "taskbar");
+    assert_eq!(normalize_float_bar_style(""), "floating");
+    assert_eq!(normalize_float_bar_style("TASKBAR"), "floating");
+    assert_eq!(normalize_float_bar_style("glass"), "floating");
 }
 
 #[test]

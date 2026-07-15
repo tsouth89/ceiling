@@ -15,8 +15,7 @@ pub async fn show_float_bar(app: AppHandle) -> Result<(), String> {
     settings.float_bar_enabled = true;
     settings.save().map_err(|e| e.to_string())?;
 
-    super::apply_state(&app, &settings);
-    Ok(())
+    super::apply_state(&app, &settings)
 }
 
 #[tauri::command]

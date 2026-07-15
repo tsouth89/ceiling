@@ -107,10 +107,12 @@ export default function GeneralTab({
             <NumberInput
               value={settings.highUsageThreshold}
               min={0}
-              max={100}
+              max={settings.criticalUsageThreshold}
               step={5}
               disabled={saving}
-              onChange={(v) => set({ highUsageThreshold: v })}
+              onChange={(v) => set({
+                highUsageThreshold: Math.min(v, settings.criticalUsageThreshold),
+              })}
             />
           </Field>
         </div>

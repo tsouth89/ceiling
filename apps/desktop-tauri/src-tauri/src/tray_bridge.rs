@@ -435,21 +435,21 @@ pub fn update_tray_icon_and_tooltip(
         .copied()
         .filter(|s| s.error.is_none())
         .collect();
-    let all_error = ok_snapshots.is_empty() && !snapshots.is_empty();
+    let all_error = ok_snapshots.is_empty() && !ordered_snapshots.is_empty();
 
     // One branded tray icon represents Ceiling as a whole. Its severity color
     // follows the most constrained healthy provider; legacy icon-selection
     // settings are intentionally ignored.
     let prefer_highest = true;
 
-    let picked = pick_tray_provider(&ok_snapshots, prefer_highest);
+    let picked = pick_tray_provider(&ok_snapshots, &settings, prefer_highest);
 
     let (session_pct, weekly_pct) = match picked {
-        Some(s) => selected_tray_percents(s, &settings),
+        Some(s) => selected_tray_used_percents(s, &settings),
         None => (
             ok_snapshots
                 .iter()
-                .map(|s| selected_tray_percents(s, &settings).0)
+                .map(|s| selected_tray_used_percents(s, &settings).0)
                 .fold(0.0_f64, f64::max),
             None,
         ),
@@ -480,11 +480,11 @@ fn status_labels_for_settings(
         .into_iter()
         .filter(|s| s.error.is_none())
         .collect();
-    let Some(selected) = pick_tray_provider(&healthy, true) else {
+    let Some(selected) = pick_tray_provider(&healthy, settings, true) else {
         return vec![];
     };
 
-    let (_, label) = provider_status_label(selected, lang);
+    let (_, label) = provider_status_label_for_settings(selected, settings, lang);
     vec![("status_summary".to_string(), label)]
 }
 
@@ -518,6 +518,7 @@ fn ordered_snapshot_refs<'a>(
     ordered
 }
 
+#[cfg(test)]
 fn provider_status_label(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     lang: codexbar::settings::Language,
@@ -526,6 +527,27 @@ fn provider_status_label(
     (
         snapshot.provider_id.clone(),
         format!("{} {}", snapshot.display_name, label),
+    )
+}
+
+fn provider_status_label_for_settings(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+    settings: &Settings,
+    lang: codexbar::settings::Language,
+) -> (String, String) {
+    let provider = ProviderId::from_cli_name(snapshot.provider_id.as_str());
+    let preference = provider
+        .map(|id| settings.get_provider_metric(id))
+        .unwrap_or(MetricPreference::Automatic);
+    let percent = selected_metric_percent(snapshot, provider, preference)
+        .or_else(|| selected_metric_percent(snapshot, provider, MetricPreference::Automatic))
+        .unwrap_or(snapshot.primary.used_percent);
+    let status = selected_metric_window(snapshot, provider, preference)
+        .map(|window| crate::commands::compact_tray_status_label(window, lang))
+        .unwrap_or_else(|| format!("{}%", percent.clamp(0.0, 100.0).round() as u8));
+    (
+        snapshot.provider_id.clone(),
+        format!("{} {status}", snapshot.display_name),
     )
 }
 
@@ -545,6 +567,7 @@ fn render_tray_icon_for_settings(
 /// paths without needing a live Tauri app handle.
 fn pick_tray_provider<'a>(
     ok_snapshots: &'a [&'a crate::commands::ProviderUsageSnapshot],
+    settings: &Settings,
     prefer_highest: bool,
 ) -> Option<&'a crate::commands::ProviderUsageSnapshot> {
     if ok_snapshots.is_empty() {
@@ -552,9 +575,9 @@ fn pick_tray_provider<'a>(
     }
     if prefer_highest {
         ok_snapshots.iter().copied().max_by(|a, b| {
-            a.primary
-                .used_percent
-                .partial_cmp(&b.primary.used_percent)
+            selected_tray_used_percents(a, settings)
+                .0
+                .partial_cmp(&selected_tray_used_percents(b, settings).0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
     } else {
@@ -562,7 +585,7 @@ fn pick_tray_provider<'a>(
     }
 }
 
-fn selected_tray_percents(
+fn selected_tray_used_percents(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     settings: &Settings,
 ) -> (f64, Option<f64>) {
@@ -574,15 +597,9 @@ fn selected_tray_percents(
         .or_else(|| selected_metric_percent(snapshot, provider, MetricPreference::Automatic))
         .unwrap_or(snapshot.primary.used_percent);
 
-    let secondary = snapshot
-        .secondary
-        .as_ref()
-        .map(|w| display_metric_percent(w.used_percent, settings.show_as_used));
+    let secondary = snapshot.secondary.as_ref().map(|w| w.used_percent);
 
-    (
-        display_metric_percent(primary, settings.show_as_used),
-        secondary,
-    )
+    (primary.clamp(0.0, 100.0), secondary)
 }
 
 fn display_metric_percent(used_percent: f64, show_as_used: bool) -> f64 {
@@ -619,6 +636,76 @@ fn selected_metric_percent(
             extra_rate_window_percent(snapshot).or_else(|| cost_metric_percent(snapshot))
         }
         MetricPreference::Average => average_metric_percent(snapshot),
+    }
+}
+
+fn selected_metric_window(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+    provider: Option<ProviderId>,
+    preference: MetricPreference,
+) -> Option<&crate::commands::RateWindowSnapshot> {
+    match preference {
+        MetricPreference::Automatic => automatic_metric_window(snapshot, provider),
+        MetricPreference::Session => Some(&snapshot.primary),
+        MetricPreference::Weekly => snapshot.secondary.as_ref().or(Some(&snapshot.primary)),
+        MetricPreference::Model => snapshot.model_specific.as_ref().or(Some(&snapshot.primary)),
+        MetricPreference::Tertiary => snapshot
+            .tertiary
+            .as_ref()
+            .or(snapshot.secondary.as_ref())
+            .or(Some(&snapshot.primary)),
+        MetricPreference::ExtraUsage => snapshot
+            .extra_rate_windows
+            .iter()
+            .max_by(|a, b| {
+                a.window
+                    .used_percent
+                    .partial_cmp(&b.window.used_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|extra| &extra.window),
+        MetricPreference::Credits | MetricPreference::Average => None,
+    }
+}
+
+fn automatic_metric_window<'a>(
+    snapshot: &'a crate::commands::ProviderUsageSnapshot,
+    provider: Option<ProviderId>,
+) -> Option<&'a crate::commands::RateWindowSnapshot> {
+    let highest = |windows: Vec<&'a crate::commands::RateWindowSnapshot>| {
+        windows.into_iter().max_by(|a, b| {
+            a.used_percent
+                .partial_cmp(&b.used_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    };
+    match provider {
+        Some(ProviderId::Cursor) => {
+            let mut windows = vec![&snapshot.primary];
+            windows.extend(snapshot.secondary.iter());
+            windows.extend(snapshot.tertiary.iter());
+            highest(windows)
+        }
+        Some(ProviderId::Zai) => {
+            let mut windows = vec![&snapshot.primary];
+            windows.extend(snapshot.tertiary.iter());
+            highest(windows)
+        }
+        Some(ProviderId::Factory) | Some(ProviderId::Kimi) => {
+            snapshot.secondary.as_ref().or(Some(&snapshot.primary))
+        }
+        Some(ProviderId::Copilot) => {
+            let mut windows = vec![&snapshot.primary];
+            windows.extend(snapshot.secondary.iter());
+            windows.extend(
+                snapshot
+                    .extra_rate_windows
+                    .iter()
+                    .map(|extra| &extra.window),
+            );
+            highest(windows)
+        }
+        _ => Some(&snapshot.primary),
     }
 }
 
@@ -1268,32 +1355,48 @@ mod tests {
 
     #[test]
     fn pick_tray_provider_highest_picks_max_primary() {
+        let settings = Settings::default();
         let a = fake_snapshot("codex", "Codex", 30.0);
         let b = fake_snapshot("claude", "Claude", 72.5);
         let c = fake_snapshot("gemini", "Gemini", 50.0);
         let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&a, &b, &c];
 
-        let picked = pick_tray_provider(&refs, /* prefer_highest = */ true)
+        let picked = pick_tray_provider(&refs, &settings, /* prefer_highest = */ true)
             .expect("highest mode should pick a provider");
         assert_eq!(picked.provider_id, "claude");
     }
 
     #[test]
     fn pick_tray_provider_first_preserves_catalog_order() {
+        let settings = Settings::default();
         let a = fake_snapshot("codex", "Codex", 30.0);
         let b = fake_snapshot("claude", "Claude", 72.5);
         let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&a, &b];
 
-        let picked = pick_tray_provider(&refs, /* prefer_highest = */ false)
+        let picked = pick_tray_provider(&refs, &settings, /* prefer_highest = */ false)
             .expect("non-highest mode should still pick the first entry");
         assert_eq!(picked.provider_id, "codex");
     }
 
     #[test]
+    fn pick_tray_provider_ranks_the_configured_metric_in_used_units() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
+        let cursor = fake_snapshot_with("cursor", "Cursor", 95.0, None, None, Some((15.0, 100.0)));
+        let claude = fake_snapshot("claude", "Claude", 50.0);
+        let refs = vec![&cursor, &claude];
+
+        let picked = pick_tray_provider(&refs, &settings, true).expect("selected provider");
+
+        assert_eq!(picked.provider_id, "claude");
+    }
+
+    #[test]
     fn pick_tray_provider_none_when_empty() {
+        let settings = Settings::default();
         let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![];
-        assert!(pick_tray_provider(&refs, true).is_none());
-        assert!(pick_tray_provider(&refs, false).is_none());
+        assert!(pick_tray_provider(&refs, &settings, true).is_none());
+        assert!(pick_tray_provider(&refs, &settings, false).is_none());
     }
 
     #[test]
@@ -1532,7 +1635,7 @@ mod tests {
             Some((15.0, 100.0)),
         );
 
-        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        let (primary, secondary) = selected_tray_used_percents(&snapshot, &settings);
 
         assert_eq!(primary, 15.0);
         assert_eq!(secondary, Some(20.0));
@@ -1545,7 +1648,7 @@ mod tests {
         let mut snapshot = fake_snapshot("copilot", "Copilot", 20.0);
         snapshot.extra_rate_windows.push(fake_extra_window(42.0));
 
-        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        let (primary, secondary) = selected_tray_used_percents(&snapshot, &settings);
 
         assert_eq!(primary, 42.0);
         assert_eq!(secondary, None);
@@ -1557,13 +1660,13 @@ mod tests {
         let mut snapshot = fake_snapshot("copilot", "Copilot", 20.0);
         snapshot.extra_rate_windows.push(fake_extra_window(42.0));
 
-        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        let (primary, _) = selected_tray_used_percents(&snapshot, &settings);
 
         assert_eq!(primary, 42.0);
     }
 
     #[test]
-    fn selected_tray_percent_respects_remaining_display_mode() {
+    fn tray_icon_pressure_stays_in_used_units_when_display_shows_remaining() {
         let mut settings = Settings {
             show_as_used: false,
             ..Settings::default()
@@ -1578,10 +1681,10 @@ mod tests {
             Some((15.0, 100.0)),
         );
 
-        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        let (primary, secondary) = selected_tray_used_percents(&snapshot, &settings);
 
-        assert_eq!(primary, 85.0);
-        assert_eq!(secondary, Some(80.0));
+        assert_eq!(primary, 15.0);
+        assert_eq!(secondary, Some(20.0));
     }
 
     #[test]
@@ -1590,7 +1693,7 @@ mod tests {
         settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
         let snapshot = fake_snapshot_with("cursor", "Cursor", 10.0, Some(72.0), None, None);
 
-        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        let (primary, _) = selected_tray_used_percents(&snapshot, &settings);
 
         assert_eq!(primary, 72.0);
     }

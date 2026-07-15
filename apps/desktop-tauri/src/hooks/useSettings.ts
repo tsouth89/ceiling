@@ -78,9 +78,8 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
   const update = useCallback((patch: SettingsUpdate): Promise<void> => {
     pendingUpdates.current += 1;
     setSaving(true);
-    setError(null);
-
     const run = updateQueue.current.then(async () => {
+      setError(null);
       try {
         const next = await updateSettings(patch);
         setSettings(next);

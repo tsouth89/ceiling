@@ -139,9 +139,11 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
       })
       .catch(() => {
         if (!cancelled) {
-          setData(null);
           setEnriching(false);
-          setFailed(true);
+          if (cached === null) {
+            setData(null);
+            setFailed(true);
+          }
           setLoading(false);
         }
       });

@@ -693,7 +693,7 @@ use chrono::Datelike;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{TimeZone, Utc};
     use std::io::Write;
 
     #[test]
@@ -766,7 +766,7 @@ mod tests {
             &range,
         );
         parser.process_line(
-            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cache_read_input_tokens":40,"output_tokens":9}}}}"#,
+            r#"{"timestamp":"2026-05-31T06:00:02.000-04:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cache_read_input_tokens":40,"output_tokens":9}}}}"#,
             &range,
         );
 
@@ -775,7 +775,38 @@ mod tests {
         assert_eq!(record.day_key, "2026-05-31");
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (120, 40, 9));
+        assert_eq!(
+            record.timestamp,
+            Some(Utc.with_ymd_and_hms(2026, 5, 31, 10, 0, 2).unwrap())
+        );
         assert_eq!(parser.current_model.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn serde_token_path_preserves_offset_timestamps_and_tolerates_malformed_values() {
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        let offset = serde_json::json!({
+            "timestamp": "2026-05-31T06:00:02-04:00",
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": 4, "output_tokens": 2}}
+            }
+        });
+        parser.record_token_count(&offset, "2026-05-31".to_string());
+        assert_eq!(
+            parser.records[0].timestamp,
+            Some(Utc.with_ymd_and_hms(2026, 5, 31, 10, 0, 2).unwrap())
+        );
+
+        let malformed = serde_json::json!({
+            "timestamp": "not-a-timestamp",
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": 1, "output_tokens": 1}}
+            }
+        });
+        parser.record_token_count(&malformed, "2026-05-31".to_string());
+        assert_eq!(parser.records[1].timestamp, None);
     }
 
     #[test]
