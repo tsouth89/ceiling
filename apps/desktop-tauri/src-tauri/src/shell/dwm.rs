@@ -75,6 +75,36 @@ unsafe extern "system" {
     fn GetMonitorInfoW(hmonitor: isize, info: *mut MonitorInfo) -> i32;
 }
 
+/// Return the physical Win32 monitor rectangle containing `hwnd`.
+///
+/// Keeping this query beside the existing DWM declarations avoids duplicate
+/// extern signatures in other native window features.
+#[cfg(windows)]
+pub(crate) fn monitor_bounds_for_window(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if monitor == 0 {
+            return None;
+        }
+        let mut info = MonitorInfo {
+            cb_size: std::mem::size_of::<MonitorInfo>() as u32,
+            rc_monitor: WinRect::default(),
+            rc_work: WinRect::default(),
+            dw_flags: 0,
+        };
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return None;
+        }
+        Some((
+            info.rc_monitor.left,
+            info.rc_monitor.top,
+            info.rc_monitor.right,
+            info.rc_monitor.bottom,
+        ))
+    }
+}
+
 #[cfg(windows)]
 #[link(name = "comctl32")]
 unsafe extern "system" {
