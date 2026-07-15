@@ -5,7 +5,7 @@ vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key, language: "english" }),
 }));
 // The FloatBar section pulls in its own bridge dependencies; it is irrelevant
-// to the window-scale control under test.
+// to these display-preference tests.
 vi.mock("../../../floatbar", () => ({
   FloatBarSettingsSection: () => null,
 }));
@@ -32,32 +32,18 @@ function renderTab(set: (patch: Record<string, unknown>) => void) {
   );
 }
 
-describe("DisplayTab window scale", () => {
+describe("DisplayTab", () => {
   it("does not expose the unused token-account display setting", () => {
     renderTab(vi.fn());
     expect(screen.queryByText("ShowAllTokenAccountsLabel")).not.toBeInTheDocument();
   });
 
-  it("commits the new window scale on blur", () => {
-    const set = vi.fn();
-    renderTab(set);
-    const slider = screen.getByRole("slider", { name: "WindowScaleAriaLabel" });
-
-    fireEvent.change(slider, { target: { value: "175" } });
-    fireEvent.blur(slider);
-
-    expect(set).toHaveBeenCalledWith({ windowScalePercent: 175 });
-  });
-
-  it("does not commit when the value is unchanged", () => {
-    const set = vi.fn();
-    renderTab(set);
-    const slider = screen.getByRole("slider", { name: "WindowScaleAriaLabel" });
-
-    fireEvent.change(slider, { target: { value: "100" } });
-    fireEvent.blur(slider);
-
-    expect(set).not.toHaveBeenCalled();
+  it("keeps legacy dashboard scaling out of the primary settings UI", () => {
+    renderTab(vi.fn());
+    expect(
+      screen.queryByRole("slider", { name: "WindowScaleAriaLabel" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("WindowScaleLabel")).not.toBeInTheDocument();
   });
 
   it("updates the exhausted reset display preference", () => {
@@ -68,5 +54,4 @@ describe("DisplayTab window scale", () => {
 
     expect(set).toHaveBeenCalledWith({ showResetWhenExhausted: true });
   });
-
 });
