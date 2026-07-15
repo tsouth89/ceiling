@@ -29,52 +29,59 @@ const CEILING: (u8, u8, u8) = (166, 227, 92);
 /// Track colour behind an unfilled usage bar.
 const TRACK: (u8, u8, u8) = (44, 50, 58);
 
-/// Render the compact Ceiling glyph used by the Windows notification area.
+/// Render the compact Ceiling mark used by the Windows notification area.
 ///
-/// Unlike the full app icon this has no dark tile: Windows commonly displays
-/// tray art at only 16 logical pixels, where the old tile + two tiny bars read
-/// as an indistinct black square. A thick open gauge and a short lime ceiling
-/// remain legible after downsampling, with a dark keyline for light taskbars.
-pub fn render_ceiling_tray_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
+/// The full app icon is reduced to its two defining shapes instead of being
+/// scaled down wholesale. A transparent background avoids the bolted-on black
+/// tile, while a subtle dark keyline keeps the lime ceiling and pale chamber
+/// legible on both light and dark taskbars. Usage belongs in the tooltip and
+/// taskbar widget; the tray mark stays calm and recognizable at 16px.
+pub fn render_ceiling_tray_icon_rgba(_percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
     let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
     for pixel in img.pixels_mut() {
         *pixel = Rgba([0, 0, 0, 0]);
     }
 
-    let outline = Rgba([19, 25, 31, if has_error { 180 } else { 235 }]);
-    let (r, g, b) = desat(brand_usage_color(percent), has_error);
-    let gauge = Rgba([r, g, b, 255]);
-    let draw_gauge = |img: &mut RgbaImage, inner: f64, outer: f64, color: Rgba<u8>| {
-        for y in 3..30 {
-            for x in 2..30 {
-                let dx = x as f64 + 0.5 - 15.5;
-                let dy = y as f64 + 0.5 - 17.0;
-                let distance = (dx * dx + dy * dy).sqrt();
-                let in_opening = dx > 4.0 && dy.abs() < 4.8;
-                if !in_opening && distance >= inner && distance <= outer {
-                    img.put_pixel(x, y, color);
-                }
-            }
-        }
-    };
-
-    draw_gauge(&mut img, 5.4, 11.7, outline);
-    draw_gauge(&mut img, 6.8, 10.1, gauge);
-
-    for y in 4..10 {
-        for x in 6..26 {
-            img.put_pixel(x, y, outline);
-        }
-    }
+    let keyline = Rgba([18, 23, 29, if has_error { 170 } else { 225 }]);
     let (cr, cg, cb) = desat(CEILING, has_error);
-    for y in 6..9 {
-        for x in 8..24 {
-            img.put_pixel(x, y, Rgba([cr, cg, cb, 255]));
-        }
-    }
+    let ceiling = Rgba([cr, cg, cb, 255]);
+    let (fr, fg, fb) = desat((225, 232, 238), has_error);
+    let chamber = Rgba([fr, fg, fb, 255]);
+
+    fill_rounded_rect(&mut img, 5, 3, 27, 12, 5, keyline);
+    fill_rounded_rect(&mut img, 7, 5, 25, 10, 3, ceiling);
+    fill_rounded_rect(&mut img, 5, 13, 27, 30, 7, keyline);
+    fill_rounded_rect(&mut img, 7, 15, 25, 28, 5, chamber);
 
     (img.into_raw(), SZ, SZ)
+}
+
+fn fill_rounded_rect(
+    img: &mut RgbaImage,
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+    radius: u32,
+    color: Rgba<u8>,
+) {
+    let radius = (radius as f64)
+        .min((right.saturating_sub(left)) as f64 / 2.0)
+        .min((bottom.saturating_sub(top)) as f64 / 2.0);
+    for y in top..bottom {
+        for x in left..right {
+            let px = x as f64 + 0.5;
+            let py = y as f64 + 0.5;
+            let nearest_x = px.clamp(left as f64 + radius, right as f64 - radius);
+            let nearest_y = py.clamp(top as f64 + radius, bottom as f64 - radius);
+            let dx = px - nearest_x;
+            let dy = py - nearest_y;
+            if dx * dx + dy * dy <= radius * radius {
+                img.put_pixel(x, y, color);
+            }
+        }
+    }
 }
 
 fn desat(rgb: (u8, u8, u8), has_error: bool) -> (u8, u8, u8) {
@@ -255,6 +262,31 @@ mod tests {
         assert!(
             rgba.chunks_exact(4)
                 .any(|pixel| { pixel[3] == 255 && (pixel[0], pixel[1], pixel[2]) == CEILING })
+        );
+        assert!(
+            rgba.chunks_exact(4).any(|pixel| {
+                pixel[3] == 255 && (pixel[0], pixel[1], pixel[2]) == (225, 232, 238)
+            })
+        );
+    }
+
+    #[test]
+    fn compact_ceiling_icon_stays_brand_first_across_usage_levels() {
+        let (low, _, _) = render_ceiling_tray_icon_rgba(12.0, false);
+        let (high, _, _) = render_ceiling_tray_icon_rgba(91.0, false);
+        assert_eq!(low, high);
+    }
+
+    #[test]
+    fn compact_ceiling_icon_desaturates_on_error() {
+        let (normal, _, _) = render_ceiling_tray_icon_rgba(50.0, false);
+        let (error, _, _) = render_ceiling_tray_icon_rgba(50.0, true);
+
+        assert_ne!(normal, error);
+        assert!(
+            error
+                .chunks_exact(4)
+                .any(|pixel| { pixel[3] == 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2] })
         );
     }
 
