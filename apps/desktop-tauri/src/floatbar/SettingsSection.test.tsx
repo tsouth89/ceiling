@@ -13,6 +13,8 @@ const settings = {
   floatBarScale: 100,
   floatBarOrientation: "horizontal",
   floatBarStyle: "floating",
+  floatBarDensity: "standard",
+  floatBarContrast: "auto",
   floatBarShowCost: false,
   floatBarShowResetInline: false,
   floatBarDarkText: false,

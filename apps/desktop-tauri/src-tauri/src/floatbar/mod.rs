@@ -6,6 +6,8 @@
 //! shell only needs to call into the small public API exported here.
 
 mod commands;
+mod placement;
+mod taskbar;
 mod window;
 
 pub use commands::*;
@@ -89,6 +91,9 @@ pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
         window::apply_opacity(&w, settings.float_bar_opacity);
         window::apply_click_through(&w, settings.float_bar_click_through);
         window::apply_always_on_top(&w);
+        if settings.float_bar_style == "taskbar" {
+            window::reposition_taskbar(&w, true);
+        }
     }
 }
 
@@ -102,6 +107,8 @@ pub struct SettingsPatch {
     pub scale: Option<u8>,
     pub orientation: Option<String>,
     pub style: Option<String>,
+    pub density: Option<String>,
+    pub contrast: Option<String>,
     pub click_through: Option<bool>,
     pub provider_ids: Option<Vec<String>>,
     pub dark_text: Option<bool>,
@@ -116,6 +123,8 @@ impl SettingsPatch {
             && self.scale.is_none()
             && self.orientation.is_none()
             && self.style.is_none()
+            && self.density.is_none()
+            && self.contrast.is_none()
             && self.click_through.is_none()
             && self.provider_ids.is_none()
             && self.dark_text.is_none()
@@ -140,6 +149,12 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.style {
             settings.float_bar_style = codexbar::settings::normalize_float_bar_style(v);
+        }
+        if let Some(v) = &self.density {
+            settings.float_bar_density = codexbar::settings::normalize_float_bar_density(v);
+        }
+        if let Some(v) = &self.contrast {
+            settings.float_bar_contrast = Some(codexbar::settings::normalize_float_bar_contrast(v));
         }
         if let Some(v) = self.click_through {
             settings.float_bar_click_through = v;

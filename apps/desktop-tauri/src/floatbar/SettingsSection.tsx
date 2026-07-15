@@ -3,6 +3,8 @@ import { Field, Select, Toggle } from "../components/FormControls";
 import { useLocale } from "../hooks/useLocale";
 import type {
   FloatBarOrientation,
+  FloatBarContrast,
+  FloatBarDensity,
   FloatBarStyle,
   SettingsSnapshot,
   SettingsUpdate,
@@ -97,6 +99,36 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           />
         </Field>
         <Field
+          label="Density"
+          description="Choose how much information each provider segment shows."
+        >
+          <Select
+            value={settings.floatBarDensity}
+            disabled={saving || !settings.floatBarEnabled}
+            options={[
+              { value: "compact", label: "Compact" },
+              { value: "standard", label: "Standard" },
+              { value: "detailed", label: "Detailed" },
+            ]}
+            onChange={(v) => set({ floatBarDensity: v as FloatBarDensity })}
+          />
+        </Field>
+        <Field
+          label="Contrast"
+          description="Automatic follows the Windows light or dark appearance."
+        >
+          <Select
+            value={settings.floatBarContrast}
+            disabled={saving || !settings.floatBarEnabled}
+            options={[
+              { value: "auto", label: "Automatic" },
+              { value: "light-text", label: "Light text" },
+              { value: "dark-text", label: "Dark text" },
+            ]}
+            onChange={(v) => set({ floatBarContrast: v as FloatBarContrast })}
+          />
+        </Field>
+        <Field
           label={`Opacity (${opacity.draft}%)`}
           description="Lower values make the bar more see-through."
         >
@@ -143,17 +175,6 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             checked={settings.floatBarShowResetInline}
             disabled={saving || !settings.floatBarEnabled}
             onChange={(v) => set({ floatBarShowResetInline: v })}
-          />
-        </Field>
-        <Field
-          label="Invert Colors"
-          description="Switches to dark text on light glass for bright backgrounds."
-          leading
-        >
-          <Toggle
-            checked={settings.floatBarDarkText}
-            disabled={saving || !settings.floatBarEnabled}
-            onChange={(v) => set({ floatBarDarkText: v })}
           />
         </Field>
         <Field

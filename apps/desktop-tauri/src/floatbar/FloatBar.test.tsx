@@ -133,6 +133,8 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarScale: 100,
     floatBarOrientation: "horizontal",
     floatBarStyle: "floating",
+    floatBarDensity: "standard",
+    floatBarContrast: "light-text",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
     floatBarDarkText: false,
@@ -405,11 +407,11 @@ describe("FloatBar", () => {
   it("applies the light-background class and CSS opacity", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(
-      settings({ floatBarDarkText: true, floatBarOpacity: 45 }),
+      settings({ floatBarContrast: "dark-text", floatBarOpacity: 45 }),
     );
 
     const { container } = renderFloatBar(
-      bootstrap({ floatBarDarkText: true, floatBarOpacity: 45 }),
+      bootstrap({ floatBarContrast: "dark-text", floatBarOpacity: 45 }),
     );
 
     await waitFor(() => {

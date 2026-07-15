@@ -135,6 +135,10 @@ pub(super) struct RawSettings {
     float_bar_orientation: String,
     #[serde(default = "default_float_bar_style")]
     float_bar_style: String,
+    #[serde(default = "default_float_bar_density")]
+    float_bar_density: String,
+    #[serde(default)]
+    float_bar_contrast: Option<String>,
     #[serde(default)]
     float_bar_click_through: bool,
     #[serde(default)]
@@ -226,6 +230,8 @@ impl Default for RawSettings {
             float_bar_scale: s.float_bar_scale,
             float_bar_orientation: s.float_bar_orientation,
             float_bar_style: s.float_bar_style,
+            float_bar_density: s.float_bar_density,
+            float_bar_contrast: s.float_bar_contrast,
             float_bar_click_through: s.float_bar_click_through,
             float_bar_provider_ids: s.float_bar_provider_ids,
             float_bar_dark_text: s.float_bar_dark_text,
@@ -504,6 +510,10 @@ impl From<RawSettings> for Settings {
             float_bar_scale: clamp_float_bar_scale(raw.float_bar_scale),
             float_bar_orientation: normalize_float_bar_orientation(&raw.float_bar_orientation),
             float_bar_style: normalize_float_bar_style(&raw.float_bar_style),
+            float_bar_density: normalize_float_bar_density(&raw.float_bar_density),
+            float_bar_contrast: raw
+                .float_bar_contrast
+                .map(|value| normalize_float_bar_contrast(&value)),
             float_bar_click_through: raw.float_bar_click_through,
             float_bar_provider_ids: raw.float_bar_provider_ids,
             float_bar_dark_text: raw.float_bar_dark_text,

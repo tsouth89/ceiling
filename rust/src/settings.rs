@@ -217,6 +217,17 @@ pub struct Settings {
     #[serde(default = "default_float_bar_style")]
     pub float_bar_style: String,
 
+    /// Floating-bar information density: "compact", "standard", or
+    /// "detailed". Standard preserves the original layout.
+    #[serde(default = "default_float_bar_density")]
+    pub float_bar_density: String,
+
+    /// Floating-bar contrast mode. `None` means a pre-density settings file;
+    /// resolve it through the legacy `float_bar_dark_text` preference so
+    /// upgrades preserve their appearance. New installs default to auto.
+    #[serde(default)]
+    pub float_bar_contrast: Option<String>,
+
     /// When true the floating bar is fully click-through (overlay mode).
     #[serde(default)]
     pub float_bar_click_through: bool,
@@ -272,6 +283,10 @@ fn default_float_bar_style() -> String {
     "floating".to_string()
 }
 
+fn default_float_bar_density() -> String {
+    "standard".to_string()
+}
+
 /// Clamp the floating-bar opacity to the supported range.
 ///
 /// Opacity values below 30% would make the bar effectively invisible, so we
@@ -302,6 +317,41 @@ pub fn normalize_float_bar_style(value: &str) -> String {
         "taskbar" => "taskbar".to_string(),
         _ => "floating".to_string(),
     }
+}
+
+/// Normalize a floating-bar density string while preserving the established
+/// standard layout for unknown or older values.
+pub fn normalize_float_bar_density(value: &str) -> String {
+    match value {
+        "compact" => "compact".to_string(),
+        "detailed" => "detailed".to_string(),
+        _ => "standard".to_string(),
+    }
+}
+
+/// Normalize the resolved contrast mode used by the desktop bridge.
+pub fn normalize_float_bar_contrast(value: &str) -> String {
+    match value {
+        "light-text" => "light-text".to_string(),
+        "dark-text" => "dark-text".to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+/// Resolve upgraded settings without changing their previous light/dark text
+/// choice. Fresh defaults carry an explicit automatic mode.
+pub fn resolved_float_bar_contrast(settings: &Settings) -> String {
+    settings
+        .float_bar_contrast
+        .as_deref()
+        .map(normalize_float_bar_contrast)
+        .unwrap_or_else(|| {
+            if settings.float_bar_dark_text {
+                "dark-text".to_string()
+            } else {
+                "light-text".to_string()
+            }
+        })
 }
 
 /// Canonicalize a requested provider display order.
@@ -419,6 +469,8 @@ impl Default for Settings {
             float_bar_scale: default_float_bar_scale(),
             float_bar_orientation: default_float_bar_orientation(),
             float_bar_style: default_float_bar_style(),
+            float_bar_density: default_float_bar_density(),
+            float_bar_contrast: Some("auto".to_string()),
             float_bar_click_through: false,
             float_bar_provider_ids: Vec::new(),
             float_bar_dark_text: false,
