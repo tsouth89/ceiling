@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { ChartTooltip } from "../../../../../components/charts/ChartTooltip";
 import { serviceColorVar } from "../../../../../components/charts/chartPalette";
 import { useChartAnimation } from "../../../../../components/charts/useChartAnimation";
 import type { DailyUsageBreakdown } from "../../../../../types/bridge";
@@ -129,11 +130,7 @@ export function UsageBreakdownChart({
                       className="chart__stack-rect"
                       onMouseMove={(e) => onSegMove(e, label, svc.creditsUsed)}
                       onMouseLeave={onSegLeave}
-                    >
-                      <title>
-                        {day.day} {svc.service}: {svc.creditsUsed.toFixed(2)}
-                      </title>
-                    </rect>
+                    />
                   );
                   xOffset += w;
                   return rect;
@@ -156,14 +153,10 @@ export function UsageBreakdownChart({
           </div>
         )}
         {hover && !anim.running && (
-          <div
-            className="chart__tooltip"
-            style={{ left: hover.x, top: hover.y }}
-            role="tooltip"
-          >
+          <ChartTooltip containerRef={containerRef} x={hover.x} y={hover.y}>
             <span className="chart__tooltip-label">{hover.label}</span>
             <strong>{hover.value.toFixed(2)}</strong>
-          </div>
+          </ChartTooltip>
         )}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { ChartTooltip } from "./ChartTooltip";
 import { useChartAnimation } from "./useChartAnimation";
 
 /**
@@ -142,11 +143,7 @@ export function LineChart({
             className="chart__point"
             onMouseMove={(e) => onPointMove(e, i)}
             onMouseLeave={onLeave}
-          >
-            <title>
-              {tooltipFmt(p.label)}: {fmt(p.value)}
-            </title>
-          </circle>
+          />
         ))}
       </svg>
       <div className="chart__axis">
@@ -155,14 +152,10 @@ export function LineChart({
         <span>{axisFmt(data[data.length - 1].label)}</span>
       </div>
       {hover && !anim.running && (
-        <div
-          className="chart__tooltip"
-          style={{ left: hover.x, top: hover.y }}
-          role="tooltip"
-        >
+        <ChartTooltip containerRef={containerRef} x={hover.x} y={hover.y}>
           <span className="chart__tooltip-label">{tooltipFmt(data[hover.i].label)}</span>
           <strong>{fmt(data[hover.i].value)}</strong>
-        </div>
+        </ChartTooltip>
       )}
     </div>
   );

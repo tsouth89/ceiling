@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { ChartTooltip } from "./ChartTooltip";
 import { useChartAnimation } from "./useChartAnimation";
 
 /**
@@ -124,11 +125,7 @@ export function BarChart({
                 className="chart__bar"
                 onMouseMove={(e) => onMove(e, i)}
                 onMouseLeave={onLeave}
-              >
-                <title>
-                  {p.label}: {fmt(p.value)}
-                </title>
-              </rect>
+              />
               {isPeak && (
                 <rect
                   x={x}
@@ -151,14 +148,10 @@ export function BarChart({
         <span>{data[data.length - 1].label.slice(-5)}</span>
       </div>
       {hover && !anim.running && (
-        <div
-          className="chart__tooltip"
-          style={{ left: hover.x, top: hover.y }}
-          role="tooltip"
-        >
+        <ChartTooltip containerRef={containerRef} x={hover.x} y={hover.y}>
           <span className="chart__tooltip-label">{data[hover.i].label}</span>
           <strong>{fmt(data[hover.i].value)}</strong>
-        </div>
+        </ChartTooltip>
       )}
     </div>
   );
