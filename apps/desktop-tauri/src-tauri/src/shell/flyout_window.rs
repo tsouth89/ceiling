@@ -22,6 +22,8 @@ use crate::state::AppState;
 use crate::surface::SurfaceMode;
 
 pub const FLYOUT_LABEL: &str = "flyout";
+const FLYOUT_WIDTH: f64 = 344.0;
+const FLYOUT_INITIAL_HEIGHT: f64 = 174.0;
 
 /// Geometry-store key for the flyout's remembered SIZE (position is never
 /// stored — the flyout always re-anchors above the tray on open). Kept as
@@ -69,29 +71,20 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
         return Ok(());
     }
 
-    // Derive window properties from `SurfaceMode::TrayPanel.window_properties()`
-    // — the historical single source of truth for the flyout's shape (size,
-    // resizability, always-on-top, taskbar visibility). The variant is kept
-    // specifically so this builder (and the geometry-store key, and
-    // `default_surface_position`'s positioning branch) have one place to read
-    // from, rather than duplicating these values as independent constants
-    // that could silently drift from `surface.rs`.
-    let props = SurfaceMode::TrayPanel.window_properties();
-    let (width, height) = stored_size()
-        .map(|(w, h)| (w as f64, h as f64))
-        .unwrap_or((props.width, props.height));
-
     let url = WebviewUrl::App("index.html?window=flyout".into());
 
-    let mut builder = tauri::WebviewWindowBuilder::new(app, FLYOUT_LABEL, url)
+    let builder = tauri::WebviewWindowBuilder::new(app, FLYOUT_LABEL, url)
         .title("Ceiling")
-        .inner_size(width, height)
-        .decorations(props.decorations)
+        .inner_size(FLYOUT_WIDTH, FLYOUT_INITIAL_HEIGHT)
+        .decorations(false)
         .shadow(true)
         .transparent(true)
-        .resizable(props.resizable)
-        .always_on_top(props.always_on_top)
-        .skip_taskbar(props.skip_taskbar)
+        // This is a glance surface, not a second dashboard. Its React surface
+        // sizes the window to live provider content; users should never see a
+        // resize cursor or a remembered legacy tray-panel dimension.
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
         .theme(Some(tauri::Theme::Dark))
         // CRITICAL: dynamically-built windows default to drag-drop ENABLED,
         // which intercepts the HTML5 draggable events the provider grid's
@@ -100,14 +93,9 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
         // disabled explicitly on every window that hosts that grid.
         .disable_drag_drop_handler()
         .visible(false);
-    if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
-        builder = builder.min_inner_size(min_w, min_h);
-    }
     let win = builder.build().map_err(|e| e.to_string())?;
 
-    // Force DWM caption dark; keep WS_THICKFRAME (resizable) like the
-    // Settings window.
-    super::dwm::force_dark_caption_resizable(&win);
+    super::dwm::force_dark_caption(&win);
 
     let target_position =
         position.or_else(|| super::position::default_surface_position(app, SurfaceMode::TrayPanel));
@@ -320,22 +308,13 @@ mod tests {
     }
 
     #[test]
-    fn tray_panel_window_properties_still_the_single_source_for_flyout_shape() {
-        // `open_or_focus`'s builder reads size/decorations/resizable/
-        // always_on_top/skip_taskbar/min-size from
-        // `SurfaceMode::TrayPanel.window_properties()` directly (not
-        // independent duplicated constants) — this pins down the values that
-        // relationship depends on, so a change to `surface.rs` shows up here
-        // instead of silently drifting from what the flyout actually builds.
-        let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 328.0);
-        assert_eq!(props.height, 776.0);
-        assert_eq!(props.min_width, Some(300.0));
-        assert_eq!(props.min_height, Some(360.0));
-        assert!(props.resizable);
-        assert!(props.always_on_top);
-        assert!(props.skip_taskbar);
-        assert!(!props.decorations);
+    fn taskbar_flyout_has_a_small_dedicated_initial_shape() {
+        assert_eq!(FLYOUT_WIDTH, 344.0);
+        assert_eq!(FLYOUT_INITIAL_HEIGHT, 174.0);
+        assert_ne!(
+            FLYOUT_WIDTH,
+            SurfaceMode::TrayPanel.window_properties().width
+        );
     }
 
     #[test]

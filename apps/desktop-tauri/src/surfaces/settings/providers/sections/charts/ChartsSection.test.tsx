@@ -24,6 +24,37 @@ const enrichedData = {
     sevenDayTokens: 4_949_300_000,
     thirtyDayCost: 17_700,
     thirtyDayTokens: 23_550_000_000,
+    currentWindows: [
+      {
+        id: "primary",
+        label: "Current 5h window",
+        startsAt: new Date().toISOString(),
+        endsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        tokens: 18_400_000,
+        tokenBreakdown: {
+          processedTokens: 18_400_000,
+          freshInputTokens: 100_000,
+          outputTokens: 300_000,
+          cacheReadTokens: 18_000_000,
+          cacheWriteTokens: 0,
+        },
+      },
+      {
+        id: "secondary",
+        label: "Current weekly window",
+        startsAt: new Date(Date.now() - 4 * 24 * 3_600_000).toISOString(),
+        endsAt: new Date(Date.now() + 3 * 24 * 3_600_000).toISOString(),
+        tokens: 843_400_000,
+        tokenBreakdown: {
+          processedTokens: 843_400_000,
+          freshInputTokens: 1_000_000,
+          outputTokens: 4_000_000,
+          cacheReadTokens: 838_400_000,
+          cacheWriteTokens: 0,
+        },
+      },
+    ],
+    comparisonPeriods: [],
     latestTokens: 2_100_000,
     topModel: "claude-opus-4-8",
     estimateNote: "API-equivalent estimate from local logs; not subscription spend",
@@ -52,9 +83,14 @@ describe("ChartsSection local usage summary", () => {
 
     await waitFor(() => expect(getByText("4.9B")).toBeTruthy());
     expect(getByText("23.6B")).toBeTruthy();
+    expect(getByText("Current 5h window")).toBeTruthy();
+    expect(getByText("Current weekly window")).toBeTruthy();
+    expect(getByText("18.4M")).toBeTruthy();
+    expect(() => getByText("Last session")).toThrow();
     expect(getByText("99.7% cache traffic")).toBeTruthy();
-    expect(getAllByText("processed tokens")).toHaveLength(3);
+    expect(getAllByText("processed tokens")).toHaveLength(2);
     expect(() => getByText("$3,427.91")).toThrow();
+    expect(getByLabelText("Local usage summary").getAttribute("data-card-count")).toBe("4");
 
     const mix = getByLabelText("Last 7 days token breakdown");
     expect(mix.textContent).toContain("Fresh input2M");

@@ -704,24 +704,8 @@ fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<DateTime<Utc>> {
 }
 
 fn with_reset_credits(mut usage: UsageSnapshot, reset_credits: &ResetCredits) -> UsageSnapshot {
-    if reset_credits.available_count == 0 {
-        return usage;
-    }
-    let mut window = RateWindow::new(0.0);
-    window.reset_description = Some(format!(
-        "{} reset credit{} available",
-        reset_credits.available_count,
-        if reset_credits.available_count == 1 {
-            ""
-        } else {
-            "s"
-        }
-    ));
-    usage.extra_rate_windows.push(NamedRateWindow::new(
-        "reset-credits",
-        "Reset credits",
-        window,
-    ));
+    usage.reset_credits_available =
+        (reset_credits.available_count > 0).then_some(reset_credits.available_count);
     usage
 }
 
@@ -1057,14 +1041,9 @@ mod tests {
                 available_count: 1,
             },
         );
-        assert_eq!(
-            weekly_only
-                .extra_rate_windows
-                .iter()
-                .map(|window| window.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["codex-spark-weekly", "reset-credits"]
-        );
+        assert_eq!(weekly_only.reset_credits_available, Some(1));
+        assert_eq!(weekly_only.extra_rate_windows.len(), 1);
+        assert_eq!(weekly_only.extra_rate_windows[0].id, "codex-spark-weekly");
 
         let (restored, _) = api
             .build_result_from_json(&restored_json)

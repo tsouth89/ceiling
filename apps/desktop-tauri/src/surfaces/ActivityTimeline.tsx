@@ -4,12 +4,9 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { allMeasuredWindows } from "../lib/capacityPresentation";
 
 /**
- * Activity = an "upcoming resets" timeline. Each provider exposes one or more
- * rate windows (plan / session / weekly / model / extra), and every window
- * carries a `resetsAt`. We enumerate them all, sort by soonest reset, and group
- * by how far out they are — so at a glance you can see what frees up next and in
- * what order. This is built purely from the live snapshot (no fabricated
- * history); the Charts tab owns cost-over-time.
+ * Activity is a calm schedule of the rate-window resets providers report.
+ * The soonest future reset is promoted into a useful glance, while the rest
+ * stay in a compact chronological list. No history is implied or fabricated.
  */
 
 type TimelineEntry = {
@@ -18,7 +15,6 @@ type TimelineEntry = {
   displayName: string;
   label: string;
   window: RateWindowSnapshot;
-  /** Parsed reset time in ms; null when the window has no known reset. */
   resetMs: number | null;
 };
 
@@ -30,16 +26,13 @@ type Bucket = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Same urgency scale the dashboard cards use, keyed off remaining headroom. */
+/** Color is reserved for an almost-depleted or exhausted window. */
 function levelOf(window: RateWindowSnapshot): string {
   if (window.isExhausted) return "exhausted";
-  const remain = window.remainingPercent;
-  if (remain <= 5) return "critical";
-  if (remain <= 25) return "high";
+  if (window.remainingPercent <= 5) return "critical";
   return "normal";
 }
 
-/** Language-neutral short duration: "6d 13h" / "1h 27m" / "12m" / "now". */
 function shortDuration(ms: number): string {
   if (ms <= 0) return "now";
   const totalMin = Math.floor(ms / 60_000);
@@ -49,6 +42,29 @@ function shortDuration(ms: number): string {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function sameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function localResetLabel(resetMs: number, nowMs: number): string {
+  const reset = new Date(resetMs);
+  const now = new Date(nowMs);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const time = reset.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  if (sameLocalDay(reset, now)) return `Today at ${time}`;
+  if (sameLocalDay(reset, tomorrow)) return `Tomorrow at ${time}`;
+  const weekday = reset.toLocaleDateString(undefined, { weekday: "long" });
+  return `${weekday} at ${time}`;
 }
 
 function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
@@ -72,14 +88,6 @@ function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
   return entries;
 }
 
-/**
- * A window is "quiet" — not worth a timeline row — when nothing is happening on
- * it: no usage yet AND no imminent reset. This drops the 0%-used lanes that
- * would otherwise pad the list (e.g. an untouched Promotional/On-demand pool
- * resetting weeks out, or a lifted window that reports 0% with no reset). A
- * 0%-used window still shows if it resets within the next day, since that's a
- * heads-up worth keeping.
- */
 function isQuiet(entry: TimelineEntry, nowMs: number): boolean {
   if (entry.window.usedPercent >= 1) return false;
   const resettingSoon =
@@ -89,25 +97,36 @@ function isQuiet(entry: TimelineEntry, nowMs: number): boolean {
   return !resettingSoon;
 }
 
-function bucketEntries(entries: TimelineEntry[], nowMs: number): Bucket[] {
-  const visible = entries.filter((e) => !isQuiet(e, nowMs));
-  // Only windows with a known future/near reset appear on the timeline; sort by
-  // soonest. Entries without a parseable reset fall to the end under "No reset".
-  const dated = visible
-    .filter((e) => e.resetMs !== null)
-    .sort((a, b) => (a.resetMs as number) - (b.resetMs as number));
-  const undated = visible.filter((e) => e.resetMs === null);
+function sortEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.resetMs === null) return b.resetMs === null ? 0 : 1;
+    if (b.resetMs === null) return -1;
+    return a.resetMs - b.resetMs;
+  });
+}
 
+function bucketEntries(
+  entries: TimelineEntry[],
+  nowMs: number,
+  featuredKey: string | null,
+): Bucket[] {
   const readyNow: TimelineEntry[] = [];
   const today: TimelineEntry[] = [];
   const week: TimelineEntry[] = [];
   const later: TimelineEntry[] = [];
-  for (const e of dated) {
-    const delta = (e.resetMs as number) - nowMs;
-    if (delta <= 0) readyNow.push(e);
-    else if (delta < DAY_MS) today.push(e);
-    else if (delta < 7 * DAY_MS) week.push(e);
-    else later.push(e);
+  const undated: TimelineEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.key === featuredKey) continue;
+    if (entry.resetMs === null) {
+      undated.push(entry);
+      continue;
+    }
+    const delta = entry.resetMs - nowMs;
+    if (delta <= 0) readyNow.push(entry);
+    else if (delta < DAY_MS) today.push(entry);
+    else if (delta < 7 * DAY_MS) week.push(entry);
+    else later.push(entry);
   }
 
   return [
@@ -116,35 +135,57 @@ function bucketEntries(entries: TimelineEntry[], nowMs: number): Bucket[] {
     { id: "week", label: "This week", entries: week },
     { id: "later", label: "Later", entries: later },
     { id: "noreset", label: "No scheduled reset", entries: undated },
-  ].filter((b) => b.entries.length > 0);
+  ].filter((bucket) => bucket.entries.length > 0);
 }
 
-function TimelineRow({
-  entry,
-  nowMs,
-}: {
-  entry: TimelineEntry;
-  nowMs: number;
-}) {
-  const level = levelOf(entry.window);
+function UsageBar({ window }: { window: RateWindowSnapshot }) {
+  const usedPct = Math.max(0, Math.min(100, window.usedPercent));
+  return (
+    <div className="activity-row__bar" aria-hidden>
+      <div
+        className="activity-row__bar-fill"
+        data-level={levelOf(window)}
+        style={{ width: `${usedPct}%` }}
+      />
+    </div>
+  );
+}
+
+function FeaturedReset({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) {
+  const usedPct = Math.max(0, Math.min(100, entry.window.usedPercent));
+  const duration = shortDuration((entry.resetMs as number) - nowMs);
+  return (
+    <section className="activity-next" data-activity-entry={entry.key}>
+      <div className="activity-next__eyebrow">Next reset</div>
+      <div className="activity-next__provider">
+        <ProviderIcon
+          providerId={entry.providerId}
+          size={20}
+          className="activity-next__icon"
+          title={entry.displayName}
+        />
+        <span>{entry.displayName}</span>
+        <span className="activity-next__window">{entry.label}</span>
+      </div>
+      <div className="activity-next__glance">
+        <strong>{duration}</strong>
+        <span>{localResetLabel(entry.resetMs as number, nowMs)}</span>
+        <span className="activity-next__pct">{Math.round(usedPct)}% used</span>
+      </div>
+      <UsageBar window={entry.window} />
+    </section>
+  );
+}
+
+function TimelineRow({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) {
   const usedPct = Math.max(0, Math.min(100, entry.window.usedPercent));
   const when =
-    entry.resetMs === null
-      ? "—"
-      : shortDuration((entry.resetMs as number) - nowMs);
+    entry.resetMs === null ? "—" : shortDuration(entry.resetMs - nowMs);
 
   return (
-    <li className="activity-row">
-      <div className="activity-row__when">
-        {entry.resetMs !== null && when !== "now" && (
-          <span className="activity-row__when-prefix">in</span>
-        )}
-        <span className="activity-row__when-value">{when}</span>
-      </div>
-      <div className="activity-row__track" aria-hidden>
-        <span className="activity-row__dot" data-level={level} />
-      </div>
-      <div className="activity-row__card">
+    <li className="activity-row" data-activity-entry={entry.key}>
+      <div className="activity-row__when">{when}</div>
+      <div className="activity-row__content">
         <div className="activity-row__head">
           <ProviderIcon
             providerId={entry.providerId}
@@ -156,13 +197,7 @@ function TimelineRow({
           <span className="activity-row__label">{entry.label}</span>
           <span className="activity-row__pct">{Math.round(usedPct)}% used</span>
         </div>
-        <div className="activity-row__bar">
-          <div
-            className="activity-row__bar-fill"
-            data-level={level}
-            style={{ width: `${usedPct}%` }}
-          />
-        </div>
+        <UsageBar window={entry.window} />
       </div>
     </li>
   );
@@ -173,19 +208,25 @@ export default function ActivityTimeline({
 }: {
   providers: ProviderUsageSnapshot[];
 }) {
-  // Live clock so the "in Xh Ym" durations stay current between refreshes.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(id);
   }, []);
 
-  const buckets = useMemo(
-    () => bucketEntries(collectEntries(providers), nowMs),
+  const entries = useMemo(
+    () =>
+      sortEntries(collectEntries(providers).filter((entry) => !isQuiet(entry, nowMs))),
     [providers, nowMs],
   );
+  const featured =
+    entries.find((entry) => entry.resetMs !== null && entry.resetMs > nowMs) ?? null;
+  const buckets = useMemo(
+    () => bucketEntries(entries, nowMs, featured?.key ?? null),
+    [entries, featured?.key, nowMs],
+  );
 
-  if (buckets.length === 0) {
+  if (!featured && buckets.length === 0) {
     return (
       <div className="activity-empty">
         <strong>Nothing scheduled</strong>
@@ -196,6 +237,7 @@ export default function ActivityTimeline({
 
   return (
     <div className="activity-timeline">
+      {featured && <FeaturedReset entry={featured} nowMs={nowMs} />}
       {buckets.map((bucket) => (
         <Fragment key={bucket.id}>
           <div className="activity-group__label">{bucket.label}</div>

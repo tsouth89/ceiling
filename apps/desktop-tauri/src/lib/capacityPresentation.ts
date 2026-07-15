@@ -52,9 +52,10 @@ export function constrainingWindow(
 /**
  * Overview glance model: primary plan pool as hero, plus compact companion
  * lanes. Cursor always shows its reported Auto and API lanes because they are
- * distinct allowances users need to compare. Other providers keep the single
- * hottest materially constrained lane. Clicking never toggles meters — detail
- * mode lists every window.
+ * distinct allowances users need to compare. Claude always shows Weekly beside
+ * its 5-hour session because both limits define the subscription. Other
+ * providers keep the single hottest materially constrained lane. Clicking
+ * never toggles meters — detail mode lists every window.
  */
 export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
   const primary: ConstrainingWindow = {
@@ -70,6 +71,11 @@ export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
       candidates.find((candidate) => candidate.id === "extra-cursor-api"),
     ].filter((candidate): candidate is ConstrainingWindow => Boolean(candidate));
     return { primary, companions: cursorCompanions };
+  }
+
+  if (provider.providerId === "claude") {
+    const weekly = candidates.find((candidate) => candidate.id === "secondary");
+    return { primary, companions: weekly ? [weekly] : [] };
   }
 
   let companion: ConstrainingWindow | null = null;
@@ -118,9 +124,27 @@ function nonPrimaryWindows(
   push("model", null, provider.modelSpecific, "Model");
   push("tertiary", null, provider.tertiary, "Extra");
   for (const extra of provider.extraRateWindows ?? []) {
+    if (extra.id === "reset-credits") continue;
     push(`extra-${extra.id}`, extra.title, extra.window, extra.title);
   }
   return out;
+}
+
+/** Available provider-reported resets, including legacy cached snapshots. */
+export function resetCreditsAvailable(
+  provider: ProviderUsageSnapshot,
+): number | null {
+  if (
+    typeof provider.resetCreditsAvailable === "number" &&
+    provider.resetCreditsAvailable > 0
+  ) {
+    return Math.floor(provider.resetCreditsAvailable);
+  }
+  const legacy = provider.extraRateWindows?.find(
+    (window) => window.id === "reset-credits",
+  );
+  const match = legacy?.window.resetDescription?.match(/\d+/);
+  return match ? Number(match[0]) : null;
 }
 
 /**

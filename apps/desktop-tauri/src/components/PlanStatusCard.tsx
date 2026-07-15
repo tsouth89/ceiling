@@ -7,6 +7,7 @@ import { useLocale } from "../hooks/useLocale";
 import {
   capacityFreshness,
   glanceMeters,
+  resetCreditsAvailable,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
 
@@ -30,6 +31,13 @@ function levelOf(remainPct: number, exhausted: boolean): string {
   if (remainPct <= 5) return "critical";
   if (remainPct <= 25) return "high";
   return "normal";
+}
+
+function pressureLabel(level: string): string | null {
+  if (level === "exhausted") return "Depleted";
+  if (level === "critical") return "Almost out";
+  if (level === "high") return "Near limit";
+  return null;
 }
 
 function inactiveWindowSummary(provider: ProviderUsageSnapshot): string | null {
@@ -65,6 +73,7 @@ function MeterRow({
   const barPct = showAsUsed ? usedPct : remain;
   const suffix = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
   const level = levelOf(remain, snap.isExhausted);
+  const status = pressureLabel(level);
   const formattedReset = useFormattedResetTime(
     snap.resetsAt,
     snap.resetDescription,
@@ -93,6 +102,12 @@ function MeterRow({
             <span className="plan-status-card__meter-pct plan-status-card__meter-pct--quiet">
               {Math.round(displayPct)}% {suffix}
             </span>
+            {status && (
+              <span className="plan-status-card__pressure" data-level={level}>
+                <span aria-hidden />
+                {status}
+              </span>
+            )}
             <strong className="plan-status-card__meter-reset plan-status-card__meter-reset--hero">
               {formattedReset}
             </strong>
@@ -102,6 +117,12 @@ function MeterRow({
             <strong className="plan-status-card__meter-pct">
               {Math.round(displayPct)}% {suffix}
             </strong>
+            {status && (
+              <span className="plan-status-card__pressure" data-level={level}>
+                <span aria-hidden />
+                {status}
+              </span>
+            )}
             {showReset && (
               <span
                 className={`plan-status-card__meter-reset${
@@ -145,6 +166,7 @@ export default function PlanStatusCard({
   const freshness = capacityFreshness(provider);
   const planName = displayPlanName(provider.planName, provider.displayName);
   const inactiveSummary = inactiveWindowSummary(provider);
+  const resetCredits = resetCreditsAvailable(provider);
 
   const className = [
     "plan-status-card",
@@ -173,13 +195,20 @@ export default function PlanStatusCard({
               <span className="plan-status-card__plan">{planName}</span>
             )}
           </div>
-          {freshness === "stale" && !provider.error && (
+          {!provider.error && (freshness === "stale" || resetCredits != null) && (
             <div className="plan-status-card__meta">
-              <span
-                className={`plan-status-card__chip plan-status-card__chip--${freshness}`}
-              >
-                {freshness}
-              </span>
+              {freshness === "stale" && (
+                <span
+                  className={`plan-status-card__chip plan-status-card__chip--${freshness}`}
+                >
+                  {freshness}
+                </span>
+              )}
+              {resetCredits != null && (
+                <span className="plan-status-card__reset-credit">
+                  ↻ {resetCredits} {resetCredits === 1 ? "reset available" : "resets available"}
+                </span>
+              )}
             </div>
           )}
         </div>

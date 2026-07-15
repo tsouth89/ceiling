@@ -29,6 +29,54 @@ const CEILING: (u8, u8, u8) = (166, 227, 92);
 /// Track colour behind an unfilled usage bar.
 const TRACK: (u8, u8, u8) = (44, 50, 58);
 
+/// Render the compact Ceiling glyph used by the Windows notification area.
+///
+/// Unlike the full app icon this has no dark tile: Windows commonly displays
+/// tray art at only 16 logical pixels, where the old tile + two tiny bars read
+/// as an indistinct black square. A thick open gauge and a short lime ceiling
+/// remain legible after downsampling, with a dark keyline for light taskbars.
+pub fn render_ceiling_tray_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
+    const SZ: u32 = TRAY_ICON_SIZE;
+    let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
+    for pixel in img.pixels_mut() {
+        *pixel = Rgba([0, 0, 0, 0]);
+    }
+
+    let outline = Rgba([19, 25, 31, if has_error { 180 } else { 235 }]);
+    let (r, g, b) = desat(brand_usage_color(percent), has_error);
+    let gauge = Rgba([r, g, b, 255]);
+    let draw_gauge = |img: &mut RgbaImage, inner: f64, outer: f64, color: Rgba<u8>| {
+        for y in 3..30 {
+            for x in 2..30 {
+                let dx = x as f64 + 0.5 - 15.5;
+                let dy = y as f64 + 0.5 - 17.0;
+                let distance = (dx * dx + dy * dy).sqrt();
+                let in_opening = dx > 4.0 && dy.abs() < 4.8;
+                if !in_opening && distance >= inner && distance <= outer {
+                    img.put_pixel(x, y, color);
+                }
+            }
+        }
+    };
+
+    draw_gauge(&mut img, 5.4, 11.7, outline);
+    draw_gauge(&mut img, 6.8, 10.1, gauge);
+
+    for y in 4..10 {
+        for x in 6..26 {
+            img.put_pixel(x, y, outline);
+        }
+    }
+    let (cr, cg, cb) = desat(CEILING, has_error);
+    for y in 6..9 {
+        for x in 8..24 {
+            img.put_pixel(x, y, Rgba([cr, cg, cb, 255]));
+        }
+    }
+
+    (img.into_raw(), SZ, SZ)
+}
+
 fn desat(rgb: (u8, u8, u8), has_error: bool) -> (u8, u8, u8) {
     if has_error {
         let g = ((rgb.0 as u16 + rgb.1 as u16 + rgb.2 as u16) / 3) as u8;
@@ -196,6 +244,18 @@ mod tests {
         assert_eq!(w, TRAY_ICON_SIZE);
         assert_eq!(h, TRAY_ICON_SIZE);
         assert_eq!(rgba.len() as u32, w * h * 4);
+    }
+
+    #[test]
+    fn compact_ceiling_icon_is_transparent_and_legible() {
+        let (rgba, w, h) = render_ceiling_tray_icon_rgba(72.0, false);
+        assert_eq!((w, h), (TRAY_ICON_SIZE, TRAY_ICON_SIZE));
+        assert_eq!(rgba.len() as u32, w * h * 4);
+        assert_eq!(rgba[3], 0, "top-left corner should remain transparent");
+        assert!(
+            rgba.chunks_exact(4)
+                .any(|pixel| { pixel[3] == 255 && (pixel[0], pixel[1], pixel[2]) == CEILING })
+        );
     }
 
     #[test]

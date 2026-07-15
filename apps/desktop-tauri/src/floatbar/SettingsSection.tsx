@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Field, Select, Toggle } from "../components/FormControls";
-import { useLocale } from "../hooks/useLocale";
 import type {
   FloatBarOrientation,
   FloatBarContrast,
   FloatBarDensity,
-  FloatBarStyle,
   SettingsSnapshot,
   SettingsUpdate,
 } from "../types/bridge";
@@ -40,12 +38,9 @@ function useDraftNumber(value: number) {
 }
 
 /**
- * Settings UI block for the floating capacity bar. Rendered as one row
- * in the Display tab — kept in this module so the Display tab only
- * imports a single component.
+ * Settings UI for the two independent at-a-glance surfaces.
  */
 export default function FloatBarSettingsSection({ settings, saving, set }: Props) {
-  const { t } = useLocale();
   const opacity = useDraftNumber(settings.floatBarOpacity);
   const scale = useDraftNumber(settings.floatBarScale);
   const commitOpacity = () => {
@@ -56,12 +51,66 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
   };
 
   return (
-    <section className="settings-section">
-      <h3 className="settings-section__title">Floating Bar</h3>
-      <div className="settings-section__group">
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section__title">Taskbar Usage</h3>
+        <div className="settings-section__group">
+          <Field
+            label="Show Taskbar Usage"
+            description="Show live provider usage between Windows taskbar controls."
+            leading
+          >
+            <Toggle
+              checked={settings.taskbarWidgetEnabled}
+              ariaLabel="Show Taskbar Usage"
+              disabled={saving}
+              onChange={(v) => set({ taskbarWidgetEnabled: v })}
+            />
+          </Field>
+          <Field
+            label="Open on Hover"
+            description="Open the usage glance after briefly resting the pointer on the taskbar widget."
+            leading
+          >
+            <Toggle
+              checked={settings.taskbarWidgetOpenOnHover}
+              ariaLabel="Open on Hover"
+              disabled={saving || !settings.taskbarWidgetEnabled}
+              onChange={(v) => set({ taskbarWidgetOpenOnHover: v })}
+            />
+          </Field>
+          <Field
+            label="Show on All Monitors"
+            description="Mirror one usage widget onto each verified Windows taskbar."
+            leading
+          >
+            <Toggle
+              checked={settings.taskbarWidgetAllMonitors}
+              ariaLabel="Show on All Monitors"
+              disabled={saving || !settings.taskbarWidgetEnabled}
+              onChange={(v) => set({ taskbarWidgetAllMonitors: v })}
+            />
+          </Field>
+          <Field
+            label="Show Reset Time Inline"
+            description="Show the reset countdown beside each taskbar percentage when known."
+            leading
+          >
+            <Toggle
+              checked={settings.floatBarShowResetInline}
+              disabled={saving || !settings.taskbarWidgetEnabled}
+              onChange={(v) => set({ floatBarShowResetInline: v })}
+            />
+          </Field>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section__title">Floating Bar</h3>
+        <div className="settings-section__group">
         <Field
           label="Show Floating Bar"
-          description="Always-on-top, transparent strip showing remaining capacity per provider."
+          description="Show a separate always-on-top usage strip on the desktop."
           leading
         >
           <Toggle
@@ -70,125 +119,103 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             onChange={(v) => set({ floatBarEnabled: v })}
           />
         </Field>
-        <Field
-          label="Orientation"
-          description="Horizontal sits above a taskbar; vertical sits on a screen edge."
-        >
-          <Select
-            value={settings.floatBarOrientation}
-            disabled={saving || !settings.floatBarEnabled}
-            options={[
-              { value: "horizontal", label: "Horizontal" },
-              { value: "vertical", label: "Vertical" },
-            ]}
-            onChange={(v) => set({ floatBarOrientation: v as FloatBarOrientation })}
-          />
-        </Field>
-        <Field
-          label="Style"
-          description="Choose the original floating glass look or the Windows taskbar widget look."
-        >
-          <Select
-            value={settings.floatBarStyle}
-            disabled={saving || !settings.floatBarEnabled}
-            options={[
-              { value: "floating", label: "Floating glass" },
-              { value: "taskbar", label: "Taskbar widget" },
-            ]}
-            onChange={(v) => set({ floatBarStyle: v as FloatBarStyle })}
-          />
-        </Field>
-        <Field
-          label="Density"
-          description="Choose how much information each provider segment shows."
-        >
-          <Select
-            value={settings.floatBarDensity}
-            disabled={saving || !settings.floatBarEnabled}
-            options={[
-              { value: "compact", label: "Compact" },
-              { value: "standard", label: "Standard" },
-              { value: "detailed", label: "Detailed" },
-            ]}
-            onChange={(v) => set({ floatBarDensity: v as FloatBarDensity })}
-          />
-        </Field>
-        <Field
-          label="Contrast"
-          description="Automatic follows the Windows light or dark appearance."
-        >
-          <Select
-            value={settings.floatBarContrast}
-            disabled={saving || !settings.floatBarEnabled}
-            options={[
-              { value: "auto", label: "Automatic" },
-              { value: "light-text", label: "Light text" },
-              { value: "dark-text", label: "Dark text" },
-            ]}
-            onChange={(v) => set({ floatBarContrast: v as FloatBarContrast })}
-          />
-        </Field>
-        <Field
-          label={`Opacity (${opacity.draft}%)`}
-          description="Lower values make the bar more see-through."
-        >
-          <input
-            type="range"
-            min={30}
-            max={100}
-            step={5}
-            value={opacity.draft}
-            disabled={!settings.floatBarEnabled}
-            onChange={(e) => opacity.setDraft(Number(e.target.value))}
-            onPointerUp={commitOpacity}
-            onTouchEnd={commitOpacity}
-            onBlur={commitOpacity}
-            onKeyUp={commitOpacity}
-            aria-label="Floating bar opacity"
-          />
-        </Field>
-        <Field
-          label={`Size (${scale.draft}%)`}
-          description="Scales the floating bar icons, text, and pill spacing."
-        >
-          <input
-            type="range"
-            min={75}
-            max={200}
-            step={5}
-            value={scale.draft}
-            disabled={!settings.floatBarEnabled}
-            onChange={(e) => scale.setDraft(Number(e.target.value))}
-            onPointerUp={commitScale}
-            onTouchEnd={commitScale}
-            onBlur={commitScale}
-            onKeyUp={commitScale}
-            aria-label="Floating bar size"
-          />
-        </Field>
-        <Field
-          label="Show Reset Time Inline"
-          description="Shows countdown beside each percentage. Depleted providers always show reset when known."
-          leading
-        >
-          <Toggle
-            checked={settings.floatBarShowResetInline}
-            disabled={saving || !settings.floatBarEnabled}
-            onChange={(v) => set({ floatBarShowResetInline: v })}
-          />
-        </Field>
-        <Field
-          label="Click-Through"
-          description="Mouse clicks pass through to the window underneath — pure overlay mode."
-          leading
-        >
-          <Toggle
-            checked={settings.floatBarClickThrough}
-            disabled={saving || !settings.floatBarEnabled}
-            onChange={(v) => set({ floatBarClickThrough: v })}
-          />
-        </Field>
-      </div>
-    </section>
+          <Field
+            label="Orientation"
+            description="Horizontal sits above a taskbar; vertical sits on a screen edge."
+          >
+            <Select
+              value={settings.floatBarOrientation}
+              disabled={saving || !settings.floatBarEnabled}
+              options={[
+                { value: "horizontal", label: "Horizontal" },
+                { value: "vertical", label: "Vertical" },
+              ]}
+              onChange={(v) => set({ floatBarOrientation: v as FloatBarOrientation })}
+            />
+          </Field>
+          <Field
+            label="Density"
+            description="Choose how much information each provider segment shows."
+          >
+            <Select
+              value={settings.floatBarDensity}
+              disabled={saving || !settings.floatBarEnabled}
+              options={[
+                { value: "compact", label: "Compact" },
+                { value: "standard", label: "Standard" },
+                { value: "detailed", label: "Detailed" },
+              ]}
+              onChange={(v) => set({ floatBarDensity: v as FloatBarDensity })}
+            />
+          </Field>
+          <>
+            <Field
+              label="Contrast"
+              description="Automatic follows the Windows light or dark appearance."
+            >
+              <Select
+                value={settings.floatBarContrast}
+                disabled={saving || !settings.floatBarEnabled}
+                options={[
+                  { value: "auto", label: "Automatic" },
+                  { value: "light-text", label: "Light text" },
+                  { value: "dark-text", label: "Dark text" },
+                ]}
+                onChange={(v) => set({ floatBarContrast: v as FloatBarContrast })}
+              />
+            </Field>
+            <Field
+              label={`Opacity (${opacity.draft}%)`}
+              description="Lower values make the bar more see-through."
+            >
+              <input
+                type="range"
+                min={30}
+                max={100}
+                step={5}
+                value={opacity.draft}
+                disabled={!settings.floatBarEnabled}
+                onChange={(e) => opacity.setDraft(Number(e.target.value))}
+                onPointerUp={commitOpacity}
+                onTouchEnd={commitOpacity}
+                onBlur={commitOpacity}
+                onKeyUp={commitOpacity}
+                aria-label="Floating bar opacity"
+              />
+            </Field>
+            <Field
+              label={`Size (${scale.draft}%)`}
+              description="Scales the floating bar icons, text, and pill spacing."
+            >
+              <input
+                type="range"
+                min={75}
+                max={200}
+                step={5}
+                value={scale.draft}
+                disabled={!settings.floatBarEnabled}
+                onChange={(e) => scale.setDraft(Number(e.target.value))}
+                onPointerUp={commitScale}
+                onTouchEnd={commitScale}
+                onBlur={commitScale}
+                onKeyUp={commitScale}
+                aria-label="Floating bar size"
+              />
+            </Field>
+          </>
+          <Field
+            label="Click-Through"
+            description="Mouse clicks pass through to the window underneath — pure overlay mode."
+            leading
+          >
+            <Toggle
+              checked={settings.floatBarClickThrough}
+              disabled={saving || !settings.floatBarEnabled}
+              onChange={(v) => set({ floatBarClickThrough: v })}
+            />
+          </Field>
+        </div>
+      </section>
+    </>
   );
 }

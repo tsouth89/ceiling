@@ -76,10 +76,13 @@ const settings: SettingsSnapshot = {
   disableKeychainAccess: false,
   providerMetrics: {},
   floatBarEnabled: false,
+  taskbarWidgetEnabled: true,
+  taskbarWidgetAllMonitors: false,
   floatBarOpacity: 0.9,
   floatBarScale: 100,
   floatBarOrientation: "horizontal",
   floatBarStyle: "floating",
+  taskbarWidgetOpenOnHover: true,
   floatBarDensity: "standard",
   floatBarContrast: "auto",
   floatBarClickThrough: false,
@@ -107,6 +110,7 @@ describe("AboutTab", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "GitHub" }));
     fireEvent.click(screen.getByRole("button", { name: "Website" }));
+    fireEvent.click(screen.getByRole("button", { name: "Win-CodexBar" }));
     fireEvent.click(screen.getByRole("button", { name: "CodexBar" }));
 
     expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
@@ -119,8 +123,23 @@ describe("AboutTab", () => {
     );
     expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
       3,
+      "https://github.com/Finesssee/Win-CodexBar",
+    );
+    expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
+      4,
       "https://github.com/steipete/CodexBar",
     );
+  });
+
+  it("keeps update controls simple and credits both upstream projects", async () => {
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+
+    await screen.findByText("Ceiling");
+    expect(screen.queryByText("UpdateChannelChoice")).not.toBeInTheDocument();
+    expect(screen.queryByText("UpdateChannelStableOption")).not.toBeInTheDocument();
+    expect(screen.queryByText("UpdateChannelBetaOption")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Win-CodexBar" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "CodexBar" })).toBeInTheDocument();
   });
 
   it("shows a link error if the OS browser launch fails", async () => {

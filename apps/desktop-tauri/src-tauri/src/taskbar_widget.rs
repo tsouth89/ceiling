@@ -27,10 +27,56 @@ struct ProviderReadout {
 struct WidgetModel {
     providers: Vec<ProviderReadout>,
     dark_text: bool,
+    open_on_hover: bool,
+}
+
+fn centered_content_x(item_left: i32, item_width: i32, content_width: i32) -> i32 {
+    item_left.saturating_add(item_width.saturating_sub(content_width).max(0) / 2)
+}
+
+fn explorer_child_style(style: u32) -> u32 {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_POPUP: u32 = 0x8000_0000;
+    (style & !WS_POPUP) | WS_CHILD
 }
 
 pub fn native_mode_enabled(settings: &codexbar::settings::Settings) -> bool {
-    settings.float_bar_enabled && settings.float_bar_style == "taskbar"
+    settings.taskbar_widget_enabled
+}
+
+fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) -> bool {
+    let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
+        settings.provider_display_order_names()
+    } else {
+        settings.float_bar_provider_ids.clone()
+    };
+    preferred_ids
+        .iter()
+        .any(|provider_id| settings.enabled_providers.contains(provider_id))
+}
+
+fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
+    all_monitors || layout.primary
+}
+
+fn taskbar_placements(
+    layouts: &[TaskbarLayout],
+    all_monitors: bool,
+    provider_count: usize,
+) -> (Vec<isize>, Vec<(isize, ChildPlacement)>) {
+    let mut discovered = Vec::new();
+    let mut placements = Vec::new();
+    for layout in layouts
+        .iter()
+        .filter(|layout| layout_is_enabled(layout, all_monitors))
+        .filter(|layout| layout.window_handle != 0)
+    {
+        discovered.push(layout.window_handle);
+        if let Some(placement) = child_placement(layout, layout.landmarks, provider_count) {
+            placements.push((layout.window_handle, placement));
+        }
+    }
+    (discovered, placements)
 }
 
 fn child_placement(
@@ -148,9 +194,10 @@ mod windows_host {
     use tauri::Manager;
 
     const CLASS_NAME: &str = "CeilingNativeTaskbarWidget";
-    const WINDOW_TITLE: &str = "Ceiling taskbar widget proof";
+    const WINDOW_TITLE: &str = "Ceiling taskbar widget";
 
     const WS_VISIBLE: u32 = 0x1000_0000;
+    const WS_CHILD: u32 = 0x4000_0000;
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
     const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
@@ -168,26 +215,45 @@ mod windows_host {
     const WM_ERASEBKGND: u32 = 0x0014;
     const WM_SETCURSOR: u32 = 0x0020;
     const WM_MOUSEACTIVATE: u32 = 0x0021;
+    const WM_TIMER: u32 = 0x0113;
+    const WM_MOUSEMOVE: u32 = 0x0200;
     const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_MOUSELEAVE: u32 = 0x02A3;
     const MA_NOACTIVATE: isize = 3;
-    const IDC_HAND: usize = 32649;
+    const IDC_ARROW: usize = 32512;
+    const TME_LEAVE: u32 = 0x0000_0002;
+    const HOVER_TIMER_ID: usize = 0xCE11;
+    const HOVER_DWELL_MS: u32 = 150;
+    const HOVER_DISMISS_GRACE: std::time::Duration = std::time::Duration::from_millis(180);
+    const HOVER_POINTER_POLL: std::time::Duration = std::time::Duration::from_millis(50);
     const TRANSPARENT: i32 = 1;
     const PS_SOLID: i32 = 0;
     const FONT_QUALITY_ANTIALIASED: u32 = 4;
+    const GWL_STYLE: i32 = -16;
     // A deliberately uncommon key color. Pixels left in this color are
     // transparent, allowing Explorer's own taskbar material to show through.
     const TRANSPARENT_KEY: u32 = rgb(1, 2, 3);
 
     #[derive(Debug, Default)]
-    struct HostState {
+    struct HostedWidget {
         hwnd: isize,
         taskbar: isize,
+    }
+
+    #[derive(Debug, Default)]
+    struct HostState {
+        widgets: Vec<HostedWidget>,
         model: WidgetModel,
     }
 
     struct PreparedWidget {
         taskbar: isize,
         placement: ChildPlacement,
+    }
+
+    struct PreparedWidgets {
+        widgets: Vec<PreparedWidget>,
+        discovered_taskbars: Vec<isize>,
         model: WidgetModel,
     }
 
@@ -195,6 +261,8 @@ mod windows_host {
     static HOST: OnceLock<Mutex<HostState>> = OnceLock::new();
     static CLASS_REGISTERED: OnceLock<bool> = OnceLock::new();
     static RECOVERY_PENDING: AtomicBool = AtomicBool::new(false);
+    static HOVER_TRACKING: AtomicBool = AtomicBool::new(false);
+    static HOVER_FLYOUT_OPEN: AtomicBool = AtomicBool::new(false);
 
     pub(super) fn install(app: &tauri::AppHandle) {
         let _ = APP.set(app.clone());
@@ -218,7 +286,7 @@ mod windows_host {
     }
 
     pub(super) fn apply_state(app: &tauri::AppHandle, settings: &codexbar::settings::Settings) {
-        if native_mode_enabled(settings) {
+        if native_mode_enabled(settings) && native_mode_has_configured_provider(settings) {
             schedule_recovery(app);
         } else {
             hide_existing();
@@ -278,7 +346,7 @@ mod windows_host {
 
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let prepared = tauri::async_runtime::spawn_blocking(prepare_widget).await;
+            let prepared = tauri::async_runtime::spawn_blocking(prepare_widgets).await;
             let dispatched = app.run_on_main_thread(move || {
                 match prepared {
                     Ok(Ok(prepared)) => {
@@ -287,12 +355,15 @@ mod windows_host {
                         }
                     }
                     Ok(Err(error)) => {
-                        hide_existing();
-                        tracing::debug!(%error, "Native taskbar widget proof recovery deferred");
+                        // Start, Search, Widgets, and other Explorer surfaces can
+                        // temporarily make UI Automation landmarks unavailable.
+                        // Keep the last known healthy child visible rather than
+                        // turning a transient discovery miss into user-visible
+                        // flicker and a slow rediscovery cycle.
+                        tracing::debug!(%error, "Native taskbar widget recovery deferred; preserving the current widget");
                     }
                     Err(error) => {
-                        hide_existing();
-                        tracing::warn!(%error, "Native taskbar discovery worker failed");
+                        tracing::warn!(%error, "Native taskbar discovery worker failed; preserving the current widget");
                     }
                 }
                 RECOVERY_PENDING.store(false, Ordering::Release);
@@ -303,7 +374,7 @@ mod windows_host {
         });
     }
 
-    fn prepare_widget() -> Result<PreparedWidget, String> {
+    fn prepare_widgets() -> Result<PreparedWidgets, String> {
         let settings = codexbar::settings::Settings::load();
         if !native_mode_enabled(&settings) {
             return Err("Native taskbar mode is disabled".to_string());
@@ -312,63 +383,82 @@ mod windows_host {
         if model.providers.is_empty() {
             return Err("No enabled providers are available for the taskbar widget".to_string());
         }
-        let taskbar = unsafe { find_primary_taskbar() }
-            .ok_or_else(|| "Explorer primary taskbar is unavailable".to_string())?;
         let layouts = crate::floatbar::taskbar::discover_all();
-        let layout = crate::floatbar::taskbar::primary_layout(&layouts)
-            .ok_or_else(|| "No usable primary taskbar layout was discovered".to_string())?;
-        let landmarks = crate::floatbar::taskbar::primary_landmarks();
-        let Some(placement) = child_placement(layout, landmarks, model.providers.len()) else {
-            return Err(
-                "The Widgets-to-Start taskbar lane cannot fit the native widget".to_string(),
-            );
-        };
+        let (discovered_taskbars, placements) = taskbar_placements(
+            &layouts,
+            settings.taskbar_widget_all_monitors,
+            model.providers.len(),
+        );
+        let widgets = placements
+            .into_iter()
+            .map(|(taskbar, placement)| PreparedWidget { taskbar, placement })
+            .collect::<Vec<_>>();
+        if widgets.is_empty() {
+            return Err("No verified taskbar lane can fit the native widget".to_string());
+        }
 
-        Ok(PreparedWidget {
-            taskbar,
-            placement,
+        Ok(PreparedWidgets {
+            widgets,
+            discovered_taskbars,
             model,
         })
     }
 
-    fn apply_prepared(prepared: PreparedWidget) -> Result<(), String> {
+    fn apply_prepared(prepared: PreparedWidgets) -> Result<(), String> {
         let mut state = HOST
             .get_or_init(|| Mutex::new(HostState::default()))
             .lock()
             .map_err(|_| "Native taskbar widget state is poisoned".to_string())?;
 
-        let window_alive = state.hwnd != 0 && unsafe { IsWindow(state.hwnd) } != 0;
-        let correctly_parented = window_alive
-            && state.taskbar == prepared.taskbar
-            && unsafe { GetParent(state.hwnd) } == prepared.taskbar;
-        if !correctly_parented {
-            // Never reparent a stale foreign child after Explorer restarts.
-            // Destroy it on its owner thread and create a fresh popup host for
-            // the new Shell_TrayWnd instead.
-            if window_alive {
-                unsafe { DestroyWindow(state.hwnd) };
-            }
-            state.hwnd = unsafe { create_widget(prepared.taskbar)? };
-            state.taskbar = prepared.taskbar;
-            tracing::info!("Created native Ceiling taskbar widget proof");
-        }
-
         let model_changed = state.model != prepared.model;
         state.model = prepared.model;
-        unsafe {
-            SetWindowRgn(state.hwnd, 0, 1);
-            SetWindowPos(
-                state.hwnd,
-                0,
-                prepared.placement.x,
-                prepared.placement.y,
-                prepared.placement.width,
-                prepared.placement.height,
-                SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-            );
-            ShowWindow(state.hwnd, SW_SHOWNA);
-            if model_changed {
-                InvalidateRect(state.hwnd, std::ptr::null(), 0);
+        state.widgets.retain(|widget| {
+            let keep = prepared.discovered_taskbars.contains(&widget.taskbar);
+            if !keep && widget.hwnd != 0 && unsafe { IsWindow(widget.hwnd) } != 0 {
+                unsafe { DestroyWindow(widget.hwnd) };
+            }
+            keep
+        });
+
+        for prepared_widget in prepared.widgets {
+            let index = state
+                .widgets
+                .iter()
+                .position(|widget| widget.taskbar == prepared_widget.taskbar)
+                .unwrap_or_else(|| {
+                    state.widgets.push(HostedWidget {
+                        hwnd: 0,
+                        taskbar: prepared_widget.taskbar,
+                    });
+                    state.widgets.len() - 1
+                });
+            let widget = &mut state.widgets[index];
+            let window_alive = widget.hwnd != 0 && unsafe { IsWindow(widget.hwnd) } != 0;
+            let correctly_parented =
+                window_alive && unsafe { GetParent(widget.hwnd) } == prepared_widget.taskbar;
+            if !correctly_parented {
+                if window_alive {
+                    unsafe { DestroyWindow(widget.hwnd) };
+                }
+                widget.hwnd = unsafe { create_widget(prepared_widget.taskbar)? };
+                tracing::info!("Created native Ceiling taskbar widget");
+            }
+
+            unsafe {
+                SetWindowRgn(widget.hwnd, 0, 1);
+                SetWindowPos(
+                    widget.hwnd,
+                    0,
+                    prepared_widget.placement.x,
+                    prepared_widget.placement.y,
+                    prepared_widget.placement.width,
+                    prepared_widget.placement.height,
+                    SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                );
+                ShowWindow(widget.hwnd, SW_SHOWNA);
+                if model_changed {
+                    InvalidateRect(widget.hwnd, std::ptr::null(), 0);
+                }
             }
         }
         Ok(())
@@ -431,15 +521,14 @@ mod windows_host {
             .take(3)
             .collect();
 
-        let dark_text = match codexbar::settings::resolved_float_bar_contrast(&settings).as_str() {
-            "dark-text" => true,
-            "light-text" => false,
-            _ => system_uses_light_theme(),
-        };
+        // The taskbar surface follows Windows. Manual contrast is retained only
+        // for the free-floating bar where the desktop background is unknown.
+        let dark_text = system_uses_light_theme();
 
         Ok(WidgetModel {
             providers,
             dark_text,
+            open_on_hover: settings.taskbar_widget_open_on_hover,
         })
     }
 
@@ -498,8 +587,10 @@ mod windows_host {
         let Ok(state) = host.try_lock() else {
             return;
         };
-        if state.hwnd != 0 && unsafe { IsWindow(state.hwnd) } != 0 {
-            unsafe { ShowWindow(state.hwnd, SW_HIDE) };
+        for widget in &state.widgets {
+            if widget.hwnd != 0 && unsafe { IsWindow(widget.hwnd) } != 0 {
+                unsafe { ShowWindow(widget.hwnd, SW_HIDE) };
+            }
         }
     }
 
@@ -535,6 +626,18 @@ mod windows_host {
         if hwnd == 0 {
             return Err("CreateWindowExW failed for the taskbar widget".to_string());
         }
+        // SetParent intentionally does not update WS_POPUP/WS_CHILD. Microsoft
+        // requires changing those bits before attaching a desktop popup to a
+        // non-null parent; leaving the popup style in Explorer previously made
+        // the host vulnerable to broken input and shell repaint behavior.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        let child_style = explorer_child_style(style);
+        unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, child_style as isize) };
+        let applied_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        if applied_style & WS_POPUP != 0 || applied_style & WS_CHILD == 0 {
+            unsafe { DestroyWindow(hwnd) };
+            return Err("Could not apply the taskbar child window style".to_string());
+        }
         let previous = unsafe { SetParent(hwnd, taskbar) };
         if previous == 0 && unsafe { GetParent(hwnd) } != taskbar {
             unsafe { DestroyWindow(hwnd) };
@@ -565,7 +668,7 @@ mod windows_host {
             window_extra: 0,
             instance,
             icon: 0,
-            cursor: unsafe { LoadCursorW(0, IDC_HAND as *const u16) },
+            cursor: unsafe { LoadCursorW(0, IDC_ARROW as *const u16) },
             background: 0,
             menu_name: std::ptr::null(),
             class_name: class.as_ptr(),
@@ -588,23 +691,75 @@ mod windows_host {
             WM_ERASEBKGND => 1,
             WM_MOUSEACTIVATE => MA_NOACTIVATE,
             WM_SETCURSOR => {
-                unsafe { SetCursor(LoadCursorW(0, IDC_HAND as *const u16)) };
+                unsafe { SetCursor(LoadCursorW(0, IDC_ARROW as *const u16)) };
                 1
             }
+            WM_MOUSEMOVE => {
+                begin_hover_dwell(hwnd);
+                0
+            }
+            WM_MOUSELEAVE => {
+                cancel_hover_dwell(hwnd);
+                0
+            }
+            WM_TIMER if wparam == HOVER_TIMER_ID => {
+                unsafe { KillTimer(hwnd, HOVER_TIMER_ID) };
+                if hover_open_enabled() {
+                    open_flyout(hwnd);
+                }
+                0
+            }
             WM_LBUTTONUP => {
+                // A deliberate click owns the interaction until the pointer
+                // leaves, so the pending hover timer cannot immediately undo
+                // a click-to-close action.
+                unsafe { KillTimer(hwnd, HOVER_TIMER_ID) };
+                HOVER_FLYOUT_OPEN.store(false, Ordering::Release);
                 toggle_flyout(hwnd);
                 0
             }
-            WM_DESTROY => 0,
+            WM_DESTROY => {
+                cancel_hover_dwell(hwnd);
+                0
+            }
             _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
         }
     }
 
-    fn toggle_flyout(hwnd: isize) {
-        let Some(app) = APP.get().cloned() else {
-            return;
-        };
+    fn hover_open_enabled() -> bool {
+        HOST.get()
+            .and_then(|host| host.try_lock().ok().map(|state| state.model.open_on_hover))
+            .unwrap_or(false)
+    }
 
+    fn begin_hover_dwell(hwnd: isize) {
+        if !hover_open_enabled()
+            || HOVER_TRACKING
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return;
+        }
+
+        let mut tracking = TrackMouseEventParams {
+            size: std::mem::size_of::<TrackMouseEventParams>() as u32,
+            flags: TME_LEAVE,
+            hwnd_track: hwnd,
+            hover_time: 0,
+        };
+        let leave_armed = unsafe { TrackMouseEvent(&mut tracking) } != 0;
+        let timer_armed = unsafe { SetTimer(hwnd, HOVER_TIMER_ID, HOVER_DWELL_MS, None) } != 0;
+        if !leave_armed || !timer_armed {
+            cancel_hover_dwell(hwnd);
+        }
+    }
+
+    fn cancel_hover_dwell(hwnd: isize) {
+        unsafe { KillTimer(hwnd, HOVER_TIMER_ID) };
+        HOVER_TRACKING.store(false, Ordering::Release);
+    }
+
+    fn remember_flyout_anchor(app: &tauri::AppHandle, hwnd: isize) {
         // Treat the widget rectangle as the tray anchor so the existing
         // compact flyout opens visually connected to this taskbar surface.
         // Never wait for AppState from Explorer's mouse-message path.
@@ -620,6 +775,99 @@ mod windows_host {
                 height: rect.bottom.saturating_sub(rect.top).max(1) as u32,
             });
         }
+    }
+
+    fn open_flyout(hwnd: isize) {
+        let Some(app) = APP.get().cloned() else {
+            return;
+        };
+        remember_flyout_anchor(&app, hwnd);
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = crate::shell::flyout_window::open_or_focus(&app, None) {
+                HOVER_FLYOUT_OPEN.store(false, Ordering::Release);
+                tracing::warn!(%error, "Could not open native taskbar widget flyout on hover");
+                return;
+            }
+            if !HOVER_FLYOUT_OPEN.swap(true, Ordering::AcqRel) {
+                monitor_hover_flyout(app, hwnd).await;
+            }
+        });
+    }
+
+    async fn monitor_hover_flyout(app: tauri::AppHandle, widget_hwnd: isize) {
+        let mut outside_since = None;
+        loop {
+            tokio::time::sleep(HOVER_POINTER_POLL).await;
+            if !HOVER_FLYOUT_OPEN.load(Ordering::Acquire) {
+                return;
+            }
+
+            let Some(pointer) = cursor_position() else {
+                continue;
+            };
+            if point_is_inside_window(widget_hwnd, pointer) || point_is_inside_flyout(&app, pointer)
+            {
+                outside_since = None;
+                continue;
+            }
+
+            let since = outside_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() < HOVER_DISMISS_GRACE {
+                continue;
+            }
+
+            if HOVER_FLYOUT_OPEN.swap(false, Ordering::AcqRel)
+                && let Err(error) = crate::shell::flyout_window::hide(&app)
+            {
+                tracing::warn!(%error, "Could not dismiss native taskbar hover flyout");
+            }
+            return;
+        }
+    }
+
+    fn cursor_position() -> Option<WinPoint> {
+        let mut point = WinPoint { x: 0, y: 0 };
+        (unsafe { GetCursorPos(&mut point) } != 0).then_some(point)
+    }
+
+    fn point_is_inside_window(hwnd: isize, point: WinPoint) -> bool {
+        if hwnd == 0 || unsafe { IsWindow(hwnd) } == 0 {
+            return false;
+        }
+        let mut rect = WinRect::default();
+        (unsafe { GetWindowRect(hwnd, (&mut rect as *mut WinRect).cast()) }) != 0
+            && point_is_inside_rect(point, &rect)
+    }
+
+    fn point_is_inside_flyout(app: &tauri::AppHandle, point: WinPoint) -> bool {
+        let Some(window) = app.get_webview_window(crate::shell::flyout_window::FLYOUT_LABEL) else {
+            return false;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            HOVER_FLYOUT_OPEN.store(false, Ordering::Release);
+            return false;
+        }
+        let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+            return false;
+        };
+        let rect = WinRect {
+            left: position.x,
+            top: position.y,
+            right: position.x.saturating_add(size.width as i32),
+            bottom: position.y.saturating_add(size.height as i32),
+        };
+        point_is_inside_rect(point, &rect)
+    }
+
+    fn point_is_inside_rect(point: WinPoint, rect: &WinRect) -> bool {
+        point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+    }
+
+    fn toggle_flyout(hwnd: isize) {
+        let Some(app) = APP.get().cloned() else {
+            return;
+        };
+        remember_flyout_anchor(&app, hwnd);
 
         tauri::async_runtime::spawn(async move {
             let flyout = app.get_webview_window(crate::shell::flyout_window::FLYOUT_LABEL);
@@ -708,25 +956,32 @@ mod windows_host {
         for (index, provider) in model.providers.iter().enumerate() {
             let item_left = i32::try_from(index).unwrap_or(0) * item_width;
             let color = provider_color(&provider.provider_id);
-            unsafe {
-                draw_provider_icon(
-                    hdc,
-                    &provider.provider_id,
-                    item_left + 17,
-                    middle - 7,
-                    color,
-                )
-            };
             let label = provider
                 .percent
                 .map(|percent| format!("{percent}%"))
                 .unwrap_or_else(|| "—".to_string());
             let label = wide_without_nul(&label);
+            let label_width = unsafe { text_width(hdc, &label) };
+            const ICON_WIDTH: i32 = 16;
+            const ICON_TEXT_GAP: i32 = 5;
+            let primary_width = ICON_WIDTH
+                .saturating_add(ICON_TEXT_GAP)
+                .saturating_add(label_width);
+            let primary_left = centered_content_x(item_left, item_width, primary_width);
+            unsafe {
+                draw_provider_icon(
+                    hdc,
+                    &provider.provider_id,
+                    primary_left + ICON_WIDTH / 2,
+                    middle - 7,
+                    color,
+                )
+            };
             unsafe {
                 SetTextColor(hdc, text_color);
                 TextOutW(
                     hdc,
-                    item_left + 30,
+                    primary_left + ICON_WIDTH + ICON_TEXT_GAP,
                     middle - 16,
                     label.as_ptr(),
                     label.len() as i32,
@@ -742,9 +997,10 @@ mod windows_host {
             unsafe {
                 SelectObject(hdc, detail_font);
                 SetTextColor(hdc, text_color);
+                let detail_width = text_width(hdc, &detail);
                 TextOutW(
                     hdc,
-                    item_left + 8,
+                    centered_content_x(item_left, item_width, detail_width),
                     middle + 1,
                     detail.as_ptr(),
                     detail.len() as i32,
@@ -870,6 +1126,17 @@ mod windows_host {
         value.encode_utf16().collect()
     }
 
+    unsafe fn text_width(hdc: isize, text: &[u16]) -> i32 {
+        let mut size = WinSize::default();
+        if text.is_empty()
+            || unsafe { GetTextExtentPoint32W(hdc, text.as_ptr(), text.len() as i32, &mut size) }
+                == 0
+        {
+            return i32::try_from(text.len()).unwrap_or(0).saturating_mul(7);
+        }
+        size.cx.max(0)
+    }
+
     #[repr(C)]
     struct WndClassExW {
         size: u32,
@@ -900,6 +1167,21 @@ mod windows_host {
     struct WinPoint {
         x: i32,
         y: i32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct WinSize {
+        cx: i32,
+        cy: i32,
+    }
+
+    #[repr(C)]
+    struct TrackMouseEventParams {
+        size: u32,
+        flags: u32,
+        hwnd_track: isize,
+        hover_time: u32,
     }
 
     #[repr(C)]
@@ -938,6 +1220,8 @@ mod windows_host {
         fn DefWindowProcW(hwnd: isize, message: u32, wparam: usize, lparam: isize) -> isize;
         fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
         fn GetParent(hwnd: isize) -> isize;
+        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+        fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
         fn SetParent(child: isize, new_parent: isize) -> isize;
         fn SetLayeredWindowAttributes(hwnd: isize, color_key: u32, alpha: u8, flags: u32) -> i32;
         fn DestroyWindow(hwnd: isize) -> i32;
@@ -955,10 +1239,19 @@ mod windows_host {
         fn InvalidateRect(hwnd: isize, rect: *const WinRect, erase: i32) -> i32;
         fn LoadCursorW(instance: isize, cursor_name: *const u16) -> isize;
         fn SetCursor(cursor: isize) -> isize;
+        fn TrackMouseEvent(event: *mut TrackMouseEventParams) -> i32;
+        fn SetTimer(
+            hwnd: isize,
+            event_id: usize,
+            interval_ms: u32,
+            callback: Option<unsafe extern "system" fn(isize, u32, usize, u32)>,
+        ) -> usize;
+        fn KillTimer(hwnd: isize, event_id: usize) -> i32;
         fn BeginPaint(hwnd: isize, paint: *mut PaintStruct) -> isize;
         fn EndPaint(hwnd: isize, paint: *const PaintStruct) -> i32;
         fn GetClientRect(hwnd: isize, rect: *mut WinRect) -> i32;
         fn GetWindowRect(hwnd: isize, rect: *mut std::ffi::c_void) -> i32;
+        fn GetCursorPos(point: *mut WinPoint) -> i32;
         fn GetDC(hwnd: isize) -> isize;
         fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
         fn FillRect(hdc: isize, rect: *const WinRect, brush: isize) -> i32;
@@ -1003,6 +1296,12 @@ mod windows_host {
         fn SelectObject(hdc: isize, object: isize) -> isize;
         fn SetBkMode(hdc: isize, mode: i32) -> i32;
         fn SetTextColor(hdc: isize, color: u32) -> u32;
+        fn GetTextExtentPoint32W(
+            hdc: isize,
+            text: *const u16,
+            count: i32,
+            size: *mut WinSize,
+        ) -> i32;
         fn TextOutW(hdc: isize, x: i32, y: i32, text: *const u16, count: i32) -> i32;
         fn MoveToEx(hdc: isize, x: i32, y: i32, previous: *mut WinPoint) -> i32;
         fn LineTo(hdc: isize, x: i32, y: i32) -> i32;
@@ -1016,9 +1315,34 @@ mod windows_host {
 mod tests {
     use super::*;
     use crate::floatbar::placement::Rect;
+    use codexbar::settings::Settings;
+
+    #[test]
+    fn provider_content_is_centered_inside_its_segment() {
+        assert_eq!(centered_content_x(92, 92, 48), 114);
+        assert_eq!(centered_content_x(184, 92, 60), 200);
+    }
+
+    #[test]
+    fn oversized_provider_content_stays_at_the_segment_start() {
+        assert_eq!(centered_content_x(92, 72, 90), 92);
+    }
+
+    #[test]
+    fn explorer_parenting_replaces_popup_style_with_child_style() {
+        const WS_VISIBLE: u32 = 0x1000_0000;
+        const WS_CHILD: u32 = 0x4000_0000;
+        const WS_POPUP: u32 = 0x8000_0000;
+        let style = explorer_child_style(WS_VISIBLE | WS_POPUP);
+
+        assert_eq!(style & WS_POPUP, 0);
+        assert_eq!(style & WS_CHILD, WS_CHILD);
+        assert_eq!(style & WS_VISIBLE, WS_VISIBLE);
+    }
 
     fn layout(bounds: Rect, obstacles: Vec<Rect>) -> TaskbarLayout {
         TaskbarLayout {
+            window_handle: 1,
             bounds,
             monitor_bounds: Rect {
                 left: 0,
@@ -1027,8 +1351,108 @@ mod tests {
                 bottom: 1080,
             },
             obstacles,
+            landmarks: TaskbarLandmarks::default(),
             primary: true,
         }
+    }
+
+    #[test]
+    fn multi_monitor_setting_includes_secondary_taskbars_only_when_enabled() {
+        let primary = TaskbarLayout {
+            primary: true,
+            ..layout(
+                Rect {
+                    left: 0,
+                    top: 1392,
+                    right: 2560,
+                    bottom: 1440,
+                },
+                Vec::new(),
+            )
+        };
+        let secondary = TaskbarLayout {
+            window_handle: 2,
+            primary: false,
+            ..layout(
+                Rect {
+                    left: -1920,
+                    top: 1032,
+                    right: 0,
+                    bottom: 1080,
+                },
+                Vec::new(),
+            )
+        };
+
+        assert!(layout_is_enabled(&primary, false));
+        assert!(!layout_is_enabled(&secondary, false));
+        assert!(layout_is_enabled(&primary, true));
+        assert!(layout_is_enabled(&secondary, true));
+    }
+
+    #[test]
+    fn mixed_resolution_taskbars_receive_independent_local_placements() {
+        let primary_bounds = Rect {
+            left: 0,
+            top: 1392,
+            right: 2560,
+            bottom: 1440,
+        };
+        let secondary_bounds = Rect {
+            left: -1920,
+            top: 1032,
+            right: 0,
+            bottom: 1080,
+        };
+        let primary = TaskbarLayout {
+            window_handle: 1,
+            landmarks: landmarks(
+                Rect {
+                    left: 0,
+                    top: 1392,
+                    right: 160,
+                    bottom: 1440,
+                },
+                Rect {
+                    left: 1120,
+                    top: 1392,
+                    right: 1168,
+                    bottom: 1440,
+                },
+            ),
+            ..layout(primary_bounds, Vec::new())
+        };
+        let secondary = TaskbarLayout {
+            window_handle: 2,
+            bounds: secondary_bounds,
+            monitor_bounds: Rect {
+                left: -1920,
+                top: 0,
+                right: 0,
+                bottom: 1080,
+            },
+            landmarks: TaskbarLandmarks {
+                widgets: None,
+                start: Some(Rect {
+                    left: -1040,
+                    top: 1032,
+                    right: -992,
+                    bottom: 1080,
+                }),
+            },
+            primary: false,
+            ..layout(secondary_bounds, Vec::new())
+        };
+
+        let (discovered, placements) = taskbar_placements(&[primary, secondary], true, 3);
+        assert_eq!(discovered, vec![1, 2]);
+        assert_eq!(placements.len(), 2);
+        assert!(placements.iter().all(|(_, placement)| placement.x >= 0));
+        assert!(
+            placements
+                .iter()
+                .all(|(_, placement)| placement.height == 48)
+        );
     }
 
     fn landmarks(widgets: Rect, start: Rect) -> TaskbarLandmarks {
@@ -1036,6 +1460,21 @@ mod tests {
             widgets: Some(widgets),
             start: Some(start),
         }
+    }
+
+    #[test]
+    fn native_mode_requires_at_least_one_enabled_selected_provider() {
+        let mut settings = Settings {
+            float_bar_enabled: true,
+            float_bar_style: "taskbar".to_string(),
+            enabled_providers: ["codex".to_string()].into_iter().collect(),
+            float_bar_provider_ids: vec!["claude".to_string()],
+            ..Settings::default()
+        };
+
+        assert!(!native_mode_has_configured_provider(&settings));
+        settings.float_bar_provider_ids = vec!["codex".to_string()];
+        assert!(native_mode_has_configured_provider(&settings));
     }
 
     #[test]

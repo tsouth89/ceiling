@@ -249,8 +249,13 @@ export function getAppInfo(): Promise<AppInfoBridge> {
 export function getProviderChartData(
   providerId: string,
   accountEmail?: string,
+  usageWindows?: import("../types/bridge").LocalUsageWindowRequest[],
 ): Promise<ProviderChartData> {
-  return invoke<ProviderChartData>("get_provider_chart_data", { providerId, accountEmail });
+  return invoke<ProviderChartData>("get_provider_chart_data", {
+    providerId,
+    accountEmail,
+    usageWindows,
+  });
 }
 
 export function getProviderLocalUsageSummary(

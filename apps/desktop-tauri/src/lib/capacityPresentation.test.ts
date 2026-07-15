@@ -6,6 +6,7 @@ import {
   activePromoBoosts,
   activePromoInclusions,
   providerGlanceStatus,
+  resetCreditsAvailable,
 } from "./capacityPresentation";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 
@@ -104,7 +105,7 @@ describe("capacityPresentation", () => {
     ]);
   });
 
-  it("omits quiet weekly companion from glance", () => {
+  it("keeps Claude weekly visible even when it is quieter than the session", () => {
     const meters = glanceMeters(
       provider({
         providerId: "claude",
@@ -115,7 +116,8 @@ describe("capacityPresentation", () => {
         secondaryLabel: "Weekly",
       }),
     );
-    expect(meters.companions).toEqual([]);
+    expect(meters.companions.map((meter) => meter.label)).toEqual(["Weekly"]);
+    expect(meters.companions[0].window.usedPercent).toBe(20);
   });
 
   it("reports glance status from constraining pressure", () => {
@@ -184,5 +186,20 @@ describe("capacityPresentation", () => {
       "claude-weekly-promo",
     ]);
     expect(activePromoInclusions(snap).map((p) => p.id)).toEqual(["cursor-grok"]);
+  });
+
+  it("reads reset availability without treating it as a usage meter", () => {
+    const snap = provider({
+      resetCreditsAvailable: 1,
+      extraRateWindows: [
+        {
+          id: "reset-credits",
+          title: "Reset credits",
+          window: { ...window(0), resetDescription: "1 reset credit available" },
+        },
+      ],
+    });
+    expect(resetCreditsAvailable(snap)).toBe(1);
+    expect(glanceMeters(snap).companions).toEqual([]);
   });
 });

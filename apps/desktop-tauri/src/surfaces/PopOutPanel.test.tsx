@@ -158,10 +158,13 @@ function settings(): SettingsSnapshot {
     disableKeychainAccess: false,
     providerMetrics: {},
     floatBarEnabled: false,
+    taskbarWidgetEnabled: true,
+    taskbarWidgetAllMonitors: false,
     floatBarOpacity: 80,
     floatBarScale: 100,
     floatBarOrientation: "horizontal",
     floatBarStyle: "floating",
+    taskbarWidgetOpenOnHover: true,
     floatBarDensity: "standard",
     floatBarContrast: "auto",
     floatBarClickThrough: false,
@@ -250,19 +253,22 @@ describe("PopOutPanel", () => {
     );
   });
 
-  it("focuses the requested provider's detail card", async () => {
+  it("opens the requested provider as a first-class detail page", async () => {
     const { container } = renderPopOut(
       [provider("codex", "Codex", 80), provider("claude", "Claude", 30)],
       "claude",
     );
 
     await waitFor(() => {
-      expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(1);
+      expect(container.querySelector(".provider-focus")).not.toBeNull();
     });
-    // Only the requested provider's card renders (the switcher was removed;
-    // the rail's Overview returns to all cards).
     expect(screen.getAllByText("Claude").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("Codex")).toBeNull();
+    expect(screen.getByRole("button", { name: "Back to Overview" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Overview" }));
+    expect(container.querySelector(".provider-focus")).toBeNull();
+    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(2);
   });
 
   it("renders the dashboard chrome: rail, header, and status bar", async () => {
@@ -338,7 +344,9 @@ describe("PopOutPanel", () => {
     // Default theme is dark, so the toggle switches to light.
     fireEvent.click(container.querySelector<HTMLButtonElement>(".dashboard-status__toggle")!);
 
-    expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ theme: "light" });
+    await waitFor(() =>
+      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ theme: "light" }),
+    );
   });
 
   it("renders cleanly with the flyout-window rewiring for goTray's onClick", async () => {

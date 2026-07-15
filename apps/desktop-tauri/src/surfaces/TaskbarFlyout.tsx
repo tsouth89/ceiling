@@ -6,6 +6,7 @@ import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { orderProviderSnapshots } from "../lib/providerOrder";
+import { allMeasuredWindows, resetCreditsAvailable, type ConstrainingWindow } from "../lib/capacityPresentation";
 import {
   dismissTrayPanel,
   getTaskbarSurfaceColor,
@@ -17,6 +18,7 @@ import type { BootstrapState, ProviderUsageSnapshot, RateWindowSnapshot } from "
 
 const FLYOUT_WIDTH = 344;
 const MAX_VISIBLE_PROVIDERS = 6;
+const MAX_VISIBLE_WINDOWS_PER_PROVIDER = 4;
 
 function compactDuration(resetsAt: string | null, fallback: string | null, now: number): string {
   if (!resetsAt) return fallback?.replace(/^resets?\s+(in\s+)?/i, "") ?? "No reset";
@@ -36,19 +38,57 @@ function valueFor(window: RateWindowSnapshot, showAsUsed: boolean): number {
   return Math.max(0, Math.min(100, Math.round(showAsUsed ? window.usedPercent : window.remainingPercent)));
 }
 
-function earliestReset(providers: ProviderUsageSnapshot[]): string | null {
+function meterLevel(window: RateWindowSnapshot): "normal" | "warning" | "critical" {
+  if (window.usedPercent >= 95) return "critical";
+  if (window.usedPercent >= 85) return "warning";
+  return "normal";
+}
+
+function earliestReset(providers: ProviderUsageSnapshot[], now: number): string | null {
   let earliest: string | null = null;
   let earliestTime = Number.POSITIVE_INFINITY;
   for (const provider of providers) {
-    const candidate = provider.primary.resetsAt;
-    if (!candidate) continue;
-    const time = Date.parse(candidate);
-    if (Number.isFinite(time) && time > Date.now() && time < earliestTime) {
-      earliest = candidate;
-      earliestTime = time;
+    if (provider.error) continue;
+    const windows = allMeasuredWindows(provider).filter(isUtilityWindow);
+    for (const { window } of windows) {
+      const candidate = window?.resetsAt;
+      if (!candidate) continue;
+      const time = Date.parse(candidate);
+      if (Number.isFinite(time) && time > now && time < earliestTime) {
+        earliest = candidate;
+        earliestTime = time;
+      }
     }
   }
   return earliest;
+}
+
+function isUtilityWindow(window: ConstrainingWindow): boolean {
+  const identity = `${window.id} ${window.label}`.toLowerCase();
+  return ![
+    "promotional",
+    "on-demand",
+    "on demand",
+    "ondemand",
+  ].some((noise) => identity.includes(noise));
+}
+
+function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
+  const windows = allMeasuredWindows(provider).filter(isUtilityWindow);
+  if (provider.providerId !== "cursor") {
+    return windows.slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
+  }
+
+  // Cursor's three durable allowances are the useful comparison. Keep API in
+  // the first three even if the provider inserts another auxiliary pool.
+  const preferredIds = ["primary", "secondary", "extra-cursor-api"];
+  const preferred = preferredIds
+    .map((id) => windows.find((window) => window.id === id))
+    .filter((window): window is ConstrainingWindow => Boolean(window));
+  const remaining = windows.filter(
+    (window) => !preferred.some((candidate) => candidate.id === window.id),
+  );
+  return [...preferred, ...remaining].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
 }
 
 function ProviderRow({ provider, showAsUsed, now }: {
@@ -57,22 +97,67 @@ function ProviderRow({ provider, showAsUsed, now }: {
   now: number;
 }) {
   const icon = getProviderIcon(provider.providerId);
-  const percent = valueFor(provider.primary, showAsUsed);
-  const reset = compactDuration(provider.primary.resetsAt, provider.primary.resetDescription, now);
-  const label = provider.primaryLabel || (provider.primary.windowMinutes ? `${Math.round(provider.primary.windowMinutes / 60)}h` : "Limit");
+  if (provider.error) {
+    return (
+      <div className="taskbar-flyout__provider taskbar-flyout__provider--error" style={{ "--provider-brand": icon.brandColor } as CSSProperties}>
+        <ProviderIcon providerId={provider.providerId} size={27} className="taskbar-flyout__provider-icon" />
+        <div className="taskbar-flyout__provider-content">
+          <div className="taskbar-flyout__provider-topline">
+            <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
+            <span className="taskbar-flyout__provider-unavailable">Unavailable</span>
+          </div>
+          <div className="taskbar-flyout__provider-status">Last sync failed · open Ceiling for details</div>
+        </div>
+      </div>
+    );
+  }
+  const windows = flyoutWindows(provider);
+  const resetCredits = resetCreditsAvailable(provider);
+  const hiddenWindowCount = Math.max(
+    0,
+    allMeasuredWindows(provider).filter(isUtilityWindow).length - windows.length,
+  );
   return (
     <div className="taskbar-flyout__provider" style={{ "--provider-brand": icon.brandColor } as CSSProperties}>
       <ProviderIcon providerId={provider.providerId} size={27} className="taskbar-flyout__provider-icon" />
       <div className="taskbar-flyout__provider-content">
         <div className="taskbar-flyout__provider-topline">
           <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
-          <span className="taskbar-flyout__provider-percent">{percent}%</span>
+          {resetCredits != null && (
+            <span className="taskbar-flyout__reset-credit">
+              ↻ {resetCredits} {resetCredits === 1 ? "reset ready" : "resets ready"}
+            </span>
+          )}
         </div>
-        <div className="taskbar-flyout__provider-bottomline">
-          <div className="taskbar-flyout__track" aria-label={`${provider.displayName} ${percent}%`}>
-            <span style={{ width: `${percent}%` }} />
-          </div>
-          <span className="taskbar-flyout__reset">{label} · {reset}</span>
+        <div className="taskbar-flyout__meters">
+          {windows.map(({ id, label, window }) => {
+            const percent = valueFor(window, showAsUsed);
+            const reset = compactDuration(window.resetsAt, window.resetDescription, now);
+            const level = meterLevel(window);
+            return (
+              <div className="taskbar-flyout__meter" key={id} data-level={level}>
+                <div className="taskbar-flyout__meter-meta">
+                  <span className="taskbar-flyout__meter-label">{label}</span>
+                  <span className="taskbar-flyout__meter-value" data-level={level}>{percent}%</span>
+                  <span className="taskbar-flyout__reset">{reset}</span>
+                </div>
+                <div
+                  className="taskbar-flyout__track"
+                  data-level={level}
+                  role="progressbar"
+                  aria-label={`${provider.displayName} ${label} ${percent}%`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percent}
+                >
+                  <span style={{ width: `${percent}%` }} />
+                </div>
+              </div>
+            );
+          })}
+          {hiddenWindowCount > 0 && (
+            <div className="taskbar-flyout__window-more">+{hiddenWindowCount} more limits in Ceiling</div>
+          )}
         </div>
       </div>
     </div>
@@ -86,14 +171,26 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
   const [surfaceColor, setSurfaceColor] = useState<string | null>(null);
   const surfaceRef = useRef<HTMLElement>(null);
 
-  const visibleProviders = useMemo(() => orderProviderSnapshots(
-    providers,
-    state.providers,
-    settings.enabledProviders,
-    settings.providerOrder,
-  ).slice(0, MAX_VISIBLE_PROVIDERS), [providers, settings.enabledProviders, settings.providerOrder, state.providers]);
+  const taskbarProviders = useMemo(() => {
+    const ordered = orderProviderSnapshots(
+      providers,
+      state.providers,
+      settings.enabledProviders,
+      settings.providerOrder,
+    );
+    const selected = settings.floatBarProviderIds ?? [];
+    if (selected.length === 0) return ordered;
+    const selectedIds = new Set(selected);
+    return ordered.filter((provider) => selectedIds.has(provider.providerId));
+  }, [providers, settings.enabledProviders, settings.floatBarProviderIds, settings.providerOrder, state.providers]);
+  const visibleProviders = taskbarProviders.slice(0, MAX_VISIBLE_PROVIDERS);
+  const hiddenProviderCount = Math.max(0, taskbarProviders.length - visibleProviders.length);
+  const visibleWindowCount = visibleProviders.reduce(
+    (total, provider) => total + flyoutWindows(provider).length,
+    0,
+  );
 
-  const nextReset = earliestReset(visibleProviders);
+  const nextReset = earliestReset(taskbarProviders, now);
   const nextResetText = nextReset ? `Next reset in ${compactDuration(nextReset, null, now)}` : "Usage at a glance";
 
   useEffect(() => {
@@ -115,7 +212,7 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
       })();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [hasLoadedCache, visibleProviders.length]);
+  }, [hasLoadedCache, hiddenProviderCount, visibleProviders.length, visibleWindowCount]);
 
   const openCeiling = useCallback(() => {
     void setSurfaceMode("popOut", { kind: "dashboard" })
@@ -130,11 +227,33 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    let cleanupTimer: number | undefined;
+    const replayEntrance = () => {
+      surface.classList.remove("taskbar-flyout--entering");
+      void surface.offsetWidth;
+      surface.classList.add("taskbar-flyout--entering");
+      window.clearTimeout(cleanupTimer);
+      cleanupTimer = window.setTimeout(
+        () => surface.classList.remove("taskbar-flyout--entering"),
+        150,
+      );
+    };
+    replayEntrance();
+    window.addEventListener("focus", replayEntrance);
+    return () => {
+      window.removeEventListener("focus", replayEntrance);
+      window.clearTimeout(cleanupTimer);
+    };
+  }, []);
+
   return (
     <main className="taskbar-flyout-frame" style={{ "--taskbar-surface": surfaceColor ?? "#073b78" } as CSSProperties}>
       <section className="taskbar-flyout" ref={surfaceRef} aria-label="Ceiling usage at a glance">
         <header className="taskbar-flyout__header">
-          <CeilingMark size={32} className="taskbar-flyout__mark" />
+          <CeilingMark size={32} appearance="glass" className="taskbar-flyout__mark" />
           <div>
             <div className="taskbar-flyout__title">Ceiling</div>
             <div className="taskbar-flyout__subtitle">{nextResetText}</div>
@@ -147,6 +266,9 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
           ))}
           {visibleProviders.length === 0 && (
             <div className="taskbar-flyout__empty">Syncing provider usage…</div>
+          )}
+          {hiddenProviderCount > 0 && (
+            <div className="taskbar-flyout__more">+{hiddenProviderCount} more in Ceiling</div>
           )}
         </div>
 

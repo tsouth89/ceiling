@@ -18,6 +18,7 @@ const CONFIRMATION_MIN_AGE_SECONDS: i64 = 30;
 pub enum CapacityEventKind {
     ScheduledReset,
     SurpriseReset,
+    PartialReset,
     ResetTimeShift,
     WindowLifted,
     WindowRestored,
@@ -46,6 +47,9 @@ impl CapacityEventPayload {
             CapacityEventKind::SurpriseReset => {
                 format!("{} capacity restored early", self.display_name)
             }
+            CapacityEventKind::PartialReset => {
+                format!("{} capacity partially restored", self.display_name)
+            }
             CapacityEventKind::ResetTimeShift => {
                 format!("{} reset time changed", self.display_name)
             }
@@ -71,6 +75,10 @@ impl CapacityEventPayload {
             CapacityEventKind::SurpriseReset => format!(
                 "{} reset earlier than expected. {:.0}% available now.",
                 self.window_label, remaining
+            ),
+            CapacityEventKind::PartialReset => format!(
+                "{} dropped from {:.0}% to {:.0}% used. {:.0}% available now.",
+                self.window_label, self.previous_used_percent, self.current_used_percent, remaining
             ),
             CapacityEventKind::ResetTimeShift => {
                 format!("{} now has a different reset time.", self.window_label)
@@ -339,10 +347,17 @@ fn detect_reset(
         && reset_advanced;
     let reset_shift =
         (current.resets_at - previous.resets_at).num_minutes().abs() >= RESET_SHIFT_MINUTES;
+    let reset_unchanged =
+        (current.resets_at - previous.resets_at).num_minutes().abs() <= RESET_JITTER_MINUTES;
     let kind = if scheduled {
         CapacityEventKind::ScheduledReset
     } else if used_drop >= USED_DROP_THRESHOLD && reset_advanced {
         CapacityEventKind::SurpriseReset
+    } else if used_drop >= USED_DROP_THRESHOLD && reset_unchanged {
+        // Some providers restore only part of a pool without moving its normal
+        // reset date. Treat a large, confirmed decrease in used capacity as a
+        // real event while leaving small corrections and reset-time churn alone.
+        CapacityEventKind::PartialReset
     } else if reset_shift {
         CapacityEventKind::ResetTimeShift
     } else {
@@ -673,6 +688,7 @@ mod tests {
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
+            reset_credits_available: None,
             cost: None,
             plan_name: None,
             account_email: Some("person@example.com".into()),
@@ -786,6 +802,52 @@ mod tests {
                     50.0,
                     reset + Duration::minutes(5),
                 ))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn partial_reset_with_unchanged_reset_time_requires_confirmation() {
+        let start = Utc::now();
+        let reset = start + Duration::days(22);
+        let mut observer = CapacityEventObserver::default();
+
+        observer.observe(&snapshot(start, 99.4, reset));
+        assert!(
+            observer
+                .observe(&snapshot(start + Duration::minutes(5), 49.7, reset))
+                .is_empty(),
+            "a single provider read must not trigger a reset notification"
+        );
+
+        let events = observer.observe(&snapshot(
+            start + Duration::minutes(10),
+            49.7,
+            reset + Duration::minutes(2),
+        ));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, CapacityEventKind::PartialReset);
+        assert_eq!(events[0].previous_used_percent, 99.4);
+        assert_eq!(events[0].current_used_percent, 49.7);
+    }
+
+    #[test]
+    fn startup_at_a_partially_restored_value_does_not_replay_an_alert() {
+        let start = Utc::now();
+        let reset = start + Duration::days(22);
+        let mut before_restart = CapacityEventObserver::default();
+        before_restart.observe(&snapshot(start, 99.4, reset));
+
+        let persisted = serde_json::to_string(&before_restart).unwrap();
+        let mut after_restart: CapacityEventObserver = serde_json::from_str(&persisted).unwrap();
+        assert!(
+            after_restart
+                .observe(&snapshot(start + Duration::minutes(5), 49.7, reset))
+                .is_empty()
+        );
+        assert!(
+            after_restart
+                .observe(&snapshot(start + Duration::minutes(10), 49.7, reset))
                 .is_empty()
         );
     }

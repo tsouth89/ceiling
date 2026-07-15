@@ -33,6 +33,11 @@ function renderTab(set: (patch: Record<string, unknown>) => void) {
 }
 
 describe("DisplayTab window scale", () => {
+  it("does not expose the unused token-account display setting", () => {
+    renderTab(vi.fn());
+    expect(screen.queryByText("ShowAllTokenAccountsLabel")).not.toBeInTheDocument();
+  });
+
   it("commits the new window scale on blur", () => {
     const set = vi.fn();
     renderTab(set);
@@ -63,4 +68,5 @@ describe("DisplayTab window scale", () => {
 
     expect(set).toHaveBeenCalledWith({ showResetWhenExhausted: true });
   });
+
 });

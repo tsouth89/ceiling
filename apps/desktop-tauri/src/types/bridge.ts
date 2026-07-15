@@ -253,12 +253,16 @@ export interface SettingsSnapshot {
   wayfinderGatewayUrl?: string;
   providerMetrics: Record<string, MetricPreference>;
   floatBarEnabled: boolean;
+  taskbarWidgetEnabled: boolean;
+  taskbarWidgetAllMonitors: boolean;
   /** 30..=100 — clamped server-side. */
   floatBarOpacity: number;
   /** 75..=200 — clamped server-side. */
   floatBarScale: number;
   floatBarOrientation: FloatBarOrientation;
   floatBarStyle: FloatBarStyle;
+  /** Open the taskbar glance panel after a short pointer dwell. */
+  taskbarWidgetOpenOnHover: boolean;
   floatBarDensity: FloatBarDensity;
   floatBarContrast: FloatBarContrast;
   floatBarClickThrough: boolean;
@@ -316,10 +320,13 @@ export interface SettingsUpdate {
   /** Map of provider CLI name → metric preference label. */
   providerMetrics?: Record<string, MetricPreference>;
   floatBarEnabled?: boolean;
+  taskbarWidgetEnabled?: boolean;
+  taskbarWidgetAllMonitors?: boolean;
   floatBarOpacity?: number;
   floatBarScale?: number;
   floatBarOrientation?: FloatBarOrientation;
   floatBarStyle?: FloatBarStyle;
+  taskbarWidgetOpenOnHover?: boolean;
   floatBarDensity?: FloatBarDensity;
   floatBarContrast?: FloatBarContrast;
   floatBarClickThrough?: boolean;
@@ -416,6 +423,7 @@ export interface ProviderUsageSnapshot {
     windowId?: string | null;
     endsAt?: string | null;
   }>;
+  resetCreditsAvailable?: number | null;
   cost: CostSnapshotBridge | null;
   planName: string | null;
   accountEmail: string | null;
@@ -475,6 +483,7 @@ export interface CapacityEventPayload {
   kind:
     | "scheduledReset"
     | "surpriseReset"
+    | "partialReset"
     | "resetTimeShift"
     | "windowLifted"
     | "windowRestored"
@@ -593,10 +602,33 @@ export interface ProviderLocalUsageSummary {
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
   thirtyDayTokenBreakdown?: LocalTokenBreakdown | null;
+  currentWindows: LocalUsageWindowSummary[];
+  comparisonPeriods: LocalUsageComparisonPeriod[];
   latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+}
+
+export interface LocalUsageWindowRequest {
+  id: string;
+  label: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface LocalUsageWindowSummary extends LocalUsageWindowRequest {
+  tokens: number;
+  tokenBreakdown: LocalTokenBreakdown;
+}
+
+export interface LocalUsageComparisonPeriod {
+  id: string;
+  label: string;
+  currentTokens: number;
+  currentBreakdown: LocalTokenBreakdown;
+  previousTokens: number;
+  previousBreakdown: LocalTokenBreakdown;
 }
 
 export interface LocalTokenBreakdown {

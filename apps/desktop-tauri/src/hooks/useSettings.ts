@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { SettingsSnapshot, SettingsUpdate } from "../types/bridge";
 import { getSettingsSnapshot, updateSettings } from "../lib/tauri";
@@ -18,6 +18,8 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
   const [settings, setSettings] = useState<SettingsSnapshot>(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const updateQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingUpdates = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,32 +75,41 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
     };
   }, []);
 
-  const update = useCallback(async (patch: SettingsUpdate) => {
+  const update = useCallback((patch: SettingsUpdate): Promise<void> => {
+    pendingUpdates.current += 1;
     setSaving(true);
     setError(null);
-    try {
-      const next = await updateSettings(patch);
-      setSettings(next);
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent<SettingsSnapshot>("codexbar:settings-updated", {
-            detail: next,
-          }),
-        );
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      // Re-fetch to stay in sync with disk state on failure
+
+    const run = updateQueue.current.then(async () => {
       try {
-        const fresh = await getSettingsSnapshot();
-        setSettings(fresh);
-      } catch {
-        // ignore secondary failure
+        const next = await updateSettings(patch);
+        setSettings(next);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent<SettingsSnapshot>("codexbar:settings-updated", {
+              detail: next,
+            }),
+          );
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        // Re-fetch to stay in sync with disk state on failure.
+        try {
+          const fresh = await getSettingsSnapshot();
+          setSettings(fresh);
+        } catch {
+          // Ignore a secondary failure and retain the current snapshot.
+        }
+      } finally {
+        pendingUpdates.current -= 1;
+        if (pendingUpdates.current === 0) setSaving(false);
       }
-    } finally {
-      setSaving(false);
-    }
+    });
+
+    // Keep the queue usable even if a future implementation lets `run` reject.
+    updateQueue.current = run.catch(() => {});
+    return run;
   }, []);
 
   return { settings, saving, error, update };

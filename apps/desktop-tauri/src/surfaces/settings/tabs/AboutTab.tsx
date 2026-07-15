@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { useUpdateState } from "../../../hooks/useUpdateState";
 import { getAppInfo, openExternalUrl } from "../../../lib/tauri";
-import { Field, Select, Toggle } from "../../../components/FormControls";
-import type { AppInfoBridge, UpdateChannel } from "../../../types/bridge";
+import { Field, Toggle } from "../../../components/FormControls";
+import type { AppInfoBridge } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import ceilingIcon from "../../../assets/ceiling-icon.png";
 
@@ -97,22 +97,6 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
           />
         </Field>
 
-        <div className="about-channel-row">
-          <Field label={t("UpdateChannelChoice")}>
-            <Select
-              value={settings.updateChannel}
-              disabled={saving}
-              options={[
-                { value: "stable", label: t("UpdateChannelStableOption") },
-                { value: "beta", label: t("UpdateChannelBetaOption") },
-              ]}
-              onChange={(v) => set({ updateChannel: v as UpdateChannel })}
-            />
-          </Field>
-          <p className="about-channel-description">
-            {t("UpdateChannelChoiceHelper")}
-          </p>
-        </div>
       </div>
 
       <div className="about-actions">
@@ -184,7 +168,17 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
       </div>
 
       <p className="about-copyright">
-        Ceiling · MIT License · Based on{" "}
+        Ceiling · MIT License · Forked from{" "}
+        <button
+          type="button"
+          className="about-link about-link--inline"
+          onClick={() =>
+            openAboutLink("https://github.com/Finesssee/Win-CodexBar")
+          }
+        >
+          Win-CodexBar
+        </button>
+        , which is based on{" "}
         <button
           type="button"
           className="about-link about-link--inline"

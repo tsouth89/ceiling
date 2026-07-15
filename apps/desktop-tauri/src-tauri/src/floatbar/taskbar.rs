@@ -7,9 +7,11 @@ const OBSTACLE_CLEARANCE: i32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskbarLayout {
+    pub window_handle: isize,
     pub bounds: Rect,
     pub monitor_bounds: Rect,
     pub obstacles: Vec<Rect>,
+    pub landmarks: TaskbarLandmarks,
     pub primary: bool,
 }
 
@@ -99,11 +101,6 @@ pub fn discover_all() -> Vec<TaskbarLayout> {
     Vec::new()
 }
 
-#[cfg(not(windows))]
-pub fn primary_landmarks() -> TaskbarLandmarks {
-    TaskbarLandmarks::default()
-}
-
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -182,25 +179,6 @@ pub fn discover_all() -> Vec<TaskbarLayout> {
 }
 
 #[cfg(windows)]
-pub fn primary_landmarks() -> TaskbarLandmarks {
-    let class = wide("Shell_TrayWnd");
-    let taskbar = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
-    if taskbar == 0 {
-        return TaskbarLandmarks::default();
-    }
-
-    let mut landmarks = TaskbarLandmarks::default();
-    for button in unsafe { uia_buttons(taskbar) } {
-        match button.automation_id.as_str() {
-            "WidgetsButton" => landmarks.widgets = Some(button.bounds),
-            "StartButton" => landmarks.start = Some(button.bounds),
-            _ => {}
-        }
-    }
-    landmarks
-}
-
-#[cfg(windows)]
 unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout> {
     unsafe {
         let bounds = window_rect(hwnd)?;
@@ -233,18 +211,29 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
         // Automation as an obstacle source when Explorer exposes the tree.
         // Failure is intentionally non-fatal; the native widget then uses the
         // conservative preferred anchor and classic HWND obstacles.
+        let automation_buttons = uia_buttons(hwnd);
+        let mut landmarks = TaskbarLandmarks::default();
+        for button in &automation_buttons {
+            match button.automation_id.as_str() {
+                "WidgetsButton" => landmarks.widgets = Some(button.bounds),
+                "StartButton" => landmarks.start = Some(button.bounds),
+                _ => {}
+            }
+        }
         context
             .obstacles
-            .extend(uia_buttons(hwnd).into_iter().map(|button| button.bounds));
+            .extend(automation_buttons.into_iter().map(|button| button.bounds));
 
         context
             .obstacles
             .sort_by_key(|rect| (rect.left, rect.top, rect.right, rect.bottom));
         context.obstacles.dedup();
         Some(TaskbarLayout {
+            window_handle: hwnd,
             bounds,
             monitor_bounds,
             obstacles: context.obstacles,
+            landmarks,
             primary,
         })
     }
@@ -425,7 +414,6 @@ unsafe extern "system" {
         class_name: *const u16,
         window_name: *const u16,
     ) -> isize;
-    fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
     fn GetWindowRect(hwnd: isize, rect: *mut std::ffi::c_void) -> i32;
     fn GetClassNameW(hwnd: isize, class_name: *mut u16, max_count: i32) -> i32;
     fn EnumChildWindows(
@@ -442,9 +430,11 @@ mod tests {
 
     fn layout(monitor_bounds: Rect, bounds: Rect, primary: bool) -> TaskbarLayout {
         TaskbarLayout {
+            window_handle: 0,
             bounds,
             monitor_bounds,
             obstacles: Vec::new(),
+            landmarks: TaskbarLandmarks::default(),
             primary,
         }
     }

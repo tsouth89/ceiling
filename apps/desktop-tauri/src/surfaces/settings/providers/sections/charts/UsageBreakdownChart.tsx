@@ -1,4 +1,8 @@
 import { useMemo, useRef, useState } from "react";
+import {
+  chartTooltipPosition,
+  type ChartTooltipAlignment,
+} from "../../../../../components/charts/chartTooltip";
 import { serviceColorVar } from "../../../../../components/charts/chartPalette";
 import { useChartAnimation } from "../../../../../components/charts/useChartAnimation";
 import type { DailyUsageBreakdown } from "../../../../../types/bridge";
@@ -37,6 +41,7 @@ export function UsageBreakdownChart({
     value: number;
     x: number;
     y: number;
+    alignment: ChartTooltipAlignment;
   } | null>(null);
 
   const anim = useChartAnimation(recent.length, animations, [
@@ -75,7 +80,7 @@ export function UsageBreakdownChart({
     const host = containerRef.current;
     if (!host) return;
     const rect = host.getBoundingClientRect();
-    setHover({ label, value, x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setHover({ label, value, ...chartTooltipPosition(e.clientX, e.clientY, rect) });
   };
   const onSegLeave = () => setHover(null);
 
@@ -93,8 +98,7 @@ export function UsageBreakdownChart({
         >
           {recent.map((day, rowIdx) => {
             const y = rowIdx * (rowHeight + rowGap);
-            const eased = anim.barProgress(rowIdx);
-            const rowWidth = (day.totalCreditsUsed / max) * barAreaWidth * eased;
+            const rowWidth = (day.totalCreditsUsed / max) * barAreaWidth;
             let xOffset = labelWidth;
             const sorted = [...day.services].sort((a, b) =>
               a.service.localeCompare(b.service),
@@ -110,6 +114,13 @@ export function UsageBreakdownChart({
                 >
                   {day.day.slice(-5)}
                 </text>
+                <g
+                  className={anim.enabled ? "chart__grow-x" : undefined}
+                  style={anim.enabled ? {
+                    animationDelay: `${anim.delayFor(rowIdx)}ms`,
+                    animationDuration: `${anim.durationMs}ms`,
+                  } : undefined}
+                >
                 {sorted.map((svc) => {
                   const w =
                     day.totalCreditsUsed > 0
@@ -138,6 +149,7 @@ export function UsageBreakdownChart({
                   xOffset += w;
                   return rect;
                 })}
+                </g>
               </g>
             );
           })}
@@ -157,7 +169,7 @@ export function UsageBreakdownChart({
         )}
         {hover && !anim.running && (
           <div
-            className="chart__tooltip"
+            className={`chart__tooltip chart__tooltip--${hover.alignment}`}
             style={{ left: hover.x, top: hover.y }}
             role="tooltip"
           >

@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { chartTooltipPosition, type ChartTooltipPosition } from "./chartTooltip";
 import { useChartAnimation } from "./useChartAnimation";
 
 /**
@@ -46,7 +47,7 @@ export function BarChart({
 }: BarChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<(ChartTooltipPosition & { i: number }) | null>(null);
 
   const anim = useChartAnimation(data.length, animations, [
     data.length,
@@ -86,7 +87,7 @@ export function BarChart({
     const host = containerRef.current;
     if (!host) return;
     const hostRect = host.getBoundingClientRect();
-    setHover({ i, x: e.clientX - hostRect.left, y: e.clientY - hostRect.top });
+    setHover({ i, ...chartTooltipPosition(e.clientX, e.clientY, hostRect) });
   };
   const onLeave = () => setHover(null);
 
@@ -102,8 +103,7 @@ export function BarChart({
       >
         {data.map((p, i) => {
           const base = p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
-          const eased = anim.barProgress(i);
-          const barH = base * eased;
+          const barH = base;
           const x = i * (barWidth + BAR_GAP);
           const y = height - barH;
           const isPeak = i === peakIndex && barH > CAP_HEIGHT;
@@ -112,7 +112,14 @@ export function BarChart({
           const isHovered = hover?.i === i;
 
           return (
-            <g key={`${p.label}-${i}`}>
+            <g
+              key={`${p.label}-${i}`}
+              className={anim.enabled ? "chart__grow-y" : undefined}
+              style={anim.enabled ? {
+                animationDelay: `${anim.delayFor(i)}ms`,
+                animationDuration: `${anim.durationMs}ms`,
+              } : undefined}
+            >
               <rect
                 x={x}
                 y={bodyY}
@@ -152,7 +159,7 @@ export function BarChart({
       </div>
       {hover && !anim.running && (
         <div
-          className="chart__tooltip"
+          className={`chart__tooltip chart__tooltip--${hover.alignment}`}
           style={{ left: hover.x, top: hover.y }}
           role="tooltip"
         >

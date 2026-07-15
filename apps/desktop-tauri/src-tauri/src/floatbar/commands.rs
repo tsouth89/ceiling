@@ -16,7 +16,6 @@ pub async fn show_float_bar(app: AppHandle) -> Result<(), String> {
     settings.save().map_err(|e| e.to_string())?;
 
     super::apply_state(&app, &settings);
-    crate::taskbar_widget::apply_state(&app, &settings);
     Ok(())
 }
 
@@ -25,9 +24,7 @@ pub fn hide_float_bar(app: AppHandle) -> Result<(), String> {
     let mut settings = Settings::load();
     settings.float_bar_enabled = false;
     settings.save().map_err(|e| e.to_string())?;
-    let result = floatbar_window::hide(&app);
-    crate::taskbar_widget::apply_state(&app, &settings);
-    result
+    floatbar_window::hide(&app)
 }
 
 #[tauri::command]
@@ -66,9 +63,6 @@ pub fn resize_float_bar(app: AppHandle, width: f64, height: f64) -> Result<(), S
         // One native operation owns the resize + interaction-state invariant,
         // so the webview never has to repair Win32 window styles itself.
         floatbar_window::resize(&window, width, height, settings.float_bar_click_through)?;
-        if settings.float_bar_style == "taskbar" {
-            floatbar_window::reposition_taskbar(&window, true);
-        }
     }
     Ok(())
 }

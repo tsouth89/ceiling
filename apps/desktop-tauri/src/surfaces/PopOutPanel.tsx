@@ -6,12 +6,12 @@ import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
 import { useLocale } from "../hooks/useLocale";
-import MenuCard from "../components/MenuCard";
 import PlanStatusCard from "../components/PlanStatusCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import ActivityTimeline from "./ActivityTimeline";
 import ChartsPanel from "./ChartsPanel";
 import AccountsPanel from "./AccountsPanel";
+import ProviderDetailView from "./ProviderDetailView";
 import { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
 import DetectedAccountsCard from "../components/DetectedAccountsCard";
@@ -128,7 +128,7 @@ export default function PopOutPanel({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     providerId ?? null,
   );
-  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const dashboardBodyRef = useRef<HTMLDivElement>(null);
   const windowScale = useMemo(() => {
     const scalePercent = Number(settings.windowScalePercent);
     return (
@@ -179,60 +179,14 @@ export default function PopOutPanel({
     }
   }, [providers.length, selectedProviderId, sorted]);
 
-  const visibleProviders = useMemo(() => {
-    if (selectedProviderId === null) {
-      // The dashboard body scrolls, so show every provider (no compact cap).
-      return sorted;
-    }
-    const match = sorted.find((p) => p.providerId === selectedProviderId);
-    return match ? [match] : sorted;
-  }, [sorted, selectedProviderId]);
-  const providerOrderKey = useMemo(
-    () => sorted.map((provider) => provider.providerId).join(","),
-    [sorted],
+  const selectedProvider = useMemo(
+    () => sorted.find((provider) => provider.providerId === selectedProviderId) ?? null,
+    [selectedProviderId, sorted],
   );
 
   const handleGridClick = useCallback((nextProviderId: string | null) => {
     setSelectedProviderId(nextProviderId);
   }, []);
-
-  useEffect(() => {
-    if (!providerId || selectedProviderId !== providerId || providerOrderKey.length === 0) return;
-
-    let cancelled = false;
-    const scrollToProvider = () => {
-      if (cancelled) return;
-      const target = cardRefs.current.get(providerId);
-      if (!target) return;
-
-      window.scrollTo(0, 0);
-      if (document.scrollingElement) {
-        document.scrollingElement.scrollTop = 0;
-      }
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-
-      for (const selector of [".menu-stack", ".menu-surface__body"]) {
-        const container = target.closest<HTMLElement>(selector);
-        if (!container) continue;
-        container.scrollTop = 0;
-        const targetRect = target.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        container.scrollTop += targetRect.top - containerRect.top;
-      }
-    };
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(scrollToProvider);
-    });
-    const timer = window.setTimeout(scrollToProvider, 100);
-    const lateTimer = window.setTimeout(scrollToProvider, 350);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      window.clearTimeout(lateTimer);
-    };
-  }, [providerId, selectedProviderId, providerOrderKey]);
 
   const openSettings = useCallback(() => {
     openSettingsWindow("general");
@@ -251,6 +205,10 @@ export default function PopOutPanel({
   );
 
   const [activeSection, setActiveSection] = useState<DashboardSection>("overview");
+
+  useEffect(() => {
+    if (dashboardBodyRef.current) dashboardBodyRef.current.scrollTop = 0;
+  }, [activeSection, selectedProviderId]);
 
   const isLight = settings.theme === "light";
   const toggleTheme = useCallback(() => {
@@ -304,8 +262,8 @@ export default function PopOutPanel({
     overview: { title: "Overview", sub: "Usage at a glance", blurb: "" },
     activity: {
       title: "Activity",
-      sub: "Upcoming resets",
-      blurb: "A timeline of usage and resets across your providers.",
+      sub: "Reset schedule",
+      blurb: "Your upcoming provider resets in chronological order.",
     },
     accounts: {
       title: "Accounts",
@@ -356,15 +314,37 @@ export default function PopOutPanel({
         </nav>
 
         <div className="dashboard-main">
-          <header className="dashboard-header">
-            <div className="dashboard-header__title">{meta.title}</div>
-            <div className="dashboard-header__sub">{meta.sub}</div>
-          </header>
+          {activeSection === "overview" && selectedProvider ? (
+            <header className="dashboard-header dashboard-header--provider">
+              <button
+                type="button"
+                className="provider-focus__back"
+                onClick={() => setSelectedProviderId(null)}
+                aria-label="Back to Overview"
+              >
+                <span aria-hidden>‹</span>
+                Overview
+              </button>
+            </header>
+          ) : (
+            <header className="dashboard-header">
+              <div className="dashboard-header__title">{meta.title}</div>
+              <div className="dashboard-header__sub">{meta.sub}</div>
+            </header>
+          )}
 
-          <div className="dashboard-body">
+          <div className="dashboard-body" ref={dashboardBodyRef}>
             {banner}
             {activeSection === "overview" ? (
-              <>
+              selectedProvider ? (
+                <ProviderDetailView
+                  provider={selectedProvider}
+                  resetTimeRelative={settings.resetTimeRelative}
+                  showAsUsed={settings.showAsUsed}
+                  isRefreshing={refreshingProviderIds.has(selectedProvider.providerId)}
+                />
+              ) : (
+                <>
                 <DetectedAccountsCard
                   enabledProviderIds={settings.enabledProviders}
                   previouslyTrackedProviderIds={cachedProviderIds}
@@ -377,46 +357,28 @@ export default function PopOutPanel({
                     onSettings={openSettings}
                   />
                 ) : (
-                  <div className="menu-stack">
-                    {visibleProviders.map((p, idx) => (
+                  <div
+                    className={`menu-stack${selectedProviderId === null ? " menu-stack--overview" : ""}`}
+                  >
+                    {sorted.map((p, idx) => (
                       <Fragment key={p.providerId}>
                         {idx > 0 && <div className="menu-stack__sep" />}
-                        <div
-                          className={`menu-stack__item${selectedProviderId === p.providerId ? " menu-stack__item--selected" : ""}`}
-                          ref={(node) => {
-                            if (node) {
-                              cardRefs.current.set(p.providerId, node);
-                            } else {
-                              cardRefs.current.delete(p.providerId);
-                            }
-                          }}
-                        >
-                          {selectedProviderId === null ? (
-                            <PlanStatusCard
-                              provider={p}
-                              isRefreshing={refreshingProviderIds.has(p.providerId)}
-                              resetTimeRelative={settings.resetTimeRelative}
-                              showResetWhenExhausted={settings.showResetWhenExhausted}
-                              showAsUsed={settings.showAsUsed}
-                              onSelect={() => handleGridClick(p.providerId)}
-                            />
-                          ) : (
-                            <MenuCard
-                              provider={p}
-                              isRefreshing={refreshingProviderIds.has(p.providerId)}
-                              hideEmail={settings.hidePersonalInfo}
-                              resetTimeRelative={settings.resetTimeRelative}
-                              showResetWhenExhausted={settings.showResetWhenExhausted}
-                              showAsUsed={settings.showAsUsed}
-                              showActivitySection
-                            />
-                          )}
+                        <div className="menu-stack__item">
+                          <PlanStatusCard
+                            provider={p}
+                            isRefreshing={refreshingProviderIds.has(p.providerId)}
+                            resetTimeRelative={settings.resetTimeRelative}
+                            showResetWhenExhausted={settings.showResetWhenExhausted}
+                            showAsUsed={settings.showAsUsed}
+                            onSelect={() => handleGridClick(p.providerId)}
+                          />
                         </div>
                       </Fragment>
                     ))}
                   </div>
                 )}
-              </>
+                </>
+              )
             ) : activeSection === "activity" ? (
               <ActivityTimeline providers={sorted} />
             ) : activeSection === "charts" ? (
@@ -427,13 +389,7 @@ export default function PopOutPanel({
                 hideEmail={settings.hidePersonalInfo}
                 onManage={() => openSettingsWindow("providers")}
               />
-            ) : (
-              <div className="dashboard-placeholder">
-                <strong>{meta.title} — coming soon</strong>
-                {meta.blurb} Ceiling is in its foundation phase; the Overview is
-                live today.
-              </div>
-            )}
+            ) : null}
           </div>
 
           <footer className="dashboard-status">

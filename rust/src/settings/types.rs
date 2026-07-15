@@ -37,20 +37,10 @@ pub fn normalize_usage_threshold_overrides(
 }
 
 impl Settings {
-    pub fn usage_thresholds(&self, provider: ProviderId, window: &str) -> UsageThresholds {
-        let provider_key = provider.cli_name();
-        let window_key = format!("{provider_key}:{window}");
-        let provider_override = self.provider_usage_thresholds.get(provider_key);
-        let window_override = self.provider_usage_thresholds.get(&window_key);
+    pub fn usage_thresholds(&self, _provider: ProviderId, _window: &str) -> UsageThresholds {
         UsageThresholds {
-            high: window_override
-                .and_then(|value| value.high)
-                .or_else(|| provider_override.and_then(|value| value.high))
-                .unwrap_or(self.high_usage_threshold),
-            critical: window_override
-                .and_then(|value| value.critical)
-                .or_else(|| provider_override.and_then(|value| value.critical))
-                .unwrap_or(self.critical_usage_threshold),
+            high: self.high_usage_threshold,
+            critical: self.critical_usage_threshold,
         }
     }
 }

@@ -231,6 +231,7 @@ mod tests {
         let records = vec![
             CodexUsageRecord {
                 day_key: "2026-05-31".to_string(),
+                timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 input: 200_000,
                 cached: 0,
@@ -238,6 +239,7 @@ mod tests {
             },
             CodexUsageRecord {
                 day_key: "2026-05-31".to_string(),
+                timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 input: 200_000,
                 cached: 0,
@@ -245,6 +247,7 @@ mod tests {
             },
             CodexUsageRecord {
                 day_key: "2026-05-30".to_string(),
+                timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 input: 200_000,
                 cached: 0,
@@ -266,6 +269,7 @@ mod tests {
         let range = CostUsageDayRange::new(target, target);
         let records = vec![CodexUsageRecord {
             day_key: "2026-05-31".to_string(),
+            timestamp: None,
             model: "gpt-mystery".to_string(),
             input: 1_000_000,
             cached: 0,

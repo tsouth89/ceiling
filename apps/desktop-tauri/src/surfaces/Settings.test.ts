@@ -7,5 +7,6 @@ describe("Settings navigation", () => {
       { id: "general", labelKey: "TabGeneral" },
       { id: "providers", labelKey: "TabProviders" },
     ]);
+    expect(TAB_META.some((tab) => tab.id === "menuBar")).toBe(false);
   });
 });

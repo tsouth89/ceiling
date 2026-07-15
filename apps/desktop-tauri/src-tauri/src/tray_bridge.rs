@@ -4,13 +4,13 @@ use std::sync::Mutex;
 
 use crate::commands::ProviderCatalogEntry;
 use codexbar::core::ProviderId;
-use codexbar::settings::{MetricPreference, Settings, TrayIconMode};
+use codexbar::settings::{MetricPreference, Settings};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
-use codexbar::tray::{render_bar_icon_rgba, render_percent_icon_rgba};
+use codexbar::tray::render_ceiling_tray_icon_rgba;
 
 use crate::shell;
 use crate::state::{AppState, TrayAnchor};
@@ -132,7 +132,7 @@ fn build_native_tray_menu(
         providers,
         status_labels,
         &enabled,
-        settings.float_bar_enabled,
+        settings.taskbar_widget_enabled,
         settings.ui_language,
     );
     let entries = spec
@@ -190,6 +190,7 @@ fn resolve_menu_action(id: &str) -> Option<MenuAction> {
         "check_for_updates" => Some(MenuAction::CheckForUpdates),
         "quit" => Some(MenuAction::Quit),
         "settings" => Some(MenuAction::OpenSettings("general".into())),
+        "more_providers" => Some(MenuAction::OpenSettings("providers".into())),
         "about" => Some(MenuAction::OpenSettings("about".into())),
         "toggle_float_bar" => Some(MenuAction::ToggleFloatBar),
         _ if id.starts_with("toggle_provider:") => {
@@ -242,9 +243,10 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
 
-    // Embed the icon at compile time so it works regardless of working directory.
-    let icon_bytes = include_bytes!("../../../../rust/icons/icon.png");
-    let icon = Image::from_bytes(icon_bytes)?;
+    // Use tray-specific transparent artwork from the first frame. The full
+    // square app icon loses its silhouette when Windows downsamples it to 16px.
+    let (rgba, width, height) = render_ceiling_tray_icon_rgba(0.0, false);
+    let icon = Image::new_owned(rgba, width, height);
 
     let _tray = TrayIconBuilder::with_id("codexbar-main")
         .icon(icon)
@@ -435,8 +437,10 @@ pub fn update_tray_icon_and_tooltip(
         .collect();
     let all_error = ok_snapshots.is_empty() && !snapshots.is_empty();
 
-    let prefer_highest = settings.menu_bar_shows_highest_usage
-        || settings.menu_bar_display_mode.as_str() == "minimal";
+    // One branded tray icon represents Ceiling as a whole. Its severity color
+    // follows the most constrained healthy provider; legacy icon-selection
+    // settings are intentionally ignored.
+    let prefer_highest = true;
 
     let picked = pick_tray_provider(&ok_snapshots, prefer_highest);
 
@@ -458,7 +462,11 @@ pub fn update_tray_icon_and_tooltip(
     // ── Tooltip ───────────────────────────────────────────────────────────
     // Use the same dashboard-ordered set as the icon so the tooltip lists
     // providers in the window's order and never omits one to a tail clip.
-    let tooltip = build_tooltip(&ordered_snapshots, settings.ui_language);
+    let tooltip = build_tooltip(
+        &ordered_snapshots,
+        settings.ui_language,
+        settings.show_as_used,
+    );
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
@@ -472,17 +480,7 @@ fn status_labels_for_settings(
         .into_iter()
         .filter(|s| s.error.is_none())
         .collect();
-    if settings.tray_icon_mode == TrayIconMode::PerProvider {
-        return healthy
-            .into_iter()
-            .map(|s| provider_status_label(s, lang))
-            .collect::<Vec<_>>();
-    }
-
-    let Some(selected) = pick_tray_provider(
-        &healthy,
-        settings.menu_bar_shows_highest_usage || settings.menu_bar_display_mode == "minimal",
-    ) else {
+    let Some(selected) = pick_tray_provider(&healthy, true) else {
         return vec![];
     };
 
@@ -500,7 +498,13 @@ fn ordered_snapshot_refs<'a>(
         .enumerate()
         .map(|(index, provider_id)| (provider_id, index))
         .collect::<std::collections::HashMap<_, _>>();
-    let mut ordered = snapshots.iter().collect::<Vec<_>>();
+    // Refreshes upsert provider snapshots, so disabling a provider does not
+    // remove its cached entry. Never let that stale cache continue driving the
+    // native tray icon, tooltip, or status menu after the user unchecks it.
+    let mut ordered = snapshots
+        .iter()
+        .filter(|snapshot| settings.enabled_providers.contains(&snapshot.provider_id))
+        .collect::<Vec<_>>();
     ordered.sort_by(|a, b| {
         let a_order = order.get(&a.provider_id);
         let b_order = order.get(&b.provider_id);
@@ -531,11 +535,8 @@ fn render_tray_icon_for_settings(
     weekly_pct: Option<f64>,
     all_error: bool,
 ) -> (Vec<u8>, u32, u32) {
-    if settings.menu_bar_shows_percent {
-        render_percent_icon_rgba(session_pct, all_error)
-    } else {
-        render_bar_icon_rgba(session_pct, weekly_pct, all_error)
-    }
+    let _ = (settings, weekly_pct);
+    render_ceiling_tray_icon_rgba(session_pct, all_error)
 }
 
 /// Pick the provider whose usage the tray icon should render.
@@ -682,9 +683,9 @@ fn max_metric_percent<const N: usize>(values: [Option<f64>; N]) -> Option<f64> {
 
 /// Build a compact multi-line tooltip string from provider snapshots.
 ///
-/// The hard constraint: Windows Shell only reliably *displays* ~64 characters
-/// of a tray icon's tooltip (the struct field holds 128, but the shell clips
-/// the visible text far shorter). At that budget, "Name P% Label · reset" for
+/// The hard constraint: Windows Shell only reliably *displays* 63 characters
+/// of a tray icon's tooltip on the taskbar surface we use (the backing struct
+/// is larger, but Explorer clips the visible text). At that budget, "Name P% Label · reset" for
 /// three-plus providers overflows and the tail providers silently disappear —
 /// which is exactly the "not showing all subscriptions" bug.
 ///
@@ -692,10 +693,13 @@ fn max_metric_percent<const N: usize>(values: [Option<f64>; N]) -> Option<f64> {
 /// line, and we spend the remaining budget on the richest per-line detail that
 /// still fits — degrading label+reset → reset → percent uniformly rather than
 /// dropping anyone. Callers pass snapshots already in dashboard order so the
-/// tooltip reads the same top-to-bottom as the window.
+/// tooltip reads the same top-to-bottom as the window. The configured
+/// used/remaining mode is included explicitly so the percentage is never
+/// ambiguous on hover.
 fn build_tooltip(
     snapshots: &[&crate::commands::ProviderUsageSnapshot],
     lang: codexbar::settings::Language,
+    show_as_used: bool,
 ) -> String {
     use codexbar::locale::{LocaleKey, get_text};
 
@@ -704,29 +708,60 @@ fn build_tooltip(
     }
 
     let error_label = get_text(lang, LocaleKey::TrayStatusRowError);
+    let percent_suffix = get_text(
+        lang,
+        if show_as_used {
+            LocaleKey::PanelUsedSuffix
+        } else {
+            LocaleKey::PanelLeftSuffix
+        },
+    );
 
-    // Per-line detail levels, richest first. The reset ("when do I get more?")
-    // is the actionable glance value, so it outranks the window label when only
-    // one fits; the label stays visible in the dashboard and tray menu.
-    //   0: "Name  85% Weekly · 24d 11h"
-    //   1: "Name  85% · 24d 11h"   (drop the window label)
-    //   2: "Name  85%"             (percent only)
+    // The window label is mandatory: an unlabeled percentage is not useful
+    // across providers with radically different reset windows. Reset timing is
+    // the only optional detail when Windows' tooltip budget is tight.
+    //   0: "Name · Weekly · 85% used · 24d 11h"
+    //   1: "Name · Weekly · 85% used"
+    //   2: "Name Weekly 85% used"
+    //   3: "Name Weekly 85%"
     let render_line = |s: &crate::commands::ProviderUsageSnapshot, detail: u8| -> String {
         if s.error.is_some() {
             return format!("{}  {}", s.display_name, error_label);
         }
-        let mut line = format!("{}  {:.0}%", s.display_name, s.primary.used_percent);
+        let percent = display_metric_percent(s.primary.used_percent, show_as_used);
+        let label = s
+            .primary_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(|label| truncate_tooltip_text(label, 12))
+            .or_else(|| {
+                s.primary.window_minutes.map(|minutes| {
+                    if minutes >= 60 && minutes % 60 == 0 {
+                        format!("{}h", minutes / 60)
+                    } else {
+                        format!("{minutes}m")
+                    }
+                })
+            })
+            .unwrap_or_else(|| match s.provider_id.as_str() {
+                "claude" => "Session (5h)".to_string(),
+                "codex" => "Weekly".to_string(),
+                "cursor" => "Plan".to_string(),
+                _ => "Limit".to_string(),
+            });
+        let name = truncate_tooltip_text(&s.display_name, 12);
+        let compact_label = compact_tooltip_window_label(
+            s.provider_id.as_str(),
+            Some(label.as_str()),
+            s.primary.window_minutes,
+        );
+        let mut line = match detail {
+            0 | 1 => format!("{name} · {label} · {percent:.0}% {percent_suffix}"),
+            2 => format!("{name} {compact_label} {percent:.0}% {percent_suffix}"),
+            _ => format!("{name} {compact_label} {percent:.0}%"),
+        };
         if detail == 0
-            && let Some(label) = s
-                .primary_label
-                .as_deref()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-        {
-            line.push(' ');
-            line.push_str(&truncate_tooltip_text(label, 12));
-        }
-        if detail <= 1
             && let Some(reset) = tooltip_short_reset(
                 s.primary.resets_at.as_deref(),
                 s.primary.reset_description.as_deref(),
@@ -740,8 +775,8 @@ fn build_tooltip(
 
     // Windows' visible tooltip budget. Kept conservative so every provider
     // survives the shell's clip even on the strictest builds.
-    const BUDGET: usize = 62;
-    for detail in 0u8..=2 {
+    const BUDGET: usize = 63;
+    for detail in 0u8..=3 {
         let body = snapshots
             .iter()
             .map(|s| render_line(s, detail))
@@ -751,14 +786,56 @@ fn build_tooltip(
             return body;
         }
     }
-    // Even percent-only overflows (many providers): return it anyway — all
-    // providers are present; let the shell clip the overflow rather than us
-    // hiding anyone.
-    snapshots
+    // More providers can exceed the Windows limit even in compact form. Keep
+    // complete lines only and end with an explicit overflow row; never hand
+    // Explorer a string that it will cut halfway through a word or provider.
+    let compact = snapshots
         .iter()
-        .map(|s| render_line(s, 2))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|s| render_line(s, 3))
+        .collect::<Vec<_>>();
+    let mut visible = Vec::new();
+    for (index, line) in compact.iter().enumerate() {
+        let remaining = compact.len() - index - 1;
+        let overflow = (remaining > 0).then(|| format!("+{remaining} more in Ceiling"));
+        let mut candidate = visible.clone();
+        candidate.push(line.clone());
+        if let Some(overflow) = overflow {
+            candidate.push(overflow);
+        }
+        if candidate.join("\n").chars().count() > BUDGET {
+            break;
+        }
+        visible.push(line.clone());
+    }
+    let hidden = compact.len().saturating_sub(visible.len());
+    if hidden > 0 {
+        visible.push(format!("+{hidden} more in Ceiling"));
+    }
+    visible.join("\n")
+}
+
+fn compact_tooltip_window_label(
+    provider_id: &str,
+    label: Option<&str>,
+    window_minutes: Option<u32>,
+) -> String {
+    let label = label.map(str::trim).filter(|label| !label.is_empty());
+    let normalized = label.map(str::to_ascii_lowercase);
+    if provider_id == "claude"
+        && (normalized
+            .as_deref()
+            .is_some_and(|label| label.contains("session"))
+            || window_minutes == Some(300))
+    {
+        return "5h".to_string();
+    }
+    label
+        .map(|label| truncate_tooltip_text(label, 8))
+        .unwrap_or_else(|| match provider_id {
+            "codex" => "Weekly".to_string(),
+            "cursor" => "Plan".to_string(),
+            _ => "Limit".to_string(),
+        })
 }
 
 /// Compact reset duration for the tooltip ("24d 11h" / "2h 21m" / "12m"), or
@@ -932,6 +1009,12 @@ mod tests {
         match action {
             MenuAction::OpenSettings(tab) => assert_eq!(tab, "general"),
             _ => panic!("expected OpenSettings for 'settings'"),
+        }
+
+        let action = resolve_menu_action("more_providers").expect("providers action");
+        match action {
+            MenuAction::OpenSettings(tab) => assert_eq!(tab, "providers"),
+            _ => panic!("expected OpenSettings for 'more_providers'"),
         }
     }
 
@@ -1132,6 +1215,7 @@ mod tests {
             inactive_rate_windows: Vec::new(),
             extra_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
+            reset_credits_available: None,
             cost: cost.map(|(used, limit)| crate::commands::CostSnapshotBridge {
                 used,
                 limit: Some(limit),
@@ -1213,9 +1297,9 @@ mod tests {
     }
 
     #[test]
-    fn status_labels_per_provider_mode_lists_each_healthy_provider() {
+    fn legacy_per_provider_mode_still_collapses_to_one_summary() {
         let settings = Settings {
-            tray_icon_mode: TrayIconMode::PerProvider,
+            tray_icon_mode: codexbar::settings::TrayIconMode::PerProvider,
             provider_order: codexbar::settings::normalize_provider_order(&[
                 "claude".to_string(),
                 "codex".to_string(),
@@ -1235,17 +1319,14 @@ mod tests {
 
         assert_eq!(
             labels,
-            vec![
-                ("claude".to_string(), "Claude 72%".to_string()),
-                ("codex".to_string(), "Codex 30%".to_string()),
-            ]
+            vec![("status_summary".to_string(), "Claude 72%".to_string())]
         );
     }
 
     #[test]
     fn status_labels_single_mode_collapses_to_selected_provider() {
         let settings = Settings {
-            tray_icon_mode: TrayIconMode::Single,
+            tray_icon_mode: codexbar::settings::TrayIconMode::Single,
             menu_bar_shows_highest_usage: true,
             ..Settings::default()
         };
@@ -1267,7 +1348,32 @@ mod tests {
     }
 
     #[test]
-    fn tray_icon_renderer_uses_percent_mode_when_enabled() {
+    fn tray_presentation_excludes_disabled_cached_providers() {
+        let settings = Settings {
+            tray_icon_mode: codexbar::settings::TrayIconMode::PerProvider,
+            enabled_providers: ["codex".to_string()].into_iter().collect(),
+            ..Settings::default()
+        };
+        let snapshots = vec![
+            fake_snapshot("codex", "Codex", 30.0),
+            fake_snapshot("claude", "Claude", 92.0),
+        ];
+
+        let ordered = ordered_snapshot_refs(&settings, &snapshots);
+        assert_eq!(ordered.len(), 1);
+        assert_eq!(ordered[0].provider_id, "codex");
+        assert_eq!(
+            status_labels_for_settings(
+                &settings,
+                &snapshots,
+                codexbar::settings::Language::English,
+            ),
+            vec![("status_summary".to_string(), "Codex 30%".to_string())]
+        );
+    }
+
+    #[test]
+    fn legacy_percent_mode_does_not_change_the_branded_tray_icon() {
         let bar_settings = Settings {
             menu_bar_shows_percent: false,
             ..Settings::default()
@@ -1283,7 +1389,7 @@ mod tests {
             render_tray_icon_for_settings(&percent_settings, 72.0, Some(40.0), false);
 
         assert_eq!((bar_w, bar_h), (pct_w, pct_h));
-        assert_ne!(bar, percent);
+        assert_eq!(bar, percent);
     }
 
     #[test]
@@ -1293,18 +1399,23 @@ mod tests {
         let mut codex = fake_snapshot("codex", "Codex", 8.0);
         codex.primary.reset_description = Some("4h 10m".to_string());
 
-        let tooltip = build_tooltip(&[&claude, &codex], codexbar::settings::Language::English);
+        let tooltip = build_tooltip(
+            &[&claude, &codex],
+            codexbar::settings::Language::English,
+            true,
+        );
 
-        // No "Ceiling" header (it would cost budget every provider needs), and
-        // percent + reset per provider since both providers + resets fit.
-        assert_eq!(tooltip, "Claude  13% · 2h 05m\nCodex  8% · 4h 10m");
+        // Every line names its rate window. Reset detail is dropped uniformly
+        // when retaining it would cross Explorer's visible tooltip limit.
+        assert_eq!(
+            tooltip,
+            "Claude · Session (5h) · 13% used\nCodex · Weekly · 8% used"
+        );
     }
 
     #[test]
     fn tooltip_keeps_every_provider_within_the_budget() {
-        // Three providers with labels + resets can't ALL fit at full detail in
-        // Windows' ~64-char tooltip, so the builder must degrade detail rather
-        // than drop a provider — every name must still appear.
+        // Window identity is never sacrificed when reset detail gets tight.
         let mut codex = fake_snapshot("codex", "Codex", 80.0);
         codex.primary_label = Some("Weekly".to_string());
         codex.primary.reset_description = Some("6d 13h".to_string());
@@ -1318,9 +1429,10 @@ mod tests {
         let tooltip = build_tooltip(
             &[&codex, &claude, &cursor],
             codexbar::settings::Language::English,
+            true,
         );
 
-        assert!(tooltip.chars().count() <= 62, "over budget: {tooltip}");
+        assert!(tooltip.chars().count() <= 63, "over budget: {tooltip}");
         for name in ["Codex", "Claude", "Cursor"] {
             assert!(tooltip.contains(name), "missing {name}: {tooltip}");
         }
@@ -1328,6 +1440,13 @@ mod tests {
         for pct in ["80%", "57%", "85%"] {
             assert!(tooltip.contains(pct), "missing {pct}: {tooltip}");
         }
+        for label in ["Weekly", "5h", "Plan"] {
+            assert!(tooltip.contains(label), "missing {label}: {tooltip}");
+        }
+        assert_eq!(
+            tooltip,
+            "Codex Weekly 80% used\nClaude 5h 57% used\nCursor Plan 85% used"
+        );
     }
 
     #[test]
@@ -1336,12 +1455,28 @@ mod tests {
         claude.primary.reset_description =
             Some("resets in Jun 10 at 3:00PM with extra noisy suffix".to_string());
 
-        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English);
+        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English, true);
 
         let line = tooltip.lines().next().expect("provider tooltip line");
-        assert!(line.starts_with("Claude  13% · Jun 10 at 3:00"), "{line}");
+        assert!(
+            line.starts_with("Claude · Session (5h) · 13% used · Jun 10 at 3:00"),
+            "{line}"
+        );
         assert!(line.ends_with("..."), "{line}");
-        assert!(line.chars().count() <= 40, "{line}");
+        assert!(line.chars().count() <= 65, "{line}");
+    }
+
+    #[test]
+    fn tooltip_honors_remaining_mode_and_names_the_value() {
+        let claude = fake_snapshot("claude", "Claude", 13.0);
+
+        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English, false);
+
+        assert!(
+            tooltip.contains("Claude · Session (5h) · 87% left"),
+            "{tooltip}"
+        );
+        assert!(!tooltip.contains("13%"), "{tooltip}");
     }
 
     #[test]
@@ -1349,7 +1484,7 @@ mod tests {
         let mut claude = fake_snapshot("claude", "Claude", 13.0);
         claude.error = Some("network timeout".to_string());
 
-        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::Japanese);
+        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::Japanese, true);
 
         assert!(tooltip.contains("エラー"), "{tooltip}");
         assert!(!tooltip.contains(": error ("), "{tooltip}");
@@ -1364,8 +1499,12 @@ mod tests {
         // The native tooltip is intentionally compact and language-neutral
         // (percent + a universal d/h/m reset) so every provider fits, so it no
         // longer carries the localized "Resets in" text.
-        let english_tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English);
-        assert!(english_tooltip.contains("Claude  13%"), "{english_tooltip}");
+        let english_tooltip =
+            build_tooltip(&[&claude], codexbar::settings::Language::English, true);
+        assert!(
+            english_tooltip.contains("Claude · Session (5h) · 13%"),
+            "{english_tooltip}"
+        );
         assert!(
             !english_tooltip.to_ascii_lowercase().contains("resets in"),
             "{english_tooltip}"
