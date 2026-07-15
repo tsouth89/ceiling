@@ -144,6 +144,7 @@ fn main() {
             commands::update_settings,
             commands::set_surface_mode,
             commands::dismiss_tray_panel,
+            taskbar_widget::get_taskbar_surface_color,
             commands::hide_dashboard_to_tray,
             commands::begin_flyout_gesture,
             commands::end_flyout_gesture,
@@ -234,9 +235,7 @@ fn main() {
             }
             tray_bridge::setup(app)?;
             shortcut_bridge::register(app.handle());
-            if !taskbar_widget::proof_enabled() {
-                floatbar::install(app.handle());
-            }
+            floatbar::install(app.handle());
             taskbar_widget::install(app.handle());
             auto_refresh::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {

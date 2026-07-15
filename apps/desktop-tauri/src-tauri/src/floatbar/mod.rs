@@ -22,7 +22,7 @@ use tauri::{Emitter, Manager};
 /// Called once from `main.rs::setup`. No-op when the setting is off.
 pub fn install(app: &tauri::AppHandle) {
     let persisted = Settings::load();
-    if persisted.float_bar_enabled {
+    if persisted.float_bar_enabled && persisted.float_bar_style != "taskbar" {
         let _ = window::show(
             app,
             persisted.float_bar_opacity,
@@ -58,25 +58,21 @@ pub fn toggle(app: &tauri::AppHandle) {
     let mut settings = Settings::load();
     settings.float_bar_enabled = !settings.float_bar_enabled;
     let _ = settings.save();
-    if settings.float_bar_enabled {
-        let _ = window::show(
-            app,
-            settings.float_bar_opacity,
-            &settings.float_bar_orientation,
-            &settings.float_bar_style,
-            settings.float_bar_click_through,
-        );
-    } else {
-        let _ = window::hide(app);
-    }
+    apply_state(app, &settings);
+    crate::taskbar_widget::apply_state(app, &settings);
 }
 
 /// Bring the floating-bar window in line with persisted settings: open,
 /// close, or re-apply opacity / click-through as appropriate. Used after
 /// a settings patch is saved.
 pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
-    let open = app.get_webview_window(FLOATBAR_LABEL).is_some();
-    if settings.float_bar_enabled && !open {
+    let window = app.get_webview_window(FLOATBAR_LABEL);
+    let visible = window
+        .as_ref()
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    let should_show_overlay = settings.float_bar_enabled && settings.float_bar_style != "taskbar";
+    if should_show_overlay && !visible {
         let _ = window::show(
             app,
             settings.float_bar_opacity,
@@ -84,9 +80,9 @@ pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
             &settings.float_bar_style,
             settings.float_bar_click_through,
         );
-    } else if !settings.float_bar_enabled && open {
+    } else if !should_show_overlay && visible {
         let _ = window::hide(app);
-    } else if let Some(w) = app.get_webview_window(FLOATBAR_LABEL) {
+    } else if should_show_overlay && let Some(w) = window {
         window::apply_no_activate(&w);
         window::apply_opacity(&w, settings.float_bar_opacity);
         window::apply_click_through(&w, settings.float_bar_click_through);
@@ -188,6 +184,7 @@ pub fn after_settings_saved(
     }
     if !patch.is_empty() {
         apply_state(app, settings);
+        crate::taskbar_widget::apply_state(app, settings);
     }
 }
 

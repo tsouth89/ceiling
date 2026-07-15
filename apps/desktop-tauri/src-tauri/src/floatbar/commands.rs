@@ -15,13 +15,9 @@ pub async fn show_float_bar(app: AppHandle) -> Result<(), String> {
     settings.float_bar_enabled = true;
     settings.save().map_err(|e| e.to_string())?;
 
-    floatbar_window::show(
-        &app,
-        settings.float_bar_opacity,
-        &settings.float_bar_orientation,
-        &settings.float_bar_style,
-        settings.float_bar_click_through,
-    )
+    super::apply_state(&app, &settings);
+    crate::taskbar_widget::apply_state(&app, &settings);
+    Ok(())
 }
 
 #[tauri::command]
@@ -29,7 +25,9 @@ pub fn hide_float_bar(app: AppHandle) -> Result<(), String> {
     let mut settings = Settings::load();
     settings.float_bar_enabled = false;
     settings.save().map_err(|e| e.to_string())?;
-    floatbar_window::hide(&app)
+    let result = floatbar_window::hide(&app);
+    crate::taskbar_widget::apply_state(&app, &settings);
+    result
 }
 
 #[tauri::command]

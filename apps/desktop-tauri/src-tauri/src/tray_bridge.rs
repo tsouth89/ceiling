@@ -764,7 +764,10 @@ fn build_tooltip(
 /// Compact reset duration for the tooltip ("24d 11h" / "2h 21m" / "12m"), or
 /// `None` when there is no known future reset. Deliberately unit-terse and
 /// language-neutral to keep the native Windows tooltip within its length cap.
-fn tooltip_short_reset(resets_at: Option<&str>, reset_desc: Option<&str>) -> Option<String> {
+pub(crate) fn tooltip_short_reset(
+    resets_at: Option<&str>,
+    reset_desc: Option<&str>,
+) -> Option<String> {
     if let Some(ra) = resets_at
         && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ra)
     {

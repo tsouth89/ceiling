@@ -38,6 +38,9 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 vi.mock("./surfaces/TrayPanel", () => ({
   default: () => <div data-testid="surface-tray-panel" />,
 }));
+vi.mock("./surfaces/TaskbarFlyout", () => ({
+  default: () => <div data-testid="surface-taskbar-flyout" />,
+}));
 vi.mock("./surfaces/PopOutPanel", () => ({
   default: () => <div data-testid="surface-pop-out-panel" />,
 }));
@@ -148,14 +151,15 @@ describe("App window-label routing", () => {
     eventMocks.listen.mockResolvedValue(() => {});
   });
 
-  it("routes the dedicated flyout window to TrayPanel", async () => {
+  it("routes the dedicated flyout window to the taskbar glance surface", async () => {
     webviewWindowMocks.label = "flyout";
 
     const { queryByTestId } = render(<App />);
 
     await waitFor(() => {
-      expect(queryByTestId("surface-tray-panel")).not.toBeNull();
+      expect(queryByTestId("surface-taskbar-flyout")).not.toBeNull();
     });
+    expect(queryByTestId("surface-tray-panel")).toBeNull();
     expect(queryByTestId("surface-pop-out-panel")).toBeNull();
     expect(queryByTestId("surface-settings")).toBeNull();
     expect(queryByTestId("surface-float-bar")).toBeNull();

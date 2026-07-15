@@ -83,6 +83,11 @@ export function dismissTrayPanel(): Promise<void> {
   return invoke<void>("dismiss_tray_panel");
 }
 
+/** Sample the current Windows taskbar material for the native glance flyout. */
+export function getTaskbarSurfaceColor(): Promise<string | null> {
+  return invoke<string | null>("get_taskbar_surface_color");
+}
+
 /** Hide the primary dashboard while Ceiling continues running in the tray. */
 export function hideDashboardToTray(): Promise<void> {
   return invoke<void>("hide_dashboard_to_tray");

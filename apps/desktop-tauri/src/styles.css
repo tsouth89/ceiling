@@ -1095,6 +1095,190 @@ body:has(.tray-panel-reveal) {
   transition: opacity 80ms ease-out;
 }
 
+/* Native taskbar-widget glance flyout. This deliberately has its own visual
+   language and content model instead of inheriting the dashboard/tray menu. */
+html:has(.taskbar-flyout-frame),
+body:has(.taskbar-flyout-frame),
+body:has(.taskbar-flyout-frame) #root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.taskbar-flyout-frame {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100vh;
+  padding: 0;
+  color: #f7f9fc;
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+}
+
+.taskbar-flyout {
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.065), rgba(0, 0, 0, 0.09)),
+    color-mix(in srgb, var(--taskbar-surface) 92%, #07182f);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.075);
+  backdrop-filter: blur(24px) saturate(125%);
+  -webkit-backdrop-filter: blur(24px) saturate(125%);
+}
+
+.taskbar-flyout__header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 51px;
+  padding: 10px 14px 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.taskbar-flyout__mark {
+  flex: 0 0 auto;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.taskbar-flyout__title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: -0.1px;
+}
+
+.taskbar-flyout__subtitle {
+  margin-top: 1px;
+  color: rgba(242, 247, 255, 0.68);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.taskbar-flyout__providers {
+  padding: 4px 0;
+}
+
+.taskbar-flyout__provider {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 7px 14px;
+}
+
+.taskbar-flyout__provider + .taskbar-flyout__provider {
+  border-top: 1px solid rgba(255, 255, 255, 0.075);
+}
+
+.taskbar-flyout__provider-icon {
+  border-radius: 8px;
+  color: var(--provider-brand);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+}
+
+.taskbar-flyout__provider-content {
+  min-width: 0;
+}
+
+.taskbar-flyout__provider-topline,
+.taskbar-flyout__provider-bottomline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.taskbar-flyout__provider-name {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskbar-flyout__provider-percent {
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.taskbar-flyout__provider-bottomline {
+  margin-top: 5px;
+}
+
+.taskbar-flyout__track {
+  flex: 1 1 auto;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.taskbar-flyout__track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--provider-brand) 84%, white);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--provider-brand) 35%, transparent);
+}
+
+.taskbar-flyout__reset {
+  flex: 0 0 auto;
+  color: rgba(242, 247, 255, 0.62);
+  font-size: 10.5px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.taskbar-flyout__empty {
+  padding: 25px 16px;
+  color: rgba(242, 247, 255, 0.66);
+  font-size: 12px;
+  text-align: center;
+}
+
+.taskbar-flyout__open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.025);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.taskbar-flyout__open:hover,
+.taskbar-flyout__open:focus-visible {
+  background: rgba(255, 255, 255, 0.085);
+  outline: none;
+}
+
+.taskbar-flyout__open svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .tray-panel-reveal--dense .menu-surface--tray {
   min-height: 100vh;
 }
