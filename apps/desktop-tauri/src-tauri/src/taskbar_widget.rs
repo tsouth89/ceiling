@@ -130,7 +130,6 @@ pub fn install(app: &tauri::AppHandle) {
 #[cfg(windows)]
 mod windows_host {
     use super::*;
-    use crate::{shell, surface::SurfaceMode, surface_target::SurfaceTarget};
     use std::sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -439,7 +438,7 @@ mod windows_host {
                 1
             }
             WM_LBUTTONUP => {
-                open_dashboard();
+                toggle_flyout(hwnd);
                 0
             }
             WM_DESTROY => 0,
@@ -447,18 +446,41 @@ mod windows_host {
         }
     }
 
-    fn open_dashboard() {
+    fn toggle_flyout(hwnd: isize) {
         let Some(app) = APP.get().cloned() else {
             return;
         };
-        let app_for_main = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let _ = shell::reopen_to_target(
-                &app_for_main,
-                SurfaceMode::PopOut,
-                SurfaceTarget::Dashboard,
-                None,
-            );
+
+        // Treat the widget rectangle as the tray anchor so the existing
+        // compact flyout opens visually connected to this taskbar surface.
+        // Never wait for AppState from Explorer's mouse-message path.
+        let mut rect = WinRect::default();
+        if unsafe { GetWindowRect(hwnd, (&mut rect as *mut WinRect).cast()) } != 0
+            && let Some(state) = app.try_state::<Mutex<crate::state::AppState>>()
+            && let Ok(mut state) = state.try_lock()
+        {
+            state.tray_anchor = Some(crate::state::TrayAnchor {
+                x: rect.left,
+                y: rect.top,
+                width: rect.right.saturating_sub(rect.left).max(1) as u32,
+                height: rect.bottom.saturating_sub(rect.top).max(1) as u32,
+            });
+        }
+
+        tauri::async_runtime::spawn(async move {
+            let flyout = app.get_webview_window(crate::shell::flyout_window::FLYOUT_LABEL);
+            let visible = flyout
+                .as_ref()
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+            let result = if visible {
+                crate::shell::flyout_window::hide(&app)
+            } else {
+                crate::shell::flyout_window::open_or_focus(&app, None)
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, "Could not toggle native taskbar widget flyout");
+            }
         });
     }
 
@@ -698,6 +720,7 @@ mod windows_host {
         fn BeginPaint(hwnd: isize, paint: *mut PaintStruct) -> isize;
         fn EndPaint(hwnd: isize, paint: *const PaintStruct) -> i32;
         fn GetClientRect(hwnd: isize, rect: *mut WinRect) -> i32;
+        fn GetWindowRect(hwnd: isize, rect: *mut std::ffi::c_void) -> i32;
         fn FillRect(hdc: isize, rect: *const WinRect, brush: isize) -> i32;
         fn SetWindowRgn(hwnd: isize, region: isize, redraw: i32) -> i32;
     }
