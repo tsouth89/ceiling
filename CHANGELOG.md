@@ -1,20 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [Ceiling] 0.43.3-beta.1 - 2026-07-14
 
 ### Added
 - Add private, first-party website analytics for visitors, downloads, and GitHub traffic.
 - Add persistent quota history and factual processed-token summaries to Charts.
+- Add compact, standard, and detailed floating-bar density presets with automatic contrast.
+- Add taskbar-aware floating-bar placement across primary and secondary Windows taskbars.
 
 ### Changed
 - Replace API-equivalent dollar estimates with processed-token and cache-traffic breakdowns.
 - Polish the repository README around the released app and current Windows UI.
 - Pin release and CI actions to immutable commits and test the website Worker in CI.
+- Rework floating-bar recovery around Windows events instead of repeated z-order writes.
 
 ### Fixed
 - Keep Codex's regular weekly limit distinct from Codex Spark Weekly so scheduled resets notify reliably.
 - Correct malformed chart time labels and keep provider charts responsive while history loads.
 - Keep the floating bar above normal taskbar activity without taking focus.
+- Keep taskbar placement stable across mixed resolutions, DPI scales, negative coordinates, and taskbar restarts.
 
 ## [Ceiling] 0.43.2 - 2026-07-14
 
