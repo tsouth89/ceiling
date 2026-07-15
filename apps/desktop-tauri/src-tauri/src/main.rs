@@ -15,6 +15,7 @@ mod shortcut_bridge;
 mod state;
 mod surface;
 mod surface_target;
+mod taskbar_widget;
 mod tray_bridge;
 mod tray_menu;
 mod usage_history;
@@ -234,6 +235,7 @@ fn main() {
             tray_bridge::setup(app)?;
             shortcut_bridge::register(app.handle());
             floatbar::install(app.handle());
+            taskbar_widget::install(app.handle());
             auto_refresh::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {
                 powertoys::install(app.handle().clone());

@@ -6,8 +6,8 @@
 //! shell only needs to call into the small public API exported here.
 
 mod commands;
-mod placement;
-mod taskbar;
+pub(crate) mod placement;
+pub(crate) mod taskbar;
 mod window;
 
 pub use commands::*;

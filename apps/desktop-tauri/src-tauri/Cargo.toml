@@ -19,3 +19,10 @@ tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["rt", "time", "sync", "net", "io-util"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+] }
