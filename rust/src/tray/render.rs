@@ -278,6 +278,19 @@ mod tests {
     }
 
     #[test]
+    fn compact_ceiling_icon_desaturates_on_error() {
+        let (normal, _, _) = render_ceiling_tray_icon_rgba(50.0, false);
+        let (error, _, _) = render_ceiling_tray_icon_rgba(50.0, true);
+
+        assert_ne!(normal, error);
+        assert!(
+            error
+                .chunks_exact(4)
+                .any(|pixel| { pixel[3] == 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2] })
+        );
+    }
+
+    #[test]
     fn render_two_bar_has_correct_size() {
         let (rgba, w, h) = render_bar_icon_rgba(30.0, Some(60.0), false);
         assert_eq!(rgba.len() as u32, w * h * 4);
