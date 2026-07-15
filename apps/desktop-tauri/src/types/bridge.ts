@@ -388,6 +388,7 @@ export interface CostSnapshotBridge {
 }
 
 export interface PaceSnapshot {
+  windowLabel: string;
   stage: "on_track" | "slightly_ahead" | "ahead" | "far_ahead" | "slightly_behind" | "behind" | "far_behind";
   deltaPercent: number;
   willLastToReset: boolean;

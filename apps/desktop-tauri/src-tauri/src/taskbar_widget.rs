@@ -34,12 +34,6 @@ fn centered_content_x(item_left: i32, item_width: i32, content_width: i32) -> i3
     item_left.saturating_add(item_width.saturating_sub(content_width).max(0) / 2)
 }
 
-fn explorer_child_style(style: u32) -> u32 {
-    const WS_CHILD: u32 = 0x4000_0000;
-    const WS_POPUP: u32 = 0x8000_0000;
-    (style & !WS_POPUP) | WS_CHILD
-}
-
 pub fn native_mode_enabled(settings: &codexbar::settings::Settings) -> bool {
     settings.taskbar_widget_enabled
 }
@@ -57,6 +51,14 @@ fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) 
 
 fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
     all_monitors || layout.primary
+}
+
+fn taskbar_remains_selected(
+    existing_taskbar: isize,
+    prepared_taskbars: &[isize],
+    all_monitors: bool,
+) -> bool {
+    all_monitors || prepared_taskbars.contains(&existing_taskbar)
 }
 
 fn taskbar_placements(
@@ -110,7 +112,10 @@ fn child_placement(
     };
     let lane_right = start.left.saturating_sub(8);
     let provider_count = i32::try_from(provider_count).ok()?;
-    let desired_width = provider_count.saturating_mul(92);
+    // Leave enough room for labels such as "Weekly · 5d 21h" while keeping
+    // both lines centered on the same axis. Squeezing 3 providers into 276px
+    // put the final reset digits against the divider.
+    let desired_width = provider_count.saturating_mul(104);
     let minimum_width = provider_count.saturating_mul(72);
 
     // UI Automation can expose Search, Task View, or pinned-app buttons in
@@ -197,7 +202,6 @@ mod windows_host {
     const WINDOW_TITLE: &str = "Ceiling taskbar widget";
 
     const WS_VISIBLE: u32 = 0x1000_0000;
-    const WS_CHILD: u32 = 0x4000_0000;
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
     const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
@@ -229,7 +233,6 @@ mod windows_host {
     const TRANSPARENT: i32 = 1;
     const PS_SOLID: i32 = 0;
     const FONT_QUALITY_ANTIALIASED: u32 = 4;
-    const GWL_STYLE: i32 = -16;
     // A deliberately uncommon key color. Pixels left in this color are
     // transparent, allowing Explorer's own taskbar material to show through.
     const TRANSPARENT_KEY: u32 = rgb(1, 2, 3);
@@ -253,7 +256,7 @@ mod windows_host {
 
     struct PreparedWidgets {
         widgets: Vec<PreparedWidget>,
-        discovered_taskbars: Vec<isize>,
+        all_monitors: bool,
         model: WidgetModel,
     }
 
@@ -384,7 +387,7 @@ mod windows_host {
             return Err("No enabled providers are available for the taskbar widget".to_string());
         }
         let layouts = crate::floatbar::taskbar::discover_all();
-        let (discovered_taskbars, placements) = taskbar_placements(
+        let (_, placements) = taskbar_placements(
             &layouts,
             settings.taskbar_widget_all_monitors,
             model.providers.len(),
@@ -399,7 +402,7 @@ mod windows_host {
 
         Ok(PreparedWidgets {
             widgets,
-            discovered_taskbars,
+            all_monitors: settings.taskbar_widget_all_monitors,
             model,
         })
     }
@@ -412,8 +415,24 @@ mod windows_host {
 
         let model_changed = state.model != prepared.model;
         state.model = prepared.model;
+        let prepared_taskbars = prepared
+            .widgets
+            .iter()
+            .map(|candidate| candidate.taskbar)
+            .collect::<Vec<_>>();
         state.widgets.retain(|widget| {
-            let keep = prepared.discovered_taskbars.contains(&widget.taskbar);
+            // Start/Search can temporarily remove one monitor's taskbar from a
+            // UI Automation discovery pass. In mirrored mode, preserve any
+            // still-valid Explorer host instead of treating that partial pass
+            // as a monitor removal. When mirroring is disabled, retain only the
+            // primary taskbar selected by this successful preparation.
+            let host_is_alive = widget.hwnd != 0
+                && unsafe { IsWindow(widget.hwnd) } != 0
+                && unsafe { IsWindow(widget.taskbar) } != 0
+                && unsafe { GetParent(widget.hwnd) } == widget.taskbar;
+            let selected =
+                taskbar_remains_selected(widget.taskbar, &prepared_taskbars, prepared.all_monitors);
+            let keep = host_is_alive && selected;
             if !keep && widget.hwnd != 0 && unsafe { IsWindow(widget.hwnd) } != 0 {
                 unsafe { DestroyWindow(widget.hwnd) };
             }
@@ -626,18 +645,10 @@ mod windows_host {
         if hwnd == 0 {
             return Err("CreateWindowExW failed for the taskbar widget".to_string());
         }
-        // SetParent intentionally does not update WS_POPUP/WS_CHILD. Microsoft
-        // requires changing those bits before attaching a desktop popup to a
-        // non-null parent; leaving the popup style in Explorer previously made
-        // the host vulnerable to broken input and shell repaint behavior.
-        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
-        let child_style = explorer_child_style(style);
-        unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, child_style as isize) };
-        let applied_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
-        if applied_style & WS_POPUP != 0 || applied_style & WS_CHILD == 0 {
-            unsafe { DestroyWindow(hwnd) };
-            return Err("Could not apply the taskbar child window style".to_string());
-        }
+        // Keep the popup style when attaching to Explorer. This is the hosting
+        // model used by the approved taskbar build: it remains non-activating
+        // while avoiding the composed taskbar painting over an ordinary child
+        // whenever Start, Search, or Widgets opens.
         let previous = unsafe { SetParent(hwnd, taskbar) };
         if previous == 0 && unsafe { GetParent(hwnd) } != taskbar {
             unsafe { DestroyWindow(hwnd) };
@@ -906,10 +917,13 @@ mod windows_host {
             SetBkMode(hdc, TRANSPARENT);
         }
 
-        let face = wide("Segoe UI Variable Text");
+        // Match Windows 11's compact taskbar typography. The Small optical cut
+        // keeps counters and spacing legible at the compact sizes used by
+        // Widgets (Weather), with a restrained medium/regular hierarchy.
+        let face = wide("Segoe UI Variable Small");
         let primary_font = unsafe {
             CreateFontW(
-                -15,
+                -14,
                 0,
                 0,
                 0,
@@ -1220,8 +1234,6 @@ mod windows_host {
         fn DefWindowProcW(hwnd: isize, message: u32, wparam: usize, lparam: isize) -> isize;
         fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
         fn GetParent(hwnd: isize) -> isize;
-        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
-        fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
         fn SetParent(child: isize, new_parent: isize) -> isize;
         fn SetLayeredWindowAttributes(hwnd: isize, color_key: u32, alpha: u8, flags: u32) -> i32;
         fn DestroyWindow(hwnd: isize) -> i32;
@@ -1329,15 +1341,10 @@ mod tests {
     }
 
     #[test]
-    fn explorer_parenting_replaces_popup_style_with_child_style() {
-        const WS_VISIBLE: u32 = 0x1000_0000;
-        const WS_CHILD: u32 = 0x4000_0000;
-        const WS_POPUP: u32 = 0x8000_0000;
-        let style = explorer_child_style(WS_VISIBLE | WS_POPUP);
-
-        assert_eq!(style & WS_POPUP, 0);
-        assert_eq!(style & WS_CHILD, WS_CHILD);
-        assert_eq!(style & WS_VISIBLE, WS_VISIBLE);
+    fn mirrored_widget_survives_a_partial_taskbar_discovery_pass() {
+        assert!(taskbar_remains_selected(2, &[1], true));
+        assert!(!taskbar_remains_selected(2, &[1], false));
+        assert!(taskbar_remains_selected(1, &[1], false));
     }
 
     fn layout(bounds: Rect, obstacles: Vec<Rect>) -> TaskbarLayout {
@@ -1448,6 +1455,8 @@ mod tests {
         assert_eq!(discovered, vec![1, 2]);
         assert_eq!(placements.len(), 2);
         assert!(placements.iter().all(|(_, placement)| placement.x >= 0));
+        assert_eq!(placements[0].1.width, 312);
+        assert_eq!(placements[1].1.width, 312);
         assert!(
             placements
                 .iter()
@@ -1521,9 +1530,9 @@ mod tests {
             3,
         )
         .expect("the Widgets-to-Start lane should fit");
-        assert_eq!(placement.x, 306);
+        assert_eq!(placement.x, 288);
         assert_eq!(placement.y, 0);
-        assert_eq!(placement.width, 276);
+        assert_eq!(placement.width, 312);
         assert_eq!(placement.height, 48);
     }
 
@@ -1625,8 +1634,8 @@ mod tests {
             3,
         )
         .expect("the taskbar edge-to-Start lane should fit");
-        assert_eq!(placement.x, 262);
-        assert_eq!(placement.width, 276);
+        assert_eq!(placement.x, 244);
+        assert_eq!(placement.width, 312);
     }
 
     #[test]
@@ -1701,7 +1710,7 @@ mod tests {
         )
         .expect("the verified gap after the obstacle should fit");
 
-        assert_eq!(placement.x, 472);
-        assert_eq!(placement.width, 276);
+        assert_eq!(placement.x, 454);
+        assert_eq!(placement.width, 312);
     }
 }

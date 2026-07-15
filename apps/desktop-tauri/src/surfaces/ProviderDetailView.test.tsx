@@ -52,6 +52,7 @@ function codex(): ProviderUsageSnapshot {
     updatedAt: new Date().toISOString(),
     error: null,
     pace: {
+      windowLabel: "Weekly",
       stage: "far_ahead",
       deltaPercent: 38.6,
       willLastToReset: false,
@@ -114,6 +115,7 @@ describe("ProviderDetailView", () => {
     expect(screen.getByText("5-hour session")).toBeInTheDocument();
     expect(screen.getByText("Not currently enforced")).toBeInTheDocument();
     expect(screen.queryByText("Promotional")).toBeNull();
+    expect(screen.getAllByText(/Weekly pace/)).toHaveLength(2);
     expect(screen.getAllByText(/Far ahead of budget/)).toHaveLength(2);
     expect(container.querySelector(".provider-focus__pace-fill")?.getAttribute("data-tone"))
       .toBe("risk");

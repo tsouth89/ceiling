@@ -164,7 +164,7 @@ function PaceSection({ pace }: { pace: PaceSnapshot }) {
   return (
     <section className="provider-focus__section provider-focus__pace">
       <div className="provider-focus__section-head">
-        <h3>Pace</h3>
+        <h3>{pace.windowLabel} pace</h3>
         <span data-tone={tone}>
           {paceLabel(pace.stage)} ({pace.deltaPercent >= 0 ? "+" : ""}
           {pace.deltaPercent.toFixed(1)}%)
@@ -278,8 +278,9 @@ export default function ProviderDetailView({
             {provider.pace && (
               <div className="provider-focus__pace-glance" data-tone={paceTone(provider.pace)}>
                 <i />
-                <strong>{paceLabel(provider.pace.stage)}</strong>
+                <strong>{provider.pace.windowLabel} pace</strong>
                 <span>
+                  {paceLabel(provider.pace.stage)} ·{" "}
                   {provider.pace.deltaPercent >= 0 ? "+" : ""}
                   {provider.pace.deltaPercent.toFixed(1)}%
                 </span>
