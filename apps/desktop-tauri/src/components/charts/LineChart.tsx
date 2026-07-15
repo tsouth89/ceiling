@@ -33,6 +33,13 @@ export interface LineChartProps {
 const DEFAULT_COLOR = "var(--chart-credits)";
 const SVG_WIDTH = 280;
 
+/**
+ * Renders an accessible SVG line chart with optional area fill, animations, formatting, and hover tooltips.
+ *
+ * @param data - The labeled numeric points to plot.
+ * @param ariaLabel - Accessible name for the chart.
+ * @returns The rendered line chart or its empty state when no data is provided.
+ */
 export function LineChart({
   data,
   color = DEFAULT_COLOR,

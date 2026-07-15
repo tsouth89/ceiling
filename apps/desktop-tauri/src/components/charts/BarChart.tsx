@@ -36,6 +36,14 @@ const BAR_GAP = 2;
 const SVG_WIDTH = 280;
 const CAP_HEIGHT = 5;
 
+/**
+ * Renders an accessible bar chart with optional animation, formatting, and empty-state content.
+ *
+ * @param data - The labeled numeric values to display as bars
+ * @param ariaLabel - Accessible label describing the chart
+ * @param emptyMessage - Content displayed when `data` is empty
+ * @returns The rendered bar chart
+ */
 export function BarChart({
   data,
   color = DEFAULT_COLOR,

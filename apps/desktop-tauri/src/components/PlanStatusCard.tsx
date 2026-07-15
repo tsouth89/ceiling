@@ -26,6 +26,13 @@ function displayPlanName(
   return trimmed;
 }
 
+/**
+ * Classifies remaining capacity into a semantic usage level.
+ *
+ * @param remainPct - The percentage of capacity remaining
+ * @param exhausted - Whether the capacity is exhausted
+ * @returns `"exhausted"` when exhausted, `"critical"` at or below 5%, `"high"` at or below 25%, or `"normal"` otherwise
+ */
 function levelOf(remainPct: number, exhausted: boolean): string {
   if (exhausted) return "exhausted";
   if (remainPct <= 5) return "critical";
@@ -33,6 +40,12 @@ function levelOf(remainPct: number, exhausted: boolean): string {
   return "normal";
 }
 
+/**
+ * Maps a meter level to its user-facing pressure label.
+ *
+ * @param level - The meter level to label
+ * @returns The corresponding pressure label, or `null` when no label applies
+ */
 function pressureLabel(level: string): string | null {
   if (level === "exhausted") return "Depleted";
   if (level === "critical") return "Almost out";
@@ -40,6 +53,12 @@ function pressureLabel(level: string): string | null {
   return null;
 }
 
+/**
+ * Summarizes the titles of a provider's inactive rate windows.
+ *
+ * @param provider - The provider whose inactive rate window titles are summarized.
+ * @returns Up to two unique, non-empty titles with a count of any additional titles, or `null` when no titles are available.
+ */
 function inactiveWindowSummary(provider: ProviderUsageSnapshot): string | null {
   const labels = [...new Set(
     (provider.inactiveRateWindows ?? [])
@@ -52,6 +71,15 @@ function inactiveWindowSummary(provider: ProviderUsageSnapshot): string | null {
   return remaining > 0 ? `${visible} +${remaining}` : visible;
 }
 
+/**
+ * Renders a usage meter with percentage, pressure, and reset information.
+ *
+ * @param meter - The constraining usage window to display
+ * @param showAsUsed - Whether to display used capacity instead of remaining capacity
+ * @param resetTimeRelative - Whether to format the reset time relative to now
+ * @param showResetWhenExhausted - Whether to emphasize the reset time when the meter is exhausted
+ * @param hero - Whether to render the meter in the prominent hero style
+ */
 function MeterRow({
   meter,
   showAsUsed,
@@ -146,6 +174,16 @@ function MeterRow({
   );
 }
 
+/**
+ * Renders a provider's plan status, capacity meters, reset information, and inactive-window messaging.
+ *
+ * @param provider - Usage snapshot containing provider identity, plan, capacity, and error information
+ * @param resetTimeRelative - Whether reset times should use relative formatting
+ * @param showResetWhenExhausted - Whether to emphasize reset times for exhausted meters
+ * @param showAsUsed - Whether meters should display used capacity instead of remaining capacity
+ * @param isRefreshing - Whether the usage data is currently refreshing
+ * @param onSelect - Optional callback that makes the card interactive
+ */
 export default function PlanStatusCard({
   provider,
   resetTimeRelative,

@@ -18,6 +18,13 @@ const ABOUT_LINKS = [
   },
 ] as const;
 
+/**
+ * Renders the About settings tab with application information, external links, and update controls.
+ *
+ * @param settings - Current application settings.
+ * @param set - Updates application settings.
+ * @param saving - Indicates whether settings are being saved.
+ */
 export default function AboutTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
   const [appInfo, setAppInfo] = useState<AppInfoBridge | null>(null);

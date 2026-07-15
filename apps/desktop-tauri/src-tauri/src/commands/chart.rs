@@ -125,6 +125,17 @@ struct ComparisonPeriodSpec {
     previous_window_id: String,
 }
 
+/// Builds rolling current and previous usage windows for five-hour and seven-day comparisons.
+///
+/// # Examples
+///
+/// ```
+/// let now = chrono::Utc::now();
+/// let (specs, windows) = comparison_period_specs(now);
+///
+/// assert_eq!(specs.len(), 2);
+/// assert_eq!(windows.len(), 4);
+/// ```
 fn comparison_period_specs(
     now: DateTime<Utc>,
 ) -> (Vec<ComparisonPeriodSpec>, Vec<CurrentUsageWindow>) {
@@ -199,6 +210,31 @@ struct PersistedChartCache {
     entries: HashMap<String, CachedProviderChartData>,
 }
 
+/// Loads chart data for a provider, including cost, quota, credit, and local usage history.
+///
+/// The optional account email and usage window definitions determine account-specific and
+/// window-specific data returned by the chart.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// let chart = tauri::async_runtime::block_on(get_provider_chart_data(
+///     "codex".to_owned(),
+///     None,
+///     None,
+/// ));
+/// assert_eq!(chart.provider_id, "codex");
+/// ```
+///
+/// # Arguments
+///
+/// * `provider_id` - Provider whose chart data should be loaded.
+/// * `account_email` - Optional account identity used for account-specific dashboard data.
+/// * `usage_windows` - Optional local usage windows to include in the summary.
+///
+/// # Returns
+///
+/// The provider's chart data, including available histories and local usage summaries.
 #[tauri::command]
 pub async fn get_provider_chart_data(
     provider_id: String,
@@ -260,6 +296,19 @@ fn cached_chart_data(key: &str) -> Option<CachedProviderChartData> {
     chart_cache().lock().ok()?.entries.get(key).cloned()
 }
 
+/// Stores chart data in the persistent chart cache with the current refresh timestamp.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[test]
+/// fn stores_chart_data() {
+///     store_chart_data(
+///         "codex:cache-key".to_owned(),
+///         ProviderChartData::empty("codex".to_owned()),
+///     );
+/// }
+/// ```
 fn store_chart_data(key: String, data: ProviderChartData) {
     let Ok(mut guard) = chart_cache().lock() else {
         return;
@@ -275,6 +324,18 @@ fn store_chart_data(key: String, data: ProviderChartData) {
     persist_chart_cache(&guard);
 }
 
+/// Schedules a background refresh for a provider chart cache entry, skipping refreshes already active for the cache key.
+///
+/// # Examples
+///
+/// ```no_run
+/// schedule_chart_cache_refresh(
+///     "codex:cache-key".to_string(),
+///     "codex".to_string(),
+///     None,
+///     Vec::new(),
+/// );
+/// ```
 fn schedule_chart_cache_refresh(
     key: String,
     provider_id: String,
@@ -305,6 +366,22 @@ fn schedule_chart_cache_refresh(
     });
 }
 
+/// Builds a normalized cache key from a provider, account identity, and usage windows.
+///
+/// Account identities and provider IDs are compared case-insensitively. Missing or empty
+/// account identities use the `anonymous` identity.
+///
+/// # Examples
+///
+/// ```
+/// let key = chart_cache_key("Codex", None, &[]);
+/// assert!(key.starts_with("codex:"));
+/// ```
+///
+/// # Returns
+///
+/// A cache key containing the normalized provider ID and hashes of the account identity
+/// and usage-window definitions.
 fn chart_cache_key(
     provider_id: &str,
     account_email: Option<&str>,
@@ -397,6 +474,21 @@ pub(crate) fn build_provider_chart_data(
     build_provider_chart_data_with_cancel(provider_id, account_email, Vec::new(), None)
 }
 
+/// Builds chart data for a provider, including cost history, dashboard credits, quota history, and local usage summaries.
+///
+/// Invalid usage windows are ignored. A set cancellation flag prevents local usage from being loaded.
+///
+/// # Examples
+///
+/// ```
+/// let data = build_provider_chart_data_with_cancel(
+///     "codex".to_string(),
+///     None,
+///     Vec::new(),
+///     None,
+/// );
+/// assert_eq!(data.provider_id, "codex");
+/// ```
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
@@ -470,6 +562,32 @@ fn build_provider_chart_data_with_cancel(
     }
 }
 
+/// Builds a local usage summary from a cost usage report, including requested windows and rolling comparison periods.
+///
+/// Returns `None` when the report contains no usage.
+///
+/// # Examples
+///
+/// ```ignore
+/// let summary = local_usage_summary_from_report(
+///     "codex",
+///     &report,
+///     &usage_window_requests,
+///     &comparison_specs,
+/// );
+/// assert!(summary.is_some());
+/// ```
+///
+/// # Arguments
+///
+/// * `provider_id` — Provider whose token accounting rules apply.
+/// * `report` — Cost and usage data used to populate the summary.
+/// * `usage_window_requests` — Requested windows to include in the summary.
+/// * `comparison_specs` — Rolling periods used to populate comparisons and the seven-day aggregate.
+///
+/// # Returns
+///
+/// A populated usage summary, or `None` when the report contains no usage.
 fn local_usage_summary_from_report(
     provider_id: &str,
     report: &CostUsageReport,
@@ -594,6 +712,21 @@ fn load_local_usage_summary(
     load_local_usage_summary_with_unknown_models(provider_id, cancel).0
 }
 
+/// Loads local usage data and collects model identifiers that lack pricing information.
+///
+/// Scans the provider's recent usage, returning no summary when usage is absent or
+/// cancellation is requested. The returned model set contains unknown models found
+/// during the scans.
+///
+/// # Examples
+///
+/// ```
+/// let (summary, unknown_models) =
+///     load_local_usage_summary_with_unknown_models("unsupported", None);
+///
+/// assert!(summary.is_none());
+/// assert!(unknown_models.is_empty());
+/// ```
 fn load_local_usage_summary_with_unknown_models(
     provider_id: &str,
     cancel: Option<&AtomicBool>,

@@ -14,6 +14,12 @@ interface Props {
   set: (patch: SettingsUpdate) => void;
 }
 
+/**
+ * Manages an editable numeric draft and commits changes when the value differs from the persisted value.
+ *
+ * @param value - The persisted numeric value used to initialize and synchronize the draft
+ * @returns The current draft value, its state updater, and a commit function
+ */
 function useDraftNumber(value: number) {
   const [draft, setDraft] = useState(value);
 
@@ -38,7 +44,9 @@ function useDraftNumber(value: number) {
 }
 
 /**
- * Settings UI for the two independent at-a-glance surfaces.
+ * Renders settings controls for taskbar usage and the floating bar.
+ *
+ * @returns The taskbar usage and floating bar settings interface.
  */
 export default function FloatBarSettingsSection({ settings, saving, set }: Props) {
   const opacity = useDraftNumber(settings.floatBarOpacity);

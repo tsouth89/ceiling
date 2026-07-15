@@ -9,6 +9,16 @@ use tauri::{AppHandle, Manager};
 
 use super::window as floatbar_window;
 
+/// Enables the floating bar and applies its configured window state.
+///
+/// # Examples
+///
+/// ```no_run
+/// show_float_bar(app).await?;
+/// # Ok::<(), String>(())
+/// ```
+///
+/// Returns an error if the settings cannot be saved.
 #[tauri::command]
 pub async fn show_float_bar(app: AppHandle) -> Result<(), String> {
     let mut settings = Settings::load();
@@ -56,7 +66,27 @@ pub fn set_float_bar_click_through(app: AppHandle, enabled: bool) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+/// Resizes the floating bar window when it is available.
+///
+/// The resize respects the current click-through interaction setting. A missing
+/// floating bar window is treated as a successful no-op.
+///
+/// # Arguments
+///
+/// * `width` - The target width in logical pixels.
+/// * `height` - The target height in logical pixels.
+///
+/// # Returns
+///
+/// `Ok(())` after a successful resize or when the window is unavailable;
+/// otherwise, the resize error.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let result = resize_float_bar(app, 320.0, 80.0);
+/// assert!(result.is_ok());
+/// ```
 pub fn resize_float_bar(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
     let settings = Settings::load();
     if let Some(window) = app.get_webview_window(floatbar_window::FLOATBAR_LABEL) {

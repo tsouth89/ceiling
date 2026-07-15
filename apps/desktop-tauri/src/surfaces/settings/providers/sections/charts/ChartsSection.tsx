@@ -32,10 +32,24 @@ type TabKey = "limits" | "credits" | "usage";
 // of truth and maintains its own longer-lived disk cache.
 const chartDataCache = new Map<string, ProviderChartData>();
 
+/**
+ * Builds a normalized cache key for provider chart data.
+ *
+ * @param providerId - The provider identifier.
+ * @param accountEmail - The account email, or `null` when unavailable.
+ * @param usageWindowsKey - The identifier for the usage windows.
+ * @returns A cache key combining the provider, account, and usage window identifiers.
+ */
 function chartDataCacheKey(providerId: string, accountEmail: string | null, usageWindowsKey = ""): string {
   return `${providerId.toLowerCase()}:${accountEmail?.trim().toLowerCase() ?? ""}:${usageWindowsKey}`;
 }
 
+/**
+ * Formats a usage window start time for display.
+ *
+ * @param value - The date value to format
+ * @returns A localized time, or a localized date and time when the date differs from today; `"current reset period"` when the value is invalid
+ */
 function formatWindowStart(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "current reset period";
@@ -47,6 +61,12 @@ function formatWindowStart(value: string): string {
   ).format(date);
 }
 
+/**
+ * Formats a token count using compact notation.
+ *
+ * @param value - The token count to format, or `null` for an unavailable value
+ * @returns The formatted token count, or `"—"` when no value is provided
+ */
 function formatTokens(value: number | null): string {
   if (value == null) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -87,13 +107,13 @@ function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
 }
 
 /**
- * Charts tabs block for the Settings → Providers detail pane.
+ * Displays provider history charts and local token usage summaries.
  *
- * Port target: cost_history / credits_history / usage_breakdown blocks
- * in `rust/src/native_ui/preferences.rs::render_provider_detail_panel`.
- *
- * Phase 10: fetches the latest settings snapshot so the animation flag feeds
- * through to each chart component.
+ * @param providerId - The provider whose history should be displayed.
+ * @param accountEmail - The provider account email used to identify account-specific history.
+ * @param providerSnapshot - Optional provider snapshot used to determine current usage windows.
+ * @param t - Localization function for chart labels and messages.
+ * @returns The provider charts section.
  */
 export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }: Props) {
   const [data, setData] = useState<ProviderChartData | null>(null);

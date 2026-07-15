@@ -6,6 +6,21 @@ use codexbar::settings::Settings;
 const AUTO_REFRESH_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
+/// Starts the background task that periodically refreshes stale providers.
+///
+/// The task continues running for the lifetime of the application and uses the
+/// fixed provider refresh interval.
+///
+/// # Arguments
+///
+/// * `app` - Tauri application handle used to perform provider refreshes.
+///
+/// # Examples
+///
+/// ```no_run
+/// let app: tauri::AppHandle = todo!("obtain the Tauri application handle");
+/// install(app);
+/// ```
 pub fn install(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut schedule: Option<(Duration, Instant)> = None;
@@ -53,6 +68,17 @@ fn powertoys_local_usage_provider_ids(settings: &Settings) -> Vec<String> {
         .collect()
 }
 
+/// Schedules a refresh of local provider usage data when supported providers are enabled.
+///
+/// Only one refresh task runs at a time; requests made while another refresh is
+/// in progress are skipped.
+///
+/// # Examples
+///
+/// ```
+/// let settings = Settings::default();
+/// schedule_refresh_enrichment(&settings);
+/// ```
 pub(crate) fn schedule_refresh_enrichment(settings: &Settings) {
     let provider_ids = powertoys_local_usage_provider_ids(settings);
     if provider_ids.is_empty() {

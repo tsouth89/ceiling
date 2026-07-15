@@ -75,9 +75,10 @@ function clampTrayScalePercent(value: number): number {
 }
 
 /**
- * Tray popover surface — two modes like macOS CodexBar:
- * 1. Overview (default): provider grid + plan-status glance cards
- * 2. Detail: click a provider in grid → show only that provider's full card
+ * Renders the tray flyout panel with provider overview and detail views.
+ *
+ * The overview displays provider status cards, while the detail view displays
+ * the full card for the selected provider.
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);

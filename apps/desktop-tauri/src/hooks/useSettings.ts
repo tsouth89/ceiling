@@ -11,8 +11,10 @@ interface UseSettingsReturn {
 }
 
 /**
- * Manages the current settings state and exposes a mutation helper that
- * persists changes through the Tauri bridge and refreshes the local copy.
+ * Manages local settings state, synchronizes persisted changes, and exposes update progress and errors.
+ *
+ * @param initial - The initial settings snapshot used before the persisted state is loaded.
+ * @returns The current settings, saving status, latest update error, and settings update function.
  */
 export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
   const [settings, setSettings] = useState<SettingsSnapshot>(initial);

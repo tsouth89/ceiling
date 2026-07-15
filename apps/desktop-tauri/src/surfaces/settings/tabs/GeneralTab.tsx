@@ -4,6 +4,14 @@ import { playNotificationSound } from "../../../lib/tauri";
 import { Field, NumberInput, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../../Settings";
 
+/**
+ * Renders startup, notification, and usage-threshold settings based on the selected mode.
+ *
+ * @param mode - The settings category to display.
+ * @param settings - The current application settings.
+ * @param set - Updates one or more application settings.
+ * @param saving - Whether settings are currently being saved.
+ */
 export default function GeneralTab({
   mode = "general",
   settings,

@@ -20,6 +20,14 @@ const FLYOUT_WIDTH = 344;
 const MAX_VISIBLE_PROVIDERS = 6;
 const MAX_VISIBLE_WINDOWS_PER_PROVIDER = 4;
 
+/**
+ * Formats a reset timestamp as a compact duration.
+ *
+ * @param resetsAt - The reset timestamp to format.
+ * @param fallback - Text to use when the timestamp is missing or invalid.
+ * @param now - The current time in milliseconds since the Unix epoch.
+ * @returns A compact duration, `"Now"`, or the fallback text.
+ */
 function compactDuration(resetsAt: string | null, fallback: string | null, now: number): string {
   if (!resetsAt) return fallback?.replace(/^resets?\s+(in\s+)?/i, "") ?? "No reset";
   const target = Date.parse(resetsAt);
@@ -34,16 +42,36 @@ function compactDuration(resetsAt: string | null, fallback: string | null, now: 
   return `${mins}m`;
 }
 
+/**
+ * Computes the percentage displayed for a usage meter.
+ *
+ * @param window - The rate-window snapshot containing usage percentages
+ * @param showAsUsed - Whether to display the used percentage instead of the remaining percentage
+ * @returns The selected percentage rounded and constrained to the range from 0 to 100
+ */
 function valueFor(window: RateWindowSnapshot, showAsUsed: boolean): number {
   return Math.max(0, Math.min(100, Math.round(showAsUsed ? window.usedPercent : window.remainingPercent)));
 }
 
+/**
+ * Classifies a usage meter by its severity level.
+ *
+ * @param window - The rate window whose usage determines the severity.
+ * @returns `"critical"` for usage of 95% or more, `"warning"` for usage from 85% to 94%, or `"normal"` otherwise.
+ */
 function meterLevel(window: RateWindowSnapshot): "normal" | "warning" | "critical" {
   if (window.usedPercent >= 95) return "critical";
   if (window.usedPercent >= 85) return "warning";
   return "normal";
 }
 
+/**
+ * Finds the earliest future reset among utility windows with valid reset times.
+ *
+ * @param providers - Provider usage snapshots to inspect.
+ * @param now - Current time in milliseconds since the Unix epoch.
+ * @returns The earliest future reset time, or `null` when none is available.
+ */
 function earliestReset(providers: ProviderUsageSnapshot[], now: number): string | null {
   let earliest: string | null = null;
   let earliestTime = Number.POSITIVE_INFINITY;
@@ -63,6 +91,12 @@ function earliestReset(providers: ProviderUsageSnapshot[], now: number): string 
   return earliest;
 }
 
+/**
+ * Determines whether a usage window should be included in the utility window display.
+ *
+ * @param window - The usage window to classify.
+ * @returns `true` if the window is a utility window, `false` if it is promotional or on-demand.
+ */
 function isUtilityWindow(window: ConstrainingWindow): boolean {
   const identity = `${window.id} ${window.label}`.toLowerCase();
   return ![
@@ -73,6 +107,12 @@ function isUtilityWindow(window: ConstrainingWindow): boolean {
   ].some((noise) => identity.includes(noise));
 }
 
+/**
+ * Selects the utility windows displayed for a provider, prioritizing Cursor's primary allowance windows.
+ *
+ * @param provider - The provider whose utility windows should be selected
+ * @returns Up to four utility windows for display
+ */
 function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   const windows = allMeasuredWindows(provider).filter(isUtilityWindow);
   if (provider.providerId !== "cursor") {
@@ -91,6 +131,13 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   return [...preferred, ...remaining].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
 }
 
+/**
+ * Renders a provider's usage meters or an unavailable status when synchronization fails.
+ *
+ * @param provider - Provider usage data and measured windows to display
+ * @param showAsUsed - Whether meters display used percentages instead of remaining percentages
+ * @param now - Current timestamp used to format reset information
+ */
 function ProviderRow({ provider, showAsUsed, now }: {
   provider: ProviderUsageSnapshot;
   showAsUsed: boolean;
@@ -164,6 +211,12 @@ function ProviderRow({ provider, showAsUsed, now }: {
   );
 }
 
+/**
+ * Displays a taskbar flyout with provider usage and reset information.
+ *
+ * @param state - Application bootstrap state used to configure provider ordering and settings
+ * @returns The taskbar flyout interface
+ */
 export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);
   const { providers, hasLoadedCache } = useProviders({ initialRefreshDelayMs: 800 });

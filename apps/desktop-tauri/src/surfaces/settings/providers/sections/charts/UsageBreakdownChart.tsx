@@ -27,6 +27,16 @@ interface Props {
   emptyMessage: string;
 }
 
+/**
+ * Displays recent daily credit usage as a stacked service breakdown chart.
+ *
+ * @param data - Daily usage breakdowns to visualize; only the 14 most recent entries are shown.
+ * @param title - Chart title.
+ * @param ariaLabel - Accessible label for the chart.
+ * @param animations - Whether to animate the chart rows.
+ * @param emptyMessage - Message displayed when no usage data is available.
+ * @returns The usage breakdown chart or an empty-state view.
+ */
 export function UsageBreakdownChart({
   data,
   title,

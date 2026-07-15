@@ -146,6 +146,13 @@ async function applySettingsWindowSize() {
     .catch(() => {});
 }
 
+/**
+ * Renders the settings window and its selectable configuration panels.
+ *
+ * @param state - Application bootstrap state used to populate settings and provider data.
+ * @param initialTab - Optional tab identifier to select initially.
+ * @returns The settings window element.
+ */
 export default function Settings({ state, initialTab: propTab }: { state: BootstrapState; initialTab?: string }) {
   const { settings, saving, error, update } = useSettings(state.settings);
   const { t } = useLocale();

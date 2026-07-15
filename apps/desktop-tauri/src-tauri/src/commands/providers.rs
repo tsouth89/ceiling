@@ -281,6 +281,16 @@ fn spawn_provider_refreshes(
     handles
 }
 
+/// Refreshes a provider's usage data and updates the application state and notifications.
+///
+/// Capacity events are emitted only after notifications are armed; eligible events may be
+/// consolidated into a single capacity notification.
+///
+/// # Examples
+///
+/// ```ignore
+/// refresh_provider(app_handle, provider_id, fetch_context).await;
+/// ```
 async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchContext) {
     let snapshot = fetch_provider_snapshot(id, ctx).await;
 
@@ -322,6 +332,20 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
     }
 }
 
+/// Determines whether a capacity event qualifies for a Windows notification.
+///
+/// # Examples
+///
+/// ```
+/// assert!(capacity_event_uses_windows_notification(
+///     crate::capacity_events::CapacityEventKind::ScheduledReset
+/// ));
+/// assert!(!capacity_event_uses_windows_notification(
+///     crate::capacity_events::CapacityEventKind::Other
+/// ));
+/// ```
+///
+/// Returns `true` for scheduled, surprise, and partial resets, and `false` for other event kinds.
 fn capacity_event_uses_windows_notification(
     kind: crate::capacity_events::CapacityEventKind,
 ) -> bool {
@@ -333,6 +357,15 @@ fn capacity_event_uses_windows_notification(
     )
 }
 
+/// Builds a notification for eligible capacity reset events, combining multiple events into one message.
+///
+/// # Examples
+///
+/// ```
+/// let notification = capacity_event_notification(&[]);
+/// assert!(notification.is_none());
+/// ```
+fn capacity_event_notification(...) -> ...?
 fn capacity_event_notification(
     events: &[crate::capacity_events::CapacityEventPayload],
 ) -> Option<(String, String)> {
@@ -360,6 +393,19 @@ fn capacity_event_notification(
     }
 }
 
+/// Preserves the most recent successful Claude snapshot during the first transient authentication failure.
+///
+/// Subsequent transient authentication failures return the failing snapshot. The failure counter is
+/// cleared when the snapshot succeeds or the error is unrelated to transient Claude authentication.
+/// If no successful cached snapshot exists, the failing snapshot is returned.
+///
+/// # Examples
+///
+/// ```
+/// # // Given an application state containing a successful cached Claude snapshot:
+/// # let snapshot = preserve_last_good_transient_failure(&mut state, ProviderId::Claude, failing_snapshot);
+/// # assert!(snapshot.error.is_none());
+/// ```
 pub(super) fn preserve_last_good_transient_failure(
     guard: &mut AppState,
     id: ProviderId,

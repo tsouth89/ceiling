@@ -110,6 +110,24 @@ pub(crate) fn build_tray_menu(
     )
 }
 
+/// Builds the localized system-tray menu, including status rows, actions, provider controls, and application commands.
+///
+/// Featured providers are shown directly in the provider submenu; additional providers are represented by an “All providers...” entry.
+///
+/// # Examples
+///
+/// ```
+/// let menu = build_tray_menu_with(
+///     &[],
+///     &[],
+///     &std::collections::HashSet::new(),
+///     false,
+///     Language::English,
+/// );
+///
+/// assert_eq!(menu.len(), 9);
+/// ```
+pub(crate) fn build_tray_menu_with(
 pub(crate) fn build_tray_menu_with(
     providers: &[ProviderCatalogEntry],
     status_labels: &[(String, String)],

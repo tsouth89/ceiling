@@ -79,11 +79,18 @@ export function setSurfaceMode<M extends VisibleSurfaceMode>(
   return invoke<SurfaceMode>("set_surface_mode", { mode, target });
 }
 
+/**
+ * Dismisses the tray panel.
+ */
 export function dismissTrayPanel(): Promise<void> {
   return invoke<void>("dismiss_tray_panel");
 }
 
-/** Sample the current Windows taskbar material for the native glance flyout. */
+/**
+ * Retrieves the current Windows taskbar material color for the native glance flyout.
+ *
+ * @returns The taskbar surface color, or `null` when unavailable.
+ */
 export function getTaskbarSurfaceColor(): Promise<string | null> {
   return invoke<string | null>("get_taskbar_surface_color");
 }
@@ -246,6 +253,14 @@ export function getAppInfo(): Promise<AppInfoBridge> {
   return invoke<AppInfoBridge>("get_app_info");
 }
 
+/**
+ * Retrieves chart data for a provider, optionally scoped to an account and usage windows.
+ *
+ * @param providerId - The provider identifier
+ * @param accountEmail - The email address of the account to include
+ * @param usageWindows - The usage windows to query
+ * @returns Chart data for the provider
+ */
 export function getProviderChartData(
   providerId: string,
   accountEmail?: string,
@@ -258,6 +273,12 @@ export function getProviderChartData(
   });
 }
 
+/**
+ * Retrieves the locally recorded usage summary for a provider.
+ *
+ * @param providerId - The provider identifier
+ * @returns The provider's local usage summary, or `null` when no summary is available
+ */
 export function getProviderLocalUsageSummary(
   providerId: string,
 ): Promise<ProviderLocalUsageSummary | null> {

@@ -109,6 +109,13 @@ fn should_suppress_blur_dismiss(launch: LaunchBehavior, proof_mode: bool) -> boo
     launch.suppress_blur_dismiss || proof_mode
 }
 
+/// Starts the Tauri desktop application, initializes its integrations, and runs the tray-based event loop.
+///
+/// # Examples
+///
+/// ```no_run
+/// main();
+/// ```
 fn main() {
     codexbar::logging::init(false, false).expect("failed to initialize logging");
 

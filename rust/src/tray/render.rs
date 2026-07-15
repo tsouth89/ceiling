@@ -29,12 +29,21 @@ const CEILING: (u8, u8, u8) = (166, 227, 92);
 /// Track colour behind an unfilled usage bar.
 const TRACK: (u8, u8, u8) = (44, 50, 58);
 
-/// Render the compact Ceiling glyph used by the Windows notification area.
+/// Renders a compact 32×32 RGBA tray icon with a usage gauge and ceiling marker.
 ///
-/// Unlike the full app icon this has no dark tile: Windows commonly displays
-/// tray art at only 16 logical pixels, where the old tile + two tiny bars read
-/// as an indistinct black square. A thick open gauge and a short lime ceiling
-/// remain legible after downsampling, with a dark keyline for light taskbars.
+/// # Examples
+///
+/// ```
+/// let (rgba, width, height) = render_ceiling_tray_icon_rgba(75.0, false);
+/// assert_eq!((width, height), (32, 32));
+/// assert_eq!(rgba.len(), (width * height * 4) as usize);
+/// ```
+///
+/// The gauge color reflects `percent`, while `has_error` desaturates the artwork.
+///
+/// # Returns
+///
+/// A tuple containing the raw RGBA pixels, width, and height.
 pub fn render_ceiling_tray_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
     let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
@@ -77,6 +86,14 @@ pub fn render_ceiling_tray_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>,
     (img.into_raw(), SZ, SZ)
 }
 
+/// Converts a color to grayscale when an error state is active.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(desat((30, 60, 90), true), (60, 60, 60));
+/// assert_eq!(desat((30, 60, 90), false), (30, 60, 90));
+/// ```
 fn desat(rgb: (u8, u8, u8), has_error: bool) -> (u8, u8, u8) {
     if has_error {
         let g = ((rgb.0 as u16 + rgb.1 as u16 + rgb.2 as u16) / 3) as u8;

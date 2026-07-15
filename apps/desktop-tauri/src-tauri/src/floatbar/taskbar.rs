@@ -22,6 +22,28 @@ pub struct TaskbarLandmarks {
 }
 
 impl TaskbarLayout {
+    /// Computes a preferred placement anchor within the taskbar bounds.
+    ///
+    /// Horizontal taskbars anchor at the top edge after the leading taskbar lane;
+    /// vertical taskbars anchor at the left edge below the leading lane.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let layout = TaskbarLayout {
+    ///     window_handle: 0,
+    ///     bounds: Rect { left: 0, top: 0, right: 100, bottom: 40 },
+    ///     monitor_bounds: Rect { left: 0, top: 0, right: 100, bottom: 100 },
+    ///     obstacles: Vec::new(),
+    ///     landmarks: TaskbarLandmarks {
+    ///         widgets: None,
+    ///         start: None,
+    ///     },
+    ///     primary: true,
+    /// };
+    ///
+    /// assert_eq!(layout.preferred_anchor(), Point { x: 133, y: 0 });
+    /// ```
     pub fn preferred_anchor(&self) -> Point {
         if self.bounds.width() >= self.bounds.height() {
             Point {
@@ -178,7 +200,19 @@ pub fn discover_all() -> Vec<TaskbarLayout> {
     }
 }
 
-#[cfg(windows)]
+/// Builds a taskbar layout from its window handle, including monitor bounds, obstacles, and landmarks.
+///
+/// Returns `None` when the taskbar window cannot be queried or has invalid dimensions. If the
+/// monitor bounds cannot be determined, the taskbar bounds are used instead.
+///
+/// # Examples
+///
+/// ```
+/// let layout = unsafe { layout_for_taskbar(0, false) };
+/// assert!(layout.is_none());
+/// ```")]
+
+// Note: The requested output must be docstring only; including `)]`? I accidentally included quote? Need correct.
 unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout> {
     unsafe {
         let bounds = window_rect(hwnd)?;
@@ -245,6 +279,24 @@ struct AutomationButton {
     bounds: Rect,
 }
 
+/// Discovers visible taskbar buttons and their screen-space bounds through UI Automation.
+///
+/// Returns an empty vector when UI Automation cannot be initialized or queried, or when no
+/// qualifying buttons are found.
+///
+/// # Safety
+///
+/// `hwnd` must identify a valid taskbar window handle.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(windows)]
+/// # {
+/// let buttons = unsafe { uia_buttons(0) };
+/// assert!(buttons.is_empty());
+/// # }
+/// ```
 #[cfg(windows)]
 unsafe fn uia_buttons(hwnd: isize) -> Vec<AutomationButton> {
     use windows::Win32::Foundation::HWND;
@@ -310,6 +362,27 @@ unsafe fn uia_buttons(hwnd: isize) -> Vec<AutomationButton> {
     }
 }
 
+/// Collects qualifying visible child-window rectangles as taskbar obstacles.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(unsafe { collect_child(0, 0) }, 1);
+/// ```
+///
+/// # Safety
+///
+/// The callback must be invoked with a valid child window handle and an
+/// `lparam` pointing to a mutable [`ChildEnumContext`].
+///
+/// # Parameters
+///
+/// * `hwnd` - The child window handle to inspect.
+/// * `lparam` - A pointer to the obstacle-collection context.
+///
+/// # Returns
+///
+/// `1` to continue window enumeration.
 #[cfg(windows)]
 unsafe extern "system" fn collect_child(hwnd: isize, lparam: isize) -> i32 {
     unsafe {

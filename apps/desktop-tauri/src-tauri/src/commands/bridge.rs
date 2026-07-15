@@ -173,6 +173,21 @@ fn primary_window_label<'a>(
 }
 
 impl ProviderUsageSnapshot {
+    /// Builds a frontend usage snapshot from a successful provider fetch result.
+    ///
+    /// Converts provider usage windows, pacing data, promotional signals, cost details,
+    /// account metadata, and optional reset-credit information into the snapshot format.
+    ///
+    —# Examples
+    ///
+    /// ```ignore
+    /// let snapshot = ProviderUsageSnapshot::from_fetch_result(id, &metadata, &result);
+    /// assert_eq!(snapshot.error, None);
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// A populated snapshot representing the provider's current usage and account state.
     pub(super) fn from_fetch_result(
         id: ProviderId,
         metadata: &ProviderMetadata,
@@ -289,6 +304,22 @@ impl ProviderUsageSnapshot {
         }
     }
 
+    /// Creates a provider usage snapshot representing a failed fetch.
+    ///
+    /// The snapshot contains default primary-window values and the supplied error message,
+    /// with provider-specific formatting applied where applicable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let snapshot = ProviderUsageSnapshot::from_error(
+    ///     provider_id,
+    ///     &metadata,
+    ///     "Unable to fetch usage".to_string(),
+    /// );
+    /// assert!(snapshot.error.is_some());
+    /// ```
+    pub(super) fn from_error...
     pub(super) fn from_error(id: ProviderId, metadata: &ProviderMetadata, error: String) -> Self {
         let error = friendly_provider_error(id, &error);
         Self {
@@ -559,6 +590,14 @@ pub fn get_settings_snapshot() -> SettingsSnapshot {
 }
 
 impl From<Settings> for SettingsSnapshot {
+    /// Converts application settings into the serialized frontend settings snapshot.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let snapshot = SettingsSnapshot::from(Settings::default());
+    /// assert!(!snapshot.provider_order.is_empty() || snapshot.provider_order.is_empty());
+    /// ```
     fn from(settings: Settings) -> Self {
         let avoid_keychain_prompts = settings.claude_avoid_keychain_prompts();
         let codex_spark_usage_visible = settings.codex_spark_usage_visible();

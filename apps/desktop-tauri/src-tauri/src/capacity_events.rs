@@ -41,6 +41,25 @@ pub struct CapacityEventPayload {
 }
 
 impl CapacityEventPayload {
+    /// Creates a human-readable title for the capacity event.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let event = CapacityEventPayload {
+    ///     provider_id: "example".into(),
+    ///     window_id: "plan".into(),
+    ///     display_name: "Plan".into(),
+    ///     kind: CapacityEventKind::PartialReset,
+    ///     previous_used_percent: 80.0,
+    ///     current_used_percent: 40.0,
+    ///     previous_reset_at: "2025-01-01T00:00:00Z".into(),
+    ///     current_reset_at: "2025-01-01T00:00:00Z".into(),
+    ///     occurred_at: "2025-01-01T00:01:00Z".into(),
+    /// };
+    ///
+    /// assert_eq!(event.notification_title(), "Plan capacity partially restored");
+    /// ```
     pub fn notification_title(&self) -> String {
         match self.kind {
             CapacityEventKind::ScheduledReset => format!("{} reset", self.display_name),
@@ -65,6 +84,28 @@ impl CapacityEventPayload {
         }
     }
 
+    /// Formats a human-readable notification message for the capacity event.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let payload = CapacityEventPayload {
+    ///     provider_id: "example".into(),
+    ///     window_id: "daily".into(),
+    ///     window_label: "Daily limit".into(),
+    ///     kind: CapacityEventKind::ScheduledReset,
+    ///     previous_used_percent: 100.0,
+    ///     current_used_percent: 25.0,
+    ///     previous_reset_at: "2025-01-01T00:00:00Z".into(),
+    ///     current_reset_at: "2025-01-02T00:00:00Z".into(),
+    ///     occurred_at: "2025-01-01T00:00:00Z".into(),
+    /// };
+    ///
+    /// assert_eq!(
+    ///     payload.notification_body(),
+    ///     "Daily limit reset on schedule. 75% available now."
+    /// );
+    /// ```
     pub fn notification_body(&self) -> String {
         let remaining = (100.0 - self.current_used_percent).clamp(0.0, 100.0);
         match self.kind {
@@ -332,6 +373,23 @@ impl CapacityEventObserver {
     }
 }
 
+/// Classifies a capacity change between two observations as a reset event.
+///
+/// Returns `None` when the change does not meet the thresholds for a scheduled,
+/// surprise, partial, or reset-time-shift event.
+///
+/// # Examples
+///
+/// ```ignore
+/// let event = detect_reset(
+///     &snapshot,
+///     &previous_observation,
+///     &current_observation,
+///     &previous_window,
+///     &current_window,
+/// );
+/// ```
+fn detect_reset(
 fn detect_reset(
     snapshot: &ProviderUsageSnapshot,
     previous_observation: &ProviderObservation,

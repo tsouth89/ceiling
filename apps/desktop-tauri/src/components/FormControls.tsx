@@ -36,6 +36,13 @@ export function Toggle({
   return input;
 }
 
+/**
+ * Renders a select control sized to accommodate its longest option label.
+ *
+ * @param value - The currently selected option value
+ * @param options - The selectable options and their displayed labels
+ * @returns A select element containing the provided options
+ */
 export function Select({
   value,
   options,

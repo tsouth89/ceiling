@@ -121,6 +121,21 @@ fn resolve_tray_anchor(
     }
 }
 
+/// Builds the native system tray menu from the provider catalog and status labels.
+///
+/// The menu reflects the currently enabled providers, taskbar widget setting, and UI language.
+///
+/// # Examples
+///
+/// ```no_run
+/// # fn example(
+/// #     app: &AppHandle,
+/// #     providers: &[ProviderCatalogEntry],
+/// # ) -> tauri::Result<()> {
+/// let _menu = build_native_tray_menu(app, providers, &[])?;
+/// # Ok(())
+/// # }
+/// ```
 fn build_native_tray_menu(
     app: &AppHandle,
     providers: &[ProviderCatalogEntry],
@@ -184,6 +199,24 @@ enum MenuTransitionDispatch {
     Reopen(shell::ShellTransitionRequest),
 }
 
+/// Resolves a native tray menu identifier into its corresponding action.
+///
+/// Provider toggle identifiers must use the `toggle_provider:<provider_id>` format.
+/// Recognized target identifiers are converted into transition actions; unrecognized
+/// identifiers produce `None`.
+///
+/// # Examples
+///
+/// ```
+/// assert!(matches!(
+///     resolve_menu_action("refresh"),
+///     Some(MenuAction::Refresh)
+/// ));
+/// assert!(matches!(
+///     resolve_menu_action("toggle_provider:codex"),
+///     Some(MenuAction::ToggleProvider(provider_id)) if provider_id == "codex"
+/// ));
+/// ```
 fn resolve_menu_action(id: &str) -> Option<MenuAction> {
     match id {
         "refresh" => Some(MenuAction::Refresh),
@@ -236,10 +269,25 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
     }
 }
 
-/// Initialise the system tray icon, context menu, and event handlers.
+/// Initializes the system tray icon, native context menu, and event handlers.
 ///
-/// - **Left-click** reveals and foregrounds the primary dashboard.
-/// - **Right-click** opens the native context menu with shell actions.
+/// A left click stores the tray anchor and reopens the primary dashboard. The
+/// native context menu handles right-click actions.
+///
+/// # Examples
+///
+/// ```no_run
+/// tauri::Builder::default()
+///     .setup(|app| {
+///         setup(app)?;
+///         Ok(())
+///     })
+///     .run(tauri::generate_context!())?;
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the tray menu or icon cannot be created.
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
 
@@ -407,17 +455,18 @@ fn presentation_snapshots(
     snapshots
 }
 
-/// Update the tray icon pixels and tooltip text to reflect current provider usage.
+/// Updates the system tray icon and tooltip using the current provider usage snapshots.
 ///
-/// Behaviour mirrors egui's `choose_tray_update_plan` (rust/src/native_ui/app.rs):
-/// - If `menu_bar_shows_highest_usage` is on OR `menu_bar_display_mode == "minimal"`,
-///   render the bar from the healthy provider with the highest session usage.
-/// - Otherwise render from the first enabled healthy provider (catalog order).
-/// - When any provider exposes a weekly/secondary window, the icon shows both
-///   bars from the same picked provider.
-/// - With zero healthy providers but at least one error, fall back to an
-///   error-styled icon using the last known max percentage so the tray
-///   still communicates "something is wrong".
+/// Disabled or hidden provider rows are excluded according to the current settings.
+/// The icon reflects the most constrained healthy provider, while the tooltip lists
+/// providers in dashboard order.
+///
+/// # Examples
+///
+/// ```no_run
+/// let snapshots = Vec::new();
+/// update_tray_icon_and_tooltip(&app, &snapshots);
+/// ```
 pub fn update_tray_icon_and_tooltip(
     app: &AppHandle,
     snapshots: &[crate::commands::ProviderUsageSnapshot],
@@ -470,6 +519,18 @@ pub fn update_tray_icon_and_tooltip(
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
+/// Builds a single tray status summary for the highest-usage healthy enabled provider.
+///
+/// # Examples
+///
+/// ```
+/// let labels = status_labels_for_settings(
+///     &Settings::default(),
+///     &[],
+///     codexbar::settings::Language::default(),
+/// );
+/// assert!(labels.is_empty());
+/// ```
 fn status_labels_for_settings(
     settings: &Settings,
     snapshots: &[crate::commands::ProviderUsageSnapshot],
@@ -488,6 +549,20 @@ fn status_labels_for_settings(
     vec![("status_summary".to_string(), label)]
 }
 
+/// Orders enabled provider usage snapshots for tray presentation.
+///
+/// Disabled providers are excluded. Enabled providers are ordered according to
+/// the configured display order, with providers absent from that order sorted
+/// by display name.
+///
+/// # Examples
+///
+/// ```
+/// let ordered = ordered_snapshot_refs(&settings, &snapshots);
+/// assert!(ordered.iter().all(|snapshot| {
+///     settings.enabled_providers.contains(&snapshot.provider_id)
+/// }));
+/// ```
 fn ordered_snapshot_refs<'a>(
     settings: &Settings,
     snapshots: &'a [crate::commands::ProviderUsageSnapshot],
@@ -529,6 +604,26 @@ fn provider_status_label(
     )
 }
 
+/// Renders the Ceiling tray icon for the current usage and error state.
+///
+/// # Arguments
+///
+/// * `session_pct` - Usage percentage represented by the icon.
+/// * `all_error` - Whether all available providers are in an error state.
+///
+/// # Returns
+///
+/// The icon's RGBA pixel data, width, and height.
+///
+/// # Examples
+///
+/// ```
+/// let settings = Settings::default();
+/// let (pixels, width, height) =
+///     render_tray_icon_for_settings(&settings, 42.0, None, false);
+///
+/// assert_eq!(pixels.len(), (width * height * 4) as usize);
+/// ```
 fn render_tray_icon_for_settings(
     settings: &Settings,
     session_pct: f64,
@@ -681,21 +776,18 @@ fn max_metric_percent<const N: usize>(values: [Option<f64>; N]) -> Option<f64> {
         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
 }
 
-/// Build a compact multi-line tooltip string from provider snapshots.
+/// Builds a localized, compact tooltip summarizing provider usage.
 ///
-/// The hard constraint: Windows Shell only reliably *displays* 63 characters
-/// of a tray icon's tooltip on the taskbar surface we use (the backing struct
-/// is larger, but Explorer clips the visible text). At that budget, "Name P% Label · reset" for
-/// three-plus providers overflows and the tail providers silently disappear —
-/// which is exactly the "not showing all subscriptions" bug.
+/// The tooltip uses progressively shorter formatting to fit the 63-character
+/// Windows taskbar budget. When not all provider rows fit, it appends an
+/// overflow row indicating how many providers remain hidden.
 ///
-/// So the rule here is completeness first: EVERY configured provider gets a
-/// line, and we spend the remaining budget on the richest per-line detail that
-/// still fits — degrading label+reset → reset → percent uniformly rather than
-/// dropping anyone. Callers pass snapshots already in dashboard order so the
-/// tooltip reads the same top-to-bottom as the window. The configured
-/// used/remaining mode is included explicitly so the percentage is never
-/// ambiguous on hover.
+/// # Examples
+///
+/// ```
+/// let tooltip = build_tooltip(&[], codexbar::settings::Language::English, true);
+/// assert_eq!(tooltip, "Ceiling");
+/// ```
 fn build_tooltip(
     snapshots: &[&crate::commands::ProviderUsageSnapshot],
     lang: codexbar::settings::Language,
@@ -814,6 +906,20 @@ fn build_tooltip(
     visible.join("\n")
 }
 
+/// Produces a compact tooltip label for a provider's usage window.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     compact_tooltip_window_label("claude", Some("Session"), Some(300)),
+///     "5h"
+/// );
+/// assert_eq!(
+///     compact_tooltip_window_label("codex", None, None),
+///     "Weekly"
+/// );
+/// ```
 fn compact_tooltip_window_label(
     provider_id: &str,
     label: Option<&str>,
@@ -838,9 +944,21 @@ fn compact_tooltip_window_label(
         })
 }
 
-/// Compact reset duration for the tooltip ("24d 11h" / "2h 21m" / "12m"), or
-/// `None` when there is no known future reset. Deliberately unit-terse and
-/// language-neutral to keep the native Windows tooltip within its length cap.
+/// Formats a future reset time or a compact provider-supplied reset description.
+///
+/// A valid future RFC 3339 timestamp takes precedence. Otherwise, a non-empty
+/// description is trimmed, common leading phrases are removed, and the result
+/// is limited to 14 characters.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     tooltip_short_reset(None, Some("resets in 12m")),
+///     Some("12m".to_string())
+/// );
+/// ```
+pub(crate) fn tooltip_short_reset(
 pub(crate) fn tooltip_short_reset(
     resets_at: Option<&str>,
     reset_desc: Option<&str>,

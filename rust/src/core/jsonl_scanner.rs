@@ -220,6 +220,18 @@ impl CodexParserState {
         }
     }
 
+    /// Processes a fast Codex event, updating the active model or recording token usage within the scan range.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The parsed fast event to process.
+    /// * `range` - The day range used to determine whether token usage should be recorded.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// parser.process_fast_event(event, &range);
+    /// ```
     fn process_fast_event(&mut self, event: CodexFastEvent<'_>, range: &CostUsageDayRange) {
         match event {
             CodexFastEvent::TurnContext { model } => {
@@ -258,6 +270,30 @@ impl CodexParserState {
         }
     }
 
+    /// Records token usage deltas from a token-count event.
+    ///
+    /// The event's model and optional RFC 3339 timestamp are preserved in the
+    /// resulting usage record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut state = CodexParserState::new(None, None);
+    /// let event = serde_json::json!({
+    ///     "timestamp": "2025-01-15T12:00:00Z",
+    ///     "payload": {
+    ///         "type": "token_count",
+    ///         "input_tokens": 100,
+    ///         "cached_input_tokens": 20,
+    ///         "output_tokens": 30
+    ///     }
+    /// });
+    ///
+    /// state.record_token_count(&event, "2025-01-15".to_owned());
+    /// assert_eq!(state.records.len(), 1);
+    /// ```
+    ///
+    /// `day_key` identifies the calendar day to associate with the usage event.
     fn record_token_count(&mut self, obj: &Value, day_key: String) {
         let Some(payload) = token_count_payload(obj) else {
             return;
@@ -286,6 +322,24 @@ impl CodexParserState {
         );
     }
 
+    /// Records a fast token-count event when it contains positive usage deltas.
+    ///
+    /// The event's model is selected from its payload, the current parser state, or
+    /// `gpt-5` when no model is available. The timestamp is stored when it is a
+    /// valid RFC 3339 value.
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - Token usage data and optional model information.
+    /// * `day_key` - Calendar day associated with the usage event.
+    /// * `timestamp` - Event timestamp in RFC 3339 format.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut state = CodexParserState::new(None, None);
+    /// state.record_fast_token_count(payload, "2025-01-15".to_owned(), timestamp);
+    /// ```
     fn record_fast_token_count(
         &mut self,
         payload: CodexFastPayload<'_>,
@@ -321,6 +375,25 @@ impl CodexParserState {
         );
     }
 
+    /// Adds a normalized token-usage record to the parser state.
+    ///
+    /// Cached input tokens are limited to the reported input tokens.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # // Example usage within the parser implementation:
+    /// # let mut state = CodexParserState::new(None, None);
+    /// state.record_usage(
+    ///     "2025-01-15".to_string(),
+    ///     None,
+    ///     "gpt-5",
+    ///     100,
+    ///     25,
+    ///     50,
+    /// );
+    /// # assert_eq!(state.records.len(), 1);
+    /// ```
     fn record_usage(
         &mut self,
         day_key: String,

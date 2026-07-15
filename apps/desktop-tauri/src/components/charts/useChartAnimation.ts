@@ -19,6 +19,14 @@ export interface ChartAnimation {
   delayFor: (index: number) => number;
 }
 
+/**
+ * Manages the entrance animation state and timing for a chart.
+ *
+ * @param count - The number of chart bars.
+ * @param enabled - Whether chart animation is requested.
+ * @param deps - Additional values that restart the animation when they change.
+ * @returns Animation state and timing metadata, including whether the animation is active, its duration, and each bar's staggered delay.
+ */
 export function useChartAnimation(
   count: number,
   enabled: boolean,
@@ -49,6 +57,11 @@ export function useChartAnimation(
   };
 }
 
+/**
+ * Tracks whether the user prefers reduced motion.
+ *
+ * @returns `true` when reduced motion is preferred, `false` otherwise.
+ */
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
 

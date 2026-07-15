@@ -699,10 +699,39 @@ impl SpendControlLimitSnapshot {
 
 // --- Helper functions ---
 
+/// Converts an optional Unix timestamp in seconds to a UTC date and time.
+///
+/// # Examples
+///
+/// ```
+/// let datetime = timestamp_to_datetime(Some(0));
+/// assert_eq!(datetime.unwrap().to_rfc3339(), "1970-01-01T00:00:00+00:00");
+///
+/// assert!(timestamp_to_datetime(None).is_none());
+/// ```
+///
+/// # Returns
+///
+/// `Some` containing the UTC date and time when the timestamp is valid, or `None` otherwise.
 fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| Utc.timestamp_opt(ts, 0).single())
 }
 
+/// Adds the number of available reset credits to a usage snapshot when credits are available.
+///
+/// # Examples
+///
+/// ```
+/// let usage = UsageSnapshot::new(RateWindow::new(0.0));
+/// let reset_credits = ResetCredits {
+///     credits: vec![],
+///     available_count: 2,
+/// };
+///
+/// let usage = with_reset_credits(usage, &reset_credits);
+///
+/// assert_eq!(usage.reset_credits_available, Some(2));
+/// ```
 fn with_reset_credits(mut usage: UsageSnapshot, reset_credits: &ResetCredits) -> UsageSnapshot {
     usage.reset_credits_available =
         (reset_credits.available_count > 0).then_some(reset_credits.available_count);

@@ -288,14 +288,35 @@ fn default_float_bar_scale() -> u8 {
     100
 }
 
+/// Provides the default floating bar orientation.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(default_float_bar_orientation(), "horizontal");
+/// ```
 fn default_float_bar_orientation() -> String {
     "horizontal".to_string()
 }
 
+/// Provides the default floating bar style.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(default_float_bar_style(), "taskbar");
+/// ```
 fn default_float_bar_style() -> String {
     "taskbar".to_string()
 }
 
+/// Provides the default floating bar density setting.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(default_float_bar_density(), "standard");
+/// ```
 fn default_float_bar_density() -> String {
     "standard".to_string()
 }
@@ -313,9 +334,16 @@ pub fn clamp_float_bar_scale(value: u8) -> u8 {
     value.clamp(75, 200)
 }
 
-/// Normalize a floating-bar orientation string. Unknown values fall back to
-/// the default ("horizontal") so a corrupt settings file can't put the
-/// renderer into an undefined state.
+/// Normalizes a floating-bar orientation value.
+///
+/// Unknown values are normalized to `"horizontal"`.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(normalize_float_bar_orientation("vertical"), "vertical");
+/// assert_eq!(normalize_float_bar_orientation("diagonal"), "horizontal");
+/// ```
 pub fn normalize_float_bar_orientation(value: &str) -> String {
     match value {
         "vertical" => "vertical".to_string(),
@@ -323,8 +351,20 @@ pub fn normalize_float_bar_orientation(value: &str) -> String {
     }
 }
 
-/// Normalize a capacity-display style string. Unknown values fall back to the
-/// current default so a corrupt setting cannot select an undefined renderer.
+/// Normalizes a floating-bar style value to a supported style.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(normalize_float_bar_style("floating"), "floating");
+/// assert_eq!(normalize_float_bar_style("taskbar"), "taskbar");
+/// assert_eq!(
+///     normalize_float_bar_style("unknown"),
+///     default_float_bar_style()
+/// );
+/// ```
+///
+/// Returns the normalized style, using the current default for unsupported values.
 pub fn normalize_float_bar_style(value: &str) -> String {
     match value {
         "floating" => "floating".to_string(),
@@ -429,6 +469,17 @@ const DEFAULT_CODEX_OPENAI_WEB_EXTRAS: bool = true;
 const DEFAULT_CODEX_SPARK_USAGE_VISIBLE: bool = true;
 
 impl Default for Settings {
+    /// Creates settings with the application's default providers and UI preferences.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let settings = Settings::default();
+    /// assert!(settings.enabled_providers.contains("claude"));
+    /// assert!(settings.enabled_providers.contains("codex"));
+    /// assert_eq!(settings.refresh_interval_secs, 300);
+    /// ```
+    fn default() -> Self?
     fn default() -> Self {
         let mut enabled = HashSet::new();
         // Default enabled providers

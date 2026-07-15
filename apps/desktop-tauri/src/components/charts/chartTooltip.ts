@@ -9,6 +9,14 @@ export interface ChartTooltipPosition {
 const EDGE_GUARD = 96;
 const INSET = 4;
 
+/**
+ * Calculates tooltip coordinates relative to a host element and selects their horizontal alignment.
+ *
+ * @param clientX - The pointer's horizontal client coordinate
+ * @param clientY - The pointer's vertical client coordinate
+ * @param hostRect - The host element's position and width
+ * @returns The relative coordinates and horizontal tooltip alignment
+ */
 export function chartTooltipPosition(
   clientX: number,
   clientY: number,

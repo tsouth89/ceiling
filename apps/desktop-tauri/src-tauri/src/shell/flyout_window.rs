@@ -49,13 +49,28 @@ pub fn save_stored_size(width: u32, height: u32) {
     geometry_store::save_size(FLYOUT_SIZE_KEY, StoredSize { width, height });
 }
 
-/// Build (first open) or show + focus (subsequent opens) the flyout window at
-/// `position`, if given, else the default tray-anchored position.
+/// Builds the flyout window on first use or shows and focuses the existing window.
 ///
-/// `WebviewWindowBuilder::build` deadlocks when called synchronously from a
-/// Tauri command on Windows (see `commands/surface.rs::open_settings_window`
-/// precedent) — callers must invoke this from an async context (an `async`
-/// command, or `tauri::async_runtime::spawn`), never a sync command handler.
+/// The window is positioned at `position` when provided; otherwise, it is anchored
+/// to the tray. Call this function from an asynchronous context on Windows.
+///
+/// # Arguments
+///
+/// * `app` - The application handle used to access or create the flyout window.
+/// * `position` - An optional physical position for the window.
+///
+/// # Returns
+///
+/// `Ok(())` when the window is created or shown successfully, or an error message
+/// if the operation fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// async fn show_flyout(app: &tauri::AppHandle) -> Result<(), String> {
+///     open_or_focus(app, None)
+/// }
+/// ```
 pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
         if let Some((x, y)) = position {

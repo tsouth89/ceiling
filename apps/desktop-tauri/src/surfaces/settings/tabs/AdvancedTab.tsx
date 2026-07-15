@@ -23,6 +23,13 @@ function parseSshHosts(value: string): string[] {
   return value.split(/[,\n]/).map((host) => host.trim()).filter(Boolean);
 }
 
+/**
+ * Renders the advanced settings interface.
+ *
+ * @param settings - Current application settings.
+ * @param set - Updates application settings.
+ * @param saving - Whether settings changes are being saved.
+ */
 export default function AdvancedTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
   const [shortcutError, setShortcutError] = useState<string | null>(null);

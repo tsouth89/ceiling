@@ -1,7 +1,8 @@
 /**
- * The Ceiling app mark: a capacity level (white) filling under the ceiling
- * line (green). Self-contained dark tile so it reads on any theme, mirroring
- * the app/tray icon. Used in window title bars and the tray flyout header.
+ * Renders the Ceiling app mark with tile or glass styling.
+ *
+ * @param appearance - Selects the background treatment and color palette.
+ * @returns An accessible SVG icon representing a ceiling line and capacity level.
  */
 export function CeilingMark({
   size = 16,

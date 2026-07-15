@@ -12,6 +12,28 @@ pub struct UsageThresholds {
     pub critical: f64,
 }
 
+/// Filters and normalizes provider usage threshold overrides.
+///
+/// Entries must reference a known provider and, when specified, a `session` or
+/// `weekly` window. Threshold values are clamped to the range `0.0..=100.0`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+///
+/// let normalized = normalize_usage_threshold_overrides(HashMap::new());
+/// assert!(normalized.is_empty());
+/// ```
+///
+/// # Arguments
+///
+/// * `values` - Provider threshold overrides to validate and normalize.
+///
+/// # Returns
+///
+/// A map containing valid overrides with threshold values clamped to
+/// `0.0..=100.0`.
 pub fn normalize_usage_threshold_overrides(
     values: HashMap<String, UsageThresholdOverride>,
 ) -> HashMap<String, UsageThresholdOverride> {
@@ -37,6 +59,19 @@ pub fn normalize_usage_threshold_overrides(
 }
 
 impl Settings {
+    /// Provides the configured global usage thresholds.
+    ///
+    /// The provider and window parameters are accepted for API compatibility and do not affect the result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let settings = Settings::default();
+    /// let thresholds = settings.usage_thresholds(ProviderId::Claude, "session");
+    ///
+    /// assert_eq!(thresholds.high, settings.high_usage_threshold);
+    /// assert_eq!(thresholds.critical, settings.critical_usage_threshold);
+    /// ```
     pub fn usage_thresholds(&self, _provider: ProviderId, _window: &str) -> UsageThresholds {
         UsageThresholds {
             high: self.high_usage_threshold,

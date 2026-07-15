@@ -71,6 +71,18 @@ impl SettingsUpdate {
         self.enabled_providers.is_some()
     }
 
+    /// Determines whether the update requires notifying the float bar.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let update = SettingsUpdate {
+    ///     refresh_interval_secs: Some(60),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// assert!(update.notifies_float_bar());
+    /// ```
     fn notifies_float_bar(&self) -> bool {
         self.enabled_providers.is_some()
             || self.refresh_interval_secs.is_some()
@@ -83,10 +95,36 @@ impl SettingsUpdate {
             || self.show_reset_when_exhausted.is_some()
     }
 
+    /// Determines whether a settings update requires rebuilding the tray menu.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let update = SettingsUpdate {
+    ///     ui_language: Some("en".to_string()),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// assert!(update.rebuilds_tray_menu());
+    /// ```
+    ///
+    /// `true` if the taskbar widget setting or UI language is present, `false` otherwise.
     fn rebuilds_tray_menu(&self) -> bool {
         self.taskbar_widget_enabled.is_some() || self.ui_language.is_some()
     }
 
+    /// Determines whether the update affects the tray's presentation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let update = SettingsUpdate {
+    ///     ui_language: Some("en".to_string()),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// assert!(update.refreshes_tray_presentation());
+    /// ```
     fn refreshes_tray_presentation(&self) -> bool {
         self.tray_icon_mode.is_some()
             || self.switcher_shows_icons.is_some()
@@ -272,6 +310,19 @@ impl SettingsUpdate {
         self
     }
 
+    /// Builds a float bar settings patch from the provided update fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let update = SettingsUpdate {
+    ///     float_bar_enabled: Some(true),
+    ///     ..Default::default()
+    /// };
+    /// let patch = update.float_bar_patch();
+    /// assert_eq!(patch.enabled, Some(true));
+    /// ```
+    ///
     fn float_bar_patch(&self) -> crate::floatbar::SettingsPatch {
         crate::floatbar::SettingsPatch {
             enabled: self.float_bar_enabled,

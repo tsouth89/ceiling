@@ -27,12 +27,24 @@ interface ProviderDetailViewProps {
   isRefreshing?: boolean;
 }
 
+/**
+ * Formats a provider plan name for display.
+ *
+ * @param planName - The provider's plan name, or `null` when unavailable
+ * @returns The formatted plan name, or `null` when no plan name is provided
+ */
 function displayPlanName(planName: string | null): string | null {
   if (!planName) return null;
   if (planName.trim().toLowerCase() === "default_claude_ai") return "Claude AI";
   return planName;
 }
 
+/**
+ * Formats a positive count using compact notation.
+ *
+ * @param value - The count to format
+ * @returns A compactly formatted count, or `—` when the value is null or less than or equal to zero
+ */
 function formatCompactCount(value: number | null): string {
   if (value == null || value <= 0) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -41,12 +53,24 @@ function formatCompactCount(value: number | null): string {
   }).format(value);
 }
 
+/**
+ * Classifies a rate window by its remaining usage.
+ *
+ * @param window - The rate window snapshot to classify
+ * @returns `"exhausted"` when exhausted, `"critical"` when 5% or less remains, or `"normal"` otherwise
+ */
 function usageLevel(window: RateWindowSnapshot): string {
   if (window.isExhausted) return "exhausted";
   if (window.remainingPercent <= 5) return "critical";
   return "normal";
 }
 
+/**
+ * Converts a pacing stage into a human-readable budget status label.
+ *
+ * @param stage - The pacing stage to describe
+ * @returns The corresponding budget status label
+ */
 function paceLabel(stage: PaceSnapshot["stage"]): string {
   switch (stage) {
     case "far_ahead":
@@ -66,15 +90,34 @@ function paceLabel(stage: PaceSnapshot["stage"]): string {
   }
 }
 
+/**
+ * Classifies pacing as a risk or calm state based on its deviation percentage.
+ *
+ * @param pace - The pacing snapshot to classify
+ * @returns `"risk"` if the deviation exceeds 5 percent, `"calm"` otherwise
+ */
 function paceTone(pace: PaceSnapshot): "risk" | "calm" {
   return pace.deltaPercent > 5 ? "risk" : "calm";
 }
 
+/**
+ * Calculates the displayed percentage for a rate window as used or remaining capacity.
+ *
+ * @param window - The rate window containing the used percentage.
+ * @param showAsUsed - Whether to display used capacity instead of remaining capacity.
+ * @returns The clamped used or remaining percentage.
+ */
 function percentFor(window: RateWindowSnapshot, showAsUsed: boolean): number {
   const used = Math.max(0, Math.min(100, window.usedPercent));
   return showAsUsed ? used : 100 - used;
 }
 
+/**
+ * Renders a progress bar for a rate window's used or remaining percentage.
+ *
+ * @param window - The rate window snapshot used to determine progress and status.
+ * @param showAsUsed - Whether the bar represents usage rather than remaining capacity.
+ */
 function DetailProgress({
   window,
   showAsUsed,
@@ -93,6 +136,13 @@ function DetailProgress({
   );
 }
 
+/**
+ * Renders a secondary usage limit with its percentage, reset information, and progress bar.
+ *
+ * @param metric - The labeled usage window to display
+ * @param resetTimeRelative - Whether to format the reset time relatively
+ * @param showAsUsed - Whether to display the percentage as used rather than remaining
+ */
 function SecondaryWindow({
   metric,
   resetTimeRelative,
@@ -122,6 +172,11 @@ function SecondaryWindow({
   );
 }
 
+/**
+ * Displays local token usage statistics, cache share, and the most-used model when available.
+ *
+ * @param summary - Local usage data used to populate the activity statistics.
+ */
 function LocalActivity({ summary }: { summary: ProviderLocalUsageSummary }) {
   const breakdown = summary.sevenDayTokenBreakdown;
   const cached = breakdown
@@ -157,6 +212,11 @@ function LocalActivity({ summary }: { summary: ProviderLocalUsageSummary }) {
   );
 }
 
+/**
+ * Displays expected and actual usage progress for a provider's current pacing window.
+ *
+ * @param pace - Pacing data used to determine the status label and progress values
+ */
 function PaceSection({ pace }: { pace: PaceSnapshot }) {
   const tone = paceTone(pace);
   const expected = Math.max(0, Math.min(100, pace.expectedUsedPercent));
@@ -186,6 +246,14 @@ function PaceSection({ pace }: { pace: PaceSnapshot }) {
   );
 }
 
+/**
+ * Displays a provider's usage, limits, pacing status, and available local activity.
+ *
+ * @param provider - Provider details and usage data to display
+ * @param resetTimeRelative - Whether reset times should use relative formatting
+ * @param showAsUsed - Whether usage values should be displayed as used rather than remaining
+ * @param isRefreshing - Whether the provider data is currently refreshing
+ */
 export default function ProviderDetailView({
   provider,
   resetTimeRelative,

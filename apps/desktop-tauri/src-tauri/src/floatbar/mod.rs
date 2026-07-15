@@ -17,9 +17,17 @@ pub use window::FLOATBAR_LABEL;
 use codexbar::settings::Settings;
 use tauri::{Emitter, Manager};
 
-/// Reopen the floating bar on app start if it was enabled previously.
+/// Restores the floating bar at application startup when it was previously enabled.
 ///
-/// Called once from `main.rs::setup`. No-op when the setting is off.
+/// Installs the floating bar's z-order guard regardless of whether the bar is enabled.
+///
+/// # Examples
+///
+/// ```
+/// # fn example(app: &tauri::AppHandle) {
+/// install(app);
+/// # }
+/// ```
 pub fn install(app: &tauri::AppHandle) {
     let persisted = Settings::load();
     if persisted.float_bar_enabled {
@@ -52,8 +60,17 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
     true
 }
 
-/// Toggle the floating bar from the tray menu. Persists the new state
-/// and shows or hides the window accordingly.
+/// Toggles the taskbar widget and applies the resulting state.
+///
+/// The updated setting is persisted before the widget state is synchronized.
+///
+/// # Examples
+///
+/// ```no_run
+/// # fn example(app: &tauri::AppHandle) {
+/// toggle(app);
+/// # }
+/// ```
 pub fn toggle(app: &tauri::AppHandle) {
     let mut settings = Settings::load();
     settings.taskbar_widget_enabled = !settings.taskbar_widget_enabled;
@@ -61,9 +78,18 @@ pub fn toggle(app: &tauri::AppHandle) {
     crate::taskbar_widget::apply_state(app, &settings);
 }
 
-/// Bring the floating-bar window in line with persisted settings: open,
-/// close, or re-apply opacity / click-through as appropriate. Used after
-/// a settings patch is saved.
+/// Synchronizes the floating-bar window with the configured enabled state and properties.
+///
+/// The window is shown or hidden as needed. When it remains visible, its opacity,
+/// click-through behavior, and always-on-top state are updated without activating it.
+///
+/// # Examples
+///
+/// ```no_run
+/// # let app = todo!();
+/// # let settings = todo!();
+/// apply_state(app, &settings);
+/// ```
 pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
     let window = app.get_webview_window(FLOATBAR_LABEL);
     let visible = window
@@ -112,6 +138,16 @@ pub struct SettingsPatch {
 }
 
 impl SettingsPatch {
+    /// Determines whether the settings patch contains any values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let patch = SettingsPatch::default();
+    /// assert!(patch.is_empty());
+    /// ```
+    ///
+    /// Returns `true` when every field is unset, `false` otherwise.
     pub fn is_empty(&self) -> bool {
         self.enabled.is_none()
             && self.taskbar_enabled.is_none()
@@ -130,8 +166,25 @@ impl SettingsPatch {
             && self.show_cost.is_none()
     }
 
-    /// Apply this patch to a mutable `Settings`. Values are clamped and
-    /// normalized before assignment to keep the on-disk state safe.
+    /// Applies the specified changes to the settings, leaving unspecified fields unchanged.
+    ///
+    /// Values requiring normalization or bounds checking are adjusted before assignment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use codexbar::floatbar::SettingsPatch;
+    /// use codexbar::settings::Settings;
+    ///
+    /// let mut settings = Settings::default();
+    /// SettingsPatch {
+    ///     enabled: Some(true),
+    ///     ..Default::default()
+    /// }
+    /// .apply(&mut settings);
+    ///
+    /// assert!(settings.float_bar_enabled);
+    /// ```
     pub fn apply(&self, settings: &mut Settings) {
         if let Some(v) = self.enabled {
             settings.float_bar_enabled = v;
@@ -181,9 +234,35 @@ impl SettingsPatch {
     }
 }
 
-/// React to a saved settings patch: emit the live-config event and bring
-/// the window in line. No-op when nothing in the patch was float-bar
-/// related.
+/// Processes a saved settings patch and synchronizes live configuration and related UI state.
+
+///
+
+/// Emits a live-configuration event when requested or when the patch contains float-bar
+
+/// settings. A non-empty patch also updates the float-bar and taskbar-widget state.
+
+///
+
+/// # Examples
+
+///
+
+/// ```ignore
+
+/// after_settings_saved(app, &patch, &settings, true);
+
+/// ```
+
+///
+
+/// # Arguments
+
+///
+
+/// * `patch` - Settings changes to apply to the live float-bar and taskbar-widget state.
+
+/// * `notify_live_config` - Whether to emit the live-configuration change event.
 pub fn after_settings_saved(
     app: &tauri::AppHandle,
     patch: &SettingsPatch,

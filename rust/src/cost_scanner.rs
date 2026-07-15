@@ -313,7 +313,30 @@ impl CostScanner {
         self.scan_claude_with_cancel(None)
     }
 
-    /// Scan Claude local logs, stopping early when the caller cancels the scan.
+    /// Scans Claude transcript logs and aggregates token usage and costs within the configured period.
+    ///
+    /// The scan stops when `cancel` contains a set flag. If the Claude projects directory does not
+    /// exist, the returned summary is empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `cancel` - Optional cancellation flag checked while discovering and parsing transcript files.
+    ///
+    /// # Returns
+    ///
+    /// An aggregated [`CostSummary`] for the configured period.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::atomic::AtomicBool;
+    ///
+    /// let scanner = CostScanner::new(7);
+    /// let cancel = AtomicBool::new(false);
+    /// let summary = scanner.scan_claude_with_cancel(Some(&cancel));
+    ///
+    /// assert!(summary.period_start.is_some());
+    /// ```
     pub fn scan_claude_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
         let projects_dir = self.get_claude_projects_dir();
         if !projects_dir.exists() {
@@ -443,6 +466,28 @@ impl CostScanner {
         }
     }
 
+    /// Recursively visits recent Claude JSONL transcript files under a directory.
+    ///
+    /// Files are visited when their modification time is greater than or equal to
+    /// `cutoff`. Traversal stops when cancellation is requested or a directory
+    /// cannot be read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use chrono::{DateTime, Utc};
+    /// # use std::path::Path;
+    /// # let scanner = CostScanner::new(7);
+    /// # let cutoff: DateTime<Utc> = Utc::now();
+    /// # let mut files = Vec::new();
+    /// # let cancel = None;
+    /// # scanner.walk_claude_files(
+    /// #     Path::new("/tmp/claude/projects"),
+    /// #     &cutoff,
+    /// #     cancel,
+    /// #     &mut |path| files.push(path.to_path_buf()),
+    /// # );
+    /// ```
     fn walk_claude_files<F>(
         &self,
         dir: &Path,
@@ -481,6 +526,28 @@ impl CostScanner {
         }
     }
 
+    /// Collects Claude transcript files modified at or after the specified cutoff time.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let scanner = CostScanner::new(7);
+    /// let cutoff = Utc::now() - chrono::Duration::days(7);
+    /// let files = scanner.claude_files_since(Path::new("/path/to/projects"), &cutoff, None);
+    /// assert!(files.iter().all(|path| path.extension().is_some_and(|ext| ext == "jsonl")));
+    /// ```
+    ///
+    /// The traversal stops early when `cancel` is set.
+    ///
+    /// # Arguments
+    ///
+    /// * `projects_dir` - Root directory containing Claude project transcripts.
+    /// * `cutoff` - Earliest file modification time to include.
+    /// * `cancel` - Optional cancellation flag checked during traversal.
+    ///
+    /// # Returns
+    ///
+    /// Paths to eligible Claude JSONL transcript files.
     fn claude_files_since(
         &self,
         projects_dir: &Path,
@@ -495,6 +562,18 @@ impl CostScanner {
     }
 }
 
+/// Parses Claude transcript files into usage records, applying the cutoff and optional cancellation flag.
+///
+/// # Examples
+///
+/// ```
+/// let files: &[std::path::PathBuf] = &[];
+/// let cutoff = chrono::Utc::now();
+///
+/// let parsed = parse_claude_files(files, &cutoff, None);
+///
+/// assert!(parsed.is_empty());
+/// ```
 fn parse_claude_files(
     files: &[PathBuf],
     cutoff: &DateTime<Utc>,
@@ -539,11 +618,41 @@ fn parse_claude_files(
     })
 }
 
-/// Stream the de-duplicated, in-window usage records from one transcript
-/// file into `on_record`. Both the summary scan and the daily-history scan
-/// consume this single reader, so Claude log semantics live in one place.
-/// Returns the number of records consumed, so callers can tell whether the
-/// file contributed anything.
+/// Reads countable Claude usage records from a transcript within the cutoff,
+/// de-duplicates them using `seen`, and passes each record to `on_record`.
+///
+/// Stops when cancellation is requested or the transcript cannot be read.
+///
+/// # Arguments
+///
+/// * `path` - Path to the Claude transcript.
+/// * `cutoff` - Earliest timestamp accepted for a usage record.
+/// * `seen` - Set of deduplication keys already processed.
+/// * `cancel` - Optional cancellation flag.
+/// * `on_record` - Callback invoked for each accepted record.
+///
+/// # Returns
+///
+/// The number of accepted usage records.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashSet;
+/// use std::path::Path;
+/// use chrono::Utc;
+///
+/// let mut seen = HashSet::new();
+/// let count = for_each_claude_usage_record(
+///     Path::new("transcript.jsonl"),
+///     &Utc::now(),
+///     &mut seen,
+///     None,
+///     |_| {},
+/// );
+///
+/// assert_eq!(count, 0);
+/// ```
 fn for_each_claude_usage_record<F>(
     path: &Path,
     cutoff: &DateTime<Utc>,
@@ -590,6 +699,14 @@ where
     counted
 }
 
+/// Determines whether a byte slice contains another byte sequence.
+///
+/// # Examples
+///
+/// ```
+/// assert!(contains_bytes(b"hello", b"ell"));
+/// assert!(!contains_bytes(b"hello", b"world"));
+/// ```
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || haystack.len() < needle.len() {
         return false;
@@ -614,6 +731,23 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     false
 }
 
+/// Converts a Claude assistant event with token usage into a costed usage record.
+///
+/// Returns `None` for non-assistant events, events without message usage, or events
+/// containing no tokens.
+///
+/// # Examples
+///
+/// ```
+/// let event = ClaudeEvent {
+///     event_type: Some("user".to_string()),
+///     message: None,
+///     timestamp: None,
+///     request_id: None,
+/// };
+///
+/// assert!(claude_usage_record_from_event(&event).is_none());
+/// ```
 fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageRecord> {
     if event.event_type.as_deref() != Some("assistant") {
         return None;
@@ -742,16 +876,46 @@ pub fn has_cost_usage_sources() -> bool {
         || scanner.get_claude_projects_dir().exists()
 }
 
-/// Build chart history and period summaries with one transcript pass.
+/// Builds chart-ready daily costs and period summaries for a provider.
 ///
-/// Codex and Claude logs can grow into gigabytes. The older chart path read
-/// the same files once for the bars, again for the 30-day summary, and again
-/// for today's values. This report keeps those views consistent and makes the
-/// initial load bounded by a single scan.
+/// `days` specifies the lookback period; values below one day are treated as one day.
+/// Returns `None` when `provider` is unsupported.
+///
+/// # Examples
+///
+/// ```
+/// let report = get_cost_usage_report("codex", 1);
+/// assert!(report.is_some());
+/// ```
+///
+/// # Returns
+///
+/// `Some(CostUsageReport)` for a supported provider, `None` otherwise.
+///
+/// # Parameters
+///
+/// * `provider` - Cost data provider to scan, such as `"codex"` or `"claude"`.
+/// * `days` - Number of days to include in the report.
 pub fn get_cost_usage_report(provider: &str, days: u32) -> Option<CostUsageReport> {
     get_cost_usage_report_with_windows(provider, days, &[])
 }
 
+/// Builds a cost usage report for a provider and caller-supplied usage windows.
+///
+/// The lookback period is treated as at least one day. Unsupported providers return `None`.
+///
+/// # Examples
+///
+/// ```
+/// let report = get_cost_usage_report_with_windows("codex", 7, &[]);
+/// assert!(report.is_some());
+///
+/// assert!(get_cost_usage_report_with_windows("unsupported", 7, &[]).is_none());
+/// ```
+///
+/// # Returns
+///
+/// `Some` with the provider's cost usage report, or `None` for an unsupported provider.
 pub fn get_cost_usage_report_with_windows(
     provider: &str,
     days: u32,
@@ -766,6 +930,16 @@ pub fn get_cost_usage_report_with_windows(
     }
 }
 
+/// Creates an empty cost summary for each usage window, keyed by window ID.
+///
+/// # Examples
+///
+/// ```
+/// let windows: &[CurrentUsageWindow] = &[];
+/// let summaries = empty_current_window_summaries(windows);
+///
+/// assert!(summaries.is_empty());
+/// ```
 fn empty_current_window_summaries(windows: &[CurrentUsageWindow]) -> HashMap<String, CostSummary> {
     windows
         .iter()
@@ -773,6 +947,63 @@ fn empty_current_window_summaries(windows: &[CurrentUsageWindow]) -> HashMap<Str
         .collect()
 }
 
+/// Applies an update to each usage summary whose window contains the timestamp.
+
+///
+
+/// Windows use an inclusive start and exclusive end. No summaries are updated when
+
+/// the timestamp is absent or when no matching summary exists.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// use std::collections::HashMap;
+
+/// use chrono::{TimeZone, Utc};
+
+///
+
+/// let start = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+
+/// let end = Utc.with_ymd_and_hms(2025, 1, 2, 0, 0, 0).unwrap();
+
+/// let windows = vec![CurrentUsageWindow {
+
+///     id: "daily".to_owned(),
+
+///     starts_at: start,
+
+///     ends_at: end,
+
+/// }];
+
+///
+
+/// let mut summaries = HashMap::from([
+
+///     ("daily".to_owned(), CostSummary::default()),
+
+/// ]);
+
+///
+
+/// add_to_current_windows(&mut summaries, &windows, Some(start), |summary| {
+
+///     summary.input_tokens += 10;
+
+/// });
+
+///
+
+/// assert_eq!(summaries["daily"].input_tokens, 10);
+
+/// ```
 fn add_to_current_windows<F>(
     summaries: &mut HashMap<String, CostSummary>,
     windows: &[CurrentUsageWindow],
@@ -794,6 +1025,14 @@ fn add_to_current_windows<F>(
     }
 }
 
+/// Creates empty cost summaries for today and each preceding day.
+///
+/// # Examples
+///
+/// ```
+/// let summaries = empty_daily_summaries(2);
+/// assert_eq!(summaries.len(), 2);
+/// ```
 fn empty_daily_summaries(days: u32) -> HashMap<String, CostSummary> {
     let today = Local::now().date_naive();
     (0..days)
@@ -835,6 +1074,25 @@ fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
         .extend(source.unknown_models.iter().cloned());
 }
 
+/// Builds a cost usage report from daily summaries, session counts, and optional undated and window summaries.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+///
+/// let report = finish_report(
+///     HashMap::new(),
+///     1,
+///     None,
+///     (0, 0, 0),
+///     None,
+///     HashMap::new(),
+/// );
+///
+/// assert!(report.daily_costs.is_empty());
+/// ```
+fn finish_report
 fn finish_report(
     mut daily: HashMap<String, CostSummary>,
     days: u32,
@@ -896,6 +1154,21 @@ fn finish_report(
     }
 }
 
+/// Aggregates Codex session costs into daily, period, session, and usage-window summaries.
+///
+/// # Examples
+///
+/// ```
+/// let scanner = CostScanner::new(1);
+/// let report = scan_codex_report(&scanner, 1, &[]);
+///
+/// assert!(report.current_windows.is_empty());
+/// ```
+fn scan_codex_report(
+scanner: &CostScanner,
+days: u32,
+windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
 fn scan_codex_report(
     scanner: &CostScanner,
     days: u32,
@@ -998,6 +1271,24 @@ fn scan_codex_report(
     )
 }
 
+/// Builds a Claude usage report for the requested period and usage windows.
+///
+/// # Examples
+///
+/// ```
+/// let scanner = CostScanner::new(1);
+/// let report = scan_claude_report(&scanner, 1, &[]);
+/// assert!(report.current_windows.is_empty());
+/// ```
+///
+/// `days` controls the historical period included in the report. Records without
+/// timestamps are included in the period summary but cannot be assigned to a
+/// daily bucket or usage window.
+fn scan_claude_report(
+scanner: &CostScanner,
+days: u32,
+windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
 fn scan_claude_report(
     scanner: &CostScanner,
     days: u32,

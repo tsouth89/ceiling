@@ -90,9 +90,11 @@ function IconMoon() {
 }
 
 /**
- * Pop-out window — a windowed dashboard: left nav rail, an Overview of
- * plan-status glance cards (selecting a provider expands its full MenuCard),
- * and a bottom status bar. Mirrors the promo chrome.
+ * Renders a pop-out dashboard for provider usage, activity, accounts, and charts.
+ *
+ * @param state - Initial application state used to configure the dashboard.
+ * @param providerId - Optional provider to focus when the dashboard opens.
+ * @returns The pop-out dashboard interface.
  */
 export default function PopOutPanel({
   state,

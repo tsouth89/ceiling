@@ -158,6 +158,14 @@ pub(super) struct RawSettings {
 }
 
 impl Default for RawSettings {
+    /// Creates default raw settings for deserialization, including canonical defaults and empty legacy migration fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let settings = RawSettings::default();
+    /// assert!(settings.provider_usage_thresholds.is_empty());
+    /// ```
     fn default() -> Self {
         let s = Settings::default();
         Self {
@@ -251,6 +259,18 @@ impl Default for RawSettings {
 }
 
 impl From<RawSettings> for Settings {
+    /// Converts deserialized settings into the canonical [`Settings`] representation.
+    ///
+    /// Migrates legacy provider-specific fields, preserves existing unified provider
+    /// configuration values, applies compatibility adjustments, and normalizes
+    /// persisted settings values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let settings = Settings::from(RawSettings::default());
+    /// assert_eq!(settings.notification_policy_version, NOTIFICATION_POLICY_VERSION);
+    /// ```
     fn from(raw: RawSettings) -> Self {
         let mut provider_configs = raw.provider_configs;
         let legacy_float_bar_style = normalize_float_bar_style(&raw.float_bar_style);

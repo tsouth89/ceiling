@@ -50,12 +50,14 @@ export function constrainingWindow(
 }
 
 /**
- * Overview glance model: primary plan pool as hero, plus compact companion
- * lanes. Cursor always shows its reported Auto and API lanes because they are
- * distinct allowances users need to compare. Claude always shows Weekly beside
- * its 5-hour session because both limits define the subscription. Other
- * providers keep the single hottest materially constrained lane. Clicking
- * never toggles meters — detail mode lists every window.
+ * Builds the glance view with the primary plan pool and applicable companion lanes.
+ *
+ * Cursor includes its secondary and API lanes when available, Claude includes its
+ * weekly lane when available, and other providers include the hottest eligible
+ * companion lane.
+ *
+ * @param provider - Usage data for the provider
+ * @returns The primary lane and selected companion lanes
  */
 export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
   const primary: ConstrainingWindow = {
@@ -102,6 +104,11 @@ function isCompanionHot(
   );
 }
 
+/**
+ * Collects all available non-primary rate windows for a provider.
+ *
+ * @returns Measured secondary, model-specific, tertiary, and extra rate windows, excluding reset-credit entries.
+ */
 function nonPrimaryWindows(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow[] {
@@ -130,7 +137,13 @@ function nonPrimaryWindows(
   return out;
 }
 
-/** Available provider-reported resets, including legacy cached snapshots. */
+/** Determines the number of resets available from current or legacy provider data. */
+
+/**
+ * Determines the number of resets available from current or legacy provider data.
+ *
+ * @returns The available reset count, or `null` when it cannot be determined.
+ */
 export function resetCreditsAvailable(
   provider: ProviderUsageSnapshot,
 ): number | null {

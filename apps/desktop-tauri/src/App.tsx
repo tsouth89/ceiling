@@ -54,6 +54,11 @@ export default function App() {
   );
 }
 
+/**
+ * Loads the application bootstrap state, synchronizes theme settings, and renders the surface for the current window.
+ *
+ * @returns The application shell, loading state, error panel, or window-specific surface.
+ */
 function AppInner() {
   const surface = useSurfaceSnapshot();
   const [state, setState] = useState<BootstrapState | null>(null);

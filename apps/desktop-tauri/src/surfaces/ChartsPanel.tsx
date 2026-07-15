@@ -9,13 +9,12 @@ import ProviderComparison from "./ProviderComparison";
 const COMPARE_ID = "compare";
 
 /**
- * Charts tab: quota, local token, credits, and usage history per provider.
+ * Displays historical charts for supported providers.
  *
- * Only a few providers report historical chart data (Codex, Claude, OpenAI),
- * so this shows a provider selector across the supported ones and reuses the
- * existing, tested ChartsSection (which owns the limits/credits/usage sub-tabs)
- * for the selected provider. Unlike the Activity timeline — built from the live
- * snapshot — this is genuine time-series history from the backend.
+ * Provides provider selection and comparison for Codex and Claude when both
+ * providers have chart data available.
+ *
+ * @param providers - Provider usage snapshots used to populate the charts
  */
 export default function ChartsPanel({
   providers,

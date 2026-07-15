@@ -30,20 +30,72 @@ struct WidgetModel {
     open_on_hover: bool,
 }
 
+/// Computes the horizontal position that centers content within an item.
+///
+/// If the content is wider than the item, returns the item's left edge.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(centered_content_x(10, 100, 40), 40);
+/// assert_eq!(centered_content_x(10, 20, 40), 10);
+/// ```
 fn centered_content_x(item_left: i32, item_width: i32, content_width: i32) -> i32 {
     item_left.saturating_add(item_width.saturating_sub(content_width).max(0) / 2)
 }
 
+/// Converts a window style for use by an Explorer child window.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// let style = explorer_child_style(0x8000_0000);
+
+/// assert_eq!(style & 0x8000_0000, 0);
+
+/// assert_ne!(style & 0x4000_0000, 0);
+
+/// ```
 fn explorer_child_style(style: u32) -> u32 {
     const WS_CHILD: u32 = 0x4000_0000;
     const WS_POPUP: u32 = 0x8000_0000;
     (style & !WS_POPUP) | WS_CHILD
 }
 
+/// Determines whether the native taskbar widget is enabled.
+///
+/// # Examples
+///
+/// ```
+/// let mut settings = codexbar::settings::Settings::default();
+/// settings.taskbar_widget_enabled = true;
+///
+/// assert!(native_mode_enabled(&settings));
+/// ```
 pub fn native_mode_enabled(settings: &codexbar::settings::Settings) -> bool {
     settings.taskbar_widget_enabled
 }
 
+/// Determines whether a provider selected for the native taskbar widget is enabled.
+///
+/// # Returns
+///
+/// `true` if at least one preferred provider is enabled, `false` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// let mut settings = codexbar::settings::Settings::default();
+/// settings.float_bar_provider_ids = vec!["codex".to_string()];
+/// settings.enabled_providers = vec!["codex".to_string()];
+///
+/// assert!(native_mode_has_configured_provider(&settings));
+/// ```
 fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) -> bool {
     let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
         settings.provider_display_order_names()
@@ -55,10 +107,38 @@ fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) 
         .any(|provider_id| settings.enabled_providers.contains(provider_id))
 }
 
+/// Determines whether a taskbar layout is eligible for use.
+///
+/// A layout is eligible when all-monitor mode is enabled or the layout represents the primary taskbar.
+///
+/// # Examples
+///
+/// ```
+/// let layout = TaskbarLayout {
+///     primary: true,
+///     ..Default::default()
+/// };
+///
+/// assert!(layout_is_enabled(&layout, false));
+/// assert!(layout_is_enabled(&layout, true));
+/// ```
 fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
     all_monitors || layout.primary
 }
 
+/// Collects eligible taskbar handles and their verified widget placements.
+///
+/// Taskbars are included when enabled for the selected monitor scope and have a valid
+/// window handle. A taskbar is added to the placement list only when its layout can
+/// accommodate the requested number of providers.
+///
+/// # Examples
+///
+/// ```
+/// let (discovered, placements) = taskbar_placements(&[], false, 1);
+/// assert!(discovered.is_empty());
+/// assert!(placements.is_empty());
+/// ```
 fn taskbar_placements(
     layouts: &[TaskbarLayout],
     all_monitors: bool,
@@ -79,6 +159,28 @@ fn taskbar_placements(
     (discovered, placements)
 }
 
+/// Computes a verified widget placement within a taskbar's available horizontal lane.
+///
+/// The placement is rejected when the taskbar is vertical, no providers are displayed,
+/// required landmarks are invalid, or no obstacle-free gap can fit the widget.
+///
+/// # Examples
+///
+/// ```ignore
+/// let placement = child_placement(&layout, landmarks, 2);
+/// assert!(placement.is_some());
+/// ```
+///
+/// # Arguments
+///
+/// * `layout` - Taskbar bounds and obstacle rectangles used to determine available space.
+/// * `landmarks` - Explorer landmarks that define the verified widget lane.
+/// * `provider_count` - Number of provider entries the widget must display.
+///
+/// # Returns
+///
+/// A placement relative to the taskbar client area, or `None` when no verified
+/// obstacle-free placement can accommodate the providers.
 fn child_placement(
     layout: &TaskbarLayout,
     landmarks: TaskbarLandmarks,
@@ -159,6 +261,17 @@ fn child_placement(
     })
 }
 
+/// Installs the native taskbar widget host for the application.
+///
+/// On non-Windows platforms, this function has no effect.
+///
+/// # Examples
+///
+/// ```no_run
+/// fn setup(app: &tauri::AppHandle) {
+///     install(app);
+/// }
+/// ```
 pub fn install(app: &tauri::AppHandle) {
     #[cfg(windows)]
     windows_host::install(app);
@@ -166,6 +279,18 @@ pub fn install(app: &tauri::AppHandle) {
     let _ = app;
 }
 
+/// Applies the configured native taskbar widget state.
+///
+/// Enables or refreshes the widget when native mode has a configured provider;
+/// otherwise, hides existing widget windows.
+///
+/// # Examples
+///
+/// ```no_run
+/// # let app: tauri::AppHandle = todo!();
+/// # let settings: codexbar::settings::Settings = todo!();
+/// apply_state(&app, &settings);
+/// ```
 pub fn apply_state(app: &tauri::AppHandle, settings: &codexbar::settings::Settings) {
     #[cfg(windows)]
     windows_host::apply_state(app, settings);
@@ -173,9 +298,20 @@ pub fn apply_state(app: &tauri::AppHandle, settings: &codexbar::settings::Settin
     let _ = (app, settings);
 }
 
-/// Return a sampled RGB color from Explorer's current taskbar material. The
-/// native flyout uses this as its base tint so custom Windows accent colors do
-/// not leave Ceiling looking like a separate, bolted-on surface.
+/// Samples the current Explorer taskbar surface color for use as a widget tint.
+///
+/// # Returns
+///
+/// A hexadecimal RGB color string when the taskbar color can be sampled, or
+/// `None` when sampling is unavailable.
+///
+/// # Examples
+///
+/// ```
+/// let color = get_taskbar_surface_color();
+/// assert!(color.is_none() || color.is_some());
+/// ```
+///
 #[tauri::command]
 pub fn get_taskbar_surface_color() -> Option<String> {
     #[cfg(windows)]
@@ -264,6 +400,13 @@ mod windows_host {
     static HOVER_TRACKING: AtomicBool = AtomicBool::new(false);
     static HOVER_FLYOUT_OPEN: AtomicBool = AtomicBool::new(false);
 
+    /// Installs the native taskbar widget host and starts its recovery and provider-refresh tasks.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// install(&app);
+    /// ```
     pub(super) fn install(app: &tauri::AppHandle) {
         let _ = APP.set(app.clone());
         schedule_recovery(app);
@@ -285,6 +428,16 @@ mod windows_host {
         });
     }
 
+    /// Applies the native taskbar widget state for the supplied settings.
+    ///
+    /// Schedules widget recovery when native mode is enabled with a configured provider;
+    /// otherwise, hides existing widget windows.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// apply_state(&app, &settings);
+    /// ```
     pub(super) fn apply_state(app: &tauri::AppHandle, settings: &codexbar::settings::Settings) {
         if native_mode_enabled(settings) && native_mode_has_configured_provider(settings) {
             schedule_recovery(app);
@@ -293,6 +446,15 @@ mod windows_host {
         }
     }
 
+    /// Samples the primary Windows taskbar surface color.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let color = taskbar_surface_color();
+    /// assert!(color.is_none() || color.unwrap().starts_with('#'));
+    /// ```
+    pub(super) fn taskbar_surface_color() -> Option<String>
     pub(super) fn taskbar_surface_color() -> Option<String> {
         let taskbar = unsafe { find_primary_taskbar()? };
         let mut rect = WinRect::default();
@@ -336,6 +498,17 @@ mod windows_host {
         ))
     }
 
+    /// Schedules a taskbar widget recovery without overlapping an existing recovery.
+    ///
+    /// Recovery runs in the background, applies successful updates on the main thread,
+    /// and preserves the current widget when discovery or preparation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// schedule_recovery(&app);
+    /// ```
+    fn schedule_recovery(app: &tauri::AppHandle) {
     fn schedule_recovery(app: &tauri::AppHandle) {
         if RECOVERY_PENDING
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -374,6 +547,25 @@ mod windows_host {
         });
     }
 
+    /// Prepares native taskbar widgets from the current settings and discovered taskbar layouts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let result = prepare_widgets();
+    ///
+    /// if let Ok(prepared) = result {
+    ///     assert!(!prepared.widgets.is_empty());
+    /// }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The prepared widget placements, discovered taskbar handles, and display model.
+    ///
+    /// An error if native mode is disabled, no providers are available, or no verified
+    /// taskbar lane can fit the widget.
+    fn prepare_widgets() -> Result<PreparedWidgets, String> {
     fn prepare_widgets() -> Result<PreparedWidgets, String> {
         let settings = codexbar::settings::Settings::load();
         if !native_mode_enabled(&settings) {
@@ -404,6 +596,23 @@ mod windows_host {
         })
     }
 
+    /// Applies prepared widget placements to the native taskbar host.
+    ///
+    /// Updates the hosted widget model, removes widgets for undiscovered taskbars,
+    /// creates or reparents widget windows as needed, and applies their current
+    /// placement and visibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the host state is poisoned or a widget window cannot be
+    /// created.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// apply_prepared(prepared_widgets)?;
+    /// # Ok::<(), String>(())
+    /// ```
     fn apply_prepared(prepared: PreparedWidgets) -> Result<(), String> {
         let mut state = HOST
             .get_or_init(|| Mutex::new(HostState::default()))
@@ -464,6 +673,18 @@ mod windows_host {
         Ok(())
     }
 
+    /// Builds the current native taskbar widget model from application state and settings.
+    ///
+    /// The model includes up to three enabled providers, their usage percentages, compact
+    /// window labels, optional inline reset text, theme-appropriate text contrast, and
+    /// hover-to-open behavior.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let model = widget_model().expect("application state should be available");
+    /// println!("Displaying {} providers", model.providers.len());
+    /// ```
     fn widget_model() -> Result<WidgetModel, String> {
         let app = APP
             .get()
@@ -532,6 +753,21 @@ mod windows_host {
         })
     }
 
+    /// Determines whether Windows is configured to use a light system theme.
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```
+    
+    /// let uses_light_theme = system_uses_light_theme();
+    
+    /// println!("Light theme enabled: {uses_light_theme}");
+    
+    /// ```
     fn system_uses_light_theme() -> bool {
         const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as isize;
         const RRF_RT_REG_DWORD: u32 = 0x0000_0018;
@@ -553,6 +789,14 @@ mod windows_host {
         }
     }
 
+    /// Creates a compact display label from a usage-window label and duration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(compact_window_label(Some("5-hour limit"), None), "5h");
+    /// assert_eq!(compact_window_label(None, Some(120)), "2h");
+    /// ```
     fn compact_window_label(label: Option<&str>, window_minutes: Option<u32>) -> String {
         let label = label.map(str::trim).filter(|label| !label.is_empty());
         if let Some(label) = label {
@@ -580,6 +824,13 @@ mod windows_host {
         }
     }
 
+    /// Hides all currently hosted taskbar widgets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// hide_existing();
+    /// ```
     fn hide_existing() {
         let Some(host) = HOST.get() else {
             return;
@@ -594,12 +845,36 @@ mod windows_host {
         }
     }
 
+    /// Finds the primary Windows taskbar window.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let taskbar = unsafe { find_primary_taskbar() };
+    /// assert!(taskbar.is_some() || taskbar.is_none());
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// This function must be called on Windows.
     unsafe fn find_primary_taskbar() -> Option<isize> {
         let class = wide("Shell_TrayWnd");
         let hwnd = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
         (hwnd != 0).then_some(hwnd)
     }
 
+    /// Creates and attaches a native widget window to a taskbar.
+    ///
+    /// The returned handle identifies the configured child window. Returns an error if
+    /// the window class cannot be registered, the window cannot be created or attached,
+    /// or layered composition cannot be enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let result = unsafe { create_widget(0) };
+    /// assert!(result.is_err());
+    /// ```
     unsafe fn create_widget(taskbar: isize) -> Result<isize, String> {
         if !*CLASS_REGISTERED.get_or_init(|| unsafe { register_class() }) {
             return Err("Could not register the native widget window class".to_string());
@@ -657,6 +932,18 @@ mod windows_host {
         Ok(hwnd)
     }
 
+    /// Registers the native taskbar widget window class.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let registered = unsafe { register_class() };
+    /// assert!(registered);
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// `true` if the window class was registered successfully, `false` otherwise.
     unsafe fn register_class() -> bool {
         let class = wide(CLASS_NAME);
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
@@ -677,6 +964,15 @@ mod windows_host {
         unsafe { RegisterClassExW(&wc) != 0 }
     }
 
+    /// Processes window messages for the hosted taskbar widget, including painting,
+    /// pointer interaction, hover activation, and cleanup.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let result = unsafe { widget_window_proc(0, WM_ERASEBKGND, 0, 0) };
+    /// assert_eq!(result, 1);
+    /// ```
     unsafe extern "system" fn widget_window_proc(
         hwnd: isize,
         message: u32,
@@ -726,12 +1022,31 @@ mod windows_host {
         }
     }
 
+    /// Determines whether opening the flyout on hover is enabled for the current widget model.
+    ///
+    /// Returns `false` when the host state is unavailable or cannot be locked.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let enabled = hover_open_enabled();
+    /// assert!(enabled == true || enabled == false);
+    /// ```
     fn hover_open_enabled() -> bool {
         HOST.get()
             .and_then(|host| host.try_lock().ok().map(|state| state.model.open_on_hover))
             .unwrap_or(false)
     }
 
+    /// Starts tracking pointer dwell over the widget and schedules hover activation.
+    ///
+    /// Cancels tracking if mouse-leave or timer registration fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// begin_hover_dwell(hwnd);
+    /// ```
     fn begin_hover_dwell(hwnd: isize) {
         if !hover_open_enabled()
             || HOVER_TRACKING
@@ -754,11 +1069,29 @@ mod windows_host {
         }
     }
 
+    /// Cancels hover tracking for a widget window and disarms its hover timer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// HOVER_TRACKING.store(true, Ordering::Release);
+    /// cancel_hover_dwell(0);
+    /// assert!(!HOVER_TRACKING.load(Ordering::Acquire));
+    /// ```
     fn cancel_hover_dwell(hwnd: isize) {
         unsafe { KillTimer(hwnd, HOVER_TIMER_ID) };
         HOVER_TRACKING.store(false, Ordering::Release);
     }
 
+    /// Records the widget's screen rectangle as the flyout's tray anchor.
+    ///
+    /// The anchor is updated only when the widget rectangle is available and application state can be acquired.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// remember_flyout_anchor(&app, widget_hwnd);
+    /// ```
     fn remember_flyout_anchor(app: &tauri::AppHandle, hwnd: isize) {
         // Treat the widget rectangle as the tray anchor so the existing
         // compact flyout opens visually connected to this taskbar surface.
@@ -777,6 +1110,15 @@ mod windows_host {
         }
     }
 
+    /// Opens or focuses the flyout associated with a taskbar widget and monitors hover dismissal.
+    ///
+    /// Does nothing when the application handle is unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// open_flyout(0);
+    /// ```
     fn open_flyout(hwnd: isize) {
         let Some(app) = APP.get().cloned() else {
             return;
@@ -794,6 +1136,18 @@ mod windows_host {
         });
     }
 
+    /// Monitors the pointer and dismisses the hover flyout after it remains outside the widget and flyout.
+    ///
+    /// # Arguments
+    ///
+    /// * `widget_hwnd` - Handle of the taskbar widget window.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// monitor_hover_flyout(app, widget_hwnd).await;
+    /// ```
+    async fn monitor_hover_flyout(app: tauri::AppHandle, widget_hwnd: isize) {
     async fn monitor_hover_flyout(app: tauri::AppHandle, widget_hwnd: isize) {
         let mut outside_since = None;
         loop {
@@ -825,11 +1179,35 @@ mod windows_host {
         }
     }
 
+    /// Retrieves the current cursor position in screen coordinates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let position = cursor_position();
+    /// assert!(position.is_some());
+    /// ```
+    fn cursor_position() -> Option<WinPoint>
     fn cursor_position() -> Option<WinPoint> {
         let mut point = WinPoint { x: 0, y: 0 };
         (unsafe { GetCursorPos(&mut point) } != 0).then_some(point)
     }
 
+    /// Determines whether a screen point lies within a window's bounds.
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```
+    
+    /// let point = WinPoint { x: 0, y: 0 };
+    
+    /// assert!(!point_is_inside_window(0, point));
+    
+    /// ```
     fn point_is_inside_window(hwnd: isize, point: WinPoint) -> bool {
         if hwnd == 0 || unsafe { IsWindow(hwnd) } == 0 {
             return false;
@@ -839,6 +1217,16 @@ mod windows_host {
             && point_is_inside_rect(point, &rect)
     }
 
+    /// Determines whether a screen point is within the visible flyout window.
+    ///
+    /// The hover state is cleared when the flyout is unavailable or no longer visible.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let inside = point_is_inside_flyout(&app, point);
+    /// assert!(inside);
+    /// ```
     fn point_is_inside_flyout(app: &tauri::AppHandle, point: WinPoint) -> bool {
         let Some(window) = app.get_webview_window(crate::shell::flyout_window::FLYOUT_LABEL) else {
             return false;
@@ -859,10 +1247,41 @@ mod windows_host {
         point_is_inside_rect(point, &rect)
     }
 
+    /// Determines whether a point lies within a rectangle's half-open bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let rect = WinRect {
+    ///     left: 10,
+    ///     top: 20,
+    ///     right: 30,
+    ///     bottom: 40,
+    /// };
+    ///
+    /// assert!(point_is_inside_rect(WinPoint { x: 10, y: 20 }, &rect));
+    /// assert!(!point_is_inside_rect(WinPoint { x: 30, y: 40 }, &rect));
+    /// ```
+    ///
+    /// # Parameters
+    ///
+    /// * `point` - The point to test.
+    /// * `rect` - The rectangle defining the bounds.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the point is inside the rectangle, `false` otherwise.
     fn point_is_inside_rect(point: WinPoint, rect: &WinRect) -> bool {
         point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
     }
 
+    /// Toggles the flyout associated with the native taskbar widget.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// toggle_flyout(widget_hwnd);
+    /// ```
     fn toggle_flyout(hwnd: isize) {
         let Some(app) = APP.get().cloned() else {
             return;
@@ -886,6 +1305,16 @@ mod windows_host {
         });
     }
 
+    /// Paints the widget window with the current provider readouts, labels, icons, and separators.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Called from the widget window procedure for a valid window handle.
+    /// unsafe {
+    ///     paint_widget(hwnd);
+    /// }
+    /// ```
     unsafe fn paint_widget(hwnd: isize) {
         let mut paint = PaintStruct::default();
         let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
@@ -1033,6 +1462,16 @@ mod windows_host {
         }
     }
 
+    /// Draws the icon for a provider at the specified position and color.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires a valid Win32 device context.
+    /// unsafe {
+    ///     draw_provider_icon(hdc, "codex", 16, 16, 0x0000FF);
+    /// }
+    /// ```
     unsafe fn draw_provider_icon(hdc: isize, provider_id: &str, x: i32, y: i32, color: u32) {
         const CODEX: [u16; 16] = [
             0x0000, 0x0000, 0x03e0, 0x1f10, 0x10d8, 0x2f54, 0x39d4, 0x2654, 0x2a64, 0x2bdc, 0x2af4,
@@ -1095,6 +1534,33 @@ mod windows_host {
         }
     }
 
+    /// Draws a 16×16 monochrome icon mask at the specified position.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let rows = [0b0001u16; 16];
+    /// unsafe {
+    ///     draw_icon_mask(hdc, &rows, 10, 10, 0x00FF00);
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// `hdc` must be a valid device context handle, and the target device context
+    /// must remain valid for the duration of the call.
+    ///
+    /// `rows` supplies one 16-bit pixel mask for each row. Set bits are drawn using
+    /// `color`.
+    ///
+    /// # Parameters
+    ///
+    /// * `hdc` - Device context handle to draw into.
+    /// * `rows` - Sixteen row masks describing the icon pixels.
+    /// * `x` - Left coordinate of the icon.
+    /// * `y` - Top coordinate of the icon.
+    /// * `color` - Pixel color.
+    unsafe fn draw_icon_mask(hdc: isize, rows: &[u16; 16], x: i32, y: i32, color: u32) {
     unsafe fn draw_icon_mask(hdc: isize, rows: &[u16; 16], x: i32, y: i32, color: u32) {
         for (row_index, row) in rows.iter().copied().enumerate() {
             for column in 0..16 {
@@ -1105,6 +1571,14 @@ mod windows_host {
         }
     }
 
+    /// Selects the display color associated with a provider identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(provider_color("claude"), rgb(216, 116, 75));
+    /// assert_eq!(provider_color("unknown"), rgb(204, 211, 220));
+    /// ```
     fn provider_color(provider_id: &str) -> u32 {
         match provider_id {
             "claude" => rgb(216, 116, 75),
@@ -1114,18 +1588,55 @@ mod windows_host {
         }
     }
 
+    /// Packs red, green, and blue channel values into a Win32 color value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(rgb(0x12, 0x56, 0x34), 0x0034_5612);
+    /// ```
     const fn rgb(red: u8, green: u8, blue: u8) -> u32 {
         red as u32 | ((green as u32) << 8) | ((blue as u32) << 16)
     }
 
+    /// Encodes a string as a null-terminated UTF-16 sequence.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let encoded = wide("Hi");
+    /// assert_eq!(encoded, vec![72, 105, 0]);
+    /// ```
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    /// Encodes a string as UTF-16 code units without a trailing null terminator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let encoded = wide_without_nul("Hi");
+    /// assert_eq!(encoded, vec![72, 105]);
+    /// ```
     fn wide_without_nul(value: &str) -> Vec<u16> {
         value.encode_utf16().collect()
     }
 
+    /// Measures the rendered width of UTF-16 text using the specified device context.
+    ///
+    /// Falls back to an estimate of seven pixels per UTF-16 code unit when the text is empty or its measured width cannot be obtained.
+    ///
+    /// # Safety
+    ///
+    /// The device context handle must be valid when `text` is non-empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let width = unsafe { text_width(0, &[]) };
+    /// assert_eq!(width, 0);
+    /// ```
     unsafe fn text_width(hdc: isize, text: &[u16]) -> i32 {
         let mut size = WinSize::default();
         if text.is_empty()

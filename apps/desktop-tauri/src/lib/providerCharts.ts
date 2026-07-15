@@ -11,6 +11,12 @@ export function providerSupportsChartData(providerId: string): boolean {
   return PROVIDER_CHART_DATA_IDS.has(providerId.toLowerCase());
 }
 
+/**
+ * Creates a standardized display label for a usage window.
+ *
+ * @param label - The source label used to identify the window duration.
+ * @returns A display label using standardized wording for five-hour and weekly windows.
+ */
 function currentWindowLabel(label: string): string {
   const normalized = label.toLowerCase();
   if (normalized.includes("5h") || normalized.includes("5-hour")) {
@@ -20,6 +26,14 @@ function currentWindowLabel(label: string): string {
   return `Current ${label.toLowerCase()} window`;
 }
 
+/**
+ * Builds a local usage window request from a provider rate-window snapshot.
+ *
+ * @param id - Identifier for the usage window
+ * @param label - Human-readable label for the usage window
+ * @param window - Provider snapshot containing the reset time and window duration
+ * @returns A usage window request with normalized ISO boundaries, or `null` if the snapshot is invalid
+ */
 function usageWindowRequest(
   id: string,
   label: string,
@@ -46,7 +60,12 @@ function usageWindowRequest(
   };
 }
 
-/** Exact local-log ranges corresponding to the provider's live reset windows. */
+/**
+ * Builds local log ranges for the supported provider's live reset windows.
+ *
+ * @param provider - The provider snapshot whose primary and secondary windows are converted.
+ * @returns The valid local log window requests, or an empty array when the provider is unsupported or unavailable.
+ */
 export function providerLocalUsageWindows(
   provider: ProviderUsageSnapshot | null | undefined,
 ): LocalUsageWindowRequest[] {

@@ -8,6 +8,12 @@ function clampWindowScalePercent(value: number): number {
   return Math.min(250, Math.max(100, Number.isFinite(value) ? value : 100));
 }
 
+/**
+ * Displays the menu-related display settings and controls.
+ *
+ * @param mode - Determines whether the menu settings are displayed.
+ * @returns The display settings interface.
+ */
 export default function DisplayTab({
   mode = "menu",
   settings,

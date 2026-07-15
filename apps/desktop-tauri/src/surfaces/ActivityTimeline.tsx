@@ -26,13 +26,24 @@ type Bucket = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Color is reserved for an almost-depleted or exhausted window. */
+/**
+ * Classifies a rate window for usage bar styling.
+ *
+ * @param window - The rate window to classify
+ * @returns `"exhausted"` for exhausted windows, `"critical"` for windows with 5% or less remaining, or `"normal"` otherwise
+ */
 function levelOf(window: RateWindowSnapshot): string {
   if (window.isExhausted) return "exhausted";
   if (window.remainingPercent <= 5) return "critical";
   return "normal";
 }
 
+/**
+ * Formats a duration as a compact human-readable string.
+ *
+ * @param ms - The duration in milliseconds
+ * @returns `"now"` for non-positive durations; otherwise, the duration in days and hours, hours and minutes, or minutes
+ */
 function shortDuration(ms: number): string {
   if (ms <= 0) return "now";
   const totalMin = Math.floor(ms / 60_000);
@@ -44,6 +55,13 @@ function shortDuration(ms: number): string {
   return `${m}m`;
 }
 
+/**
+ * Determines whether two dates fall on the same local calendar day.
+ *
+ * @param a - The first date to compare
+ * @param b - The second date to compare
+ * @returns `true` if both dates have the same local year, month, and day, `false` otherwise.
+ */
 function sameLocalDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -52,6 +70,13 @@ function sameLocalDay(a: Date, b: Date): boolean {
   );
 }
 
+/**
+ * Formats a reset timestamp as a localized relative day and time label.
+ *
+ * @param resetMs - The reset timestamp in milliseconds.
+ * @param nowMs - The reference timestamp in milliseconds.
+ * @returns A localized label such as “Today at 3:00 PM,” “Tomorrow at 3:00 PM,” or a weekday and time.
+ */
 function localResetLabel(resetMs: number, nowMs: number): string {
   const reset = new Date(resetMs);
   const now = new Date(nowMs);
@@ -67,6 +92,14 @@ function localResetLabel(resetMs: number, nowMs: number): string {
   return `${weekday} at ${time}`;
 }
 
+/**
+ * Creates timeline entries for the measured rate windows reported by providers.
+ *
+ * Providers with errors are excluded. Invalid or missing reset timestamps are represented by `null`.
+ *
+ * @param providers - Provider usage snapshots containing measured rate windows
+ * @returns The collected timeline entries
+ */
 function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   for (const provider of providers) {
@@ -88,6 +121,13 @@ function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
   return entries;
 }
 
+/**
+ * Determines whether a timeline entry should be filtered out as quiet.
+ *
+ * @param entry - The timeline entry to evaluate
+ * @param nowMs - The current time in milliseconds
+ * @returns `true` if the entry has less than 1% usage and no reset within the next 24 hours, `false` otherwise
+ */
 function isQuiet(entry: TimelineEntry, nowMs: number): boolean {
   if (entry.window.usedPercent >= 1) return false;
   const resettingSoon =
@@ -97,6 +137,12 @@ function isQuiet(entry: TimelineEntry, nowMs: number): boolean {
   return !resettingSoon;
 }
 
+/**
+ * Orders timeline entries by reset time, placing entries without a reset time last.
+ *
+ * @param entries - The timeline entries to order
+ * @returns A new array containing the entries sorted by ascending reset time
+ */
 function sortEntries(entries: TimelineEntry[]): TimelineEntry[] {
   return [...entries].sort((a, b) => {
     if (a.resetMs === null) return b.resetMs === null ? 0 : 1;
@@ -105,6 +151,14 @@ function sortEntries(entries: TimelineEntry[]): TimelineEntry[] {
   });
 }
 
+/**
+ * Groups timeline entries by reset timing and omits the featured entry.
+ *
+ * @param entries - The timeline entries to group
+ * @param nowMs - The current time in milliseconds
+ * @param featuredKey - The key of the entry to exclude from the buckets
+ * @returns The non-empty time-based buckets
+ */
 function bucketEntries(
   entries: TimelineEntry[],
   nowMs: number,
@@ -138,6 +192,11 @@ function bucketEntries(
   ].filter((bucket) => bucket.entries.length > 0);
 }
 
+/**
+ * Renders a usage bar for a rate window.
+ *
+ * @param window - The rate window whose usage and status determine the bar appearance
+ */
 function UsageBar({ window }: { window: RateWindowSnapshot }) {
   const usedPct = Math.max(0, Math.min(100, window.usedPercent));
   return (
@@ -151,6 +210,12 @@ function UsageBar({ window }: { window: RateWindowSnapshot }) {
   );
 }
 
+/**
+ * Renders the upcoming reset with its provider, timing, and usage information.
+ *
+ * @param entry - The timeline entry representing the upcoming reset
+ * @param nowMs - The current time in milliseconds
+ */
 function FeaturedReset({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) {
   const usedPct = Math.max(0, Math.min(100, entry.window.usedPercent));
   const duration = shortDuration((entry.resetMs as number) - nowMs);
@@ -203,6 +268,12 @@ function TimelineRow({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) 
   );
 }
 
+/**
+ * Displays provider rate-window reset activity in a featured section and time-based groups.
+ *
+ * @param providers - Provider usage snapshots used to build the timeline.
+ * @returns The activity timeline, or an empty-state message when no entries are scheduled.
+ */
 export default function ActivityTimeline({
   providers,
 }: {

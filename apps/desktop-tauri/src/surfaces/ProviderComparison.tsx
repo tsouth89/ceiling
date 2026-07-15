@@ -9,6 +9,12 @@ import type {
   ProviderUsageSnapshot,
 } from "../types/bridge";
 
+/**
+ * Formats a token count using compact US English notation.
+ *
+ * @param value - The token count to format
+ * @returns The formatted token count
+ */
 function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US", {
     notation: "compact",
@@ -16,12 +22,24 @@ function formatTokens(value: number): string {
   }).format(value);
 }
 
+/**
+ * Calculates the percentage of processed tokens associated with cache activity.
+ *
+ * @param breakdown - Token counts used to calculate the cache share.
+ * @returns The cache activity percentage, or `0` when no tokens were processed.
+ */
 function cacheShare(breakdown: LocalTokenBreakdown): number {
   if (breakdown.processedTokens <= 0) return 0;
   return (((breakdown.cacheReadTokens + breakdown.cacheWriteTokens) /
     breakdown.processedTokens) * 100);
 }
 
+/**
+ * Describes the change in token activity compared with the prior period.
+ *
+ * @param period - The current and previous token activity values.
+ * @returns A percentage change relative to the prior period, or a message for periods with no previous activity.
+ */
 function periodChange(period: LocalUsageComparisonPeriod): string {
   if (period.previousTokens <= 0) {
     return period.currentTokens > 0 ? "New activity" : "No change";
@@ -31,6 +49,15 @@ function periodChange(period: LocalUsageComparisonPeriod): string {
   return `${sign}${Math.round(change)}% vs prior`;
 }
 
+/**
+ * Summarizes which provider processed more local activity.
+ *
+ * @param leftName - Display name of the first provider
+ * @param leftTokens - Processed token count for the first provider
+ * @param rightName - Display name of the second provider
+ * @param rightTokens - Processed token count for the second provider
+ * @returns A summary indicating whether activity was even, one provider recorded all activity, or the leading provider processed more tokens
+ */
 function comparisonSummary(leftName: string, leftTokens: number, rightName: string, rightTokens: number): string {
   if (leftTokens === rightTokens) return "Even activity across both providers";
   const [leaderName, leaderTokens, otherTokens] = leftTokens > rightTokens
@@ -40,10 +67,26 @@ function comparisonSummary(leftName: string, leftTokens: number, rightName: stri
   return `${leaderName} processed ${(leaderTokens / otherTokens).toFixed(1)}× more`;
 }
 
+/**
+ * Finds a local usage comparison period by identifier.
+ *
+ * @param data - Provider chart data containing the comparison periods
+ * @param periodId - Identifier of the period to find
+ * @returns The matching comparison period, or `null` when unavailable
+ */
 function providerPeriod(data: ProviderChartData | null, periodId: string): LocalUsageComparisonPeriod | null {
   return data?.localUsage?.comparisonPeriods?.find((period) => period.id === periodId) ?? null;
 }
 
+/**
+ * Renders a provider usage comparison card for a rolling time window.
+ *
+ * @param periodId - Identifier of the comparison period to display
+ * @param label - Display label for the comparison period
+ * @param providers - The two providers being compared
+ * @param data - Provider chart data keyed by provider identifier
+ * @returns A comparison card, or an unavailable-history message when either provider lacks the period
+ */
 function ComparisonCard({ periodId, label, providers, data }: {
   periodId: string;
   label: string;
@@ -90,6 +133,14 @@ function ComparisonCard({ periodId, label, providers, data }: {
   );
 }
 
+/**
+ * Compares local token usage for two providers across matching rolling windows.
+ *
+ * Displays loading, timeout, and comparison states while retrieving and polling
+ * provider usage data.
+ *
+ * @param providers - The two providers to compare
+ */
 export default function ProviderComparison({ providers }: {
   providers: [ProviderUsageSnapshot, ProviderUsageSnapshot];
 }) {
