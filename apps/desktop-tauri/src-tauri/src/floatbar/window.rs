@@ -240,28 +240,40 @@ pub fn resize(
 /// discovery fails or no gap can fit the complete bar, the current position is
 /// deliberately left untouched.
 pub fn reposition_taskbar(window: &tauri::WebviewWindow, prefer_current: bool) {
-    let Some(layout) = super::taskbar::discover() else {
-        return;
-    };
-    reposition_taskbar_with_layout(window, &layout, prefer_current);
+    let layouts = super::taskbar::discover_all();
+    reposition_taskbar_with_layouts(window, &layouts, prefer_current);
 }
 
-fn reposition_taskbar_with_layout(
+fn reposition_taskbar_with_layouts(
     window: &tauri::WebviewWindow,
-    layout: &TaskbarLayout,
+    layouts: &[TaskbarLayout],
     prefer_current: bool,
 ) {
     let Ok(size) = window.outer_size() else {
         return;
     };
-    let preferred = if prefer_current {
-        window
-            .outer_position()
-            .map(|position| Point {
-                x: position.x,
-                y: position.y,
+    let current = window.outer_position().ok().map(|position| Point {
+        x: position.x,
+        y: position.y,
+    });
+    let layout = if prefer_current {
+        current
+            .and_then(|position| {
+                let center = Point {
+                    x: position.x.saturating_add((size.width / 2) as i32),
+                    y: position.y.saturating_add((size.height / 2) as i32),
+                };
+                super::taskbar::select_for_point(layouts, center)
             })
-            .unwrap_or_else(|_| layout.preferred_anchor())
+            .or_else(|| super::taskbar::primary_layout(layouts))
+    } else {
+        super::taskbar::primary_layout(layouts)
+    };
+    let Some(layout) = layout else {
+        return;
+    };
+    let preferred = if prefer_current {
+        current.unwrap_or_else(|| layout.preferred_anchor())
     } else {
         layout.preferred_anchor()
     };
@@ -298,7 +310,6 @@ pub fn install_z_order_guard(app: tauri::AppHandle) {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut ticks = 0_u64;
-            let mut last_taskbar_layout: Option<TaskbarLayout> = None;
             loop {
                 interval.tick().await;
                 let Some(window) = app.get_webview_window(FLOATBAR_LABEL) else {
@@ -332,15 +343,8 @@ pub fn install_z_order_guard(app: tauri::AppHandle) {
                 if visible && repair_layout {
                     let settings = codexbar::settings::Settings::load();
                     if settings.float_bar_style == "taskbar" {
-                        let layout = super::taskbar::discover();
-                        if layout != last_taskbar_layout {
-                            if let Some(layout) = layout.as_ref() {
-                                reposition_taskbar_with_layout(&window, layout, true);
-                            }
-                            last_taskbar_layout = layout;
-                        }
-                    } else {
-                        last_taskbar_layout = None;
+                        let layouts = super::taskbar::discover_all();
+                        reposition_taskbar_with_layouts(&window, &layouts, true);
                     }
                 }
             }
