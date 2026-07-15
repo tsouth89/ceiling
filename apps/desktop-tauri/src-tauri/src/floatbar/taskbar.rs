@@ -13,6 +13,12 @@ pub struct TaskbarLayout {
     pub primary: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TaskbarLandmarks {
+    pub widgets: Option<Rect>,
+    pub start: Option<Rect>,
+}
+
 impl TaskbarLayout {
     pub fn preferred_anchor(&self) -> Point {
         if self.bounds.width() >= self.bounds.height() {
@@ -93,6 +99,11 @@ pub fn discover_all() -> Vec<TaskbarLayout> {
     Vec::new()
 }
 
+#[cfg(not(windows))]
+pub fn primary_landmarks() -> TaskbarLandmarks {
+    TaskbarLandmarks::default()
+}
+
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -171,6 +182,25 @@ pub fn discover_all() -> Vec<TaskbarLayout> {
 }
 
 #[cfg(windows)]
+pub fn primary_landmarks() -> TaskbarLandmarks {
+    let class = wide("Shell_TrayWnd");
+    let taskbar = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    if taskbar == 0 {
+        return TaskbarLandmarks::default();
+    }
+
+    let mut landmarks = TaskbarLandmarks::default();
+    for button in unsafe { uia_buttons(taskbar) } {
+        match button.automation_id.as_str() {
+            "WidgetsButton" => landmarks.widgets = Some(button.bounds),
+            "StartButton" => landmarks.start = Some(button.bounds),
+            _ => {}
+        }
+    }
+    landmarks
+}
+
+#[cfg(windows)]
 unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout> {
     unsafe {
         let bounds = window_rect(hwnd)?;
@@ -203,7 +233,9 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
         // Automation as an obstacle source when Explorer exposes the tree.
         // Failure is intentionally non-fatal; the native widget then uses the
         // conservative preferred anchor and classic HWND obstacles.
-        context.obstacles.extend(uia_button_rects(hwnd));
+        context
+            .obstacles
+            .extend(uia_buttons(hwnd).into_iter().map(|button| button.bounds));
 
         context
             .obstacles
@@ -219,7 +251,13 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
 }
 
 #[cfg(windows)]
-unsafe fn uia_button_rects(hwnd: isize) -> Vec<Rect> {
+struct AutomationButton {
+    automation_id: String,
+    bounds: Rect,
+}
+
+#[cfg(windows)]
+unsafe fn uia_buttons(hwnd: isize) -> Vec<AutomationButton> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
     use windows::Win32::UI::Accessibility::{
@@ -252,14 +290,20 @@ unsafe fn uia_button_rects(hwnd: isize) -> Vec<Rect> {
 
         (0..length)
             .filter_map(|index| buttons.GetElement(index).ok())
-            .filter_map(|element| element.CurrentBoundingRectangle().ok())
-            .map(|rect| Rect {
-                left: rect.left,
-                top: rect.top,
-                right: rect.right,
-                bottom: rect.bottom,
+            .filter_map(|element| {
+                let automation_id = element.CurrentAutomationId().ok()?.to_string();
+                let rect = element.CurrentBoundingRectangle().ok()?;
+                Some(AutomationButton {
+                    automation_id,
+                    bounds: Rect {
+                        left: rect.left,
+                        top: rect.top,
+                        right: rect.right,
+                        bottom: rect.bottom,
+                    },
+                })
             })
-            .filter(|rect| rect.width() > 0 && rect.height() > 0)
+            .filter(|button| button.bounds.width() > 0 && button.bounds.height() > 0)
             .collect()
     }
 }
@@ -268,6 +312,9 @@ unsafe fn uia_button_rects(hwnd: isize) -> Vec<Rect> {
 unsafe extern "system" fn collect_child(hwnd: isize, lparam: isize) -> i32 {
     unsafe {
         if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        if window_class(hwnd).as_deref() == Some("CeilingNativeTaskbarWidget") {
             return 1;
         }
         let context = &mut *(lparam as *mut ChildEnumContext);
@@ -365,6 +412,7 @@ unsafe extern "system" {
         class_name: *const u16,
         window_name: *const u16,
     ) -> isize;
+    fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
     fn GetWindowRect(hwnd: isize, rect: *mut std::ffi::c_void) -> i32;
     fn GetClassNameW(hwnd: isize, class_name: *mut u16, max_count: i32) -> i32;
     fn EnumChildWindows(

@@ -234,7 +234,9 @@ fn main() {
             }
             tray_bridge::setup(app)?;
             shortcut_bridge::register(app.handle());
-            floatbar::install(app.handle());
+            if !taskbar_widget::proof_enabled() {
+                floatbar::install(app.handle());
+            }
             taskbar_widget::install(app.handle());
             auto_refresh::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {

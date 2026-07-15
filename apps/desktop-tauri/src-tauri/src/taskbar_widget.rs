@@ -5,8 +5,7 @@
 //! `CEILING_NATIVE_TASKBAR_WIDGET=1` until its lifecycle and placement have
 //! been manually validated on supported Windows configurations.
 
-use crate::floatbar::placement::Point;
-use crate::floatbar::taskbar::TaskbarLayout;
+use crate::floatbar::taskbar::{TaskbarLandmarks, TaskbarLayout};
 
 const ENABLE_ENV: &str = "CEILING_NATIVE_TASKBAR_WIDGET";
 const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
@@ -19,6 +18,17 @@ struct ChildPlacement {
     height: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderReadout {
+    provider_id: String,
+    percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WidgetModel {
+    providers: Vec<ProviderReadout>,
+}
+
 fn flag_enabled(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
@@ -28,26 +38,39 @@ fn flag_enabled(value: Option<&str>) -> bool {
     })
 }
 
-fn proof_enabled() -> bool {
+pub fn proof_enabled() -> bool {
     flag_enabled(std::env::var(ENABLE_ENV).ok().as_deref())
 }
 
-fn child_placement(layout: &TaskbarLayout) -> Option<ChildPlacement> {
-    if layout.bounds.width() < layout.bounds.height() {
+fn child_placement(
+    layout: &TaskbarLayout,
+    landmarks: TaskbarLandmarks,
+    provider_count: usize,
+) -> Option<ChildPlacement> {
+    if layout.bounds.width() < layout.bounds.height() || provider_count == 0 {
+        return None;
+    }
+
+    let widgets = landmarks.widgets?;
+    let start = landmarks.start?;
+    let lane_left = widgets.right.saturating_add(8);
+    let lane_right = start.left.saturating_sub(8);
+    let available_width = lane_right.saturating_sub(lane_left);
+    let provider_count = i32::try_from(provider_count).ok()?;
+    let desired_width = provider_count.saturating_mul(80);
+    let minimum_width = provider_count.saturating_mul(62);
+    if available_width < minimum_width {
         return None;
     }
 
     let taskbar_height = layout.bounds.height();
-    let height = taskbar_height.saturating_sub(6).max(24);
-    let width = taskbar_height.saturating_mul(5).clamp(180, 260);
-    let preferred = layout.preferred_anchor();
-    let Point { x, y } = layout.place(width, height, preferred)?;
+    let width = desired_width.min(available_width);
 
     Some(ChildPlacement {
-        x: x.saturating_sub(layout.bounds.left),
-        y: y.saturating_sub(layout.bounds.top),
+        x: lane_left.saturating_sub(layout.bounds.left),
+        y: 0,
         width,
-        height,
+        height: taskbar_height,
     })
 }
 
@@ -67,6 +90,7 @@ mod windows_host {
     use super::*;
     use crate::{shell, surface::SurfaceMode, surface_target::SurfaceTarget};
     use std::sync::{Mutex, OnceLock};
+    use tauri::Manager;
 
     const CLASS_NAME: &str = "CeilingNativeTaskbarWidget";
     const WINDOW_TITLE: &str = "Ceiling taskbar widget proof";
@@ -90,12 +114,15 @@ mod windows_host {
     const MA_NOACTIVATE: isize = 3;
     const IDC_HAND: usize = 32649;
     const TRANSPARENT: i32 = 1;
-    const DEFAULT_GUI_FONT: i32 = 17;
+    const PS_SOLID: i32 = 0;
+    const FONT_QUALITY_ANTIALIASED: u32 = 4;
+    const PROOF_BACKGROUND: u32 = rgb(24, 34, 52);
 
     #[derive(Debug, Default)]
     struct HostState {
         hwnd: isize,
         taskbar: isize,
+        model: WidgetModel,
     }
 
     static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -108,6 +135,18 @@ mod windows_host {
             tracing::warn!(%error, "Native taskbar widget proof did not start");
         }
 
+        let refresh_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::commands::do_refresh_providers_if_stale(&refresh_app).await;
+            let app_for_main = refresh_app.clone();
+            let _ = refresh_app.run_on_main_thread(move || {
+                if let Err(error) = maintain_widget() {
+                    tracing::debug!(%error, "Native taskbar widget is waiting for provider data");
+                }
+                drop(app_for_main);
+            });
+        });
+
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             let mut interval = tokio::time::interval(WATCHDOG_INTERVAL);
@@ -116,7 +155,7 @@ mod windows_host {
                 interval.tick().await;
                 let app_for_main = app.clone();
                 let _ = app.run_on_main_thread(move || {
-                    if let Err(error) = ensure_widget() {
+                    if let Err(error) = maintain_widget() {
                         tracing::debug!(%error, "Native taskbar widget proof recovery deferred");
                     }
                     drop(app_for_main);
@@ -125,15 +164,52 @@ mod windows_host {
         });
     }
 
+    fn maintain_widget() -> Result<(), String> {
+        let taskbar = unsafe { find_primary_taskbar() }
+            .ok_or_else(|| "Explorer primary taskbar is unavailable".to_string())?;
+        let model = widget_model()?;
+        let mut state = HOST
+            .get_or_init(|| Mutex::new(HostState::default()))
+            .lock()
+            .map_err(|_| "Native taskbar widget state is poisoned".to_string())?;
+        let healthy = state.hwnd != 0
+            && unsafe { IsWindow(state.hwnd) } != 0
+            && state.taskbar == taskbar
+            && unsafe { GetParent(state.hwnd) } == taskbar;
+        if healthy {
+            if state.model != model {
+                state.model = model;
+                unsafe { InvalidateRect(state.hwnd, std::ptr::null(), 0) };
+            }
+            return Ok(());
+        }
+        drop(state);
+
+        // UI Automation and taskbar geometry discovery are deliberately only
+        // performed while no healthy injected child exists. Explorer can send
+        // synchronous messages to cross-process child windows; querying its
+        // automation tree from the child owner thread at the same time risks
+        // a circular UI-thread wait.
+        ensure_widget()
+    }
+
     fn ensure_widget() -> Result<(), String> {
+        let model = widget_model()?;
+        if model.providers.is_empty() {
+            hide_existing();
+            return Err("No enabled providers are available for the taskbar widget".to_string());
+        }
         let taskbar = unsafe { find_primary_taskbar() }
             .ok_or_else(|| "Explorer primary taskbar is unavailable".to_string())?;
         let layouts = crate::floatbar::taskbar::discover_all();
         let layout = crate::floatbar::taskbar::primary_layout(&layouts)
             .ok_or_else(|| "No usable primary taskbar layout was discovered".to_string())?;
-        let Some(placement) = child_placement(layout) else {
+        let landmarks = crate::floatbar::taskbar::primary_landmarks();
+        let Some(placement) = child_placement(layout, landmarks, model.providers.len()) else {
             hide_existing();
-            return Err("No complete taskbar gap can fit the proof widget".to_string());
+            return Err(
+                "The Widgets-to-Start taskbar lane cannot fit the native widget".to_string(),
+            );
         };
 
         let mut state = HOST
@@ -155,8 +231,10 @@ mod windows_host {
             tracing::info!("Reparented native Ceiling taskbar widget proof");
         }
 
+        let model_changed = state.model != model;
+        state.model = model;
         unsafe {
-            apply_round_region(state.hwnd, placement.width, placement.height);
+            SetWindowRgn(state.hwnd, 0, 1);
             SetWindowPos(
                 state.hwnd,
                 0,
@@ -167,9 +245,56 @@ mod windows_host {
                 SWP_NOACTIVATE | SWP_NOOWNERZORDER,
             );
             ShowWindow(state.hwnd, SW_SHOWNA);
-            InvalidateRect(state.hwnd, std::ptr::null(), 0);
+            if model_changed {
+                InvalidateRect(state.hwnd, std::ptr::null(), 0);
+            }
         }
         Ok(())
+    }
+
+    fn widget_model() -> Result<WidgetModel, String> {
+        let app = APP
+            .get()
+            .ok_or_else(|| "Native taskbar widget app handle is unavailable".to_string())?;
+        let settings = codexbar::settings::Settings::load();
+        let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
+            settings.provider_display_order_names()
+        } else {
+            settings.float_bar_provider_ids.clone()
+        };
+        let state = app.state::<Mutex<crate::state::AppState>>();
+        let guard = state
+            .lock()
+            .map_err(|_| "Ceiling provider state is poisoned".to_string())?;
+
+        let providers = preferred_ids
+            .into_iter()
+            .filter(|provider_id| settings.enabled_providers.contains(provider_id))
+            .map(|provider_id| {
+                let snapshot = guard
+                    .provider_cache
+                    .iter()
+                    .find(|snapshot| snapshot.provider_id == provider_id);
+                let percent =
+                    snapshot
+                        .filter(|snapshot| snapshot.error.is_none())
+                        .map(|snapshot| {
+                            let value = if settings.show_as_used {
+                                snapshot.primary.used_percent
+                            } else {
+                                snapshot.primary.remaining_percent
+                            };
+                            value.clamp(0.0, 100.0).round() as u8
+                        });
+                ProviderReadout {
+                    provider_id,
+                    percent,
+                }
+            })
+            .take(3)
+            .collect();
+
+        Ok(WidgetModel { providers })
     }
 
     fn hide_existing() {
@@ -213,9 +338,10 @@ mod windows_host {
                 std::ptr::null(),
             )
         };
-        (hwnd != 0)
-            .then_some(hwnd)
-            .ok_or_else(|| "CreateWindowExW failed for the taskbar widget".to_string())
+        if hwnd == 0 {
+            return Err("CreateWindowExW failed for the taskbar widget".to_string());
+        }
+        Ok(hwnd)
     }
 
     unsafe fn register_class() -> bool {
@@ -279,13 +405,6 @@ mod windows_host {
         });
     }
 
-    unsafe fn apply_round_region(hwnd: isize, width: i32, height: i32) {
-        let region = unsafe { CreateRoundRectRgn(0, 0, width + 1, height + 1, 14, 14) };
-        if region != 0 && unsafe { SetWindowRgn(hwnd, region, 1) } == 0 {
-            unsafe { DeleteObject(region) };
-        }
-    }
-
     unsafe fn paint_widget(hwnd: isize) {
         let mut paint = PaintStruct::default();
         let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
@@ -293,33 +412,133 @@ mod windows_host {
             return;
         }
 
+        let model = HOST
+            .get()
+            .and_then(|host| host.lock().ok().map(|state| state.model.clone()))
+            .unwrap_or_default();
         let mut rect = WinRect::default();
         unsafe { GetClientRect(hwnd, &mut rect) };
-        let background = unsafe { CreateSolidBrush(rgb(25, 29, 34)) };
+        let background = unsafe { CreateSolidBrush(PROOF_BACKGROUND) };
         unsafe {
             FillRect(hdc, &rect, background);
             DeleteObject(background);
             SetBkMode(hdc, TRANSPARENT);
-            SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
         }
 
+        let face = wide("Segoe UI Variable Text");
+        let font = unsafe {
+            CreateFontW(
+                -16,
+                0,
+                0,
+                0,
+                500,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                FONT_QUALITY_ANTIALIASED,
+                0,
+                face.as_ptr(),
+            )
+        };
+        let old_font = unsafe { SelectObject(hdc, font) };
+        let count = i32::try_from(model.providers.len()).unwrap_or(1).max(1);
+        let item_width = (rect.right - rect.left) / count;
         let middle = (rect.bottom - rect.top) / 2;
-        let accent = unsafe { CreateSolidBrush(rgb(166, 227, 92)) };
-        let old_brush = unsafe { SelectObject(hdc, accent) };
-        unsafe {
-            Ellipse(hdc, 12, middle - 4, 20, middle + 4);
-            SelectObject(hdc, old_brush);
-            DeleteObject(accent);
+
+        for (index, provider) in model.providers.iter().enumerate() {
+            let item_left = i32::try_from(index).unwrap_or(0) * item_width;
+            let color = provider_color(&provider.provider_id);
+            unsafe {
+                draw_provider_icon(hdc, &provider.provider_id, item_left + 15, middle, color)
+            };
+            let label = provider
+                .percent
+                .map(|percent| format!("{percent}%"))
+                .unwrap_or_else(|| "—".to_string());
+            let label = wide_without_nul(&label);
+            unsafe {
+                SetTextColor(hdc, color);
+                TextOutW(
+                    hdc,
+                    item_left + 30,
+                    middle - 8,
+                    label.as_ptr(),
+                    label.len() as i32,
+                );
+            }
+
+            if index + 1 < model.providers.len() {
+                let separator = unsafe { CreatePen(PS_SOLID, 1, rgb(76, 84, 94)) };
+                let old_pen = unsafe { SelectObject(hdc, separator) };
+                unsafe {
+                    MoveToEx(
+                        hdc,
+                        item_left + item_width - 1,
+                        middle - 9,
+                        std::ptr::null_mut(),
+                    );
+                    LineTo(hdc, item_left + item_width - 1, middle + 9);
+                    SelectObject(hdc, old_pen);
+                    DeleteObject(separator);
+                }
+            }
         }
 
-        let title = wide_without_nul("Ceiling");
-        let proof = wide_without_nul("Taskbar widget proof");
         unsafe {
-            SetTextColor(hdc, rgb(238, 242, 246));
-            TextOutW(hdc, 28, middle - 7, title.as_ptr(), title.len() as i32);
-            SetTextColor(hdc, rgb(143, 154, 166));
-            TextOutW(hdc, 78, middle - 7, proof.as_ptr(), proof.len() as i32);
+            SelectObject(hdc, old_font);
+            DeleteObject(font);
             EndPaint(hwnd, &paint);
+        }
+    }
+
+    unsafe fn draw_provider_icon(hdc: isize, provider_id: &str, x: i32, y: i32, color: u32) {
+        let pen = unsafe { CreatePen(PS_SOLID, 2, color) };
+        let old_pen = unsafe { SelectObject(hdc, pen) };
+        match provider_id {
+            "claude" => {
+                for (dx, dy) in [(0, 7), (5, 5), (7, 0), (5, -5)] {
+                    unsafe {
+                        MoveToEx(hdc, x - dx, y - dy, std::ptr::null_mut());
+                        LineTo(hdc, x + dx, y + dy);
+                    }
+                }
+            }
+            "cursor" => {
+                let brush = unsafe { CreateSolidBrush(color) };
+                let old_brush = unsafe { SelectObject(hdc, brush) };
+                let points = [
+                    WinPoint { x, y: y - 8 },
+                    WinPoint { x: x + 8, y },
+                    WinPoint { x, y: y + 8 },
+                    WinPoint { x: x - 8, y },
+                ];
+                unsafe {
+                    Polygon(hdc, points.as_ptr(), points.len() as i32);
+                    SelectObject(hdc, old_brush);
+                    DeleteObject(brush);
+                }
+            }
+            _ => unsafe {
+                Ellipse(hdc, x - 8, y - 8, x + 8, y + 8);
+                Ellipse(hdc, x - 4, y - 4, x + 4, y + 4);
+            },
+        }
+        unsafe {
+            SelectObject(hdc, old_pen);
+            DeleteObject(pen);
+        }
+    }
+
+    fn provider_color(provider_id: &str) -> u32 {
+        match provider_id {
+            "claude" => rgb(216, 116, 75),
+            "cursor" => rgb(15, 201, 181),
+            "codex" => rgb(64, 196, 222),
+            _ => rgb(204, 211, 220),
         }
     }
 
@@ -358,6 +577,13 @@ mod windows_host {
         top: i32,
         right: i32,
         bottom: i32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct WinPoint {
+        x: i32,
+        y: i32,
     }
 
     #[repr(C)]
@@ -421,21 +647,32 @@ mod windows_host {
     #[link(name = "gdi32")]
     unsafe extern "system" {
         fn CreateSolidBrush(color: u32) -> isize;
+        fn CreatePen(style: i32, width: i32, color: u32) -> isize;
+        fn CreateFontW(
+            height: i32,
+            width: i32,
+            escapement: i32,
+            orientation: i32,
+            weight: i32,
+            italic: u32,
+            underline: u32,
+            strike_out: u32,
+            char_set: u32,
+            output_precision: u32,
+            clip_precision: u32,
+            quality: u32,
+            pitch_and_family: u32,
+            face: *const u16,
+        ) -> isize;
         fn DeleteObject(object: isize) -> i32;
         fn SelectObject(hdc: isize, object: isize) -> isize;
-        fn GetStockObject(object: i32) -> isize;
         fn SetBkMode(hdc: isize, mode: i32) -> i32;
         fn SetTextColor(hdc: isize, color: u32) -> u32;
         fn TextOutW(hdc: isize, x: i32, y: i32, text: *const u16, count: i32) -> i32;
+        fn MoveToEx(hdc: isize, x: i32, y: i32, previous: *mut WinPoint) -> i32;
+        fn LineTo(hdc: isize, x: i32, y: i32) -> i32;
+        fn Polygon(hdc: isize, points: *const WinPoint, count: i32) -> i32;
         fn Ellipse(hdc: isize, left: i32, top: i32, right: i32, bottom: i32) -> i32;
-        fn CreateRoundRectRgn(
-            left: i32,
-            top: i32,
-            right: i32,
-            bottom: i32,
-            width: i32,
-            height: i32,
-        ) -> isize;
     }
 }
 
@@ -458,6 +695,13 @@ mod tests {
         }
     }
 
+    fn landmarks(widgets: Rect, start: Rect) -> TaskbarLandmarks {
+        TaskbarLandmarks {
+            widgets: Some(widgets),
+            start: Some(start),
+        }
+    }
+
     #[test]
     fn flag_parser_is_explicit() {
         assert!(flag_enabled(Some("1")));
@@ -468,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_widget_uses_taskbar_client_coordinates() {
+    fn native_widget_uses_left_lane_taskbar_client_coordinates() {
         let taskbar = layout(
             Rect {
                 left: -1920,
@@ -492,11 +736,29 @@ mod tests {
             ],
         );
 
-        let placement = child_placement(&taskbar).expect("a complete gap should fit");
-        assert_eq!(placement.x, 166);
-        assert_eq!(placement.y, 3);
+        let placement = child_placement(
+            &taskbar,
+            landmarks(
+                Rect {
+                    left: -1920,
+                    top: 1032,
+                    right: -1760,
+                    bottom: 1080,
+                },
+                Rect {
+                    left: -1100,
+                    top: 1032,
+                    right: -1052,
+                    bottom: 1080,
+                },
+            ),
+            3,
+        )
+        .expect("the Widgets-to-Start lane should fit");
+        assert_eq!(placement.x, 168);
+        assert_eq!(placement.y, 0);
         assert_eq!(placement.width, 240);
-        assert_eq!(placement.height, 42);
+        assert_eq!(placement.height, 48);
     }
 
     #[test]
@@ -510,7 +772,27 @@ mod tests {
             },
             vec![],
         );
-        assert_eq!(child_placement(&taskbar), None);
+        assert_eq!(
+            child_placement(
+                &taskbar,
+                landmarks(
+                    Rect {
+                        left: 0,
+                        top: 0,
+                        right: 48,
+                        bottom: 60,
+                    },
+                    Rect {
+                        left: 0,
+                        top: 500,
+                        right: 48,
+                        bottom: 548,
+                    },
+                ),
+                3,
+            ),
+            None
+        );
     }
 
     #[test]
@@ -529,6 +811,43 @@ mod tests {
                 bottom: 1080,
             }],
         );
-        assert_eq!(child_placement(&taskbar), None);
+        assert_eq!(
+            child_placement(
+                &taskbar,
+                landmarks(
+                    Rect {
+                        left: 0,
+                        top: 1032,
+                        right: 200,
+                        bottom: 1080,
+                    },
+                    Rect {
+                        left: 340,
+                        top: 1032,
+                        right: 388,
+                        bottom: 1080,
+                    },
+                ),
+                3,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn native_widget_requires_windows_landmarks_instead_of_guessing() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![],
+        );
+        assert_eq!(
+            child_placement(&taskbar, TaskbarLandmarks::default(), 3),
+            None
+        );
     }
 }
