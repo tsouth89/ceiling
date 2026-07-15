@@ -77,8 +77,8 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
+          # The release builder uses its own WorkRoot pnpm store. Enabling the
+          # setup-node cache here points at an unused store and fails in cleanup.
 
       - name: Check Tauri package versions
         shell: pwsh
