@@ -297,25 +297,28 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
     crate::usage_history::record_snapshot(&snapshot);
     events::emit_provider_updated(&app, &snapshot);
     let notification_settings = Settings::load();
-    for event in capacity_events {
-        if !notifications_armed {
+    if !notifications_armed {
+        for event in &capacity_events {
             tracing::debug!(
-                provider = event.provider_id,
+                provider = %event.provider_id,
                 kind = ?event.kind,
                 "suppressing capacity event while establishing startup baseline"
             );
-            continue;
         }
-        events::emit_capacity_event(&app, &event);
-        if notification_settings.show_notifications
-            && notification_settings.capacity_event_notifications_enabled
-            && capacity_event_uses_windows_notification(event.kind)
-            && let Ok(mut guard) = state.lock()
-        {
-            guard
-                .notification_manager
-                .notify_capacity_event(&event.notification_title(), &event.notification_body());
-        }
+        return;
+    }
+
+    for event in &capacity_events {
+        events::emit_capacity_event(&app, event);
+    }
+    if notification_settings.show_notifications
+        && notification_settings.capacity_event_notifications_enabled
+        && let Some((title, body)) = capacity_event_notification(&capacity_events)
+        && let Ok(mut guard) = state.lock()
+    {
+        guard
+            .notification_manager
+            .notify_capacity_event(&title, &body);
     }
 }
 
@@ -326,7 +329,35 @@ fn capacity_event_uses_windows_notification(
         kind,
         crate::capacity_events::CapacityEventKind::ScheduledReset
             | crate::capacity_events::CapacityEventKind::SurpriseReset
+            | crate::capacity_events::CapacityEventKind::PartialReset
     )
+}
+
+fn capacity_event_notification(
+    events: &[crate::capacity_events::CapacityEventPayload],
+) -> Option<(String, String)> {
+    let eligible = events
+        .iter()
+        .filter(|event| capacity_event_uses_windows_notification(event.kind))
+        .collect::<Vec<_>>();
+    match eligible.as_slice() {
+        [] => None,
+        [event] => Some((event.notification_title(), event.notification_body())),
+        events => {
+            let provider = &events[0].display_name;
+            let body = events
+                .iter()
+                .map(|event| {
+                    format!(
+                        "{} {:.0}% → {:.0}% used",
+                        event.window_label, event.previous_used_percent, event.current_used_percent
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            Some((format!("{provider} capacity restored"), format!("{body}.")))
+        }
+    }
 }
 
 pub(super) fn preserve_last_good_transient_failure(
@@ -807,6 +838,9 @@ mod predictive_warning_tests {
         assert!(capacity_event_uses_windows_notification(
             CapacityEventKind::SurpriseReset
         ));
+        assert!(capacity_event_uses_windows_notification(
+            CapacityEventKind::PartialReset
+        ));
         for visual_only in [
             CapacityEventKind::ResetTimeShift,
             CapacityEventKind::WindowLifted,
@@ -815,5 +849,32 @@ mod predictive_warning_tests {
         ] {
             assert!(!capacity_event_uses_windows_notification(visual_only));
         }
+    }
+
+    #[test]
+    fn simultaneous_partial_resets_are_batched_into_one_notification() {
+        use crate::capacity_events::{CapacityEventKind, CapacityEventPayload};
+
+        let event =
+            |window_id: &str, window_label: &str, before: f64, after: f64| CapacityEventPayload {
+                provider_id: "cursor".into(),
+                display_name: "Cursor".into(),
+                window_id: window_id.into(),
+                window_label: window_label.into(),
+                kind: CapacityEventKind::PartialReset,
+                previous_used_percent: before,
+                current_used_percent: after,
+                previous_reset_at: "2026-08-06T22:49:57Z".into(),
+                current_reset_at: "2026-08-06T22:49:57Z".into(),
+                occurred_at: "2026-07-15T20:21:45Z".into(),
+            };
+        let events = vec![
+            event("auto", "Auto", 99.4, 49.7),
+            event("plan", "Plan", 85.25, 48.19),
+        ];
+
+        let (title, body) = capacity_event_notification(&events).unwrap();
+        assert_eq!(title, "Cursor capacity restored");
+        assert_eq!(body, "Auto 99% → 50% used; Plan 85% → 48% used.");
     }
 }

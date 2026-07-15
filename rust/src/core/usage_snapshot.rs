@@ -170,6 +170,10 @@ pub struct UsageSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub promo_signals: Vec<PromoSignal>,
 
+    /// Provider-reported rate-limit resets that the user can apply manually.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits_available: Option<u32>,
+
     /// When this snapshot was captured
     pub updated_at: DateTime<Utc>,
 
@@ -197,6 +201,7 @@ impl UsageSnapshot {
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
+            reset_credits_available: None,
             updated_at: Utc::now(),
             account_email: None,
             account_organization: None,

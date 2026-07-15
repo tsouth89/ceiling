@@ -68,7 +68,7 @@ fn notification_threshold_migration_preserves_custom_and_current_values() {
 }
 
 #[test]
-fn usage_thresholds_inherit_from_window_provider_and_global_levels() {
+fn usage_thresholds_merge_provider_and_window_overrides() {
     let mut settings = Settings::default();
     settings.provider_usage_thresholds.insert(
         "codex".into(),
@@ -126,10 +126,13 @@ fn empty_and_out_of_range_threshold_overrides_are_normalized_on_load() {
 fn float_bar_defaults_are_safe() {
     let settings = Settings::default();
     assert!(!settings.float_bar_enabled);
+    assert!(settings.taskbar_widget_enabled);
+    assert!(!settings.taskbar_widget_all_monitors);
     assert_eq!(settings.float_bar_opacity, 80);
     assert_eq!(settings.float_bar_scale, 100);
     assert_eq!(settings.float_bar_orientation, "horizontal");
     assert_eq!(settings.float_bar_style, "floating");
+    assert!(settings.taskbar_widget_open_on_hover);
     assert_eq!(settings.float_bar_density, "standard");
     assert_eq!(resolved_float_bar_contrast(&settings), "auto");
     assert!(!settings.float_bar_click_through);
@@ -270,10 +273,13 @@ fn float_bar_settings_round_trip_through_raw() {
     // (after clamping/normalization).
     let s = Settings {
         float_bar_enabled: true,
+        taskbar_widget_enabled: false,
+        taskbar_widget_all_monitors: true,
         float_bar_opacity: 65,
         float_bar_scale: 140,
         float_bar_orientation: "vertical".to_string(),
-        float_bar_style: "taskbar".to_string(),
+        float_bar_style: "floating".to_string(),
+        taskbar_widget_open_on_hover: false,
         float_bar_density: "compact".to_string(),
         float_bar_contrast: Some("dark-text".to_string()),
         float_bar_click_through: true,
@@ -287,10 +293,13 @@ fn float_bar_settings_round_trip_through_raw() {
     let json = serde_json::to_string(&s).expect("serialize");
     let back: Settings = serde_json::from_str(&json).expect("deserialize");
     assert!(back.float_bar_enabled);
+    assert!(!back.taskbar_widget_enabled);
+    assert!(back.taskbar_widget_all_monitors);
     assert_eq!(back.float_bar_opacity, 65);
     assert_eq!(back.float_bar_scale, 140);
     assert_eq!(back.float_bar_orientation, "vertical");
-    assert_eq!(back.float_bar_style, "taskbar");
+    assert_eq!(back.float_bar_style, "floating");
+    assert!(!back.taskbar_widget_open_on_hover);
     assert_eq!(back.float_bar_density, "compact");
     assert_eq!(resolved_float_bar_contrast(&back), "dark-text");
     assert!(back.float_bar_click_through);
@@ -329,6 +338,23 @@ fn float_bar_raw_clamps_out_of_range_opacity_on_load() {
     assert_eq!(loaded.float_bar_opacity, 100);
     assert_eq!(loaded.float_bar_scale, 200);
     assert_eq!(loaded.float_bar_orientation, "horizontal");
+    assert_eq!(loaded.float_bar_style, "floating");
+    assert!(loaded.taskbar_widget_enabled);
+    assert!(!loaded.float_bar_enabled);
+}
+
+#[test]
+fn legacy_floating_style_migrates_to_the_independent_floating_bar() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{
+            "float_bar_enabled": true,
+            "float_bar_style": "floating"
+        }"#,
+    )
+    .expect("parse legacy floating settings");
+
+    assert!(loaded.float_bar_enabled);
+    assert!(!loaded.taskbar_widget_enabled);
     assert_eq!(loaded.float_bar_style, "floating");
 }
 

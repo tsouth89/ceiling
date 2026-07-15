@@ -5,18 +5,6 @@ vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
 }));
 
-// Mock Tauri invoke for get_available_languages
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue([
-    { value: "english", display: "English" },
-    { value: "chinese", display: "中文" },
-    { value: "chinesetraditional", display: "繁體中文（臺灣）" },
-    { value: "japanese", display: "日本語" },
-    { value: "korean", display: "한국어" },
-    { value: "spanish", display: "Español" },
-  ]),
-}));
-
 import GeneralTab from "./GeneralTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 
@@ -58,10 +46,13 @@ const settings: SettingsSnapshot = {
   disableKeychainAccess: false,
   providerMetrics: {},
   floatBarEnabled: false,
+  taskbarWidgetEnabled: true,
+  taskbarWidgetAllMonitors: false,
   floatBarOpacity: 0.9,
   floatBarScale: 100,
   floatBarOrientation: "horizontal",
   floatBarStyle: "floating",
+  taskbarWidgetOpenOnHover: true,
   floatBarDensity: "standard",
   floatBarContrast: "auto",
   floatBarClickThrough: false,
@@ -72,53 +63,29 @@ const settings: SettingsSnapshot = {
   showResetWhenExhausted: false,
 };
 
-describe("GeneralTab language picker", () => {
-  it("renders 6 language options when Traditional Chinese is wired", () => {
+describe("GeneralTab", () => {
+  it("keeps general settings focused on startup behavior", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
 
-    const select = screen.getByDisplayValue("English");
-    expect(select).toBeInTheDocument();
-
-    const options = select.querySelectorAll("option");
-    expect(options).toHaveLength(6);
+    expect(screen.getByText("StartAtLogin")).toBeInTheDocument();
+    expect(screen.getByText("StartMinimized")).toBeInTheDocument();
+    expect(screen.queryByText("InterfaceLanguage")).not.toBeInTheDocument();
+    expect(screen.queryByText("RefreshIntervalLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("RefreshAllProvidersOnMenuOpen")).not.toBeInTheDocument();
   });
 
-  it("includes spanish as a selectable option", () => {
-    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
-
-    expect(
-      screen.getByText("Español"),
-    ).toBeInTheDocument();
-  });
-
-  it("includes korean as a selectable option", () => {
-    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
-
-    expect(
-      screen.getByText("한국어"),
-    ).toBeInTheDocument();
-  });
-
-  it("includes Traditional Chinese as a selectable option", () => {
-    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
-
-    expect(screen.getByText("繁體中文（臺灣）")).toBeInTheDocument();
-  });
-
-  it("updates the predictive pace warning preference", () => {
-    const set = vi.fn();
+  it("uses a simple sound toggle without a separate volume control", () => {
     render(
       <GeneralTab
         mode="notifications"
         settings={settings}
-        set={set}
+        set={vi.fn()}
         saving={false}
       />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }));
-
-    expect(set).toHaveBeenCalledWith({ predictivePaceWarningEnabled: true });
+    expect(screen.getByText("SoundEnabled")).toBeInTheDocument();
+    expect(screen.queryByText("SoundVolume")).not.toBeInTheDocument();
   });
 
   it("updates the reset and capacity alert preference", () => {
@@ -139,37 +106,18 @@ describe("GeneralTab language picker", () => {
     expect(set).toHaveBeenCalledWith({ capacityEventNotificationsEnabled: false });
   });
 
-  it("saves a window override on blur and clears it to resume inheritance", () => {
+  it("uses one global usage warning threshold", () => {
     const set = vi.fn();
-    const { rerender } = render(
+    render(
       <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
     );
-    const input = screen.getByRole("spinbutton", {
-      name: "Codex · ProviderSession HighUsageAlert",
-    });
 
-    fireEvent.change(input, { target: { value: "80" } });
-    fireEvent.blur(input);
-    expect(set).toHaveBeenLastCalledWith({
-      providerUsageThresholds: { "codex:session": { high: 80 } },
-    });
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(1);
+    expect(screen.queryByText("PredictivePaceWarnings")).not.toBeInTheDocument();
+    expect(screen.queryByText("CriticalUsageAlert")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codex · ProviderSession")).not.toBeInTheDocument();
 
-    rerender(
-      <GeneralTab
-        mode="notifications"
-        settings={{
-          ...settings,
-          providerUsageThresholds: { "codex:session": { high: 80 } },
-        }}
-        set={set}
-        saving={false}
-      />,
-    );
-    const saved = screen.getByRole("spinbutton", {
-      name: "Codex · ProviderSession HighUsageAlert",
-    });
-    fireEvent.change(saved, { target: { value: "" } });
-    fireEvent.blur(saved);
-    expect(set).toHaveBeenLastCalledWith({ providerUsageThresholds: {} });
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "80" } });
+    expect(set).toHaveBeenCalledWith({ highUsageThreshold: 80 });
   });
 });

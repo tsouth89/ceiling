@@ -4,28 +4,26 @@ use std::time::{Duration, Instant};
 use codexbar::settings::Settings;
 
 const AUTO_REFRESH_POLL_INTERVAL: Duration = Duration::from_secs(15);
+const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub fn install(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut schedule: Option<(Duration, Instant)> = None;
         loop {
-            let interval = refresh_interval(Settings::load().refresh_interval_secs);
-            match interval {
-                None => schedule = None,
-                Some(interval) => {
-                    let now = Instant::now();
-                    let scheduled_at = schedule
-                        .filter(|(scheduled_interval, _)| *scheduled_interval == interval)
-                        .map(|(_, scheduled_at)| scheduled_at)
-                        .unwrap_or(now);
-                    if now >= scheduled_at {
-                        let _ = crate::commands::do_refresh_providers_if_stale(&app).await;
-                        schedule = Some((
-                            interval,
-                            next_fixed_tick(scheduled_at, Instant::now(), interval),
-                        ));
-                    }
+            let interval = PROVIDER_REFRESH_INTERVAL;
+            let now = Instant::now();
+            let scheduled_at = schedule
+                .filter(|(scheduled_interval, _)| *scheduled_interval == interval)
+                .map(|(_, scheduled_at)| scheduled_at)
+                .unwrap_or(now);
+            if now >= scheduled_at {
+                if let Err(error) = crate::commands::do_refresh_providers_if_stale(&app).await {
+                    tracing::warn!(%error, "Automatic provider refresh failed");
                 }
+                schedule = Some((
+                    interval,
+                    next_fixed_tick(scheduled_at, Instant::now(), interval),
+                ));
             }
             tokio::time::sleep(AUTO_REFRESH_POLL_INTERVAL).await;
         }
@@ -74,18 +72,9 @@ pub(crate) fn schedule_refresh_enrichment(settings: &Settings) {
     });
 }
 
-fn refresh_interval(seconds: u64) -> Option<Duration> {
-    (seconds > 0).then(|| Duration::from_secs(seconds))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn manual_refresh_setting_disables_background_refresh() {
-        assert_eq!(refresh_interval(0), None);
-    }
 
     #[test]
     fn fixed_cadence_advances_from_the_scheduled_tick() {

@@ -61,6 +61,20 @@ function provider(
 }
 
 describe("PlanStatusCard", () => {
+  it("shows an available Codex reset as a quiet chip", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "codex",
+          displayName: "Codex",
+          resetCreditsAvailable: 1,
+        })}
+        resetTimeRelative
+      />,
+    );
+    expect(screen.getByText(/1 reset available/)).toBeInTheDocument();
+  });
+
   it("shows logo, plan, pool hero, and hot companion", () => {
     render(
       <PlanStatusCard
@@ -115,7 +129,27 @@ describe("PlanStatusCard", () => {
     );
 
     expect(screen.getByText(/100% used/)).toBeTruthy();
+    expect(screen.getByText("Depleted")).toBeTruthy();
     expect(screen.getByText("Resets in 12d")).toBeTruthy();
+  });
+
+  it("uses a quiet status label instead of recoloring the usage bar", () => {
+    const { container } = render(
+      <PlanStatusCard
+        provider={provider({
+          primary: window(82),
+          secondary: null,
+          secondaryLabel: undefined,
+        })}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("Near limit")).toBeTruthy();
+    expect(
+      container.querySelector('.plan-status-card__bar-fill[data-level="high"]'),
+    ).toBeTruthy();
   });
 
   it("keeps overview identity quiet and strips redundant plan branding", () => {

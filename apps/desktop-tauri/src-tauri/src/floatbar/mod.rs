@@ -6,8 +6,8 @@
 //! shell only needs to call into the small public API exported here.
 
 mod commands;
-mod placement;
-mod taskbar;
+pub(crate) mod placement;
+pub(crate) mod taskbar;
 mod window;
 
 pub use commands::*;
@@ -27,7 +27,7 @@ pub fn install(app: &tauri::AppHandle) {
             app,
             persisted.float_bar_opacity,
             &persisted.float_bar_orientation,
-            &persisted.float_bar_style,
+            "floating",
             persisted.float_bar_click_through,
         );
     }
@@ -56,45 +56,41 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
 /// and shows or hides the window accordingly.
 pub fn toggle(app: &tauri::AppHandle) {
     let mut settings = Settings::load();
-    settings.float_bar_enabled = !settings.float_bar_enabled;
-    let _ = settings.save();
-    if settings.float_bar_enabled {
-        let _ = window::show(
-            app,
-            settings.float_bar_opacity,
-            &settings.float_bar_orientation,
-            &settings.float_bar_style,
-            settings.float_bar_click_through,
-        );
-    } else {
-        let _ = window::hide(app);
+    settings.taskbar_widget_enabled = !settings.taskbar_widget_enabled;
+    if let Err(error) = settings.save() {
+        tracing::warn!(%error, "Could not persist taskbar widget visibility");
+        return;
     }
+    crate::taskbar_widget::apply_state(app, &settings);
 }
 
 /// Bring the floating-bar window in line with persisted settings: open,
 /// close, or re-apply opacity / click-through as appropriate. Used after
 /// a settings patch is saved.
-pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
-    let open = app.get_webview_window(FLOATBAR_LABEL).is_some();
-    if settings.float_bar_enabled && !open {
-        let _ = window::show(
+pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
+    let window = app.get_webview_window(FLOATBAR_LABEL);
+    let visible = window
+        .as_ref()
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    let should_show_overlay = settings.float_bar_enabled;
+    if should_show_overlay && !visible {
+        window::show(
             app,
             settings.float_bar_opacity,
             &settings.float_bar_orientation,
-            &settings.float_bar_style,
+            "floating",
             settings.float_bar_click_through,
-        );
-    } else if !settings.float_bar_enabled && open {
-        let _ = window::hide(app);
-    } else if let Some(w) = app.get_webview_window(FLOATBAR_LABEL) {
+        )?;
+    } else if !should_show_overlay && visible {
+        window::hide(app)?;
+    } else if should_show_overlay && let Some(w) = window {
         window::apply_no_activate(&w);
         window::apply_opacity(&w, settings.float_bar_opacity);
         window::apply_click_through(&w, settings.float_bar_click_through);
         window::apply_always_on_top(&w);
-        if settings.float_bar_style == "taskbar" {
-            window::reposition_taskbar(&w, true);
-        }
     }
+    Ok(())
 }
 
 /// All five settings fields the float bar owns, in a single optional
@@ -103,10 +99,13 @@ pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
 #[derive(Debug, Default)]
 pub struct SettingsPatch {
     pub enabled: Option<bool>,
+    pub taskbar_enabled: Option<bool>,
+    pub taskbar_all_monitors: Option<bool>,
     pub opacity: Option<u8>,
     pub scale: Option<u8>,
     pub orientation: Option<String>,
     pub style: Option<String>,
+    pub open_on_hover: Option<bool>,
     pub density: Option<String>,
     pub contrast: Option<String>,
     pub click_through: Option<bool>,
@@ -119,10 +118,13 @@ pub struct SettingsPatch {
 impl SettingsPatch {
     pub fn is_empty(&self) -> bool {
         self.enabled.is_none()
+            && self.taskbar_enabled.is_none()
+            && self.taskbar_all_monitors.is_none()
             && self.opacity.is_none()
             && self.scale.is_none()
             && self.orientation.is_none()
             && self.style.is_none()
+            && self.open_on_hover.is_none()
             && self.density.is_none()
             && self.contrast.is_none()
             && self.click_through.is_none()
@@ -138,6 +140,12 @@ impl SettingsPatch {
         if let Some(v) = self.enabled {
             settings.float_bar_enabled = v;
         }
+        if let Some(v) = self.taskbar_enabled {
+            settings.taskbar_widget_enabled = v;
+        }
+        if let Some(v) = self.taskbar_all_monitors {
+            settings.taskbar_widget_all_monitors = v;
+        }
         if let Some(v) = self.opacity {
             settings.float_bar_opacity = codexbar::settings::clamp_float_bar_opacity(v);
         }
@@ -149,6 +157,9 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.style {
             settings.float_bar_style = codexbar::settings::normalize_float_bar_style(v);
+        }
+        if let Some(v) = self.open_on_hover {
+            settings.taskbar_widget_open_on_hover = v;
         }
         if let Some(v) = &self.density {
             settings.float_bar_density = codexbar::settings::normalize_float_bar_density(v);
@@ -187,7 +198,10 @@ pub fn after_settings_saved(
         notify_settings_changed(app);
     }
     if !patch.is_empty() {
-        apply_state(app, settings);
+        if let Err(error) = apply_state(app, settings) {
+            tracing::warn!(%error, "Could not apply floating bar state");
+        }
+        crate::taskbar_widget::apply_state(app, settings);
     }
 }
 
@@ -212,6 +226,7 @@ mod tests {
             float_bar_scale: 100,
             float_bar_orientation: "horizontal".into(),
             float_bar_style: "floating".into(),
+            taskbar_widget_open_on_hover: false,
             float_bar_dark_text: false,
             float_bar_show_reset_inline: false,
             ..Settings::default()
@@ -222,6 +237,7 @@ mod tests {
             opacity: Some(45),
             scale: Some(135),
             style: Some("taskbar".into()),
+            open_on_hover: Some(true),
             dark_text: Some(true),
             show_reset_inline: Some(true),
             ..SettingsPatch::default()
@@ -231,6 +247,7 @@ mod tests {
         assert_eq!(s.float_bar_opacity, 45);
         assert_eq!(s.float_bar_scale, 135);
         assert_eq!(s.float_bar_style, "taskbar");
+        assert!(s.taskbar_widget_open_on_hover);
         assert!(s.float_bar_dark_text);
         assert!(s.float_bar_show_reset_inline);
         // Orientation untouched by the patch.

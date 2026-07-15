@@ -92,6 +92,7 @@ pub struct PromoSignalSnapshot {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaceSnapshot {
+    pub window_label: String,
     pub stage: &'static str,
     pub delta_percent: f64,
     pub will_last_to_reset: bool,
@@ -115,6 +116,7 @@ pub struct ProviderUsageSnapshot {
     pub extra_rate_windows: Vec<NamedRateWindowSnapshot>,
     pub inactive_rate_windows: Vec<InactiveRateWindowSnapshot>,
     pub promo_signals: Vec<PromoSignalSnapshot>,
+    pub reset_credits_available: Option<u32>,
     pub cost: Option<CostSnapshotBridge>,
     pub plan_name: Option<String>,
     pub account_email: Option<String>,
@@ -171,6 +173,25 @@ fn primary_window_label<'a>(
     }
 }
 
+fn is_weekly_cadence(window: &RateWindow) -> bool {
+    matches!(window.window_minutes, Some(minutes) if minutes > 720 && minutes <= 20_160)
+}
+
+/// Pace is most useful as a long-term budget signal. Prefer the provider's
+/// weekly window even when a short session window is promoted as primary.
+fn preferred_pace_window<'a>(
+    primary: &'a RateWindow,
+    secondary: Option<&'a RateWindow>,
+) -> (&'a RateWindow, bool) {
+    if is_weekly_cadence(primary) {
+        (primary, true)
+    } else if let Some(weekly) = secondary.filter(|window| is_weekly_cadence(window)) {
+        (weekly, true)
+    } else {
+        (primary, false)
+    }
+}
+
 impl ProviderUsageSnapshot {
     pub(super) fn from_fetch_result(
         id: ProviderId,
@@ -178,10 +199,24 @@ impl ProviderUsageSnapshot {
         result: &ProviderFetchResult,
     ) -> Self {
         let usage = &result.usage;
+        let primary_label = primary_window_label(
+            metadata.session_label,
+            metadata.weekly_label,
+            usage.primary.window_minutes,
+        )
+        .to_string();
 
-        let primary_pace = codexbar::core::UsagePace::weekly(&usage.primary, None, 10080);
+        let (pace_window, pace_is_weekly) =
+            preferred_pace_window(&usage.primary, usage.secondary.as_ref());
+        let selected_pace = codexbar::core::UsagePace::weekly(pace_window, None, 10080);
+        let pace_window_label = if pace_is_weekly {
+            metadata.weekly_label
+        } else {
+            primary_label.as_str()
+        };
 
-        let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
+        let pace = selected_pace.as_ref().map(|p| PaceSnapshot {
+            window_label: pace_window_label.to_string(),
             stage: pace_stage_str(p.stage),
             delta_percent: p.delta_percent,
             will_last_to_reset: p.will_last_to_reset,
@@ -210,14 +245,7 @@ impl ProviderUsageSnapshot {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
             primary: primary_snap,
-            primary_label: Some(
-                primary_window_label(
-                    metadata.session_label,
-                    metadata.weekly_label,
-                    usage.primary.window_minutes,
-                )
-                .to_string(),
-            ),
+            primary_label: Some(primary_label),
             secondary: secondary_snap,
             secondary_label: usage
                 .secondary
@@ -264,6 +292,7 @@ impl ProviderUsageSnapshot {
                     ends_at: signal.ends_at.map(|dt| dt.to_rfc3339()),
                 })
                 .collect(),
+            reset_credits_available: usage.reset_credits_available,
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {
                 used: c.used,
                 limit: c.limit,
@@ -312,6 +341,7 @@ impl ProviderUsageSnapshot {
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
+            reset_credits_available: None,
             cost: None,
             plan_name: None,
             account_email: None,
@@ -519,10 +549,13 @@ pub struct SettingsSnapshot {
     wayfinder_gateway_url: String,
     provider_metrics: std::collections::HashMap<String, &'static str>,
     float_bar_enabled: bool,
+    taskbar_widget_enabled: bool,
+    taskbar_widget_all_monitors: bool,
     float_bar_opacity: u8,
     float_bar_scale: u8,
     float_bar_orientation: String,
     float_bar_style: String,
+    taskbar_widget_open_on_hover: bool,
     float_bar_density: String,
     float_bar_contrast: String,
     float_bar_click_through: bool,
@@ -616,10 +649,13 @@ impl From<Settings> for SettingsSnapshot {
             wayfinder_gateway_url,
             provider_metrics,
             float_bar_enabled: settings.float_bar_enabled,
+            taskbar_widget_enabled: settings.taskbar_widget_enabled,
+            taskbar_widget_all_monitors: settings.taskbar_widget_all_monitors,
             float_bar_opacity: settings.float_bar_opacity,
             float_bar_scale: settings.float_bar_scale,
             float_bar_orientation: settings.float_bar_orientation,
             float_bar_style: settings.float_bar_style,
+            taskbar_widget_open_on_hover: settings.taskbar_widget_open_on_hover,
             float_bar_density: settings.float_bar_density,
             float_bar_contrast,
             float_bar_click_through: settings.float_bar_click_through,
@@ -728,6 +764,26 @@ mod tests {
         assert_eq!(primary_window_label("Plan", "Weekly", Some(43_200)), "Plan");
         // Unknown cadence keeps the configured label.
         assert_eq!(primary_window_label("Session", "Weekly", None), "Session");
+    }
+
+    #[test]
+    fn pace_prefers_the_weekly_window_over_a_primary_session() {
+        let session = RateWindow::with_details(12.0, Some(300), None, None);
+        let weekly = RateWindow::with_details(29.0, Some(10_080), None, None);
+
+        let (selected, is_weekly) = preferred_pace_window(&session, Some(&weekly));
+
+        assert!(is_weekly);
+        assert_eq!(selected.used_percent, 29.0);
+    }
+
+    #[test]
+    fn pace_keeps_a_weekly_window_promoted_to_primary() {
+        let weekly = RateWindow::with_details(51.0, Some(10_080), None, None);
+        let (selected, is_weekly) = preferred_pace_window(&weekly, None);
+
+        assert!(is_weekly);
+        assert_eq!(selected.used_percent, 51.0);
     }
 
     fn snapshot_window_with(

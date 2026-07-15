@@ -394,7 +394,7 @@ locale_keys! {
     TrayOpenCodexBar,
     TrayPopOutDashboard,
     TrayShowWindow,
-    TrayShowFloatBar,
+    TrayShowTaskbarUsage,
     TrayRefreshAll,
     TrayProviders,
     TraySettings,

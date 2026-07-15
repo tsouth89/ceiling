@@ -7,11 +7,14 @@ export function CeilingMark({
   size = 16,
   className,
   title = "Ceiling",
+  appearance = "tile",
 }: {
   size?: number;
   className?: string;
   title?: string;
+  appearance?: "tile" | "glass";
 }) {
+  const glass = appearance === "glass";
   return (
     <svg
       width={size}
@@ -22,9 +25,17 @@ export function CeilingMark({
       aria-label={title}
       className={className}
     >
-      <rect width="32" height="32" rx="8.5" fill="#0f1216" />
-      <rect x="7" y="8" width="18" height="2.6" rx="1.3" fill="#a6e35c" />
-      <rect x="7" y="13.6" width="18" height="10.4" rx="2.4" fill="#e8ecf1" />
+      <rect
+        x={glass ? 0.5 : 0}
+        y={glass ? 0.5 : 0}
+        width={glass ? 31 : 32}
+        height={glass ? 31 : 32}
+        rx="8.5"
+        fill={glass ? "rgba(255, 255, 255, 0.055)" : "#0f1216"}
+        stroke={glass ? "rgba(255, 255, 255, 0.16)" : "none"}
+      />
+      <rect x="7" y="8" width="18" height="2.6" rx="1.3" fill={glass ? "#80e5ec" : "#a6e35c"} />
+      <rect x="7" y="13.6" width="18" height="10.4" rx="2.4" fill={glass ? "#f6f9fd" : "#e8ecf1"} />
     </svg>
   );
 }

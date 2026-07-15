@@ -65,6 +65,16 @@ pub struct CostUsageReport {
     pub seven_days: CostSummary,
     pub thirty_days: CostSummary,
     pub latest_session: Option<CostSummary>,
+    /// Exact token totals for caller-supplied reset windows, keyed by ID.
+    pub current_windows: HashMap<String, CostSummary>,
+}
+
+/// A provider reset window whose local-log usage should be aggregated exactly.
+#[derive(Debug, Clone)]
+pub struct CurrentUsageWindow {
+    pub id: String,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
 }
 
 /// Per-model token counts
@@ -248,7 +258,7 @@ struct ClaudeCacheCreation {
     ephemeral_1h_input_tokens: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ClaudeUsageRecord {
     model: String,
     timestamp: Option<DateTime<Utc>>,
@@ -318,19 +328,24 @@ impl CostScanner {
         summary.period_start = Some(start_date);
         summary.period_end = Some(today);
 
-        // Walk through projects directory, de-duplicating usage records
-        // that appear across multiple files.
+        // Parse independent transcript files in parallel, then apply the
+        // cross-file de-duplication in deterministic file order.
+        let files = self.claude_files_since(&projects_dir, &cutoff, cancel);
+        let parsed_files = parse_claude_files(&files, &cutoff, cancel);
         let mut seen = HashSet::new();
-        let mut handle_file = |path: &Path| {
-            let counted =
-                for_each_claude_usage_record(path, &cutoff, &mut seen, cancel, |record| {
-                    add_claude_record_to_summary(&mut summary, record);
-                });
+        for (_, records) in parsed_files {
+            let mut counted = 0;
+            for record in records {
+                if !should_count_claude_record(&record, &cutoff, &mut seen) {
+                    continue;
+                }
+                counted += 1;
+                add_claude_record_to_summary(&mut summary, &record);
+            }
             if counted > 0 {
                 summary.sessions_count += 1;
             }
-        };
-        self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
+        }
 
         summary
     }
@@ -465,6 +480,64 @@ impl CostScanner {
             }
         }
     }
+
+    fn claude_files_since(
+        &self,
+        projects_dir: &Path,
+        cutoff: &DateTime<Utc>,
+        cancel: Option<&AtomicBool>,
+    ) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        self.walk_claude_files(projects_dir, cutoff, cancel, &mut |path| {
+            files.push(path.to_path_buf())
+        });
+        files.sort();
+        files
+    }
+}
+
+fn parse_claude_files(
+    files: &[PathBuf],
+    cutoff: &DateTime<Utc>,
+    cancel: Option<&AtomicBool>,
+) -> Vec<(PathBuf, Vec<ClaudeUsageRecord>)> {
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .clamp(1, 8)
+        .min(files.len());
+    let chunk_size = files.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        let handles = files
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|path| {
+                            let mut records = Vec::new();
+                            let mut local_seen = HashSet::new();
+                            for_each_claude_usage_record(
+                                path,
+                                cutoff,
+                                &mut local_seen,
+                                cancel,
+                                |record| records.push(record.clone()),
+                            );
+                            (path.clone(), records)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap_or_default())
+            .collect::<Vec<_>>()
+    })
 }
 
 /// Stream the de-duplicated, in-window usage records from one transcript
@@ -487,11 +560,27 @@ where
     };
 
     let mut counted = 0;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::with_capacity(16 * 1024);
+    loop {
+        line.clear();
+        let Ok(bytes_read) = reader.read_until(b'\n', &mut line) else {
+            break;
+        };
+        if bytes_read == 0 {
+            break;
+        }
         if is_cancelled(cancel) {
             break;
         }
-        if let Ok(event) = serde_json::from_str::<ClaudeEvent>(&line)
+        // Claude transcripts contain large user/tool payloads that can never
+        // contribute token usage. Avoid allocating a String and asking serde
+        // to parse those lines; only assistant events with a usage object can
+        // produce a record.
+        if !contains_bytes(&line, b"\"assistant\"") || !contains_bytes(&line, b"\"usage\"") {
+            continue;
+        }
+        if let Ok(event) = serde_json::from_slice::<ClaudeEvent>(&line)
             && let Some(record) = claude_usage_record_from_event(&event)
             && should_count_claude_record(&record, cutoff, seen)
         {
@@ -500,6 +589,30 @@ where
         }
     }
     counted
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    let mut offset = 0;
+    while offset + needle.len() <= haystack.len() {
+        let Some(relative) = haystack[offset..]
+            .iter()
+            .position(|byte| *byte == needle[0])
+        else {
+            return false;
+        };
+        let start = offset + relative;
+        if haystack
+            .get(start..start + needle.len())
+            .is_some_and(|candidate| candidate == needle)
+        {
+            return true;
+        }
+        offset = start + 1;
+    }
+    false
 }
 
 fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageRecord> {
@@ -637,12 +750,48 @@ pub fn has_cost_usage_sources() -> bool {
 /// for today's values. This report keeps those views consistent and makes the
 /// initial load bounded by a single scan.
 pub fn get_cost_usage_report(provider: &str, days: u32) -> Option<CostUsageReport> {
+    get_cost_usage_report_with_windows(provider, days, &[])
+}
+
+pub fn get_cost_usage_report_with_windows(
+    provider: &str,
+    days: u32,
+    current_windows: &[CurrentUsageWindow],
+) -> Option<CostUsageReport> {
     let days = days.max(1);
     let scanner = CostScanner::new(days);
     match provider {
-        "codex" => Some(scan_codex_report(&scanner, days)),
-        "claude" => Some(scan_claude_report(&scanner, days)),
+        "codex" => Some(scan_codex_report(&scanner, days, current_windows)),
+        "claude" => Some(scan_claude_report(&scanner, days, current_windows)),
         _ => None,
+    }
+}
+
+fn empty_current_window_summaries(windows: &[CurrentUsageWindow]) -> HashMap<String, CostSummary> {
+    windows
+        .iter()
+        .map(|window| (window.id.clone(), CostSummary::default()))
+        .collect()
+}
+
+fn add_to_current_windows<F>(
+    summaries: &mut HashMap<String, CostSummary>,
+    windows: &[CurrentUsageWindow],
+    timestamp: Option<DateTime<Utc>>,
+    mut add: F,
+) where
+    F: FnMut(&mut CostSummary),
+{
+    let Some(timestamp) = timestamp else {
+        return;
+    };
+    for window in windows {
+        if timestamp >= window.starts_at
+            && timestamp < window.ends_at
+            && let Some(summary) = summaries.get_mut(&window.id)
+        {
+            add(summary);
+        }
     }
 }
 
@@ -693,6 +842,7 @@ fn finish_report(
     latest_session: Option<CostSummary>,
     sessions: (u32, u32, u32),
     undated: Option<&CostSummary>,
+    current_windows: HashMap<String, CostSummary>,
 ) -> CostUsageReport {
     let today = Local::now().date_naive();
     let seven_day_start = today - Duration::days(6);
@@ -743,10 +893,15 @@ fn finish_report(
         seven_days: seven_day_summary,
         thirty_days: period_summary,
         latest_session,
+        current_windows,
     }
 }
 
-fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
+fn scan_codex_report(
+    scanner: &CostScanner,
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
     let today = Local::now().date_naive();
     let start = codex_period_start(today, days);
     let seven_day_start = today - Duration::days(6);
@@ -756,6 +911,7 @@ fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
     let mut today_sessions = 0;
     let mut seven_day_sessions = 0;
     let mut period_sessions = 0;
+    let mut current_windows = empty_current_window_summaries(windows);
 
     for sessions_dir in scanner.get_codex_sessions_dirs() {
         if !sessions_dir.exists() {
@@ -800,6 +956,16 @@ fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
                     if let Some(cost) = add_codex_record_to_summary(&mut file_summary, record) {
                         file_summary.total_cost_usd += cost;
                     }
+                    add_to_current_windows(
+                        &mut current_windows,
+                        windows,
+                        record.timestamp,
+                        |summary| {
+                            if let Some(cost) = add_codex_record_to_summary(summary, record) {
+                                summary.total_cost_usd += cost;
+                            }
+                        },
+                    );
                     if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
                         contributed_today |= date == today;
                         contributed_seven_days |= date >= seven_day_start;
@@ -829,14 +995,20 @@ fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
         latest.map(|(_, summary)| summary),
         (today_sessions, seven_day_sessions, period_sessions),
         None,
+        current_windows,
     )
 }
 
-fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
+fn scan_claude_report(
+    scanner: &CostScanner,
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
     let projects_dir = scanner.get_claude_projects_dir();
     let mut daily = empty_daily_summaries(days);
+    let mut current_windows = empty_current_window_summaries(windows);
     if !projects_dir.exists() {
-        return finish_report(daily, days, None, (0, 0, 0), None);
+        return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
     }
 
     let today = Local::now().date_naive();
@@ -849,18 +1021,27 @@ fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
     let mut seven_day_sessions = 0;
     let mut period_sessions = 0;
 
-    let mut handle_file = |path: &Path| {
+    let files = scanner.claude_files_since(&projects_dir, &cutoff, None);
+    for (path, records) in parse_claude_files(&files, &cutoff, None) {
         let mut file_summary = CostSummary::default();
         let mut latest_recorded_at: Option<DateTime<Utc>> = None;
         let mut contributed_today = false;
         let mut contributed_seven_days = false;
-        let counted = for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-            add_claude_record_to_summary(&mut file_summary, record);
+        let mut counted = 0;
+        for record in records {
+            if !should_count_claude_record(&record, &cutoff, &mut seen) {
+                continue;
+            }
+            counted += 1;
+            add_claude_record_to_summary(&mut file_summary, &record);
+            add_to_current_windows(&mut current_windows, windows, record.timestamp, |summary| {
+                add_claude_record_to_summary(summary, &record)
+            });
             if let Some(timestamp) = record.timestamp {
                 let date = timestamp.with_timezone(&Local).date_naive();
                 let day = date.format("%Y-%m-%d").to_string();
                 if let Some(day_summary) = daily.get_mut(&day) {
-                    add_claude_record_to_summary(day_summary, record);
+                    add_claude_record_to_summary(day_summary, &record);
                 }
                 contributed_today |= date == today;
                 contributed_seven_days |= date >= seven_day_start;
@@ -868,17 +1049,17 @@ fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
                     latest_recorded_at = Some(timestamp);
                 }
             } else {
-                add_claude_record_to_summary(&mut undated, record);
+                add_claude_record_to_summary(&mut undated, &record);
             }
-        });
+        }
         if counted == 0 {
-            return;
+            continue;
         }
         file_summary.sessions_count = 1;
         period_sessions += 1;
         today_sessions += u32::from(contributed_today);
         seven_day_sessions += u32::from(contributed_seven_days);
-        let fallback_modified = fs::metadata(path)
+        let fallback_modified = fs::metadata(&path)
             .and_then(|metadata| metadata.modified())
             .ok()
             .map(DateTime::<Utc>::from)
@@ -890,8 +1071,7 @@ fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
         {
             latest = Some((recorded_at, file_summary));
         }
-    };
-    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+    }
 
     finish_report(
         daily,
@@ -899,6 +1079,7 @@ fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
         latest.map(|(_, summary)| summary),
         (today_sessions, seven_day_sessions, period_sessions),
         Some(&undated),
+        current_windows,
     )
 }
 
@@ -976,6 +1157,16 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn claude_line_prefilter_accepts_usage_events_and_rejects_other_payloads() {
+        let usage = br#"{"type":"assistant","message":{"usage":{"input_tokens":1}}}"#;
+        let tool = br#"{"type":"user","message":{"content":"assistant usage"}}"#;
+
+        assert!(contains_bytes(usage, b"\"assistant\""));
+        assert!(contains_bytes(usage, b"\"usage\""));
+        assert!(!contains_bytes(tool, b"\"assistant\""));
+    }
 
     #[test]
     fn test_unknown_model_falls_back_to_sonnet() {
@@ -1188,6 +1379,26 @@ mod tests {
         let mut seen = HashSet::new();
         assert!(should_count_claude_record(&record, &cutoff, &mut seen));
         assert!(!should_count_claude_record(&record, &cutoff, &mut seen));
+    }
+
+    #[test]
+    fn claude_transcript_discovery_is_deterministically_sorted() {
+        let dir = tempfile::tempdir().expect("temp directory");
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(&projects).expect("create projects directory");
+        for name in ["z-last.jsonl", "a-first.jsonl", "m-middle.jsonl"] {
+            std::fs::write(projects.join(name), "{}\n").expect("write transcript");
+        }
+        let scanner = CostScanner::new(30);
+        let cutoff = Utc::now() - Duration::days(1);
+
+        let files = scanner.claude_files_since(&projects, &cutoff, None);
+        let names = files
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["a-first.jsonl", "m-middle.jsonl", "z-last.jsonl"]);
     }
 
     #[test]

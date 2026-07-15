@@ -126,15 +126,21 @@ pub(super) struct RawSettings {
     powertoys_status_pipe_enabled: bool,
 
     #[serde(default)]
-    float_bar_enabled: bool,
+    float_bar_enabled: Option<bool>,
+    #[serde(default)]
+    taskbar_widget_enabled: Option<bool>,
+    #[serde(default)]
+    taskbar_widget_all_monitors: bool,
     #[serde(default = "default_float_bar_opacity")]
     float_bar_opacity: u8,
     #[serde(default = "default_float_bar_scale")]
     float_bar_scale: u8,
     #[serde(default = "default_float_bar_orientation")]
     float_bar_orientation: String,
-    #[serde(default = "default_float_bar_style")]
-    float_bar_style: String,
+    #[serde(default)]
+    float_bar_style: Option<String>,
+    #[serde(default = "default_true")]
+    taskbar_widget_open_on_hover: bool,
     #[serde(default = "default_float_bar_density")]
     float_bar_density: String,
     #[serde(default)]
@@ -225,11 +231,14 @@ impl Default for RawSettings {
             window_scale_percent: s.window_scale_percent,
             tray_scale_percent: s.tray_scale_percent,
             powertoys_status_pipe_enabled: s.powertoys_status_pipe_enabled,
-            float_bar_enabled: s.float_bar_enabled,
+            float_bar_enabled: Some(s.float_bar_enabled),
+            taskbar_widget_enabled: Some(s.taskbar_widget_enabled),
+            taskbar_widget_all_monitors: s.taskbar_widget_all_monitors,
             float_bar_opacity: s.float_bar_opacity,
             float_bar_scale: s.float_bar_scale,
             float_bar_orientation: s.float_bar_orientation,
-            float_bar_style: s.float_bar_style,
+            float_bar_style: Some(s.float_bar_style),
+            taskbar_widget_open_on_hover: s.taskbar_widget_open_on_hover,
             float_bar_density: s.float_bar_density,
             float_bar_contrast: s.float_bar_contrast,
             float_bar_click_through: s.float_bar_click_through,
@@ -244,6 +253,21 @@ impl Default for RawSettings {
 impl From<RawSettings> for Settings {
     fn from(raw: RawSettings) -> Self {
         let mut provider_configs = raw.provider_configs;
+        let legacy_float_bar_style = match raw.float_bar_style.as_deref() {
+            Some("taskbar") => Some("taskbar"),
+            Some("floating") => Some("floating"),
+            _ => None,
+        };
+        let legacy_float_bar_enabled = raw.float_bar_enabled.unwrap_or(false);
+        let (taskbar_widget_enabled, float_bar_enabled) = match raw.taskbar_widget_enabled {
+            Some(taskbar_enabled) => (taskbar_enabled, legacy_float_bar_enabled),
+            None if legacy_float_bar_style == Some("taskbar") => (legacy_float_bar_enabled, false),
+            None if legacy_float_bar_style == Some("floating") => (false, legacy_float_bar_enabled),
+            None => {
+                let defaults = Settings::default();
+                (defaults.taskbar_widget_enabled, defaults.float_bar_enabled)
+            }
+        };
 
         // Helper closures to lazily insert per-provider configs from legacy
         // flat fields. Existing `provider_configs` entries take precedence.
@@ -481,7 +505,10 @@ impl From<RawSettings> for Settings {
             enable_animations: raw.enable_animations,
             reset_time_relative: raw.reset_time_relative,
             show_reset_when_exhausted: raw.show_reset_when_exhausted,
-            predictive_pace_warning_enabled: raw.predictive_pace_warning_enabled,
+            // Predictive warnings were experimental and are no longer exposed.
+            // Keep the serialized field for compatibility, but do not leave a
+            // hidden alert source enabled after upgrading.
+            predictive_pace_warning_enabled: false,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             show_all_token_accounts_in_menu: raw.show_all_token_accounts_in_menu,
             provider_configs,
@@ -505,11 +532,14 @@ impl From<RawSettings> for Settings {
             window_scale_percent: clamp_window_scale_percent(raw.window_scale_percent),
             tray_scale_percent: clamp_tray_scale_percent(raw.tray_scale_percent),
             powertoys_status_pipe_enabled: raw.powertoys_status_pipe_enabled,
-            float_bar_enabled: raw.float_bar_enabled,
+            float_bar_enabled,
+            taskbar_widget_enabled,
+            taskbar_widget_all_monitors: raw.taskbar_widget_all_monitors,
             float_bar_opacity: clamp_float_bar_opacity(raw.float_bar_opacity),
             float_bar_scale: clamp_float_bar_scale(raw.float_bar_scale),
             float_bar_orientation: normalize_float_bar_orientation(&raw.float_bar_orientation),
-            float_bar_style: normalize_float_bar_style(&raw.float_bar_style),
+            float_bar_style: "floating".to_string(),
+            taskbar_widget_open_on_hover: raw.taskbar_widget_open_on_hover,
             float_bar_density: normalize_float_bar_density(&raw.float_bar_density),
             float_bar_contrast: raw
                 .float_bar_contrast

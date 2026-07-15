@@ -67,6 +67,7 @@ pub struct CodexParseResult {
 #[derive(Debug, Clone)]
 pub struct CodexUsageRecord {
     pub day_key: String,
+    pub timestamp: Option<DateTime<chrono::Utc>>,
     pub model: String,
     pub input: i32,
     pub cached: i32,
@@ -237,7 +238,7 @@ impl CodexParserState {
                 ) {
                     return;
                 }
-                self.record_fast_token_count(payload, day_key);
+                self.record_fast_token_count(payload, day_key, timestamp);
             }
         }
     }
@@ -270,10 +271,27 @@ impl CodexParserState {
 
         let info = payload.get("info");
         let model = self.token_model(info, payload, obj);
-        self.record_usage(day_key, &model, delta_input, delta_cached, delta_output);
+        let timestamp = obj
+            .get("timestamp")
+            .and_then(|value| value.as_str())
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc));
+        self.record_usage(
+            day_key,
+            timestamp,
+            &model,
+            delta_input,
+            delta_cached,
+            delta_output,
+        );
     }
 
-    fn record_fast_token_count(&mut self, payload: CodexFastPayload<'_>, day_key: String) {
+    fn record_fast_token_count(
+        &mut self,
+        payload: CodexFastPayload<'_>,
+        day_key: String,
+        timestamp: &str,
+    ) {
         let Some((delta_input, delta_cached, delta_output)) = self.fast_token_deltas(&payload)
         else {
             return;
@@ -290,12 +308,31 @@ impl CodexParserState {
             .or(self.current_model.as_deref())
             .unwrap_or("gpt-5")
             .to_string();
-        self.record_usage(day_key, &model, delta_input, delta_cached, delta_output);
+        let timestamp = DateTime::parse_from_rfc3339(timestamp)
+            .ok()
+            .map(|value| value.with_timezone(&chrono::Utc));
+        self.record_usage(
+            day_key,
+            timestamp,
+            &model,
+            delta_input,
+            delta_cached,
+            delta_output,
+        );
     }
 
-    fn record_usage(&mut self, day_key: String, model: &str, input: i32, cached: i32, output: i32) {
+    fn record_usage(
+        &mut self,
+        day_key: String,
+        timestamp: Option<DateTime<chrono::Utc>>,
+        model: &str,
+        input: i32,
+        cached: i32,
+        output: i32,
+    ) {
         self.records.push(CodexUsageRecord {
             day_key,
+            timestamp,
             model: CostUsagePricing::normalize_codex_model(model),
             input,
             cached: cached.min(input),
@@ -656,7 +693,7 @@ use chrono::Datelike;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{TimeZone, Utc};
     use std::io::Write;
 
     #[test]
@@ -729,7 +766,7 @@ mod tests {
             &range,
         );
         parser.process_line(
-            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cache_read_input_tokens":40,"output_tokens":9}}}}"#,
+            r#"{"timestamp":"2026-05-31T06:00:02.000-04:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cache_read_input_tokens":40,"output_tokens":9}}}}"#,
             &range,
         );
 
@@ -738,7 +775,38 @@ mod tests {
         assert_eq!(record.day_key, "2026-05-31");
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (120, 40, 9));
+        assert_eq!(
+            record.timestamp,
+            Some(Utc.with_ymd_and_hms(2026, 5, 31, 10, 0, 2).unwrap())
+        );
         assert_eq!(parser.current_model.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn serde_token_path_preserves_offset_timestamps_and_tolerates_malformed_values() {
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        let offset = serde_json::json!({
+            "timestamp": "2026-05-31T06:00:02-04:00",
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": 4, "output_tokens": 2}}
+            }
+        });
+        parser.record_token_count(&offset, "2026-05-31".to_string());
+        assert_eq!(
+            parser.records[0].timestamp,
+            Some(Utc.with_ymd_and_hms(2026, 5, 31, 10, 0, 2).unwrap())
+        );
+
+        let malformed = serde_json::json!({
+            "timestamp": "not-a-timestamp",
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": 1, "output_tokens": 1}}
+            }
+        });
+        parser.record_token_count(&malformed, "2026-05-31".to_string());
+        assert_eq!(parser.records[1].timestamp, None);
     }
 
     #[test]

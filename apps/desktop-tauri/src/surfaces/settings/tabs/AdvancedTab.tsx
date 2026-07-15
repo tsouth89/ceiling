@@ -47,7 +47,7 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
     async (accelerator: string) => {
       setShortcutError(null);
       try {
-        await registerGlobalShortcut(accelerator).catch(() => {});
+        await registerGlobalShortcut(accelerator);
         set({ globalShortcut: accelerator });
       } catch (err: unknown) {
         setShortcutError(err instanceof Error ? err.message : String(err));
@@ -59,7 +59,7 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
   const clearShortcut = useCallback(async () => {
     setShortcutError(null);
     try {
-      await unregisterGlobalShortcut().catch(() => {});
+      await unregisterGlobalShortcut();
       set({ globalShortcut: "" });
     } catch (err: unknown) {
       setShortcutError(err instanceof Error ? err.message : String(err));

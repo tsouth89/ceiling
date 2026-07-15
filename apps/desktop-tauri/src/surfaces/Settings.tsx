@@ -102,7 +102,6 @@ export const TAB_META: { id: SettingsTab; labelKey: LocaleKey }[] = [
   { id: "general", labelKey: "TabGeneral" },
   { id: "providers", labelKey: "TabProviders" },
   { id: "notifications", labelKey: "TabNotifications" },
-  { id: "menuBar", labelKey: "TabMenuBar" },
   { id: "menu", labelKey: "TabMenu" },
   { id: "advanced", labelKey: "TabAdvanced" },
   { id: "about", labelKey: "TabAbout" },
@@ -268,9 +267,6 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
         )}
         {activeTab === "notifications" && (
           <GeneralTab mode="notifications" settings={settings} set={set} saving={saving} />
-        )}
-        {activeTab === "menuBar" && (
-          <DisplayTab mode="menuBar" settings={settings} set={set} saving={saving} />
         )}
         {activeTab === "menu" && (
           <DisplayTab mode="menu" settings={settings} set={set} saving={saving} />

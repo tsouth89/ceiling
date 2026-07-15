@@ -90,7 +90,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     hasLoadedCache,
   } = useProviders({
     initialRefreshDelayMs: TRAY_INITIAL_REFRESH_DELAY_MS,
-    forceRefreshOnMount: settings.refreshAllProvidersOnMenuOpen,
   });
   const { updateState, checkNow, download, apply, dismiss, openRelease } =
     useUpdateState();

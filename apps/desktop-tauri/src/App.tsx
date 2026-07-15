@@ -11,6 +11,7 @@ import {
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useTheme } from "./hooks/useTheme";
 import TrayPanel from "./surfaces/TrayPanel";
+import TaskbarFlyout from "./surfaces/TaskbarFlyout";
 import { FLOATBAR_WINDOW_LABEL } from "./floatbar/api";
 import { LocaleProvider } from "./i18n/LocaleProvider";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
@@ -178,11 +179,11 @@ function AppInner() {
     );
   }
 
-  // Detached flyout ("Pop Out Dashboard") window — render TrayPanel directly.
-  // TrayPanel is statically imported (not lazy), so no Suspense boundary is
-  // needed here, unlike the other detached-window branches above.
+  // The native taskbar widget gets a purpose-built glance flyout. Keeping it
+  // separate from TrayPanel prevents dashboard controls and remembered sizing
+  // from making this quick interaction feel like a second app window.
   if (isFlyoutWindow()) {
-    return <TrayPanel state={state} />;
+    return <TaskbarFlyout state={state} />;
   }
 
   return <SurfaceRouter surface={surface} state={state} />;

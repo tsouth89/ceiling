@@ -7,10 +7,18 @@ const OBSTACLE_CLEARANCE: i32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskbarLayout {
+    pub window_handle: isize,
     pub bounds: Rect,
     pub monitor_bounds: Rect,
     pub obstacles: Vec<Rect>,
+    pub landmarks: TaskbarLandmarks,
     pub primary: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TaskbarLandmarks {
+    pub widgets: Option<Rect>,
+    pub start: Option<Rect>,
 }
 
 impl TaskbarLayout {
@@ -198,16 +206,107 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
             context.obstacles.push(tray_rect);
         }
 
+        // Windows 11 renders Widgets, Start, Search, and app buttons as XAML.
+        // Those controls are invisible to EnumChildWindows, so use UI
+        // Automation as an obstacle source when Explorer exposes the tree.
+        // Failure is intentionally non-fatal; the native widget then uses the
+        // conservative preferred anchor and classic HWND obstacles.
+        let automation_buttons = uia_buttons(hwnd);
+        let mut landmarks = TaskbarLandmarks::default();
+        for button in &automation_buttons {
+            match button.automation_id.as_str() {
+                "WidgetsButton" => landmarks.widgets = Some(button.bounds),
+                "StartButton" => landmarks.start = Some(button.bounds),
+                _ => {}
+            }
+        }
+        context
+            .obstacles
+            .extend(automation_buttons.into_iter().map(|button| button.bounds));
+
         context
             .obstacles
             .sort_by_key(|rect| (rect.left, rect.top, rect.right, rect.bottom));
         context.obstacles.dedup();
         Some(TaskbarLayout {
+            window_handle: hwnd,
             bounds,
             monitor_bounds,
             obstacles: context.obstacles,
+            landmarks,
             primary,
         })
+    }
+}
+
+#[cfg(windows)]
+struct AutomationButton {
+    automation_id: String,
+    bounds: Rect,
+}
+
+#[cfg(windows)]
+unsafe fn uia_buttons(hwnd: isize) -> Vec<AutomationButton> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation8, IUIAutomation, TreeScope_Descendants, UIA_ButtonControlTypeId,
+        UIA_ControlTypePropertyId,
+    };
+    use windows::core::VARIANT;
+
+    unsafe {
+        // Taskbar discovery may run on a short-lived worker thread. Initialize
+        // COM there explicitly; UI Automation must never rely on WebView or
+        // Tauri having initialized that thread as a side effect.
+        let uninitialize = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+        let result = (|| {
+            let Ok(automation) =
+                CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
+            else {
+                return Vec::new();
+            };
+            let Ok(root) = automation.ElementFromHandle(HWND(hwnd as *mut std::ffi::c_void)) else {
+                return Vec::new();
+            };
+            let control_type = VARIANT::from(UIA_ButtonControlTypeId.0);
+            let Ok(condition) =
+                automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &control_type)
+            else {
+                return Vec::new();
+            };
+            let Ok(buttons) = root.FindAll(TreeScope_Descendants, &condition) else {
+                return Vec::new();
+            };
+            let Ok(length) = buttons.Length() else {
+                return Vec::new();
+            };
+
+            (0..length)
+                .filter_map(|index| buttons.GetElement(index).ok())
+                .filter_map(|element| {
+                    let automation_id = element.CurrentAutomationId().ok()?.to_string();
+                    let rect = element.CurrentBoundingRectangle().ok()?;
+                    Some(AutomationButton {
+                        automation_id,
+                        bounds: Rect {
+                            left: rect.left,
+                            top: rect.top,
+                            right: rect.right,
+                            bottom: rect.bottom,
+                        },
+                    })
+                })
+                .filter(|button| button.bounds.width() > 0 && button.bounds.height() > 0)
+                .collect()
+        })();
+        if uninitialize {
+            CoUninitialize();
+        }
+        result
     }
 }
 
@@ -215,6 +314,9 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
 unsafe extern "system" fn collect_child(hwnd: isize, lparam: isize) -> i32 {
     unsafe {
         if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        if window_class(hwnd).as_deref() == Some("CeilingNativeTaskbarWidget") {
             return 1;
         }
         let context = &mut *(lparam as *mut ChildEnumContext);
@@ -328,9 +430,11 @@ mod tests {
 
     fn layout(monitor_bounds: Rect, bounds: Rect, primary: bool) -> TaskbarLayout {
         TaskbarLayout {
+            window_handle: 0,
             bounds,
             monitor_bounds,
             obstacles: Vec::new(),
+            landmarks: TaskbarLandmarks::default(),
             primary,
         }
     }

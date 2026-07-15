@@ -196,9 +196,17 @@ pub struct Settings {
     #[serde(default)]
     pub powertoys_status_pipe_enabled: bool,
 
-    /// Show the always-on-top floating capacity bar.
+    /// Show the separate always-on-top floating capacity bar.
     #[serde(default)]
     pub float_bar_enabled: bool,
+
+    /// Show the native usage readout embedded in the Windows taskbar.
+    #[serde(default = "default_true")]
+    pub taskbar_widget_enabled: bool,
+
+    /// Mirror the native taskbar readout onto every verified horizontal taskbar.
+    #[serde(default)]
+    pub taskbar_widget_all_monitors: bool,
 
     /// Opacity of the floating bar window, in the inclusive range 30..=100.
     /// Stored as `u8` so the on-disk format remains stable.
@@ -213,9 +221,14 @@ pub struct Settings {
     #[serde(default = "default_float_bar_orientation")]
     pub float_bar_orientation: String,
 
-    /// Floating-bar visual style: "floating" (default) or "taskbar".
+    /// Legacy capacity-display style. New settings always store "floating";
+    /// taskbar enablement lives in `taskbar_widget_enabled`.
     #[serde(default = "default_float_bar_style")]
     pub float_bar_style: String,
+
+    /// Open the taskbar glance panel after a short pointer dwell.
+    #[serde(default = "default_true")]
+    pub taskbar_widget_open_on_hover: bool,
 
     /// Floating-bar information density: "compact", "standard", or
     /// "detailed". Standard preserves the original layout.
@@ -310,12 +323,13 @@ pub fn normalize_float_bar_orientation(value: &str) -> String {
     }
 }
 
-/// Normalize a floating-bar style string. Unknown values fall back to the
-/// original floating style so existing settings keep their previous look.
+/// Normalize a capacity-display style string. Unknown values fall back to the
+/// current default so a corrupt setting cannot select an undefined renderer.
 pub fn normalize_float_bar_style(value: &str) -> String {
     match value {
+        "floating" => "floating".to_string(),
         "taskbar" => "taskbar".to_string(),
-        _ => "floating".to_string(),
+        _ => default_float_bar_style(),
     }
 }
 
@@ -465,10 +479,13 @@ impl Default for Settings {
             tray_scale_percent: default_tray_scale_percent(),
             powertoys_status_pipe_enabled: false,
             float_bar_enabled: false,
+            taskbar_widget_enabled: true,
+            taskbar_widget_all_monitors: false,
             float_bar_opacity: default_float_bar_opacity(),
             float_bar_scale: default_float_bar_scale(),
             float_bar_orientation: default_float_bar_orientation(),
-            float_bar_style: default_float_bar_style(),
+            float_bar_style: "floating".to_string(),
+            taskbar_widget_open_on_hover: true,
             float_bar_density: default_float_bar_density(),
             float_bar_contrast: Some("auto".to_string()),
             float_bar_click_through: false,

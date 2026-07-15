@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { getProviderChartData, getSettingsSnapshot } from "../../../../../lib/tauri";
-import { providerSupportsChartData } from "../../../../../lib/providerCharts";
+import {
+  providerLocalUsageWindows,
+  providerSupportsChartData,
+} from "../../../../../lib/providerCharts";
 import type {
   LocalTokenBreakdown,
   ProviderChartData,
+  ProviderUsageSnapshot,
   SettingsSnapshot,
 } from "../../../../../types/bridge";
 import type { useLocale } from "../../../../../hooks/useLocale";
@@ -16,10 +20,32 @@ type T = ReturnType<typeof useLocale>["t"];
 interface Props {
   providerId: string;
   accountEmail: string | null;
+  providerSnapshot?: ProviderUsageSnapshot;
   t: T;
 }
 
 type TabKey = "limits" | "credits" | "usage";
+
+// Provider tabs intentionally remount their chart section. Retain the last
+// successful payload for the lifetime of the WebView so returning to a tab is
+// instant, then refresh it in the background. The Rust side remains the source
+// of truth and maintains its own longer-lived disk cache.
+const chartDataCache = new Map<string, ProviderChartData>();
+
+function chartDataCacheKey(providerId: string, accountEmail: string | null, usageWindowsKey = ""): string {
+  return `${providerId.toLowerCase()}:${accountEmail?.trim().toLowerCase() ?? ""}:${usageWindowsKey}`;
+}
+
+function formatWindowStart(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "current reset period";
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  return new Intl.DateTimeFormat(undefined, sameDay
+    ? { hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+  ).format(date);
+}
 
 function formatTokens(value: number | null): string {
   if (value == null) return "—";
@@ -69,20 +95,30 @@ function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
  * Phase 10: fetches the latest settings snapshot so the animation flag feeds
  * through to each chart component.
  */
-export function ChartsSection({ providerId, accountEmail, t }: Props) {
+export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }: Props) {
   const [data, setData] = useState<ProviderChartData | null>(null);
   const [active, setActive] = useState<TabKey | null>(null);
   const [animations, setAnimations] = useState(true);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [failed, setFailed] = useState(false);
+  const usageWindows = providerLocalUsageWindows(providerSnapshot);
+  const usageWindowsKey = usageWindows
+    .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
+    .join("|");
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
+    const cacheKey = chartDataCacheKey(providerId, accountEmail, usageWindowsKey);
+    const cached = chartDataCache.get(cacheKey) ?? null;
+    setData(cached);
     setActive(null);
-    setLoading(true);
-    setEnriching(false);
+    setLoading(cached === null);
+    setEnriching(
+      cached !== null &&
+      !cached.localUsage &&
+      ["codex", "claude"].includes(providerId.toLowerCase()),
+    );
     setFailed(false);
     if (!providerSupportsChartData(providerId)) {
       setLoading(false);
@@ -90,9 +126,10 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
         cancelled = true;
       };
     }
-    getProviderChartData(providerId, accountEmail ?? undefined)
+    getProviderChartData(providerId, accountEmail ?? undefined, usageWindows)
       .then((d) => {
         if (!cancelled) {
+          chartDataCache.set(cacheKey, d);
           setData(d);
           setEnriching(
             !d.localUsage && ["codex", "claude"].includes(providerId.toLowerCase()),
@@ -102,16 +139,18 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
       })
       .catch(() => {
         if (!cancelled) {
-          setData(null);
           setEnriching(false);
-          setFailed(true);
+          if (cached === null) {
+            setData(null);
+            setFailed(true);
+          }
           setLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [providerId, accountEmail]);
+  }, [providerId, accountEmail, usageWindowsKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,27 +180,46 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
       return;
     }
     setEnriching(true);
+    let cancelled = false;
     let attempts = 0;
-    const timer = window.setInterval(() => {
+    let timer: number | undefined;
+
+    const poll = async () => {
       attempts += 1;
-      getProviderChartData(providerId, accountEmail ?? undefined)
-        .then((next) => {
-          if (next.localUsage) {
-            setData(next);
-            setEnriching(false);
-            window.clearInterval(timer);
-          }
-        })
-        .catch(() => {
-          // Background enrichment is best-effort; keep the quota chart visible.
-        });
+      try {
+        const next = await getProviderChartData(
+          providerId,
+          accountEmail ?? undefined,
+          usageWindows,
+        );
+        if (cancelled) return;
+        if (next.localUsage) {
+          chartDataCache.set(chartDataCacheKey(providerId, accountEmail, usageWindowsKey), next);
+          setData(next);
+          setEnriching(false);
+          return;
+        }
+      } catch {
+        // Background enrichment is best-effort; keep the quota chart visible.
+      }
+
+      if (cancelled) return;
       if (attempts >= 120) {
         setEnriching(false);
-        window.clearInterval(timer);
+        return;
       }
-    }, 1_000);
-    return () => window.clearInterval(timer);
-  }, [data, providerId, accountEmail]);
+
+      // Schedule only after the previous read finishes so a slow local scan can
+      // never accumulate overlapping work.
+      timer = window.setTimeout(() => void poll(), 1_000);
+    };
+
+    timer = window.setTimeout(() => void poll(), 1_000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [data, providerId, accountEmail, usageWindowsKey]);
 
   if (loading) {
     return (
@@ -212,6 +270,29 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
     return t("DetailChartUsageBreakdown");
   };
 
+  const usagePeriods = data.localUsage
+    ? [
+        ...(data.localUsage.currentWindows ?? []).map((window) => ({
+          label: window.label,
+          tokens: window.tokens,
+          detail: `Since ${formatWindowStart(window.startsAt)}`,
+          current: true,
+        })),
+        {
+          label: "Last 7 days",
+          tokens: data.localUsage.sevenDayTokens,
+          detail: "processed tokens",
+          current: false,
+        },
+        {
+          label: "Last 30 days",
+          tokens: data.localUsage.thirtyDayTokens,
+          detail: "processed tokens",
+          current: false,
+        },
+      ]
+    : [];
+
   return (
     <section className="provider-detail-section provider-detail-charts">
       {enriching && (
@@ -224,25 +305,19 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
         </div>
       )}
       {data.localUsage && (
-        <div className="usage-periods" aria-label="Local usage summary">
-          {[
-            {
-              label: "Last session",
-              tokens: data.localUsage.lastSessionTokens,
-            },
-            {
-              label: "Last 7 days",
-              tokens: data.localUsage.sevenDayTokens,
-            },
-            {
-              label: "Last 30 days",
-              tokens: data.localUsage.thirtyDayTokens,
-            },
-          ].map((period) => (
-            <div className="usage-period" key={period.label}>
+        <div
+          className="usage-periods"
+          data-card-count={usagePeriods.length}
+          aria-label="Local usage summary"
+        >
+          {usagePeriods.map((period) => (
+            <div
+              className={`usage-period${period.current ? " usage-period--current" : ""}`}
+              key={period.label}
+            >
               <span>{period.label}</span>
               <strong>{formatTokens(period.tokens)}</strong>
-              <small>processed tokens</small>
+              <small>{period.detail}</small>
             </div>
           ))}
           {data.localUsage.sevenDayTokenBreakdown && (

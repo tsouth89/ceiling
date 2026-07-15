@@ -55,7 +55,7 @@ function provider(
 }
 
 function rowsOf(container: HTMLElement) {
-  return [...container.querySelectorAll<HTMLElement>(".activity-row")];
+  return [...container.querySelectorAll<HTMLElement>("[data-activity-entry]")];
 }
 
 describe("ActivityTimeline", () => {
@@ -109,7 +109,7 @@ describe("ActivityTimeline", () => {
 
     const { container } = render(<ActivityTimeline providers={providers} />);
     const text = container.textContent ?? "";
-    expect(text).toContain("Next 24 hours");
+    expect(text).toContain("Next reset");
     expect(text).toContain("This week");
     expect(text).toContain("Later");
   });
@@ -136,9 +136,31 @@ describe("ActivityTimeline", () => {
     // Only the healthy provider's window appears.
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain("Cursor");
-    // A window down to its last 20% carries a hot level on its bar fill.
+    // Ordinary usage stays on the calm shared accent instead of introducing
+    // another warning color into the schedule.
     const fill = container.querySelector(".activity-row__bar-fill");
-    expect(fill?.getAttribute("data-level")).toBe("high");
+    expect(fill?.getAttribute("data-level")).toBe("normal");
+  });
+
+  it("reserves warning color for an almost depleted window", () => {
+    const { container } = render(
+      <ActivityTimeline
+        providers={[
+          provider({
+            providerId: "cursor",
+            displayName: "Cursor",
+            primary: window(99, 2 * HOUR),
+            primaryLabel: "Auto",
+          }),
+        ]}
+      />,
+    );
+
+    expect(
+      container
+        .querySelector(".activity-row__bar-fill")
+        ?.getAttribute("data-level"),
+    ).toBe("critical");
   });
 
   it("hides 0%-used windows unless they reset soon", () => {

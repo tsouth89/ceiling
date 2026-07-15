@@ -68,4 +68,48 @@ describe("useSettings live sync", () => {
     unmount();
     await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
   });
+
+  it("serializes rapid updates so an older response cannot overwrite a newer choice", async () => {
+    let resolveFirst!: (value: SettingsSnapshot) => void;
+    let resolveSecond!: (value: SettingsSnapshot) => void;
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(100));
+    tauriMocks.updateSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise<SettingsSnapshot>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<SettingsSnapshot>((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const initial = snapshot(100);
+    const { result } = renderHook(() => useSettings(initial));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.update({ windowScalePercent: 125 });
+      second = result.current.update({ windowScalePercent: 150 });
+    });
+
+    await waitFor(() => expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(1));
+    expect(result.current.saving).toBe(true);
+
+    resolveFirst(snapshot(125));
+    await first;
+    await waitFor(() => expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(2));
+    expect(result.current.saving).toBe(true);
+
+    resolveSecond(snapshot(150));
+    await second;
+    await waitFor(() => {
+      expect(result.current.settings.windowScalePercent).toBe(150);
+      expect(result.current.saving).toBe(false);
+    });
+  });
 });

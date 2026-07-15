@@ -194,7 +194,7 @@ export const ALL_LOCALE_KEYS = [
   "TrayOpenCodexBar",
   "TrayPopOutDashboard",
   "TrayShowWindow",
-  "TrayShowFloatBar",
+  "TrayShowTaskbarUsage",
   "TrayRefreshAll",
   "TrayProviders",
   "TraySettings",

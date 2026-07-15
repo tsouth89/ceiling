@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
+import { chartTooltipPosition, type ChartTooltipPosition } from "./chartTooltip";
 import { useChartAnimation } from "./useChartAnimation";
 
 /**
@@ -48,7 +49,8 @@ export function LineChart({
   const axisFmt = axisLabelFormatter ?? ((label: string) => label.slice(-5));
   const tooltipFmt = tooltipLabelFormatter ?? ((label: string) => label);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
+  const clipId = useId().replace(/:/g, "");
+  const [hover, setHover] = useState<(ChartTooltipPosition & { i: number }) | null>(null);
 
   const anim = useChartAnimation(data.length, animations, [
     data.length,
@@ -73,21 +75,17 @@ export function LineChart({
   const pad = 2;
   const usableWidth = SVG_WIDTH - pad * 2;
 
-  // Baseline target Y (plot bottom) — the line animates from the
-  // baseline up to its final Y, mirroring the bar entrance.
   const baselineY = pad + plotHeight;
 
   const step = data.length > 1 ? usableWidth / (data.length - 1) : 0;
   const coords = data.map((p, i) => {
     const x = pad + i * step;
     const finalY = pad + plotHeight - ((p.value - min) / range) * plotHeight;
-    const t = anim.barProgress(i);
-    const y = baselineY + (finalY - baselineY) * t;
-    return { x, y, finalY };
+    return { x, y: finalY };
   });
 
   if (coords.length === 1) {
-    coords.push({ x: pad + usableWidth, y: coords[0].y, finalY: coords[0].finalY });
+    coords.push({ x: pad + usableWidth, y: coords[0].y });
   }
 
   const polyline = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
@@ -105,7 +103,7 @@ export function LineChart({
     const host = containerRef.current;
     if (!host) return;
     const rect = host.getBoundingClientRect();
-    setHover({ i, x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setHover({ i, ...chartTooltipPosition(e.clientX, e.clientY, rect) });
   };
   const onLeave = () => setHover(null);
 
@@ -119,35 +117,49 @@ export function LineChart({
         role="img"
         aria-label={ariaLabel}
       >
-        {areaPath && (
-          <path d={areaPath} fill={color} opacity={0.18} className="chart__area" />
-        )}
-        <polyline
-          points={polyline}
-          fill="none"
-          stroke={color}
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          opacity={0.95}
-          className="chart__line"
-        />
-        {data.map((p, i) => (
-          <circle
-            key={`${p.label}-${i}`}
-            cx={coords[i].x}
-            cy={coords[i].y}
-            r={hover?.i === i ? 3 : 1.8}
-            fill={color}
-            className="chart__point"
-            onMouseMove={(e) => onPointMove(e, i)}
-            onMouseLeave={onLeave}
-          >
-            <title>
-              {tooltipFmt(p.label)}: {fmt(p.value)}
-            </title>
-          </circle>
-        ))}
+        <defs>
+          <clipPath id={clipId}>
+            <rect
+              x={0}
+              y={0}
+              width={SVG_WIDTH}
+              height={height}
+              className={anim.enabled ? "chart__reveal" : undefined}
+              style={anim.enabled ? { animationDuration: `${anim.durationMs}ms` } : undefined}
+            />
+          </clipPath>
+        </defs>
+        <g clipPath={`url(#${clipId})`}>
+          {areaPath && (
+            <path d={areaPath} fill={color} opacity={0.18} className="chart__area" />
+          )}
+          <polyline
+            points={polyline}
+            fill="none"
+            stroke={color}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            opacity={0.95}
+            className="chart__line"
+          />
+          {data.map((p, i) => (
+            <circle
+              key={`${p.label}-${i}`}
+              cx={coords[i].x}
+              cy={coords[i].y}
+              r={hover?.i === i ? 3 : 1.8}
+              fill={color}
+              className="chart__point"
+              onMouseMove={(e) => onPointMove(e, i)}
+              onMouseLeave={onLeave}
+            >
+              <title>
+                {tooltipFmt(p.label)}: {fmt(p.value)}
+              </title>
+            </circle>
+          ))}
+        </g>
       </svg>
       <div className="chart__axis">
         <span>{axisFmt(data[0].label)}</span>
@@ -156,7 +168,7 @@ export function LineChart({
       </div>
       {hover && !anim.running && (
         <div
-          className="chart__tooltip"
+          className={`chart__tooltip chart__tooltip--${hover.alignment}`}
           style={{ left: hover.x, top: hover.y }}
           role="tooltip"
         >

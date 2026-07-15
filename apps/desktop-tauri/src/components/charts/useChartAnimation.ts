@@ -1,32 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 /**
- * Drives a 0→1 chart entrance animation using requestAnimationFrame.
+ * Tracks only the lifecycle of a chart entrance animation.
  *
- * Mirrors the egui timing in `rust/src/native_ui/charts.rs`:
- *   - TOTAL_ANIMATION_MS = 600
- *   - STAGGER_PER_BAR_MS = 20
- *   - Ease-out curve: 1 - (1 - t)^3
- *
- * The returned `barProgress(i)` helper returns the per-bar eased
- * progress; callers multiply it against the natural bar height / point
- * Y to produce the entrance effect. When `enabled` is false the hook
- * short-circuits to 1.0 so there is no animation (respects the
- * `enableAnimations` setting and `prefers-reduced-motion`).
- *
- * `deps` resets the animation whenever the dataset identity changes
- * (e.g. switching providers or tabs).
+ * Geometry is rendered at its final size and CSS/SVG performs the animation.
+ * Keeping requestAnimationFrame out of React avoids rebuilding every point in
+ * every visible chart once per frame, which was especially costly when quota
+ * history contained several long series.
  */
-export const TOTAL_ANIMATION_MS = 600;
-export const STAGGER_PER_BAR_MS = 20;
+export const TOTAL_ANIMATION_MS = 520;
+export const STAGGER_PER_BAR_MS = 14;
+export const MAX_STAGGER_MS = 180;
 
 export interface ChartAnimation {
-  /** Global 0..1 eased progress (stagger-agnostic). */
-  progress: number;
-  /** Per-item 0..1 eased progress with stagger. */
-  barProgress: (index: number) => number;
-  /** True until every staggered bar has reached 1.0. */
   running: boolean;
+  enabled: boolean;
+  durationMs: number;
+  delayFor: (index: number) => number;
 }
 
 export function useChartAnimation(
@@ -34,53 +24,29 @@ export function useChartAnimation(
   enabled: boolean,
   deps: ReadonlyArray<unknown> = [],
 ): ChartAnimation {
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef<number | null>(null);
-  const rafRef = useRef<number | null>(null);
   const prefersReduced = usePrefersReducedMotion();
-  const skip = !enabled || prefersReduced || count === 0;
+  const active = enabled && !prefersReduced && count > 0;
+  const [running, setRunning] = useState(active);
 
   useEffect(() => {
-    if (skip) {
-      setElapsed(Number.POSITIVE_INFINITY);
+    if (!active) {
+      setRunning(false);
       return;
     }
 
-    startRef.current = null;
-    setElapsed(0);
-
-    const totalMs = TOTAL_ANIMATION_MS + count * STAGGER_PER_BAR_MS;
-
-    const tick = (now: number) => {
-      if (startRef.current == null) startRef.current = now;
-      const ms = now - startRef.current;
-      setElapsed(ms);
-      if (ms < totalMs) {
-        rafRef.current = requestAnimationFrame(tick);
-      }
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    };
+    setRunning(true);
+    const maxDelay = Math.min(Math.max(0, count - 1) * STAGGER_PER_BAR_MS, MAX_STAGGER_MS);
+    const timer = window.setTimeout(() => setRunning(false), TOTAL_ANIMATION_MS + maxDelay);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skip, count, ...deps]);
+  }, [active, count, ...deps]);
 
-  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
-  const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
-
-  const progress = skip ? 1 : clamp01(elapsed / TOTAL_ANIMATION_MS);
-  const barProgress = (i: number) => {
-    if (skip) return 1;
-    const barElapsed = Math.max(0, elapsed - i * STAGGER_PER_BAR_MS);
-    return easeOut(clamp01(barElapsed / TOTAL_ANIMATION_MS));
+  return {
+    running,
+    enabled: active,
+    durationMs: TOTAL_ANIMATION_MS,
+    delayFor: (index) => Math.min(index * STAGGER_PER_BAR_MS, MAX_STAGGER_MS),
   };
-  const totalMs = TOTAL_ANIMATION_MS + count * STAGGER_PER_BAR_MS;
-  const running = !skip && elapsed < totalMs;
-
-  return { progress: easeOut(progress), barProgress, running };
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -92,9 +58,7 @@ function usePrefersReducedMotion(): boolean {
     const update = () => setReduced(mq.matches);
     update();
     mq.addEventListener?.("change", update);
-    return () => {
-      mq.removeEventListener?.("change", update);
-    };
+    return () => mq.removeEventListener?.("change", update);
   }, []);
 
   return reduced;

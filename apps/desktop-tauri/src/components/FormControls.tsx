@@ -47,8 +47,20 @@ export function Select({
   onChange: (v: string) => void;
   disabled?: boolean;
 }) {
-  const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
-  const width = Math.min(128, Math.max(48, Math.ceil(selectedLabel.length * 6.8) + 18));
+  // Size for the longest option, not only the selected value. Native select
+  // popovers use their longest label, so a narrow closed control can otherwise
+  // open past the window edge. Count CJK glyphs as double-width and reserve a
+  // dedicated arrow gutter so the label can never sit underneath the chevron.
+  const labelUnits = (label: string) =>
+    Array.from(label).reduce(
+      (total, character) => total + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1),
+      0,
+    );
+  const longestLabelUnits = Math.max(
+    labelUnits(value),
+    ...options.map((option) => labelUnits(option.label)),
+  );
+  const width = Math.min(190, Math.max(78, Math.ceil(longestLabelUnits * 7.2) + 34));
 
   return (
     <select

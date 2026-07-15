@@ -50,10 +50,13 @@ pub struct SettingsUpdate {
     /// Map of provider CLI name → metric preference label.
     pub provider_metrics: Option<std::collections::HashMap<String, String>>,
     pub float_bar_enabled: Option<bool>,
+    pub taskbar_widget_enabled: Option<bool>,
+    pub taskbar_widget_all_monitors: Option<bool>,
     pub float_bar_opacity: Option<u8>,
     pub float_bar_scale: Option<u8>,
     pub float_bar_orientation: Option<String>,
     pub float_bar_style: Option<String>,
+    pub taskbar_widget_open_on_hover: Option<bool>,
     pub float_bar_density: Option<String>,
     pub float_bar_contrast: Option<String>,
     pub float_bar_click_through: Option<bool>,
@@ -81,7 +84,7 @@ impl SettingsUpdate {
     }
 
     fn rebuilds_tray_menu(&self) -> bool {
-        self.float_bar_enabled.is_some() || self.ui_language.is_some()
+        self.taskbar_widget_enabled.is_some() || self.ui_language.is_some()
     }
 
     fn refreshes_tray_presentation(&self) -> bool {
@@ -272,10 +275,13 @@ impl SettingsUpdate {
     fn float_bar_patch(&self) -> crate::floatbar::SettingsPatch {
         crate::floatbar::SettingsPatch {
             enabled: self.float_bar_enabled,
+            taskbar_enabled: self.taskbar_widget_enabled,
+            taskbar_all_monitors: self.taskbar_widget_all_monitors,
             opacity: self.float_bar_opacity,
             scale: self.float_bar_scale,
             orientation: self.float_bar_orientation.clone(),
             style: self.float_bar_style.clone(),
+            open_on_hover: self.taskbar_widget_open_on_hover,
             density: self.float_bar_density.clone(),
             contrast: self.float_bar_contrast.clone(),
             click_through: self.float_bar_click_through,

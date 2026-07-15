@@ -4,6 +4,15 @@ use crate::commands::ProviderCatalogEntry;
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::Language;
 
+const FEATURED_TRAY_PROVIDER_IDS: [&str; 6] = [
+    "codex",
+    "claude",
+    "cursor",
+    "gemini",
+    "copilot",
+    "antigravity",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrayMenuEntry {
     pub(crate) id: Option<String>,
@@ -129,26 +138,41 @@ pub(crate) fn build_tray_menu_with(
     ));
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
-        text(LocaleKey::TrayShowFloatBar),
+        text(LocaleKey::TrayShowTaskbarUsage),
         float_bar_enabled,
     ));
     menu.push(TrayMenuEntry::separator());
 
     if !providers.is_empty() {
+        let mut provider_items = FEATURED_TRAY_PROVIDER_IDS
+            .iter()
+            .filter_map(|featured_id| {
+                providers
+                    .iter()
+                    .find(|provider| provider.id == *featured_id)
+            })
+            .map(|provider| {
+                let is_enabled = enabled_providers.contains(&provider.id);
+                TrayMenuEntry::check_item(
+                    format!("toggle_provider:{}", provider.id),
+                    &provider.display_name,
+                    is_enabled,
+                )
+            })
+            .collect::<Vec<_>>();
+        if providers.len() > provider_items.len() {
+            if !provider_items.is_empty() {
+                provider_items.push(TrayMenuEntry::separator());
+            }
+            provider_items.push(TrayMenuEntry::item(
+                "more_providers",
+                format!("{}...", text(LocaleKey::PanelAllProviders)),
+            ));
+        }
         menu.push(TrayMenuEntry::submenu(
             "providers",
             text(LocaleKey::TrayProviders),
-            providers
-                .iter()
-                .map(|provider| {
-                    let is_enabled = enabled_providers.contains(&provider.id);
-                    TrayMenuEntry::check_item(
-                        format!("toggle_provider:{}", provider.id),
-                        &provider.display_name,
-                        is_enabled,
-                    )
-                })
-                .collect(),
+            provider_items,
         ));
         menu.push(TrayMenuEntry::separator());
     }
@@ -280,10 +304,10 @@ mod tests {
         assert_eq!(
             items,
             vec![
-                "Refresh All",
-                "Pop Out Dashboard",
-                "Show Float Bar",
-                "Providers",
+                "Refresh Usage",
+                "Open Ceiling",
+                "Show Taskbar Usage",
+                "Tracked Providers",
                 "Settings...",
                 "Check for Updates",
                 "About Ceiling",
@@ -349,6 +373,44 @@ mod tests {
     }
 
     #[test]
+    fn provider_menu_keeps_featured_providers_and_routes_the_rest_to_settings() {
+        let mut catalog = sample_provider_catalog();
+        for (id, name) in [
+            ("cursor", "Cursor"),
+            ("gemini", "Gemini"),
+            ("copilot", "Copilot"),
+            ("antigravity", "Antigravity"),
+            ("factory", "Factory"),
+            ("zai", "z.ai"),
+        ] {
+            catalog.push(ProviderCatalogEntry {
+                id: id.into(),
+                display_name: name.into(),
+                cookie_domain: None,
+            });
+        }
+
+        let items = proof_menu_items(
+            &build_tray_menu(&catalog, &[], &both_enabled()),
+            "tray/providers",
+        )
+        .unwrap();
+        assert_eq!(
+            items,
+            vec![
+                "Codex",
+                "Claude",
+                "Cursor",
+                "Gemini",
+                "Copilot",
+                "Antigravity",
+                "All providers...",
+            ]
+        );
+        assert!(!items.iter().any(|item| item == "Factory" || item == "z.ai"));
+    }
+
+    #[test]
     fn float_bar_toggle_reflects_state() {
         let menu_on = build_tray_menu_with(
             &sample_provider_catalog(),
@@ -362,7 +424,7 @@ mod tests {
             .find(|e| e.id.as_deref() == Some("toggle_float_bar"))
             .expect("float bar toggle present");
         assert_eq!(toggle.checked, Some(true));
-        assert_eq!(toggle.label, "Show Float Bar");
+        assert_eq!(toggle.label, "Show Taskbar Usage");
 
         let menu_off = build_tray_menu_with(
             &sample_provider_catalog(),
@@ -392,7 +454,7 @@ mod tests {
         assert!(items.iter().any(|item| item == "すべて更新"));
         assert!(items.iter().any(|item| item == "設定..."));
         assert!(items.iter().any(|item| item == "終了"));
-        assert!(!items.iter().any(|item| item == "Refresh All"));
+        assert!(!items.iter().any(|item| item == "Refresh Usage"));
         assert!(!items.iter().any(|item| item == "Settings"));
 
         let providers = proof_menu_items(&menu, "tray/providers").unwrap();
