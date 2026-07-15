@@ -523,6 +523,8 @@ pub struct SettingsSnapshot {
     float_bar_scale: u8,
     float_bar_orientation: String,
     float_bar_style: String,
+    float_bar_density: String,
+    float_bar_contrast: String,
     float_bar_click_through: bool,
     float_bar_provider_ids: Vec<String>,
     float_bar_dark_text: bool,
@@ -557,6 +559,7 @@ impl From<Settings> for SettingsSnapshot {
         let wayfinder_gateway_url = settings.gateway_url(ProviderId::Wayfinder).to_string();
 
         let provider_order = settings.provider_display_order_names();
+        let float_bar_contrast = codexbar::settings::resolved_float_bar_contrast(&settings);
         let enabled_providers = provider_order
             .iter()
             .filter(|provider_id| settings.enabled_providers.contains(*provider_id))
@@ -617,6 +620,8 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_scale: settings.float_bar_scale,
             float_bar_orientation: settings.float_bar_orientation,
             float_bar_style: settings.float_bar_style,
+            float_bar_density: settings.float_bar_density,
+            float_bar_contrast,
             float_bar_click_through: settings.float_bar_click_through,
             float_bar_provider_ids: settings.float_bar_provider_ids,
             float_bar_dark_text: settings.float_bar_dark_text,

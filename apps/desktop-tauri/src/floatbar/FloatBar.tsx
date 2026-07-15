@@ -246,8 +246,27 @@ function freshnessChipLabel(freshness: CapacityFreshness): string | null {
 /** localStorage key persisting the float bar's "lock in place" state. */
 const FLOATBAR_LOCK_KEY = "ceiling.floatbar.locked";
 
+function useSystemPrefersLight(): boolean {
+  const query = "(prefers-color-scheme: light)";
+  const [prefersLight, setPrefersLight] = useState(
+    () => typeof window.matchMedia === "function" && window.matchMedia(query).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const update = (event: MediaQueryListEvent) => setPrefersLight(event.matches);
+    setPrefersLight(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return prefersLight;
+}
+
 export default function FloatBar({ state }: { state: BootstrapState }) {
   const { t } = useLocale();
+  const systemPrefersLight = useSystemPrefersLight();
   const { providers } = useProviders({
     refreshOnMount: false,
   });
@@ -385,9 +404,15 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const orientation: "horizontal" | "vertical" =
     settings.floatBarOrientation === "vertical" ? "vertical" : "horizontal";
   const style = settings.floatBarStyle === "taskbar" ? "taskbar" : "floating";
+  const density = ["compact", "detailed"].includes(settings.floatBarDensity)
+    ? settings.floatBarDensity
+    : "standard";
+  const contrast = settings.floatBarContrast ?? "light-text";
+  const darkText =
+    contrast === "dark-text" || (contrast === "auto" && systemPrefersLight);
   const filterIds = settings.floatBarProviderIds;
   const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
-  const showResetInline = settings.floatBarShowResetInline;
+  const showResetInline = settings.floatBarShowResetInline || density === "detailed";
   const visible = useMemo(() => {
     const enabled = new Set(settings.enabledProviders);
     let list = providers.filter((p) => enabled.has(p.providerId));
@@ -431,6 +456,9 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     visible.length,
     orientation,
     style,
+    density,
+    contrast,
+    systemPrefersLight,
     scale,
     showResetInline,
     settings.resetTimeRelative,
@@ -480,7 +508,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
 
   return (
     <div
-      className={`floatbar floatbar--${orientation} floatbar--${style}${settings.floatBarDarkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}${menuOpen ? " floatbar--menu-open" : ""}`}
+      className={`floatbar floatbar--${orientation} floatbar--${style} floatbar--density-${density}${darkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}${menuOpen ? " floatbar--menu-open" : ""}`}
       data-tauri-drag-region
       onMouseDown={startDrag}
       style={

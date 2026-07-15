@@ -46,6 +46,8 @@ export type ThemePreference = "auto" | "light" | "dark";
 export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
 export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
+export type FloatBarDensity = "compact" | "standard" | "detailed";
+export type FloatBarContrast = "auto" | "light-text" | "dark-text";
 export type ProofProviderId =
   | "codex"
   | "claude"
@@ -257,6 +259,8 @@ export interface SettingsSnapshot {
   floatBarScale: number;
   floatBarOrientation: FloatBarOrientation;
   floatBarStyle: FloatBarStyle;
+  floatBarDensity: FloatBarDensity;
+  floatBarContrast: FloatBarContrast;
   floatBarClickThrough: boolean;
   /** Empty array = show all enabled providers. */
   floatBarProviderIds: string[];
@@ -316,6 +320,8 @@ export interface SettingsUpdate {
   floatBarScale?: number;
   floatBarOrientation?: FloatBarOrientation;
   floatBarStyle?: FloatBarStyle;
+  floatBarDensity?: FloatBarDensity;
+  floatBarContrast?: FloatBarContrast;
   floatBarClickThrough?: boolean;
   floatBarProviderIds?: string[];
   floatBarDarkText?: boolean;

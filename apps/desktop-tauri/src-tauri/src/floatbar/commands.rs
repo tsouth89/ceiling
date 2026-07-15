@@ -68,6 +68,9 @@ pub fn resize_float_bar(app: AppHandle, width: f64, height: f64) -> Result<(), S
         // One native operation owns the resize + interaction-state invariant,
         // so the webview never has to repair Win32 window styles itself.
         floatbar_window::resize(&window, width, height, settings.float_bar_click_through)?;
+        if settings.float_bar_style == "taskbar" {
+            floatbar_window::reposition_taskbar(&window, true);
+        }
     }
     Ok(())
 }

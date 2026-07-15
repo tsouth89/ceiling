@@ -130,6 +130,8 @@ fn float_bar_defaults_are_safe() {
     assert_eq!(settings.float_bar_scale, 100);
     assert_eq!(settings.float_bar_orientation, "horizontal");
     assert_eq!(settings.float_bar_style, "floating");
+    assert_eq!(settings.float_bar_density, "standard");
+    assert_eq!(resolved_float_bar_contrast(&settings), "auto");
     assert!(!settings.float_bar_click_through);
     assert!(settings.float_bar_provider_ids.is_empty());
     assert!(!settings.float_bar_dark_text);
@@ -236,6 +238,32 @@ fn float_bar_style_normalization_rejects_unknown_values() {
 }
 
 #[test]
+fn float_bar_density_and_contrast_normalization_reject_unknown_values() {
+    assert_eq!(normalize_float_bar_density("compact"), "compact");
+    assert_eq!(normalize_float_bar_density("standard"), "standard");
+    assert_eq!(normalize_float_bar_density("detailed"), "detailed");
+    assert_eq!(normalize_float_bar_density("dense"), "standard");
+
+    assert_eq!(normalize_float_bar_contrast("auto"), "auto");
+    assert_eq!(normalize_float_bar_contrast("light-text"), "light-text");
+    assert_eq!(normalize_float_bar_contrast("dark-text"), "dark-text");
+    assert_eq!(normalize_float_bar_contrast("inverted"), "auto");
+}
+
+#[test]
+fn legacy_dark_text_setting_is_preserved_when_contrast_is_absent() {
+    let mut settings = Settings {
+        float_bar_contrast: None,
+        float_bar_dark_text: true,
+        ..Settings::default()
+    };
+    assert_eq!(resolved_float_bar_contrast(&settings), "dark-text");
+
+    settings.float_bar_dark_text = false;
+    assert_eq!(resolved_float_bar_contrast(&settings), "light-text");
+}
+
+#[test]
 fn float_bar_settings_round_trip_through_raw() {
     // Serialize a Settings with custom float-bar values then deserialize
     // through the `from = "RawSettings"` path — values must survive intact
@@ -246,6 +274,8 @@ fn float_bar_settings_round_trip_through_raw() {
         float_bar_scale: 140,
         float_bar_orientation: "vertical".to_string(),
         float_bar_style: "taskbar".to_string(),
+        float_bar_density: "compact".to_string(),
+        float_bar_contrast: Some("dark-text".to_string()),
         float_bar_click_through: true,
         float_bar_provider_ids: vec!["claude".into(), "codex".into()],
         float_bar_dark_text: true,
@@ -261,6 +291,8 @@ fn float_bar_settings_round_trip_through_raw() {
     assert_eq!(back.float_bar_scale, 140);
     assert_eq!(back.float_bar_orientation, "vertical");
     assert_eq!(back.float_bar_style, "taskbar");
+    assert_eq!(back.float_bar_density, "compact");
+    assert_eq!(resolved_float_bar_contrast(&back), "dark-text");
     assert!(back.float_bar_click_through);
     assert_eq!(back.float_bar_provider_ids, vec!["claude", "codex"]);
     assert!(back.float_bar_dark_text);

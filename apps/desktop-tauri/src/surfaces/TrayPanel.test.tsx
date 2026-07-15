@@ -144,6 +144,8 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarScale: 100,
     floatBarOrientation: "horizontal",
     floatBarStyle: "floating",
+    floatBarDensity: "standard",
+    floatBarContrast: "auto",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
     floatBarDarkText: false,

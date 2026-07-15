@@ -4,11 +4,17 @@
 //! state machine.
 
 #[cfg(windows)]
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
-use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, WebviewUrl};
 
 use crate::geometry_store;
+
+use super::placement::Point;
+use super::taskbar::TaskbarLayout;
 
 pub const FLOATBAR_LABEL: &str = "floatbar";
 pub const FLOAT_BAR_CONFIG_CHANGED_EVENT: &str = "float-bar-config-changed";
@@ -17,7 +23,17 @@ const FLOATBAR_DEFAULT_HEIGHT_H: f64 = 36.0;
 const FLOATBAR_DEFAULT_WIDTH_V: f64 = 80.0;
 const FLOATBAR_DEFAULT_HEIGHT_V: f64 = 280.0;
 #[cfg(windows)]
-const Z_ORDER_GUARD_INTERVAL: Duration = Duration::from_millis(500);
+const Z_ORDER_GUARD_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(windows)]
+const Z_ORDER_SAFETY_TICKS: u64 = 50;
+#[cfg(windows)]
+const TASKBAR_LAYOUT_SAFETY_TICKS: u64 = 300;
+#[cfg_attr(not(windows), allow(dead_code))]
+const WINDOW_RECOVERY_TICKS: u64 = 50;
+#[cfg(windows)]
+static Z_ORDER_DIRTY: AtomicBool = AtomicBool::new(true);
+#[cfg(windows)]
+static TASKBAR_LAYOUT_DIRTY: AtomicBool = AtomicBool::new(true);
 
 /// Initial dimensions (logical pixels) for the floating bar given an
 /// orientation string. Unknown values fall back to horizontal so callers
@@ -55,6 +71,9 @@ pub fn show(
         apply_click_through(&window, click_through);
         apply_always_on_top(&window);
         window.show().map_err(|e| e.to_string())?;
+        if style == "taskbar" {
+            reposition_taskbar(&window, true);
+        }
         apply_always_on_top(&window);
         return Ok(());
     }
@@ -88,7 +107,9 @@ pub fn show(
     // Restore prior geometry if we have one. Otherwise, taskbar style opens
     // near the bottom while the original floating style keeps its top-center
     // placement.
-    if let Some(g) = geometry_store::load_entry(FLOATBAR_LABEL) {
+    let stored_geometry = geometry_store::load_entry(FLOATBAR_LABEL);
+    let has_stored_geometry = stored_geometry.is_some();
+    if let Some(g) = stored_geometry {
         let _ = win.set_position(LogicalPosition::new(g.x as f64, g.y as f64));
         if let (Some(w), Some(h)) = (g.width, g.height) {
             let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
@@ -112,6 +133,9 @@ pub fn show(
     apply_opacity(&win, opacity);
     apply_click_through(&win, click_through);
     apply_always_on_top(&win);
+    if style == "taskbar" {
+        reposition_taskbar(&win, has_stored_geometry);
+    }
     win.show().map_err(|e| e.to_string())?;
     apply_always_on_top(&win);
     Ok(())
@@ -210,6 +234,53 @@ pub fn resize(
     Ok(())
 }
 
+/// Snap a taskbar-styled floatbar into the nearest complete free gap.
+///
+/// Discovery and placement use physical pixels end-to-end. When taskbar
+/// discovery fails or no gap can fit the complete bar, the current position is
+/// deliberately left untouched.
+pub fn reposition_taskbar(window: &tauri::WebviewWindow, prefer_current: bool) {
+    let Some(layout) = super::taskbar::discover() else {
+        return;
+    };
+    reposition_taskbar_with_layout(window, &layout, prefer_current);
+}
+
+fn reposition_taskbar_with_layout(
+    window: &tauri::WebviewWindow,
+    layout: &TaskbarLayout,
+    prefer_current: bool,
+) {
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let preferred = if prefer_current {
+        window
+            .outer_position()
+            .map(|position| Point {
+                x: position.x,
+                y: position.y,
+            })
+            .unwrap_or_else(|_| layout.preferred_anchor())
+    } else {
+        layout.preferred_anchor()
+    };
+    let Some(target) = layout.place(size.width as i32, size.height as i32, preferred) else {
+        return;
+    };
+
+    if let Ok(current) = window.outer_position()
+        && (current.x - target.x).abs() < 2
+        && (current.y - target.y).abs() < 2
+    {
+        return;
+    }
+
+    let _ = window.set_position(PhysicalPosition::new(target.x, target.y));
+    apply_no_activate(window);
+    apply_always_on_top(window);
+}
+
 /// Keep the floating bar at the front of Windows' topmost band.
 ///
 /// Explorer owns the taskbar and periodically promotes it back to the front
@@ -221,23 +292,162 @@ pub fn resize(
 pub fn install_z_order_guard(app: tauri::AppHandle) {
     #[cfg(windows)]
     {
+        install_win_event_hooks();
         tauri::async_runtime::spawn(async move {
             let mut interval = tokio::time::interval(Z_ORDER_GUARD_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+            let mut ticks = 0_u64;
+            let mut last_taskbar_layout: Option<TaskbarLayout> = None;
             loop {
                 interval.tick().await;
                 let Some(window) = app.get_webview_window(FLOATBAR_LABEL) else {
+                    let recover_window = repair_due(false, ticks, WINDOW_RECOVERY_TICKS);
+                    ticks = ticks.wrapping_add(1);
+                    if recover_window {
+                        let settings = codexbar::settings::Settings::load();
+                        if settings.float_bar_enabled {
+                            super::apply_state(&app, &settings);
+                            Z_ORDER_DIRTY.store(true, Ordering::Release);
+                            TASKBAR_LAYOUT_DIRTY.store(true, Ordering::Release);
+                        }
+                    }
                     continue;
                 };
-                if window.is_visible().unwrap_or(false) {
+                let visible = window.is_visible().unwrap_or(false);
+                let repair_z_order = repair_due(
+                    Z_ORDER_DIRTY.swap(false, Ordering::AcqRel),
+                    ticks,
+                    Z_ORDER_SAFETY_TICKS,
+                );
+                if visible && repair_z_order {
                     apply_always_on_top(&window);
+                }
+                ticks = ticks.wrapping_add(1);
+                let repair_layout = repair_due(
+                    TASKBAR_LAYOUT_DIRTY.swap(false, Ordering::AcqRel),
+                    ticks,
+                    TASKBAR_LAYOUT_SAFETY_TICKS,
+                );
+                if visible && repair_layout {
+                    let settings = codexbar::settings::Settings::load();
+                    if settings.float_bar_style == "taskbar" {
+                        let layout = super::taskbar::discover();
+                        if layout != last_taskbar_layout {
+                            if let Some(layout) = layout.as_ref() {
+                                reposition_taskbar_with_layout(&window, layout, true);
+                            }
+                            last_taskbar_layout = layout;
+                        }
+                    } else {
+                        last_taskbar_layout = None;
+                    }
                 }
             }
         });
     }
     #[cfg(not(windows))]
     let _ = app;
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn repair_due(dirty: bool, ticks: u64, safety_ticks: u64) -> bool {
+    dirty || (safety_ticks > 0 && ticks.is_multiple_of(safety_ticks))
+}
+
+#[cfg(windows)]
+fn install_win_event_hooks() {
+    unsafe {
+        const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+        const EVENT_OBJECT_CREATE: u32 = 0x8000;
+        const EVENT_OBJECT_REORDER: u32 = 0x8004;
+        const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
+        const WINEVENT_OUTOFCONTEXT: u32 = 0;
+        const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
+        let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+
+        // These out-of-context hooks remain active for the process lifetime.
+        // They are installed on Tauri's UI thread, whose message loop delivers
+        // callbacks without injecting code into Explorer.
+        let _ = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            0,
+            Some(floatbar_win_event),
+            0,
+            0,
+            flags,
+        );
+        let _ = SetWinEventHook(
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_CREATE,
+            0,
+            Some(floatbar_win_event),
+            0,
+            0,
+            flags,
+        );
+        let _ = SetWinEventHook(
+            EVENT_OBJECT_REORDER,
+            EVENT_OBJECT_REORDER,
+            0,
+            Some(floatbar_win_event),
+            0,
+            0,
+            flags,
+        );
+        let _ = SetWinEventHook(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            EVENT_OBJECT_LOCATIONCHANGE,
+            0,
+            Some(floatbar_win_event),
+            0,
+            0,
+            flags,
+        );
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn floatbar_win_event(
+    _hook: isize,
+    event: u32,
+    hwnd: isize,
+    _object_id: i32,
+    _child_id: i32,
+    _event_thread: u32,
+    _event_time: u32,
+) {
+    const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+    if event == EVENT_SYSTEM_FOREGROUND {
+        Z_ORDER_DIRTY.store(true, Ordering::Release);
+        return;
+    }
+
+    if unsafe { is_taskbar_window(hwnd) } {
+        Z_ORDER_DIRTY.store(true, Ordering::Release);
+        TASKBAR_LAYOUT_DIRTY.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(windows)]
+unsafe fn is_taskbar_window(hwnd: isize) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    const GA_ROOT: u32 = 2;
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    let candidate = if root == 0 { hwnd } else { root };
+    let mut class_name = [0_u16; 64];
+    let length =
+        unsafe { GetClassNameW(candidate, class_name.as_mut_ptr(), class_name.len() as i32) };
+    if length <= 0 {
+        return false;
+    }
+    matches!(
+        String::from_utf16_lossy(&class_name[..length as usize]).as_str(),
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+    )
 }
 
 /// Re-assert native topmost ordering without activating the window.
@@ -384,6 +594,17 @@ unsafe extern "system" {
         cy: i32,
         flags: u32,
     ) -> i32;
+    fn SetWinEventHook(
+        event_min: u32,
+        event_max: u32,
+        module: isize,
+        callback: Option<unsafe extern "system" fn(isize, u32, isize, i32, i32, u32, u32)>,
+        process_id: u32,
+        thread_id: u32,
+        flags: u32,
+    ) -> isize;
+    fn GetAncestor(hwnd: isize, flags: u32) -> isize;
+    fn GetClassNameW(hwnd: isize, class_name: *mut u16, max_count: i32) -> i32;
 }
 
 #[cfg(test)]
@@ -433,5 +654,23 @@ mod tests {
             initial_size("diagonal"),
             (FLOATBAR_DEFAULT_WIDTH_H, FLOATBAR_DEFAULT_HEIGHT_H)
         );
+    }
+
+    #[test]
+    fn event_driven_repair_runs_immediately_when_dirty() {
+        assert!(repair_due(true, 1, 50));
+    }
+
+    #[test]
+    fn recovery_watchdog_is_only_a_safety_net() {
+        assert!(!repair_due(false, 49, 50));
+        assert!(repair_due(false, 50, 50));
+    }
+
+    #[test]
+    fn lost_window_recovery_uses_the_slow_watchdog_cadence() {
+        assert!(repair_due(false, 0, WINDOW_RECOVERY_TICKS));
+        assert!(!repair_due(false, 1, WINDOW_RECOVERY_TICKS));
+        assert!(repair_due(false, 50, WINDOW_RECOVERY_TICKS));
     }
 }

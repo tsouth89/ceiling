@@ -81,6 +81,8 @@ describe("Language type", () => {
       floatBarScale: 100,
       floatBarOrientation: "horizontal",
       floatBarStyle: "floating",
+      floatBarDensity: "standard",
+      floatBarContrast: "auto",
       floatBarClickThrough: false,
       floatBarProviderIds: [],
       floatBarDarkText: false,

@@ -770,10 +770,42 @@ body.floatbar-window #root {
   opacity: 0.56;
 }
 
+/* Density changes information hierarchy, not the visual identity. Compact is
+   tuned to sit comfortably inside a 48px Windows 11 taskbar; detailed keeps
+   reset context visible without introducing a second row. */
+.floatbar--density-compact .floatbar__bar {
+  padding: calc(2px * var(--floatbar-scale, 1)) calc(4px * var(--floatbar-scale, 1));
+  border-radius: calc(13px * var(--floatbar-scale, 1));
+}
+.floatbar--density-compact .floatbar__bar .floatbar__pill {
+  padding: calc(3px * var(--floatbar-scale, 1)) calc(8px * var(--floatbar-scale, 1));
+}
+.floatbar--density-compact .floatbar__window,
+.floatbar--density-compact .floatbar__chip,
+.floatbar--density-compact .floatbar__reset {
+  display: none;
+}
+.floatbar--density-detailed .floatbar__bar .floatbar__pill {
+  padding-left: calc(12px * var(--floatbar-scale, 1));
+  padding-right: calc(12px * var(--floatbar-scale, 1));
+}
+.floatbar__pct,
+.floatbar__window,
+.floatbar__chip,
+.floatbar__reset {
+  transition: color 160ms ease, opacity 160ms ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .floatbar__bar,
   .floatbar__bar .floatbar__pill,
   .floatbar__bar .floatbar__cost-pill {
+    transition: none;
+  }
+  .floatbar__pct,
+  .floatbar__window,
+  .floatbar__chip,
+  .floatbar__reset {
     transition: none;
   }
   .floatbar:not(.floatbar--locked) .floatbar__bar:hover {
