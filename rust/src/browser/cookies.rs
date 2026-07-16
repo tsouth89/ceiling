@@ -89,10 +89,14 @@ impl TemporaryCookieDatabase {
             .to_string_lossy();
         let path =
             std::env::temp_dir().join(format!("ceiling_{}_{}", uuid::Uuid::new_v4(), file_name));
-        let mut destination = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
+        let mut destination_options = std::fs::OpenOptions::new();
+        destination_options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            destination_options.mode(0o600);
+        }
+        let mut destination = destination_options.open(&path)?;
         let temporary = Self { path };
 
         let copy_result = (|| -> Result<(), CookieError> {

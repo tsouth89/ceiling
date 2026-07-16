@@ -523,6 +523,23 @@ fn test_manual_cookies_set_get_remove() {
 }
 
 #[test]
+fn legacy_credentials_replace_only_empty_secure_store_entries() {
+    assert_eq!(
+        legacy_credential_to_migrate(Some(" legacy-secret "), None),
+        Some(" legacy-secret ")
+    );
+    assert_eq!(
+        legacy_credential_to_migrate(Some("legacy-secret"), Some("  \t")),
+        Some("legacy-secret")
+    );
+    assert_eq!(
+        legacy_credential_to_migrate(Some("legacy-secret"), Some("current-secret")),
+        None
+    );
+    assert_eq!(legacy_credential_to_migrate(Some("  "), None), None);
+}
+
+#[test]
 fn api_key_display_mask_is_utf8_safe() {
     let mut keys = ApiKeys::default();
     keys.set("openrouter", "🔑🔒漢字abcdefgh🔐", Some("unicode"));

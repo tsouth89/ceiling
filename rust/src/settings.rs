@@ -16,6 +16,15 @@ use crate::core::ProviderId;
 
 const NOTIFICATION_POLICY_VERSION: u8 = 1;
 
+fn legacy_credential_to_migrate<'a>(
+    legacy_value: Option<&'a str>,
+    stored_value: Option<&str>,
+) -> Option<&'a str> {
+    legacy_value
+        .filter(|value| !value.trim().is_empty())
+        .filter(|_| stored_value.is_none_or(|value| value.trim().is_empty()))
+}
+
 mod api_keys;
 mod manual_cookies;
 mod provider_workspace;
@@ -591,21 +600,17 @@ impl Settings {
 
             for (provider, config) in &self.provider_configs {
                 let provider_id = provider.cli_name();
-                if let Some(cookie_header) = config
-                    .manual_cookie_header
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    && manual_cookies.get(provider_id).is_none()
-                {
+                if let Some(cookie_header) = legacy_credential_to_migrate(
+                    config.manual_cookie_header.as_deref(),
+                    manual_cookies.get(provider_id),
+                ) {
                     manual_cookies.set(provider_id, cookie_header);
                     cookies_changed = true;
                 }
-                if let Some(api_token) = config
-                    .api_token
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    && api_keys.get(provider_id).is_none()
-                {
+                if let Some(api_token) = legacy_credential_to_migrate(
+                    config.api_token.as_deref(),
+                    api_keys.get(provider_id),
+                ) {
                     api_keys.set(provider_id, api_token, Some("Migrated from settings"));
                     keys_changed = true;
                 }
