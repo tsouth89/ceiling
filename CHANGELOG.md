@@ -1,5 +1,14 @@
 # Changelog
 
+## [Ceiling] 0.43.3 - 2026-07-16
+
+### Security
+- Restrict secret files (API keys, manual cookies, and settings) to the current Windows user with a locked-down NTFS ACL, and encrypt them with user-scoped DPAPI without any machine-scope fallback.
+- Lock the optional PowerToys status pipe to the current user so other local processes can no longer read usage and cost snapshots.
+- Move any credentials left in settings into the dedicated encrypted stores, remove leftover plaintext cookie caches at startup, and wipe temporary cookie databases on every exit path.
+- Scope each window to only the commands it needs and allow folder-opening only within Ceiling's own locations.
+- Update serde_with to 3.21.0 to resolve GHSA-7gcf-g7xr-8hxj.
+
 ## [Ceiling] 0.43.3-beta.2 - 2026-07-14
 
 ### Added
