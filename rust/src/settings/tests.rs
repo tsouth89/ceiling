@@ -523,6 +523,23 @@ fn test_manual_cookies_set_get_remove() {
 }
 
 #[test]
+fn legacy_credentials_replace_only_empty_secure_store_entries() {
+    assert_eq!(
+        legacy_credential_to_migrate(Some(" legacy-secret "), None),
+        Some("legacy-secret")
+    );
+    assert_eq!(
+        legacy_credential_to_migrate(Some("legacy-secret"), Some("  \t")),
+        Some("legacy-secret")
+    );
+    assert_eq!(
+        legacy_credential_to_migrate(Some("legacy-secret"), Some("current-secret")),
+        None
+    );
+    assert_eq!(legacy_credential_to_migrate(Some("  "), None), None);
+}
+
+#[test]
 fn api_key_display_mask_is_utf8_safe() {
     let mut keys = ApiKeys::default();
     keys.set("openrouter", "🔑🔒漢字abcdefgh🔐", Some("unicode"));
@@ -881,9 +898,8 @@ fn test_legacy_per_provider_fields_migrate_into_provider_configs() {
     assert!(settings.claude_avoid_keychain_prompts());
 }
 
-/// Round-trip: build a `Settings` programmatically via the new map +
-/// accessors, serialize, parse back, and assert equality of every
-/// per-provider field.
+/// General settings serialization must retain non-secret provider values but
+/// omit credentials that belong in the dedicated secure stores.
 #[test]
 fn test_provider_configs_roundtrip() {
     let mut settings = Settings::default();
@@ -909,6 +925,10 @@ fn test_provider_configs_roundtrip() {
         "json: {json}"
     );
     assert!(json.contains("\"provider_configs\""), "json: {json}");
+    assert!(!json.contains("amp=PLACEHOLDER"), "json: {json}");
+    assert!(!json.contains("TOK_PLACEHOLDER"), "json: {json}");
+    assert!(!json.contains("manual_cookie_header"), "json: {json}");
+    assert!(!json.contains("api_token"), "json: {json}");
 
     let loaded: Settings = serde_json::from_str(&json).unwrap();
     assert_eq!(loaded.cookie_source(ProviderId::Codex), "manual");
@@ -916,11 +936,8 @@ fn test_provider_configs_roundtrip() {
     assert_eq!(loaded.usage_source(ProviderId::Claude), "ccusage");
     assert_eq!(loaded.api_region(ProviderId::Alibaba), "cn");
     assert_eq!(loaded.api_region(ProviderId::Zai), "cn");
-    assert_eq!(
-        loaded.manual_cookie_header(ProviderId::Amp),
-        "amp=PLACEHOLDER"
-    );
-    assert_eq!(loaded.api_token(ProviderId::MiniMax), "TOK_PLACEHOLDER");
+    assert_eq!(loaded.manual_cookie_header(ProviderId::Amp), "");
+    assert_eq!(loaded.api_token(ProviderId::MiniMax), "");
     assert_eq!(loaded.workspace_id(ProviderId::OpenCode), "ws_placeholder");
     assert_eq!(loaded.ide_base_path(ProviderId::JetBrains), "C:/JB");
     assert!(!loaded.openai_web_extras(ProviderId::Codex));

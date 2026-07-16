@@ -229,6 +229,15 @@ fn main() {
             floatbar::set_float_bar_orientation,
         ])
         .setup(move |app| {
+            match codexbar::browser::remove_legacy_cookie_caches() {
+                Ok(removed) if removed > 0 => {
+                    tracing::info!(removed, "Removed legacy plaintext cookie caches");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "Failed to remove legacy plaintext cookie caches");
+                }
+            }
             if let Some(window) = app.get_webview_window("main") {
                 shell::dwm::force_dark_caption(&window);
                 window.hide()?;

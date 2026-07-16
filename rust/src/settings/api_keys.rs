@@ -25,13 +25,18 @@ impl ApiKeys {
 
     /// Load API keys from disk
     pub fn load() -> Self {
-        if let Some(path) = Self::keys_path()
-            && path.exists()
-            && let Ok(content) = crate::secure_file::read_string(&path)
-        {
-            return serde_json::from_str(&content).unwrap_or_default();
+        Self::try_load().unwrap_or_default()
+    }
+
+    pub(super) fn try_load() -> anyhow::Result<Self> {
+        let Some(path) = Self::keys_path() else {
+            return Ok(Self::default());
+        };
+        if !path.exists() {
+            return Ok(Self::default());
         }
-        Self::default()
+        let content = crate::secure_file::read_string(&path)?;
+        Ok(serde_json::from_str(&content)?)
     }
 
     /// Save API keys to disk

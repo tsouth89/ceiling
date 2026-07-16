@@ -311,9 +311,12 @@ pub struct ProviderConfig {
     pub usage_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_region: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Accepted only to migrate settings written by older releases. Secrets
+    // are persisted in ManualCookies / ApiKeys and must never be serialized
+    // back into the general settings document.
+    #[serde(default, skip_serializing)]
     pub manual_cookie_header: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub api_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
