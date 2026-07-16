@@ -25,7 +25,7 @@ When automatic import does succeed, Ceiling reads the browser's cookie database,
 3. Copy the `Cookie` header value from **Request Headers**.
 4. In Ceiling → **Settings → Providers → provider detail → Browser Cookies**, paste the value.
 
-Manual cookies are written to disk **encrypted with Windows DPAPI** (the `ManualCookies` store under `%APPDATA%\Ceiling`), locked to your Windows user with a user-only file ACL, and reused across restarts. They are not held only in memory.
+Manual cookies are saved to the `ManualCookies` store and reused across restarts, not held only in memory. On **Windows** (the shipped app) they are encrypted with DPAPI and locked to your user with a user-only file ACL, under `%APPDATA%\Ceiling`. On other platforms — the Linux CLI build of the shared crate — they are written with owner-only (`0600`) file permissions rather than encrypted.
 
 ## Troubleshooting
 
