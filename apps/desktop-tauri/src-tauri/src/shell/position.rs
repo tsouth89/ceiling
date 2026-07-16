@@ -230,6 +230,12 @@ pub fn remember_current_geometry_if_eligible(window: &tauri::Window) {
     };
     let current_mode = {
         let guard = st.lock().unwrap();
+        if guard.geometry_capture_suppressed(std::time::Instant::now()) {
+            // A programmatic layout (open/transition) is still applying
+            // size/position; its resize/move events must not be persisted as a
+            // user drag (SOU-222).
+            return;
+        }
         guard.surface_machine.current()
     };
     // The TrayPanel flyout persists its size explicitly from the frontend (only

@@ -88,8 +88,24 @@ pub fn apply_window_layout(
         // falls back to the mode's default size for non-remembered modes.
         let (width, height) =
             logical_size_from_geometry(mode, props, crate::geometry_store::load(mode));
-        let (width, height) = capped_logical_size(window, width, height);
+        let (width, height) =
+            capped_logical_size(window, width, height, props.min_width, props.min_height);
         let size = tauri::LogicalSize::new(width, height);
+
+        // Arm geometry-capture suppression immediately before the programmatic
+        // set_size (and the transition's subsequent position apply) so their OS
+        // resize/move events are not persisted as if the user had dragged the
+        // window (SOU-222). Armed here — after the geometry load/cap above — so
+        // the 750 ms window starts at the actual mutation, not before slow prep,
+        // and set_size can't run after the guard has already expired.
+        if let Some(st) = window.app_handle().try_state::<Mutex<AppState>>()
+            && let Ok(mut guard) = st.lock()
+        {
+            guard.arm_geometry_capture_suppression(
+                std::time::Instant::now() + std::time::Duration::from_millis(750),
+            );
+        }
+
         window.set_size(size).map_err(map_err)?;
 
         if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
@@ -133,7 +149,13 @@ pub(super) fn logical_size_from_geometry(
     )
 }
 
-fn capped_logical_size(window: &WebviewWindow, width: f64, height: f64) -> (f64, f64) {
+fn capped_logical_size(
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+    min_width: Option<f64>,
+    min_height: Option<f64>,
+) -> (f64, f64) {
     const MARGIN: f64 = 16.0;
 
     let Some(monitor) = window
@@ -152,9 +174,31 @@ fn capped_logical_size(window: &WebviewWindow, width: f64, height: f64) -> (f64,
         1.0
     };
     let work_area = monitor.work_area();
-    let max_width = (work_area.size.width as f64 / scale - MARGIN).max(320.0);
-    let max_height = (work_area.size.height as f64 / scale - MARGIN).max(240.0);
+    cap_to_available(
+        width,
+        height,
+        work_area.size.width as f64 / scale - MARGIN,
+        work_area.size.height as f64 / scale - MARGIN,
+        min_width,
+        min_height,
+    )
+}
 
+/// Cap a logical size to the available work area, but never below the window's
+/// own minimum. Capping below the minimum makes `set_size` request a
+/// sub-minimum size that the OS clamps back up to the minimum — and that clamp
+/// used to be persisted as the remembered size, collapsing the window
+/// permanently (SOU-222). Modes without a minimum keep a small 320x240 floor.
+fn cap_to_available(
+    width: f64,
+    height: f64,
+    available_width: f64,
+    available_height: f64,
+    min_width: Option<f64>,
+    min_height: Option<f64>,
+) -> (f64, f64) {
+    let max_width = available_width.max(min_width.unwrap_or(320.0));
+    let max_height = available_height.max(min_height.unwrap_or(240.0));
     (width.min(max_width), height.min(max_height))
 }
 
@@ -272,4 +316,45 @@ where
         transition,
         target: state.current_target.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cap_to_available;
+
+    #[test]
+    fn cap_never_shrinks_below_minimum() {
+        // A transient tiny work-area read must not cap a 720x560 window below
+        // its 520x400 minimum (SOU-222). The cap floors to the minimum, so
+        // set_size never requests a sub-minimum size the OS clamps + persists.
+        assert_eq!(
+            cap_to_available(720.0, 560.0, 100.0, 80.0, Some(520.0), Some(400.0)),
+            (520.0, 400.0)
+        );
+    }
+
+    #[test]
+    fn cap_applies_available_when_between_min_and_requested() {
+        assert_eq!(
+            cap_to_available(720.0, 560.0, 640.0, 500.0, Some(520.0), Some(400.0)),
+            (640.0, 500.0)
+        );
+    }
+
+    #[test]
+    fn cap_keeps_requested_size_when_it_fits() {
+        assert_eq!(
+            cap_to_available(720.0, 560.0, 1904.0, 1040.0, Some(520.0), Some(400.0)),
+            (720.0, 560.0)
+        );
+    }
+
+    #[test]
+    fn cap_uses_default_floor_for_min_less_modes() {
+        // Modes without an explicit minimum keep the 320x240 baseline floor.
+        assert_eq!(
+            cap_to_available(1000.0, 800.0, 50.0, 50.0, None, None),
+            (320.0, 240.0)
+        );
+    }
 }
