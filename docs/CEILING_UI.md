@@ -85,7 +85,7 @@ Detail lists **every** measured window plus inactive rows. Do not truncate to tw
 | Live | Normal pill, no chip | Quiet freshness text |
 | Cached / stale | Muted pill + `stale` chip | Dim metrics + stale label |
 | Error | Crit outline + `error` chip | Error line, no fake bars |
-| Not enforced | No provider chip; the constraining active window headlines as a live pill | Quiet named text row via `inactiveRateWindows` |
+| Not enforced | No chip from inactive windows; the active window headlines and normal/stale/error freshness still controls the pill | Quiet named text row via `inactiveRateWindows` |
 
 Never invent `0%` or `100%` for an inactive window.
 
