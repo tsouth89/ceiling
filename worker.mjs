@@ -4,6 +4,11 @@ const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 const SESSION_MESSAGE = "ceiling-admin-session-v1";
 const VISITOR_ID_ROTATION_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_EVENTS = new Set(["$pageview", "download_clicked", "github_clicked"]);
+const LATEST_RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`;
+const DOWNLOAD_ROUTES = {
+  "/download": /-Setup\.exe$/i,
+  "/download/portable": /-portable\.exe$/i,
+};
 
 export default {
   async fetch(request, env, ctx) {
@@ -39,9 +44,45 @@ export default {
 
     if (url.pathname.startsWith("/_private/")) return new Response("Not found", { status: 404 });
 
+    const downloadPattern = DOWNLOAD_ROUTES[url.pathname.replace(/\/+$/, "") || "/"];
+    if (downloadPattern) {
+      const target = await latestAssetUrl(downloadPattern, env, ctx).catch(() => LATEST_RELEASE_PAGE);
+      return Response.redirect(target, 302);
+    }
+
     return env.ASSETS.fetch(request);
   },
 };
+
+// Resolve the newest signed installer at click time so the download button never
+// needs editing when a release ships. Cached at the edge; falls back to the
+// releases page on any error via the caller's catch.
+async function latestAssetUrl(pattern, env, ctx) {
+  const cache = caches.default;
+  const cacheKey = new Request("https://ceiling.internal/latest-release-download-v1");
+  let cached = await cache.match(cacheKey);
+  let data;
+  if (cached) {
+    data = await cached.json();
+  } else {
+    const headers = { "User-Agent": "ceiling-site", Accept: "application/vnd.github+json" };
+    if (env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+      headers,
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) throw new Error(`github api ${res.status}`);
+    const body = await res.text();
+    const store = new Response(body, {
+      headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${CACHE_SECONDS}` },
+    });
+    ctx.waitUntil(cache.put(cacheKey, store.clone()));
+    data = JSON.parse(body);
+  }
+  const asset = (data.assets || []).find((a) => pattern.test(a.name));
+  if (!asset) throw new Error("no matching asset");
+  return asset.browser_download_url;
+}
 
 async function captureEvent(request, env, ctx) {
   if (!sameOrigin(request) || !isJson(request)) return new Response(null, { status: 204 });

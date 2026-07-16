@@ -370,7 +370,7 @@
           <img src="/favicon.png" alt="" />
           <span>Ceiling</span>
         </a>
-        <a class="github" href="https://github.com/tsouth89/ceiling">GitHub</a>
+        <a class="github" href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
       </header>
 
       <main class="hero">
@@ -379,7 +379,7 @@
           Track your Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar.
         </p>
 
-        <a class="download" href="/download">
+        <a class="download" href="/download" data-analytics="download_clicked" data-asset="windows-installer">
           <span class="windows-mark" aria-hidden="true">
             <span></span><span></span><span></span><span></span>
           </span>
@@ -415,5 +415,32 @@
         </section>
       </main>
     </div>
+    <script>
+      (() => {
+        const send = (event, details = {}) => {
+          fetch("/api/events", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              event,
+              pathname: location.pathname,
+              referrer: document.referrer,
+              ...details,
+            }),
+          }).catch(() => {});
+        };
+
+        send("$pageview");
+        document.addEventListener("click", (event) => {
+          const link = event.target.closest("[data-analytics]");
+          if (!link) return;
+          send(link.dataset.analytics, {
+            asset: link.dataset.asset || "",
+            release: link.dataset.release || "",
+          });
+        });
+      })();
+    </script>
   </body>
 </html>
