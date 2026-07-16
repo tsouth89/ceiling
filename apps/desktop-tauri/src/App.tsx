@@ -55,6 +55,7 @@ export default function App() {
 }
 
 function AppInner() {
+  const auxiliaryWindow = isFloatBarWindow() || isFlyoutWindow();
   const surface = useSurfaceSnapshot();
   const [state, setState] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,23 +88,27 @@ function AppInner() {
 
     // Fire-and-forget update checks after the first paint so startup/tray open
     // is not competing with network work.
-    const updateTimer = window.setTimeout(() => {
-      Promise.all([checkForUpdates(), getSettingsSnapshot()])
-        .then(([update, settings]) => {
-          if (settings.autoDownloadUpdates && update.canDownload) {
-            void downloadUpdate().catch(() => {});
-          }
-        })
-        .catch(() => {});
-    }, 2_000);
+    const updateTimer = auxiliaryWindow
+      ? null
+      : window.setTimeout(() => {
+          Promise.all([checkForUpdates(), getSettingsSnapshot()])
+            .then(([update, settings]) => {
+              if (settings.autoDownloadUpdates && update.canDownload) {
+                void downloadUpdate().catch(() => {});
+              }
+            })
+            .catch(() => {});
+        }, 2_000);
 
     // Listen for user-registered global shortcut events from the
     // `register_global_shortcut` command. The persistent shortcut (bound via
     // shortcut_bridge::plugin) already opens the PopOut dashboard natively;
     // this listener is the fallback for ad-hoc capture-mode registrations.
-    const unlistenPromise = listen<string>("global-shortcut-triggered", () => {
-      void setSurfaceMode("popOut", { kind: "dashboard" }).catch(() => {});
-    });
+    const unlistenPromise = auxiliaryWindow
+      ? Promise.resolve(null)
+      : listen<string>("global-shortcut-triggered", () => {
+          void setSurfaceMode("popOut", { kind: "dashboard" }).catch(() => {});
+        });
 
     const unlistenSettingsChangePromise = isSettingsWindow()
       ? listen<string>("settings-change-tab", () => {
@@ -134,14 +139,14 @@ function AppInner() {
 
     return () => {
       cancelled = true;
-      void unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+      void unlistenPromise.then((unlisten) => unlisten?.()).catch(() => {});
       void unlistenSettingsChangePromise
         .then((unlisten) => unlisten?.())
         .catch(() => {});
-      window.clearTimeout(updateTimer);
+      if (updateTimer !== null) window.clearTimeout(updateTimer);
       window.removeEventListener("codexbar:settings-updated", onSettingsUpdated);
     };
-  }, [reloadBootstrapState]);
+  }, [auxiliaryWindow, reloadBootstrapState]);
 
   if (error) {
     return (

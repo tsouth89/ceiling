@@ -16,7 +16,6 @@ import {
   getSettingsSnapshot,
   openSettingsWindow,
   refreshProvidersIfStale,
-  updateSettings,
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
@@ -493,7 +492,6 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const handleToggleClickThrough = useCallback(() => {
     const next = !settings.floatBarClickThrough;
     void setFloatBarClickThrough(next).catch(() => {});
-    void updateSettings({ floatBarClickThrough: next }).catch(() => {});
     setMenuOpen(false);
   }, [settings.floatBarClickThrough]);
   const handleOpenSettings = useCallback(() => {
@@ -502,7 +500,6 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   }, []);
   const handleHide = useCallback(() => {
     void hideFloatBar().catch(() => {});
-    void updateSettings({ floatBarEnabled: false }).catch(() => {});
     setMenuOpen(false);
   }, []);
 

@@ -86,15 +86,34 @@ pub fn open_path(path: String) -> Result<(), String> {
     if !pb.exists() {
         return Err(format!("Path not found: {trimmed}"));
     }
+    let canonical = pb
+        .canonicalize()
+        .map_err(|e| format!("Could not resolve path: {e}"))?;
+    let allowed_roots = [Settings::settings_path()]
+        .into_iter()
+        .flatten()
+        .filter_map(|path| path.parent().map(std::path::Path::to_path_buf))
+        .filter_map(|path| path.canonicalize().ok())
+        .collect::<Vec<_>>();
+    let allowed_exact = allowed_open_paths()
+        .into_iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .collect::<Vec<_>>();
+    if !path_is_allowed(&canonical, &allowed_roots, &allowed_exact) {
+        return Err("Path is outside Ceiling's allowed locations".into());
+    }
     // When given a file, open its parent directory so the file is highlighted
     // in a useful way across platforms without needing per-OS --select flags.
-    let target = if pb.is_file() {
-        pb.parent()
+    let target = if canonical.is_file() {
+        canonical
+            .parent()
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| pb.clone())
+            .unwrap_or_else(|| canonical.clone())
     } else {
-        pb.clone()
+        canonical
     };
+    #[cfg(target_os = "windows")]
+    let target = windows_shell_path(&target);
     let target_str = target.to_string_lossy().into_owned();
 
     #[cfg(target_os = "windows")]
@@ -117,6 +136,46 @@ pub fn open_path(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open path: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn windows_shell_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const EXTENDED_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC_PREFIX: &[u16] = &[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let Some(remainder) = wide.strip_prefix(EXTENDED_PREFIX) else {
+        return path.to_path_buf();
+    };
+    let normalized = if remainder.len() >= UNC_PREFIX.len()
+        && remainder[..UNC_PREFIX.len()]
+            .iter()
+            .zip(UNC_PREFIX)
+            .all(|(actual, expected)| {
+                actual == expected
+                    || ((*actual >= b'a' as u16 && *actual <= b'z' as u16)
+                        && actual - (b'a' - b'A') as u16 == *expected)
+            }) {
+        [
+            vec![b'\\' as u16, b'\\' as u16],
+            remainder[UNC_PREFIX.len()..].to_vec(),
+        ]
+        .concat()
+    } else {
+        remainder.to_vec()
+    };
+    std::ffi::OsString::from_wide(&normalized).into()
+}
+
+pub(super) fn path_is_allowed(
+    path: &std::path::Path,
+    allowed_roots: &[std::path::PathBuf],
+    allowed_exact: &[std::path::PathBuf],
+) -> bool {
+    allowed_exact.iter().any(|allowed| path == allowed)
+        || allowed_roots.iter().any(|root| path.starts_with(root))
 }
 
 // ── Session / environment ─────────────────────────────────────────────

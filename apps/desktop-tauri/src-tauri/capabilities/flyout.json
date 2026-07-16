@@ -1,0 +1,11 @@
+{
+  "identifier": "flyout",
+  "description": "Read-only usage and navigation controls for the taskbar flyout.",
+  "windows": ["flyout"],
+  "permissions": [
+    "flyout-commands",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-set-size"
+  ]
+}

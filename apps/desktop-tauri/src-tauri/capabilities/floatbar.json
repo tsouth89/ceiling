@@ -1,0 +1,11 @@
+{
+  "identifier": "floatbar",
+  "description": "Read-only usage and narrowly scoped float-bar controls.",
+  "windows": ["floatbar"],
+  "permissions": [
+    "floatbar-commands",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}

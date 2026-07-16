@@ -1047,6 +1047,79 @@ fn open_path_rejects_missing_path() {
     assert!(err.contains("not found"));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_shell_path_removes_extended_length_prefixes() {
+    assert_eq!(
+        super::windows_shell_path(std::path::Path::new(r"\\?\C:\Users\Ceiling")),
+        std::path::PathBuf::from(r"C:\Users\Ceiling")
+    );
+    assert_eq!(
+        super::windows_shell_path(std::path::Path::new(r"\\?\UNC\server\share\Ceiling")),
+        std::path::PathBuf::from(r"\\server\share\Ceiling")
+    );
+    assert_eq!(
+        super::windows_shell_path(std::path::Path::new(r"C:\Users\Ceiling")),
+        std::path::PathBuf::from(r"C:\Users\Ceiling")
+    );
+}
+
+#[test]
+fn open_path_allowlist_accepts_roots_and_exact_paths_only() {
+    let root = std::path::PathBuf::from(r"C:\Users\example\AppData\Roaming\Ceiling");
+    let exact = std::path::PathBuf::from(r"C:\Program Files\Kiro\kiro-cli.exe");
+    assert!(super::system::path_is_allowed(
+        &root.join("settings.json"),
+        std::slice::from_ref(&root),
+        std::slice::from_ref(&exact),
+    ));
+    assert!(super::system::path_is_allowed(
+        &exact,
+        std::slice::from_ref(&root),
+        std::slice::from_ref(&exact),
+    ));
+    assert!(!super::system::path_is_allowed(
+        std::path::Path::new(r"C:\Windows\System32"),
+        &[root],
+        &[exact],
+    ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn open_path_rejects_windows_directory() {
+    let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let error = super::open_path(windows).unwrap_err();
+    assert!(error.contains("outside Ceiling's allowed locations"));
+}
+
+#[test]
+fn auxiliary_window_permissions_exclude_sensitive_commands() {
+    let permissions = include_str!("../../permissions/commands.toml");
+    let floatbar = permissions
+        .split("[[permission]]")
+        .find(|section| section.contains("identifier = \"floatbar-commands\""))
+        .expect("floatbar command permission");
+    let flyout = permissions
+        .split("[[permission]]")
+        .find(|section| section.contains("identifier = \"flyout-commands\""))
+        .expect("flyout command permission");
+
+    for command in [
+        "set_api_key",
+        "set_manual_cookie",
+        "import_browser_cookies",
+        "add_token_account",
+        "open_path",
+        "quit_app",
+        "run_proof_command",
+        "apply_update",
+    ] {
+        assert!(!floatbar.contains(&format!("\"{command}\"")));
+        assert!(!flyout.contains(&format!("\"{command}\"")));
+    }
+}
+
 #[test]
 fn external_url_validator_accepts_http_and_https() {
     assert_eq!(

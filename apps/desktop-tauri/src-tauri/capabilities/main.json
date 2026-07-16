@@ -1,8 +1,9 @@
 {
-  "identifier": "default",
-  "description": "Default permissions for the Ceiling desktop app.",
-  "windows": ["main", "settings", "floatbar", "flyout"],
+  "identifier": "main",
+  "description": "Full desktop permissions for the primary and settings windows.",
+  "windows": ["main", "settings"],
   "permissions": [
+    "main-commands",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-close",
