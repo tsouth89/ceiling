@@ -47,6 +47,7 @@ async function latestAssetUrl(pattern, ctx) {
         "User-Agent": "ceiling-site",
         Accept: "application/vnd.github+json",
       },
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) throw new Error(`github api ${res.status}`);
     const body = await res.text();
