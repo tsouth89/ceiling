@@ -248,12 +248,16 @@ mod tests {
         use std::mem::size_of;
         use std::os::windows::ffi::OsStrExt;
 
-        use windows::Win32::Foundation::BOOL;
+        use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE};
         use windows::Win32::Security::{
-            ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
-            GetAclInformation, GetFileSecurityW, GetSecurityDescriptorControl,
-            GetSecurityDescriptorDacl, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+            ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+            DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetFileSecurityW,
+            GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
+            PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER, TokenUser,
         };
+        use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+        use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
         use windows::core::PCWSTR;
 
         let dir = tempfile::tempdir().unwrap();
@@ -318,6 +322,33 @@ mod tests {
             )
             .unwrap();
             assert_eq!(info.AceCount, 1);
+
+            let mut ace_ptr = std::ptr::null_mut();
+            GetAce(dacl, 0, &mut ace_ptr).unwrap();
+            let ace = &*ace_ptr.cast::<ACCESS_ALLOWED_ACE>();
+            assert_eq!(u32::from(ace.Header.AceType), ACCESS_ALLOWED_ACE_TYPE);
+            assert_eq!(ace.Mask, FILE_ALL_ACCESS.0);
+
+            let mut token = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).unwrap();
+            let mut token_bytes = 0u32;
+            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut token_bytes);
+            assert!(token_bytes >= size_of::<TOKEN_USER>() as u32);
+            let token_words = (token_bytes as usize).div_ceil(size_of::<usize>());
+            let mut token_buffer = vec![0usize; token_words];
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(token_buffer.as_mut_ptr().cast()),
+                token_bytes,
+                &mut token_bytes,
+            )
+            .unwrap();
+            CloseHandle(token).unwrap();
+
+            let token_user = &*token_buffer.as_ptr().cast::<TOKEN_USER>();
+            let ace_sid = PSID((&ace.SidStart as *const u32).cast_mut().cast());
+            EqualSid(ace_sid, token_user.User.Sid).unwrap();
         }
     }
 
