@@ -587,10 +587,33 @@ export interface ProviderLocalUsageSummary {
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
   thirtyDayTokenBreakdown?: LocalTokenBreakdown | null;
+  currentWindows: LocalUsageWindowSummary[];
+  comparisonPeriods: LocalUsageComparisonPeriod[];
   latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+}
+
+export interface LocalUsageWindowRequest {
+  id: string;
+  label: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface LocalUsageWindowSummary extends LocalUsageWindowRequest {
+  tokens: number;
+  tokenBreakdown: LocalTokenBreakdown;
+}
+
+export interface LocalUsageComparisonPeriod {
+  id: string;
+  label: string;
+  currentTokens: number;
+  currentBreakdown: LocalTokenBreakdown;
+  previousTokens: number;
+  previousBreakdown: LocalTokenBreakdown;
 }
 
 export interface LocalTokenBreakdown {

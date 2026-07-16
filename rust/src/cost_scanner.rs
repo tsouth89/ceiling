@@ -65,6 +65,16 @@ pub struct CostUsageReport {
     pub seven_days: CostSummary,
     pub thirty_days: CostSummary,
     pub latest_session: Option<CostSummary>,
+    /// Exact token totals for caller-supplied reset windows, keyed by ID.
+    pub current_windows: HashMap<String, CostSummary>,
+}
+
+/// A provider reset window whose local-log usage should be aggregated exactly.
+#[derive(Debug, Clone)]
+pub struct CurrentUsageWindow {
+    pub id: String,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
 }
 
 /// Per-model token counts
@@ -637,12 +647,48 @@ pub fn has_cost_usage_sources() -> bool {
 /// for today's values. This report keeps those views consistent and makes the
 /// initial load bounded by a single scan.
 pub fn get_cost_usage_report(provider: &str, days: u32) -> Option<CostUsageReport> {
+    get_cost_usage_report_with_windows(provider, days, &[])
+}
+
+pub fn get_cost_usage_report_with_windows(
+    provider: &str,
+    days: u32,
+    current_windows: &[CurrentUsageWindow],
+) -> Option<CostUsageReport> {
     let days = days.max(1);
     let scanner = CostScanner::new(days);
     match provider {
-        "codex" => Some(scan_codex_report(&scanner, days)),
-        "claude" => Some(scan_claude_report(&scanner, days)),
+        "codex" => Some(scan_codex_report(&scanner, days, current_windows)),
+        "claude" => Some(scan_claude_report(&scanner, days, current_windows)),
         _ => None,
+    }
+}
+
+fn empty_current_window_summaries(windows: &[CurrentUsageWindow]) -> HashMap<String, CostSummary> {
+    windows
+        .iter()
+        .map(|window| (window.id.clone(), CostSummary::default()))
+        .collect()
+}
+
+fn add_to_current_windows<F>(
+    summaries: &mut HashMap<String, CostSummary>,
+    windows: &[CurrentUsageWindow],
+    timestamp: Option<DateTime<Utc>>,
+    mut add: F,
+) where
+    F: FnMut(&mut CostSummary),
+{
+    let Some(timestamp) = timestamp else {
+        return;
+    };
+    for window in windows {
+        if timestamp >= window.starts_at
+            && timestamp < window.ends_at
+            && let Some(summary) = summaries.get_mut(&window.id)
+        {
+            add(summary);
+        }
     }
 }
 
@@ -693,6 +739,7 @@ fn finish_report(
     latest_session: Option<CostSummary>,
     sessions: (u32, u32, u32),
     undated: Option<&CostSummary>,
+    current_windows: HashMap<String, CostSummary>,
 ) -> CostUsageReport {
     let today = Local::now().date_naive();
     let seven_day_start = today - Duration::days(6);
@@ -743,10 +790,15 @@ fn finish_report(
         seven_days: seven_day_summary,
         thirty_days: period_summary,
         latest_session,
+        current_windows,
     }
 }
 
-fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
+fn scan_codex_report(
+    scanner: &CostScanner,
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
     let today = Local::now().date_naive();
     let start = codex_period_start(today, days);
     let seven_day_start = today - Duration::days(6);
@@ -756,6 +808,7 @@ fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
     let mut today_sessions = 0;
     let mut seven_day_sessions = 0;
     let mut period_sessions = 0;
+    let mut current_windows = empty_current_window_summaries(windows);
 
     for sessions_dir in scanner.get_codex_sessions_dirs() {
         if !sessions_dir.exists() {
@@ -800,6 +853,16 @@ fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
                     if let Some(cost) = add_codex_record_to_summary(&mut file_summary, record) {
                         file_summary.total_cost_usd += cost;
                     }
+                    add_to_current_windows(
+                        &mut current_windows,
+                        windows,
+                        record.timestamp,
+                        |summary| {
+                            if let Some(cost) = add_codex_record_to_summary(summary, record) {
+                                summary.total_cost_usd += cost;
+                            }
+                        },
+                    );
                     if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
                         contributed_today |= date == today;
                         contributed_seven_days |= date >= seven_day_start;
@@ -829,14 +892,20 @@ fn scan_codex_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
         latest.map(|(_, summary)| summary),
         (today_sessions, seven_day_sessions, period_sessions),
         None,
+        current_windows,
     )
 }
 
-fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
+fn scan_claude_report(
+    scanner: &CostScanner,
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
     let projects_dir = scanner.get_claude_projects_dir();
     let mut daily = empty_daily_summaries(days);
+    let mut current_windows = empty_current_window_summaries(windows);
     if !projects_dir.exists() {
-        return finish_report(daily, days, None, (0, 0, 0), None);
+        return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
     }
 
     let today = Local::now().date_naive();
@@ -856,6 +925,9 @@ fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
         let mut contributed_seven_days = false;
         let counted = for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
             add_claude_record_to_summary(&mut file_summary, record);
+            add_to_current_windows(&mut current_windows, windows, record.timestamp, |summary| {
+                add_claude_record_to_summary(summary, record)
+            });
             if let Some(timestamp) = record.timestamp {
                 let date = timestamp.with_timezone(&Local).date_naive();
                 let day = date.format("%Y-%m-%d").to_string();
@@ -899,6 +971,7 @@ fn scan_claude_report(scanner: &CostScanner, days: u32) -> CostUsageReport {
         latest.map(|(_, summary)| summary),
         (today_sessions, seven_day_sessions, period_sessions),
         Some(&undated),
+        current_windows,
     )
 }
 
@@ -976,6 +1049,33 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn aggregates_only_records_inside_current_reset_windows() {
+        let starts_at = Utc::now() - Duration::hours(4);
+        let ends_at = Utc::now() + Duration::hours(1);
+        let windows = vec![CurrentUsageWindow {
+            id: "session".to_string(),
+            starts_at,
+            ends_at,
+        }];
+        let mut summaries = empty_current_window_summaries(&windows);
+
+        add_to_current_windows(
+            &mut summaries,
+            &windows,
+            Some(starts_at + Duration::minutes(30)),
+            |summary| summary.input_tokens += 120,
+        );
+        add_to_current_windows(
+            &mut summaries,
+            &windows,
+            Some(starts_at - Duration::minutes(1)),
+            |summary| summary.input_tokens += 999,
+        );
+
+        assert_eq!(summaries["session"].input_tokens, 120);
+    }
 
     #[test]
     fn test_unknown_model_falls_back_to_sonnet() {

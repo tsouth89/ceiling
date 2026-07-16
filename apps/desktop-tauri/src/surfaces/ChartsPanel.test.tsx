@@ -10,6 +10,9 @@ vi.mock("./settings/providers/sections/charts/ChartsSection", () => ({
     <div data-testid="charts-section">{providerId}</div>
   ),
 }));
+vi.mock("./ProviderComparison", () => ({
+  default: () => <div data-testid="provider-comparison">compare</div>,
+}));
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({ t: (k: string) => k }),
 }));
@@ -64,8 +67,8 @@ describe("ChartsPanel", () => {
     expect(container.querySelector('[data-testid="charts-section"]')).toBeNull();
   });
 
-  it("renders a selector across supported providers and defaults to the first", () => {
-    const { getAllByRole, getByTestId } = render(
+  it("defaults to comparison when Codex and Claude are both available", () => {
+    const { getAllByRole, getByTestId, queryByTestId } = render(
       <ChartsPanel
         providers={[
           provider({ providerId: "codex", displayName: "Codex" }),
@@ -75,8 +78,9 @@ describe("ChartsPanel", () => {
       />,
     );
     const tabs = getAllByRole("tab");
-    expect(tabs).toHaveLength(3);
-    expect(getByTestId("charts-section").textContent).toBe("codex");
+    expect(tabs).toHaveLength(4);
+    expect(getByTestId("provider-comparison").textContent).toBe("compare");
+    expect(queryByTestId("charts-section")).toBeNull();
   });
 
   it("switches the charts when another provider is selected", () => {
@@ -88,7 +92,7 @@ describe("ChartsPanel", () => {
         ]}
       />,
     );
-    expect(getByTestId("charts-section").textContent).toBe("codex");
+    expect(getByRole("tab", { name: /Compare/ }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(getByRole("tab", { name: /Claude/ }));
     expect(getByTestId("charts-section").textContent).toBe("claude");
   });

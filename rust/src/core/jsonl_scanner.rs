@@ -67,6 +67,7 @@ pub struct CodexParseResult {
 #[derive(Debug, Clone)]
 pub struct CodexUsageRecord {
     pub day_key: String,
+    pub timestamp: Option<DateTime<chrono::Utc>>,
     pub model: String,
     pub input: i32,
     pub cached: i32,
@@ -237,7 +238,7 @@ impl CodexParserState {
                 ) {
                     return;
                 }
-                self.record_fast_token_count(payload, day_key);
+                self.record_fast_token_count(payload, day_key, timestamp);
             }
         }
     }
@@ -270,10 +271,27 @@ impl CodexParserState {
 
         let info = payload.get("info");
         let model = self.token_model(info, payload, obj);
-        self.record_usage(day_key, &model, delta_input, delta_cached, delta_output);
+        let timestamp = obj
+            .get("timestamp")
+            .and_then(|value| value.as_str())
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc));
+        self.record_usage(
+            day_key,
+            timestamp,
+            &model,
+            delta_input,
+            delta_cached,
+            delta_output,
+        );
     }
 
-    fn record_fast_token_count(&mut self, payload: CodexFastPayload<'_>, day_key: String) {
+    fn record_fast_token_count(
+        &mut self,
+        payload: CodexFastPayload<'_>,
+        day_key: String,
+        timestamp: &str,
+    ) {
         let Some((delta_input, delta_cached, delta_output)) = self.fast_token_deltas(&payload)
         else {
             return;
@@ -290,12 +308,31 @@ impl CodexParserState {
             .or(self.current_model.as_deref())
             .unwrap_or("gpt-5")
             .to_string();
-        self.record_usage(day_key, &model, delta_input, delta_cached, delta_output);
+        let timestamp = DateTime::parse_from_rfc3339(timestamp)
+            .ok()
+            .map(|value| value.with_timezone(&chrono::Utc));
+        self.record_usage(
+            day_key,
+            timestamp,
+            &model,
+            delta_input,
+            delta_cached,
+            delta_output,
+        );
     }
 
-    fn record_usage(&mut self, day_key: String, model: &str, input: i32, cached: i32, output: i32) {
+    fn record_usage(
+        &mut self,
+        day_key: String,
+        timestamp: Option<DateTime<chrono::Utc>>,
+        model: &str,
+        input: i32,
+        cached: i32,
+        output: i32,
+    ) {
         self.records.push(CodexUsageRecord {
             day_key,
+            timestamp,
             model: CostUsagePricing::normalize_codex_model(model),
             input,
             cached: cached.min(input),
@@ -736,6 +773,10 @@ mod tests {
         assert_eq!(parser.records.len(), 1);
         let record = &parser.records[0];
         assert_eq!(record.day_key, "2026-05-31");
+        assert_eq!(
+            record.timestamp.map(|value| value.to_rfc3339()),
+            Some("2026-05-31T10:00:02+00:00".to_string())
+        );
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (120, 40, 9));
         assert_eq!(parser.current_model.as_deref(), Some("gpt-5.5"));

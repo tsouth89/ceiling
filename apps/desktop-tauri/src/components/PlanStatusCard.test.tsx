@@ -118,6 +118,29 @@ describe("PlanStatusCard", () => {
     expect(screen.getByText("Resets in 12d")).toBeTruthy();
   });
 
+  it("always shows Claude weekly beside the 5-hour session", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "claude",
+          displayName: "Claude",
+          primary: window(29),
+          primaryLabel: "Session (5h)",
+          secondary: window(12),
+          secondaryLabel: "Weekly",
+          planName: "Claude Max 5x",
+        })}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("Session (5h)")).toBeTruthy();
+    expect(screen.getByText(/29% used/)).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText(/12% used/)).toBeTruthy();
+  });
+
   it("keeps overview identity quiet and strips redundant plan branding", () => {
     render(
       <PlanStatusCard

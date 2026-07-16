@@ -104,7 +104,7 @@ describe("capacityPresentation", () => {
     ]);
   });
 
-  it("omits quiet weekly companion from glance", () => {
+  it("keeps Claude weekly visible even when it is quieter than the session", () => {
     const meters = glanceMeters(
       provider({
         providerId: "claude",
@@ -115,7 +115,8 @@ describe("capacityPresentation", () => {
         secondaryLabel: "Weekly",
       }),
     );
-    expect(meters.companions).toEqual([]);
+    expect(meters.companions.map((meter) => meter.label)).toEqual(["Weekly"]);
+    expect(meters.companions[0].window.usedPercent).toBe(20);
   });
 
   it("reports glance status from constraining pressure", () => {

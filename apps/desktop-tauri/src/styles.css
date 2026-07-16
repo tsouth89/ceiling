@@ -6590,6 +6590,168 @@ body:has(.dashboard-shell) #root {
 .charts-provider-tab__icon {
   flex-shrink: 0;
 }
+.charts-provider-tab__compare-mark {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ceiling-accent) 12%, transparent);
+  color: var(--ceiling-cyan);
+  font-size: 11px;
+  line-height: 1;
+}
+.provider-comparison {
+  display: grid;
+  gap: 10px;
+}
+.provider-comparison__intro,
+.provider-comparison-loading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--ceiling-glass-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+}
+.provider-comparison__intro strong,
+.provider-comparison__intro span,
+.provider-comparison-loading strong,
+.provider-comparison-loading span {
+  display: block;
+}
+.provider-comparison__intro strong,
+.provider-comparison-loading strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+.provider-comparison__intro > div > span,
+.provider-comparison-loading span {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+.provider-comparison__source {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-cyan) 24%, var(--ceiling-glass-border));
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+}
+.provider-comparison-loading {
+  min-height: 112px;
+  justify-content: center;
+}
+.provider-comparison-loading .charts-loading__pulse {
+  flex: 0 0 auto;
+}
+.provider-comparison-card {
+  padding: 13px 14px;
+  border: 1px solid var(--ceiling-glass-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 2.5%, transparent);
+}
+.provider-comparison-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+}
+.provider-comparison-card__header strong,
+.provider-comparison-card__header span {
+  display: block;
+}
+.provider-comparison-card__header strong {
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+.provider-comparison-card__header > div > span {
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+.provider-comparison-card__summary {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  text-align: right;
+}
+.provider-comparison-card__rows {
+  display: grid;
+  gap: 12px;
+  padding-top: 11px;
+}
+.provider-comparison-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.provider-comparison-row__icon {
+  margin-top: 1px;
+}
+.provider-comparison-row__top,
+.provider-comparison-row__details {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.provider-comparison-row__top strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.provider-comparison-row__top > span {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.provider-comparison-row__track {
+  height: 4px;
+  margin: 5px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 11%, transparent);
+}
+.provider-comparison-row__track > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--ceiling-cyan) 72%, var(--text-primary));
+}
+.provider-comparison-row__details {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 11px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.provider-comparison-card--empty {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.provider-comparison-card--empty strong,
+.provider-comparison-card--empty span {
+  display: block;
+}
+.provider-comparison-card--empty strong {
+  margin-bottom: 3px;
+  color: var(--text-primary);
+}
+.provider-comparison__note {
+  margin: 0 3px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
 /* The reused ChartsSection reads as a contained chart card in the dashboard. */
 .charts-panel .provider-detail-charts {
   margin-bottom: 0;
@@ -6669,7 +6831,7 @@ body:has(.dashboard-shell) #root {
 }
 .usage-periods {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 8px;
 }
 .usage-period {
@@ -6678,6 +6840,10 @@ body:has(.dashboard-shell) #root {
   border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 80%, transparent);
   border-radius: 9px;
   background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.usage-period--current {
+  border-color: color-mix(in srgb, var(--ceiling-cyan) 30%, var(--ceiling-glass-border));
+  background: color-mix(in srgb, var(--ceiling-cyan) 5%, transparent);
 }
 .usage-period > span,
 .usage-period > small {

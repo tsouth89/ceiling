@@ -228,6 +228,8 @@ mod tests {
                 thirty_day_cost: Some(12.5),
                 thirty_day_tokens: Some(42_000),
                 thirty_day_token_breakdown: None,
+                current_windows: Vec::new(),
+                comparison_periods: Vec::new(),
                 latest_tokens: Some(1_200),
                 top_model: Some("gpt-5".to_string()),
                 estimate_note: "cached".to_string(),

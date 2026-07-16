@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { getProviderChartData, getSettingsSnapshot } from "../../../../../lib/tauri";
-import { providerSupportsChartData } from "../../../../../lib/providerCharts";
+import {
+  providerLocalUsageWindows,
+  providerSupportsChartData,
+} from "../../../../../lib/providerCharts";
 import type {
   LocalTokenBreakdown,
   ProviderChartData,
+  ProviderUsageSnapshot,
   SettingsSnapshot,
 } from "../../../../../types/bridge";
 import type { useLocale } from "../../../../../hooks/useLocale";
@@ -16,6 +20,7 @@ type T = ReturnType<typeof useLocale>["t"];
 interface Props {
   providerId: string;
   accountEmail: string | null;
+  providerSnapshot?: ProviderUsageSnapshot;
   t: T;
 }
 
@@ -27,6 +32,17 @@ function formatTokens(value: number | null): string {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
+}
+
+function formatWindowStart(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "current reset period";
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  return new Intl.DateTimeFormat(undefined, sameDay
+    ? { hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+  ).format(date);
 }
 
 function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
@@ -69,13 +85,17 @@ function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
  * Phase 10: fetches the latest settings snapshot so the animation flag feeds
  * through to each chart component.
  */
-export function ChartsSection({ providerId, accountEmail, t }: Props) {
+export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }: Props) {
   const [data, setData] = useState<ProviderChartData | null>(null);
   const [active, setActive] = useState<TabKey | null>(null);
   const [animations, setAnimations] = useState(true);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [failed, setFailed] = useState(false);
+  const usageWindows = providerLocalUsageWindows(providerSnapshot);
+  const usageWindowsKey = usageWindows
+    .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
+    .join("|");
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +110,7 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
         cancelled = true;
       };
     }
-    getProviderChartData(providerId, accountEmail ?? undefined)
+    getProviderChartData(providerId, accountEmail ?? undefined, usageWindows)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -111,7 +131,7 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [providerId, accountEmail]);
+  }, [providerId, accountEmail, usageWindowsKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,7 +164,7 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
     let attempts = 0;
     const timer = window.setInterval(() => {
       attempts += 1;
-      getProviderChartData(providerId, accountEmail ?? undefined)
+      getProviderChartData(providerId, accountEmail ?? undefined, usageWindows)
         .then((next) => {
           if (next.localUsage) {
             setData(next);
@@ -161,7 +181,7 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
       }
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [data, providerId, accountEmail]);
+  }, [data, providerId, accountEmail, usageWindowsKey]);
 
   if (loading) {
     return (
@@ -226,23 +246,32 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
       {data.localUsage && (
         <div className="usage-periods" aria-label="Local usage summary">
           {[
-            {
-              label: "Last session",
-              tokens: data.localUsage.lastSessionTokens,
-            },
+            ...(data.localUsage.currentWindows ?? []).map((window) => ({
+              label: window.label,
+              tokens: window.tokens,
+              detail: `Since ${formatWindowStart(window.startsAt)}`,
+              current: true,
+            })),
             {
               label: "Last 7 days",
               tokens: data.localUsage.sevenDayTokens,
+              detail: "processed tokens",
+              current: false,
             },
             {
               label: "Last 30 days",
               tokens: data.localUsage.thirtyDayTokens,
+              detail: "processed tokens",
+              current: false,
             },
           ].map((period) => (
-            <div className="usage-period" key={period.label}>
+            <div
+              className={`usage-period${period.current ? " usage-period--current" : ""}`}
+              key={period.label}
+            >
               <span>{period.label}</span>
               <strong>{formatTokens(period.tokens)}</strong>
-              <small>processed tokens</small>
+              <small>{period.detail}</small>
             </div>
           ))}
           {data.localUsage.sevenDayTokenBreakdown && (
