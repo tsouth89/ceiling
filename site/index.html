@@ -3,40 +3,50 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Ceiling — Stay below the ceiling.</title>
+    <title>Ceiling — AI usage and limit tracker for Windows</title>
     <meta
       name="description"
-      content="Ceiling keeps your AI usage visible in one quiet, local-first Windows app."
+      content="Ceiling keeps your AI usage visible in one quiet, local-first Windows app. Track Codex, Claude, Cursor, Gemini, and Copilot limits and resets from the taskbar."
     />
     <meta name="theme-color" content="#050607" />
     <link rel="canonical" href="https://ceiling.win/" />
-    <link
-      rel="icon"
-      href="https://raw.githubusercontent.com/tsouth89/ceiling/main/site/favicon.png"
-      type="image/png"
-    />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <link rel="preload" as="image" href="/ceiling-taskbar.png" />
 
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Ceiling — Stay below the ceiling." />
     <meta
       property="og:description"
-      content="AI usage in one quiet, local-first Windows app."
+      content="Track your Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar."
     />
     <meta property="og:url" content="https://ceiling.win/" />
-    <meta
-      property="og:image"
-      content="https://raw.githubusercontent.com/tsouth89/ceiling/main/site/og.png"
-    />
+    <meta property="og:image" content="https://ceiling.win/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Ceiling's Windows usage dashboard and floating capacity bar" />
+    <meta property="og:image:alt" content="Ceiling's taskbar capacity strip and usage overview" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Ceiling — Stay below the ceiling." />
-    <meta name="twitter:description" content="AI usage in one quiet Windows app." />
-    <meta
-      name="twitter:image"
-      content="https://raw.githubusercontent.com/tsouth89/ceiling/main/site/og.png"
-    />
+    <meta name="twitter:title" content="Ceiling — AI usage and limit tracker for Windows" />
+    <meta name="twitter:description" content="Track Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar." />
+    <meta name="twitter:image" content="https://ceiling.win/og.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Ceiling",
+        "operatingSystem": "Windows",
+        "applicationCategory": "UtilitiesApplication",
+        "description": "A quiet, local-first Windows app that tracks your AI subscription usage, limits, and reset windows for Codex, Claude, Cursor, Gemini, and Copilot from the taskbar.",
+        "url": "https://ceiling.win/",
+        "downloadUrl": "https://ceiling.win/download",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
 
     <style>
       :root {
@@ -138,6 +148,16 @@
         letter-spacing: -0.018em;
       }
 
+      .tagline {
+        margin: 9px 0 0;
+        max-width: 46ch;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.45;
+        letter-spacing: -0.005em;
+      }
+
       .download {
         min-height: 48px;
         display: inline-flex;
@@ -201,14 +221,15 @@
         margin-top: 27px;
       }
 
-      .floatbar {
-        width: min(540px, 86vw);
+      .taskbar {
+        width: min(620px, 94vw);
         overflow: hidden;
-        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 9px;
         filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.55));
       }
 
-      .floatbar img {
+      .taskbar img {
         width: 100%;
         height: auto;
         display: block;
@@ -272,8 +293,8 @@
           margin-top: 18px;
         }
 
-        .floatbar {
-          width: min(475px, 76vw);
+        .taskbar {
+          width: min(540px, 84vw);
         }
 
         .dashboard-frame {
@@ -287,8 +308,8 @@
           width: min(390px, 70vw);
         }
 
-        .floatbar {
-          width: min(420px, 72vw);
+        .taskbar {
+          width: min(490px, 76vw);
         }
       }
 
@@ -316,8 +337,8 @@
           margin-top: 24px;
         }
 
-        .floatbar {
-          width: min(440px, 95vw);
+        .taskbar {
+          width: min(525px, 96vw);
         }
 
         .dashboard-frame {
@@ -346,84 +367,53 @@
     <div class="page">
       <header class="topbar">
         <a class="brand" href="/" aria-label="Ceiling home">
-          <img
-            src="https://raw.githubusercontent.com/tsouth89/ceiling/main/site/favicon.png"
-            alt=""
-          />
+          <img src="/favicon.png" alt="" />
           <span>Ceiling</span>
         </a>
-        <a class="github" href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
+        <a class="github" href="https://github.com/tsouth89/ceiling">GitHub</a>
       </header>
 
       <main class="hero">
         <h1>Stay below the ceiling.</h1>
+        <p class="tagline">
+          Track your Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar.
+        </p>
 
-        <a
-          class="download"
-          href="https://github.com/tsouth89/ceiling/releases/download/v0.43.2/Ceiling-0.43.2-Setup.exe"
-          data-analytics="download_clicked"
-          data-asset="windows-installer"
-          data-release="v0.43.2"
-        >
+        <a class="download" href="/download">
           <span class="windows-mark" aria-hidden="true">
             <span></span><span></span><span></span><span></span>
           </span>
           Download for Windows
         </a>
 
-        <a class="release" href="https://github.com/tsouth89/ceiling/releases/tag/v0.43.2">
-          v0.43.2 · Windows · local-first
+        <a class="release" href="https://github.com/tsouth89/ceiling/releases/latest">
+          Latest release · Windows · local-first
         </a>
 
         <section class="product" aria-label="Ceiling interface preview">
-          <div class="floatbar">
+          <div class="taskbar">
             <img
-              src="https://raw.githubusercontent.com/tsouth89/ceiling/main/site/ceiling-floatbar.png"
-              width="406"
-              height="38"
-              alt="Ceiling's floating capacity bar showing Claude, Cursor, and Codex usage"
+              src="/ceiling-taskbar.png"
+              width="863"
+              height="87"
+              fetchpriority="high"
+              alt="Ceiling's capacity strip in the Windows taskbar, next to the weather widget"
             />
           </div>
 
           <div class="dashboard-frame">
             <div class="dashboard-inner">
               <img
-                src="https://raw.githubusercontent.com/tsouth89/ceiling/main/site/ceiling-dashboard.png"
-                width="577"
-                height="689"
-                alt="Ceiling's Windows dashboard showing Codex, Claude, and Cursor usage"
+                src="/ceiling-overview.png"
+                width="569"
+                height="685"
+                loading="lazy"
+                alt="Ceiling's overview showing Codex, Claude, and Cursor usage at a glance"
               />
             </div>
           </div>
         </section>
       </main>
     </div>
-    <script>
-      (() => {
-        const send = (event, details = {}) => {
-          fetch("/api/events", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            keepalive: true,
-            body: JSON.stringify({
-              event,
-              pathname: location.pathname,
-              referrer: document.referrer,
-              ...details,
-            }),
-          }).catch(() => {});
-        };
-
-        send("$pageview");
-        document.addEventListener("click", (event) => {
-          const link = event.target.closest("[data-analytics]");
-          if (!link) return;
-          send(link.dataset.analytics, {
-            asset: link.dataset.asset || "",
-            release: link.dataset.release || "",
-          });
-        });
-      })();
-    </script>
   </body>
 </html>
