@@ -1,42 +1,34 @@
 # Browser Cookie Extraction
 
-Ceiling can automatically extract browser cookies for providers that use web authentication (Claude, Cursor, Kimi, etc.).
+Some providers authenticate through their website (Claude, Cursor, Kimi, and similar). Ceiling can read those cookies from your browser, but modern Windows locks most Chromium cookies behind App-Bound Encryption, so **manual cookies are the default and most reliable path** for those providers.
 
-## Supported Browsers
+## Cookie source defaults
 
-| Browser | Encryption | Status |
-|---------|-----------|--------|
-| Chrome | DPAPI + AES-256-GCM | ✅ Automatic |
-| Edge | DPAPI + AES-256-GCM | ✅ Automatic |
-| Brave | DPAPI + AES-256-GCM | ✅ Automatic |
-| Firefox | Unencrypted SQLite | ✅ Automatic |
+- **Cursor** defaults to **Automatic** — Ceiling reads the signed-in Cursor IDE session, so a cookie import is usually unnecessary.
+- **Every other cookie-based provider** defaults to **Manual**. You paste the cookie header once and Ceiling stores it encrypted.
 
-## How It Works
+Change a provider's source in **Settings → Providers → provider detail → Browser Cookies**.
 
-1. Ceiling reads the browser's cookie database from its standard location
-2. For Chromium-based browsers, cookies are encrypted with Windows DPAPI — Ceiling decrypts them using the current user's credentials
-3. Only cookies for enabled providers are extracted (e.g., `claude.ai`, `cursor.com`)
-4. Cookies are stored in-memory and refreshed on each provider poll
+## Automatic import and App-Bound Encryption
 
-## Setting Up Cookie Import
+| Browser | Reality on current Windows |
+|---------|----------------------------|
+| Chrome / Edge / Brave | App-Bound Encryption (Chrome/Edge 127+, `v20` cookies) blocks automatic import for most profiles. When it does, Ceiling reports "App-Bound Encryption is blocking automatic browser import" and you should switch that provider to manual cookies. |
+| Firefox | Cookies are stored unencrypted, so automatic import works. |
 
-1. Open **Settings** → **Providers** tab
-2. Select the provider you want to configure
-3. In the provider detail pane, find the **Browser Cookies** section
-4. Choose your browser from the dropdown and click **Import**
+When automatic import does succeed, Ceiling reads the browser's cookie database, decrypts Chromium cookies with the current user's Windows DPAPI key, and extracts only the cookies for enabled providers (e.g. `claude.ai`, `cursor.com`).
 
-## Manual Cookies
+## Manual cookies (recommended for Chromium providers)
 
-If automatic extraction fails (e.g., browser is locked, profile is encrypted, or running in WSL):
+1. Open the provider's website in your browser (e.g. `claude.ai`) and make sure you are logged in.
+2. Open DevTools (F12) → **Network** tab, refresh the page, and click any request to the provider.
+3. Copy the `Cookie` header value from **Request Headers**.
+4. In Ceiling → **Settings → Providers → provider detail → Browser Cookies**, paste the value.
 
-1. Open your browser and navigate to the provider's website (e.g., `claude.ai`)
-2. Open DevTools (F12) → **Network** tab
-3. Refresh the page and click any request to the provider
-4. Copy the `Cookie` header value from **Request Headers**
-5. In Ceiling Settings → provider detail → **Browser Cookies**, paste the value
+Manual cookies are saved to the `ManualCookies` store and reused across restarts, not held only in memory. On **Windows** (the shipped app) they are encrypted with DPAPI and locked to your user with a user-only file ACL, under `%APPDATA%\Ceiling`. On other platforms — the Linux CLI build of the shared crate — they are written with owner-only (`0600`) file permissions rather than encrypted.
 
 ## Troubleshooting
 
-- **"Cookie decryption failed"**: Close the browser and retry — some browsers lock the cookie database while running
-- **Empty cookies**: Make sure you're logged into the provider's web interface in that browser
-- **WSL**: Chromium DPAPI cookies cannot be decrypted from WSL. Use manual cookies or CLI-based auth instead
+- **"App-Bound Encryption is blocking automatic browser import"**: expected on current Chrome/Edge/Brave. Switch that provider to manual cookies.
+- **"Cookie decryption failed" or empty cookies**: close the browser (it can lock the cookie database while running) and confirm you are logged into the provider's website in that browser.
+- **WSL**: Chromium DPAPI cookies cannot be decrypted from WSL. Use manual cookies or CLI-based provider auth instead.
