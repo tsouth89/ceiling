@@ -143,6 +143,11 @@ pub struct AppState {
     /// One-shot grace for a blur event caused while revealing the tray panel
     /// during explicit startup.
     pub startup_tray_blur_grace_until: Option<std::time::Instant>,
+    /// Set while the app is programmatically sizing/positioning a window, so
+    /// the OS resize/move events that follow are not captured as if the user
+    /// had dragged the window (SOU-222: stopped the PopOut from persisting a
+    /// clamped-to-minimum size and reopening tiny forever).
+    pub suppress_geometry_capture_until: Option<std::time::Instant>,
     /// Whether the explicit startup path may use its delayed shell fallback.
     pub startup_tray_reveal_pending: bool,
     /// One-shot permission for frontend layout code to reveal a newly opened flyout.
@@ -194,6 +199,7 @@ impl AppState {
             capacity_event_observer: crate::capacity_events::CapacityEventObserver::load_default(),
             last_shown_at: None,
             startup_tray_blur_grace_until: None,
+            suppress_geometry_capture_until: None,
             startup_tray_reveal_pending: false,
             flyout_reveal_pending: false,
             gesture_blur_guard: None,
@@ -223,6 +229,19 @@ impl AppState {
     pub fn take_startup_tray_blur_grace(&mut self, now: std::time::Instant) -> bool {
         self.startup_tray_blur_grace_until
             .take()
+            .is_some_and(|until| now <= until)
+    }
+
+    /// Suppress automatic geometry capture until `until`. Armed right before
+    /// the app programmatically resizes/moves a window.
+    pub fn arm_geometry_capture_suppression(&mut self, until: std::time::Instant) {
+        self.suppress_geometry_capture_until = Some(until);
+    }
+
+    /// Whether a programmatic layout is still in its suppression window, so the
+    /// current resize/move event should not be persisted as user geometry.
+    pub fn geometry_capture_suppressed(&self, now: std::time::Instant) -> bool {
+        self.suppress_geometry_capture_until
             .is_some_and(|until| now <= until)
     }
 
@@ -350,6 +369,22 @@ mod tests {
 
         assert!(transition.is_some());
         assert_eq!(state.current_target, SurfaceTarget::Summary);
+    }
+
+    #[test]
+    fn geometry_capture_suppression_expires() {
+        use std::time::{Duration, Instant};
+        let mut state = AppState::new();
+        let now = Instant::now();
+        // Nothing armed -> capture is allowed.
+        assert!(!state.geometry_capture_suppressed(now));
+
+        let until = now + Duration::from_millis(750);
+        state.arm_geometry_capture_suppression(until);
+        assert!(state.geometry_capture_suppressed(now));
+        assert!(state.geometry_capture_suppressed(until));
+        // Past the window, capture resumes (a genuine user drag is persisted).
+        assert!(!state.geometry_capture_suppressed(until + Duration::from_millis(1)));
     }
 
     #[test]
