@@ -86,11 +86,18 @@ pub fn apply_window_layout(
         // The canonical surface mode drives geometry restore — no brittle
         // shape-matching of WindowProperties. logical_size_from_geometry
         // falls back to the mode's default size for non-remembered modes.
-        // Arm geometry-capture suppression: the set_size below (and the
-        // transition's subsequent position apply) fire OS resize/move events
-        // that must not be persisted as if the user had dragged the window
-        // (SOU-222). Without this, a monitor-read that caps the window to its
-        // minimum was saved as the remembered size and reopened tiny forever.
+        let (width, height) =
+            logical_size_from_geometry(mode, props, crate::geometry_store::load(mode));
+        let (width, height) =
+            capped_logical_size(window, width, height, props.min_width, props.min_height);
+        let size = tauri::LogicalSize::new(width, height);
+
+        // Arm geometry-capture suppression immediately before the programmatic
+        // set_size (and the transition's subsequent position apply) so their OS
+        // resize/move events are not persisted as if the user had dragged the
+        // window (SOU-222). Armed here — after the geometry load/cap above — so
+        // the 750 ms window starts at the actual mutation, not before slow prep,
+        // and set_size can't run after the guard has already expired.
         if let Some(st) = window.app_handle().try_state::<Mutex<AppState>>()
             && let Ok(mut guard) = st.lock()
         {
@@ -99,11 +106,6 @@ pub fn apply_window_layout(
             );
         }
 
-        let (width, height) =
-            logical_size_from_geometry(mode, props, crate::geometry_store::load(mode));
-        let (width, height) =
-            capped_logical_size(window, width, height, props.min_width, props.min_height);
-        let size = tauri::LogicalSize::new(width, height);
         window.set_size(size).map_err(map_err)?;
 
         if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
