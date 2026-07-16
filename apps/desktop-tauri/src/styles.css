@@ -2877,21 +2877,6 @@ body:has(.taskbar-flyout-frame) #root {
   color: var(--provider-row-text-secondary);
 }
 
-.provider-detail-select {
-  appearance: none;
-  background: var(--provider-row-bg);
-  color: var(--provider-row-text-primary);
-  border: 1px solid var(--provider-icon-ring);
-  border-radius: 6px;
-  padding: 4px 10px;
-  font-size: 0.82rem;
-  min-width: 220px;
-}
-
-.provider-detail-select:disabled {
-  opacity: 0.55;
-}
-
 .btn.btn--ghost {
   background: var(--provider-row-bg);
   color: var(--provider-row-text-primary);
@@ -8188,4 +8173,119 @@ body:has(.dashboard-shell) #root {
 [data-theme="light"] .provider-detail-pace__stage[data-stage="far_ahead"],
 [data-theme="light"] .provider-detail-pace__stage[data-stage="ahead"] {
   color: var(--status-warning-text);
+}
+
+/* ── Themed dropdown — replaces native <select> so the popup matches the app
+   theme instead of the OS (SOU-224). See components/Dropdown.tsx. ─────────── */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+.dropdown__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-body);
+  line-height: 20px;
+  cursor: pointer;
+  text-align: left;
+}
+.dropdown__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropdown__chevron {
+  flex: none;
+  width: 8px;
+  height: 5px;
+  background: currentColor;
+  opacity: 0.55;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.dropdown__button:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.dropdown__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.dropdown__list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: #1c2024;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  outline: none;
+}
+.dropdown__option {
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dropdown__option--active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.dropdown__option--selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+.dropdown__option--selected.dropdown__option--active {
+  color: var(--text-primary);
+}
+
+/* provider-detail variant (settings provider panes) */
+.dropdown--provider-detail {
+  display: block;
+}
+.dropdown--provider-detail .dropdown__button {
+  min-width: 220px;
+  height: auto;
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  background: var(--provider-row-bg);
+  color: var(--provider-row-text-primary);
+  border: 1px solid var(--provider-icon-ring);
+  border-radius: 6px;
+}
+
+/* light theme */
+[data-theme="light"] .dropdown__button {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  color: var(--text-primary);
+}
+[data-theme="light"] .dropdown__list {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+}
+[data-theme="light"] .dropdown--provider-detail .dropdown__button {
+  background: var(--provider-row-bg);
+  color: var(--provider-row-text-primary);
+  border: 1px solid var(--provider-icon-ring);
 }

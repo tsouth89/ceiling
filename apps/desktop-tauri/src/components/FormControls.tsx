@@ -1,5 +1,7 @@
 import type React from "react";
 
+import { Dropdown } from "./Dropdown";
+
 // ── tiny reusable controls ──────────────────────────────────────────
 
 export function Toggle({
@@ -63,19 +65,13 @@ export function Select({
   const width = Math.min(190, Math.max(78, Math.ceil(longestLabelUnits * 7.2) + 34));
 
   return (
-    <select
-      className="select"
-      style={{ width }}
+    <Dropdown
       value={value}
+      options={options}
+      onChange={onChange}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+      style={{ width }}
+    />
   );
 }
 

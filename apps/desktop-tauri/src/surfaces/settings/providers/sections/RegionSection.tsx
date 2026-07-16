@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Dropdown } from "../../../../components/Dropdown";
 import type { RegionOption } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { setProviderRegion } from "../../../../lib/tauri";
@@ -49,18 +50,14 @@ export function RegionSection({
   return (
     <section className="provider-detail-section provider-detail-region">
       <h4>{t("ProviderRegion")}</h4>
-      <select
-        className="provider-detail-select"
+      <Dropdown
+        className="dropdown--provider-detail"
         value={selected}
+        options={options}
+        onChange={(next) => void handleChange(next)}
         disabled={busy}
-        onChange={(e) => void handleChange(e.target.value)}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+        ariaLabel={t("ProviderRegion")}
+      />
       {error && <p className="provider-detail-error">{error}</p>}
     </section>
   );

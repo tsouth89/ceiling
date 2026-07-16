@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Dropdown } from "../../../../components/Dropdown";
 import type {
   MetricPreference,
   ProviderDetail,
@@ -52,18 +53,14 @@ export function MenuBarMetricSection({
         <span className="provider-detail-field__label">
           {t("MenuBarMetric")}
         </span>
-        <select
-          className="provider-detail-select"
+        <Dropdown
+          className="dropdown--provider-detail"
           value={selected}
+          options={options}
+          onChange={(next) => handleChange(next as MetricPreference)}
           disabled={disabled}
-          onChange={(e) => handleChange(e.target.value as MetricPreference)}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          ariaLabel={t("MenuBarMetric")}
+        />
       </label>
       <p className="provider-detail-helper">{t("MenuBarMetricHelper")}</p>
       {error && <p className="provider-detail-error">{error}</p>}
