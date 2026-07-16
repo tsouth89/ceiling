@@ -119,23 +119,11 @@ fn protected_file_bytes(contents: &str) -> io::Result<Vec<u8>> {
 
 #[cfg(windows)]
 fn protect(plain: &[u8]) -> io::Result<(&'static str, Vec<u8>)> {
-    use windows::Win32::Security::Cryptography::{
-        CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN,
-    };
+    use windows::Win32::Security::Cryptography::CRYPTPROTECT_UI_FORBIDDEN;
 
-    match protect_with_flags(plain, CRYPTPROTECT_UI_FORBIDDEN) {
-        Ok(encrypted) => Ok((WINDOWS_DPAPI_USER, encrypted)),
-        Err(user_error) => protect_with_flags(
-            plain,
-            CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
-        )
-        .map(|encrypted| (WINDOWS_DPAPI_MACHINE, encrypted))
-        .map_err(|machine_error| {
-            io::Error::other(format!(
-                "CryptProtectData failed with user scope ({user_error}) and machine scope ({machine_error})"
-            ))
-        }),
-    }
+    protect_with_flags(plain, CRYPTPROTECT_UI_FORBIDDEN)
+        .map(|encrypted| (WINDOWS_DPAPI_USER, encrypted))
+        .map_err(|error| io::Error::other(format!("user-scoped DPAPI protection failed: {error}")))
 }
 
 #[cfg(windows)]
@@ -222,7 +210,12 @@ fn restrict_file_permissions(path: &Path) -> io::Result<()> {
     std::fs::set_permissions(path, perms)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn restrict_file_permissions(path: &Path) -> io::Result<()> {
+    crate::windows_security::restrict_path_to_current_user(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn restrict_file_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -247,6 +240,116 @@ mod tests {
         write_string(&path, r#"{"secret":"value"}"#).unwrap();
 
         assert_eq!(read_string(&path).unwrap(), r#"{"secret":"value"}"#);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_write_uses_user_dpapi_and_a_protected_single_entry_dacl() {
+        use std::mem::size_of;
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE};
+        use windows::Win32::Security::{
+            ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+            DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetFileSecurityW,
+            GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
+            PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        };
+        use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+        use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        use windows::core::PCWSTR;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secure.json");
+        write_string(&path, r#"{"secret":"value"}"#).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let protected: ProtectedFile = serde_json::from_str(&raw).unwrap();
+        assert_eq!(protected.protection, WINDOWS_DPAPI_USER);
+
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut descriptor_bytes = 0u32;
+        unsafe {
+            let _ = GetFileSecurityW(
+                PCWSTR(wide_path.as_ptr()),
+                DACL_SECURITY_INFORMATION.0,
+                PSECURITY_DESCRIPTOR(std::ptr::null_mut()),
+                0,
+                &mut descriptor_bytes,
+            );
+        }
+        assert!(descriptor_bytes > 0);
+
+        let descriptor_words = (descriptor_bytes as usize).div_ceil(size_of::<usize>());
+        let mut descriptor_buffer = vec![0usize; descriptor_words];
+        let descriptor = PSECURITY_DESCRIPTOR(descriptor_buffer.as_mut_ptr().cast());
+
+        unsafe {
+            GetFileSecurityW(
+                PCWSTR(wide_path.as_ptr()),
+                DACL_SECURITY_INFORMATION.0,
+                descriptor,
+                descriptor_bytes,
+                &mut descriptor_bytes,
+            )
+            .ok()
+            .unwrap();
+
+            let mut control = 0u16;
+            let mut revision = 0u32;
+            GetSecurityDescriptorControl(descriptor, &mut control, &mut revision).unwrap();
+            assert_ne!(control & SE_DACL_PROTECTED.0, 0);
+
+            let mut present = BOOL::default();
+            let mut defaulted = BOOL::default();
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted).unwrap();
+            assert!(present.as_bool());
+            assert!(!dacl.is_null());
+            assert!(!defaulted.as_bool());
+
+            let mut info = ACL_SIZE_INFORMATION::default();
+            GetAclInformation(
+                dacl,
+                (&mut info as *mut ACL_SIZE_INFORMATION).cast(),
+                size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+            .unwrap();
+            assert_eq!(info.AceCount, 1);
+
+            let mut ace_ptr = std::ptr::null_mut();
+            GetAce(dacl, 0, &mut ace_ptr).unwrap();
+            let ace = &*ace_ptr.cast::<ACCESS_ALLOWED_ACE>();
+            assert_eq!(u32::from(ace.Header.AceType), ACCESS_ALLOWED_ACE_TYPE);
+            assert_eq!(ace.Mask, FILE_ALL_ACCESS.0);
+
+            let mut token = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).unwrap();
+            let mut token_bytes = 0u32;
+            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut token_bytes);
+            assert!(token_bytes >= size_of::<TOKEN_USER>() as u32);
+            let token_words = (token_bytes as usize).div_ceil(size_of::<usize>());
+            let mut token_buffer = vec![0usize; token_words];
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(token_buffer.as_mut_ptr().cast()),
+                token_bytes,
+                &mut token_bytes,
+            )
+            .unwrap();
+            CloseHandle(token).unwrap();
+
+            let token_user = &*token_buffer.as_ptr().cast::<TOKEN_USER>();
+            let ace_sid = PSID((&ace.SidStart as *const u32).cast_mut().cast());
+            EqualSid(ace_sid, token_user.User.Sid).unwrap();
+        }
     }
 
     #[test]

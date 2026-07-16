@@ -134,7 +134,16 @@ async fn run_status_pipe(app: tauri::AppHandle) {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     loop {
-        let server = match ServerOptions::new().create(STATUS_PIPE_NAME) {
+        let server = match codexbar::windows_security::CurrentUserOnlySecurityDescriptor::new()
+            .and_then(|mut security| {
+                let mut attributes = security.security_attributes();
+                unsafe {
+                    ServerOptions::new().create_with_security_attributes_raw(
+                        STATUS_PIPE_NAME,
+                        attributes.as_mut_ptr(),
+                    )
+                }
+            }) {
             Ok(server) => server,
             Err(err) => {
                 tracing::warn!("failed to create PowerToys status pipe: {err}");
