@@ -1,37 +1,14 @@
-# Xcode user/session
-xcuserdata/
-
-# Build products
-.build/
-DerivedData
-
-# Bundles / artifacts
-# Main app bundle (any variation)
-CodexBar.app/
-CodexBar *.app/
-CodexBar_*.app/
-Codexbar.app/
 # Release artifacts
-*.ipa
-*.dSYM*
 *.zip
 *.delta
-*.dmg
-*.pkg
 *.tar.gz
 *.tgz
-Icon.iconset
-debug_*.swift
 
 # Misc
 .DS_Store
 
 # Debug/analysis docs
 docs/*-analysis.md
-
-# Swift Package Manager metadata (leave sources tracked)
-# Packages/
-# Package.resolved
 
 # Rust build artifacts
 rust/target/
@@ -69,14 +46,12 @@ nul
 !dev.ps1
 !scripts/*.ps1
 !scripts/**/*.ps1
-!/scripts/macos-windows-cross-build.sh
 !/scripts/run_vm_provider_proof.sh
 !/scripts/vm/provider_osclick_proof_unc.ps1
 !/scripts/vm/run_provider_proof_remote.sh
 !/scripts/vm/setup_syncthing_windows.ps1
 !/scripts/vm/windows_debug_relaunch.ps1
 version.env
-.stfolder-win-codexbar/
 
 # VM proof artifacts (screenshots/captures from Windows VM sessions)
 win11-*.png

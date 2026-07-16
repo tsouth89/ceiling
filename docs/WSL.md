@@ -1,19 +1,19 @@
 # WSL Support
 
-CodexBar runs natively inside WSL. The CLI works out of the box; the desktop shell
+Ceiling runs natively inside WSL. The CLI works out of the box; the desktop shell
 requires [WSLg](https://github.com/microsoft/wslg) (Windows 11, build 22000+).
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/Finesssee/Win-CodexBar.git
-cd Win-CodexBar
+git clone https://github.com/tsouth89/ceiling.git
+cd ceiling
 ./scripts/dev.sh
 ```
 
 This will:
 1. Detect your WSL environment
-2. Build CodexBar Desktop through Tauri's no-bundle workflow
+2. Build Ceiling Desktop through Tauri's no-bundle workflow
 3. Launch the desktop shell (WSLg) or CLI (no display server detected)
 
 CLI-only mode (no display server needed):
@@ -24,7 +24,7 @@ CLI-only mode (no display server needed):
 
 ## How It Works
 
-When running inside WSL, CodexBar:
+When running inside WSL, Ceiling:
 
 - **Browser cookies**: Reads Windows browser data from `/mnt/c/Users/<you>/AppData/...`.
   Chromium cookies encrypted with DPAPI cannot be decrypted from WSL automatically.

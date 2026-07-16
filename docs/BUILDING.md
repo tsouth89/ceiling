@@ -76,31 +76,10 @@ Useful release flags:
 Hosted CI validates pull requests. Pushing an immutable `v*` tag runs the
 Azure-backed signed Windows release workflow and creates a draft GitHub release.
 
-## macOS Windows Cross Build
-
-For a fast compile check from macOS, use the cross-build wrapper:
-
-```bash
-./scripts/macos-windows-cross-build.sh
-```
-
-Or call the desktop package script directly:
-
-```bash
-pnpm --dir apps/desktop-tauri run tauri:build:windows-cross
-```
-
-This uses `cargo-xwin` plus Homebrew `llvm`/`lld` to build the Windows MSVC
-Tauri executable at `target/x86_64-pc-windows-msvc/release/codexbar-desktop-tauri.exe`.
-It is useful for catching frontend, Tauri, and Windows-target Rust compile
-failures from a Mac. It does not replace the Windows server release path:
-installer packaging, tray behavior, WebView2, DPAPI, startup integration, and
-smoke install validation still need a real Windows machine.
-
 ## Project Structure
 
 ```
-Win-CodexBar/
+ceiling/
 ├── apps/desktop-tauri/          # Tauri desktop shell
 │   ├── src/                     # React frontend (TypeScript)
 │   └── src-tauri/               # Tauri/Rust backend
