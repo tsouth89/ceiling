@@ -3,7 +3,7 @@ import type {
   RateWindowSnapshot,
 } from "../types/bridge";
 
-export type CapacityFreshness = "live" | "stale" | "error" | "lifted";
+export type CapacityFreshness = "live" | "stale" | "error";
 
 export type ConstrainingWindow = {
   id: string;
@@ -180,7 +180,11 @@ export function providerGlanceStatus(
   return "ok";
 }
 
-/** Strip/flyout freshness: error > stale > lifted > live. */
+/**
+ * Strip/flyout freshness from the provider timestamp and error only:
+ * error > stale > live. Inactive/lifted windows are surfaced as their own
+ * `inactiveRateWindows` rows, never as provider-level freshness (SOU-152).
+ */
 export function capacityFreshness(
   provider: ProviderUsageSnapshot,
   nowMs = Date.now(),
@@ -189,9 +193,6 @@ export function capacityFreshness(
   const updated = Date.parse(provider.updatedAt);
   if (Number.isFinite(updated) && nowMs - updated > STALE_AFTER_MS) {
     return "stale";
-  }
-  if ((provider.inactiveRateWindows?.length ?? 0) > 0) {
-    return "lifted";
   }
   return "live";
 }
