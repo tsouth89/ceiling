@@ -596,7 +596,9 @@ html {
 }
 
 /* macOS-style checkbox (replaces iOS-style switch toggle) */
-.toggle {
+.toggle,
+.provider-detail-toggle input[type="checkbox"],
+.providers-sidebar__checkbox {
   appearance: none;
   -webkit-appearance: none;
   width: 16px;
@@ -613,16 +615,22 @@ html {
   transition: background 0.12s, border-color 0.12s;
 }
 
-.toggle:hover:not(:disabled) {
+.toggle:hover:not(:disabled),
+.provider-detail-toggle input[type="checkbox"]:hover:not(:disabled),
+.providers-sidebar__checkbox:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.45);
 }
 
-.toggle:checked {
+.toggle:checked,
+.provider-detail-toggle input[type="checkbox"]:checked,
+.providers-sidebar__checkbox:checked {
   background: var(--accent, #0a84ff);
   border-color: var(--accent, #0a84ff);
 }
 
-.toggle:checked::after {
+.toggle:checked::after,
+.provider-detail-toggle input[type="checkbox"]:checked::after,
+.providers-sidebar__checkbox:checked::after {
   content: "";
   position: absolute;
   left: 4px;
@@ -634,17 +642,23 @@ html {
   transform: rotate(45deg);
 }
 
-.toggle:focus-visible {
+.toggle:focus-visible,
+.provider-detail-toggle input[type="checkbox"]:focus-visible,
+.providers-sidebar__checkbox:focus-visible {
   outline: 2px solid var(--accent, #0a84ff);
   outline-offset: 1px;
 }
 
-.toggle:disabled {
+.toggle:disabled,
+.provider-detail-toggle input[type="checkbox"]:disabled,
+.providers-sidebar__checkbox:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-[data-theme="light"] .toggle {
+[data-theme="light"] .toggle,
+[data-theme="light"] .provider-detail-toggle input[type="checkbox"],
+[data-theme="light"] .providers-sidebar__checkbox {
   border-color: rgba(0, 0, 0, 0.28);
   background: rgba(255, 255, 255, 0.9);
 }
