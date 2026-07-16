@@ -526,7 +526,7 @@ fn test_manual_cookies_set_get_remove() {
 fn legacy_credentials_replace_only_empty_secure_store_entries() {
     assert_eq!(
         legacy_credential_to_migrate(Some(" legacy-secret "), None),
-        Some(" legacy-secret ")
+        Some("legacy-secret")
     );
     assert_eq!(
         legacy_credential_to_migrate(Some("legacy-secret"), Some("  \t")),

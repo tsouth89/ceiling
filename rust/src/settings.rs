@@ -21,7 +21,8 @@ fn legacy_credential_to_migrate<'a>(
     stored_value: Option<&str>,
 ) -> Option<&'a str> {
     legacy_value
-        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .filter(|_| stored_value.is_none_or(|value| value.trim().is_empty()))
 }
 
