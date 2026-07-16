@@ -140,7 +140,7 @@ describe("capacityPresentation", () => {
     ).toBe("exhausted");
   });
 
-  it("reports freshness precedence error > stale > lifted > live", () => {
+  it("reports freshness precedence error > stale > live", () => {
     expect(capacityFreshness(provider({ error: "fail" }))).toBe("error");
     expect(
       capacityFreshness(
@@ -149,20 +149,29 @@ describe("capacityPresentation", () => {
         }),
       ),
     ).toBe("stale");
+    expect(capacityFreshness(provider())).toBe("live");
+  });
+
+  it("keeps live freshness when only some windows are inactive (SOU-152)", () => {
+    // Inactive windows are surfaced as their own rows, never as a
+    // provider-level "lifted" freshness state.
+    const inactiveRateWindows = [
+      {
+        id: "cursor-auto",
+        title: "Auto",
+        description: "Not currently enforced by Cursor",
+      },
+    ];
+    expect(capacityFreshness(provider({ inactiveRateWindows }))).toBe("live");
+    // A stale timestamp still wins over inactive windows.
     expect(
       capacityFreshness(
         provider({
-          inactiveRateWindows: [
-            {
-              id: "cursor-auto",
-              title: "Auto",
-              description: "Not currently enforced by Cursor",
-            },
-          ],
+          updatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+          inactiveRateWindows,
         }),
       ),
-    ).toBe("lifted");
-    expect(capacityFreshness(provider())).toBe("live");
+    ).toBe("stale");
   });
 
   it("separates boost promos from inclusion notes", () => {

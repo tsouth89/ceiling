@@ -18,7 +18,7 @@ function statusOf(provider: ProviderUsageSnapshot, nowMs: number): Status {
   const freshness = capacityFreshness(provider, nowMs);
   if (freshness === "error") return "error";
   if (freshness === "stale") return "stale";
-  return "connected"; // live | lifted both count as connected
+  return "connected"; // live counts as connected
 }
 
 function normalizePlan(planName: string | null): string | null {

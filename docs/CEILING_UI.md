@@ -39,7 +39,7 @@ Usage bars keep calm slate→cyan progression; warn/crit stay amber/red without 
 
 - One glance: provider mark + remaining/used %. Cursor headlines its account-wide
   **Total** meter; other providers use the constraining window.
-- State chip only when not live: `stale` | `error` | `lifted`.
+- State chip only when not live: `stale` | `error`.
 - Live pills omit the chip.
 - Optional reset countdown stays secondary, not a second percentage.
 
@@ -85,7 +85,7 @@ Detail lists **every** measured window plus inactive rows. Do not truncate to tw
 | Live | Normal pill, no chip | Quiet freshness text |
 | Cached / stale | Muted pill + `stale` chip | Dim metrics + stale label |
 | Error | Crit outline + `error` chip | Error line, no fake bars |
-| Not enforced | Hollow / dashed `lifted` treatment | Quiet named text row via `inactiveRateWindows` |
+| Not enforced | No provider chip; the constraining active window headlines as a live pill | Quiet named text row via `inactiveRateWindows` |
 
 Never invent `0%` or `100%` for an inactive window.
 
@@ -133,5 +133,5 @@ Light and dark, with at least one live Codex/Cursor account:
 
 1. Tray overview showing multiple windows + one inactive row.
 2. Tray provider detail with token history/limits if available.
-3. Capacity strip with a live pill and a stale/error/lifted pill.
+3. Capacity strip with a live pill and a stale/error pill.
 4. Settings / About showing Ceiling branding.

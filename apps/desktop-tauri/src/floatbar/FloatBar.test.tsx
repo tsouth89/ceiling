@@ -300,9 +300,10 @@ describe("FloatBar", () => {
       expect(container.querySelector(".floatbar__pill--crit")).toBeNull();
       // No tiny companion chip anymore.
       expect(container.querySelector(".floatbar__companion")).toBeNull();
-      expect(container.querySelector(".floatbar__chip--lifted")?.textContent).toBe(
-        "lifted",
-      );
+      // Inactive windows no longer paint the whole provider "lifted" (SOU-152);
+      // the pill stays live and the inactive lane surfaces in the tray detail.
+      expect(container.querySelector(".floatbar__chip--lifted")).toBeNull();
+      expect(container.querySelector(".floatbar__pill--lifted")).toBeNull();
     });
   });
 

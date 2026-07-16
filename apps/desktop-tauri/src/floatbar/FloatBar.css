@@ -170,16 +170,8 @@ body.floatbar-window #root {
   background: rgba(248, 113, 113, 0.12);
   border-color: rgba(248, 113, 113, 0.28);
 }
-.floatbar__chip--lifted {
-  color: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 85%, white);
-  background: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 16%, transparent);
-  border: 1px dashed color-mix(in srgb, var(--ceiling-accent, #26b5ce) 45%, transparent);
-}
 .floatbar__pill--stale {
   opacity: 0.82;
-}
-.floatbar__pill--lifted {
-  border-style: dashed;
 }
 .floatbar__pill--error {
   border-color: color-mix(in srgb, #f87171 35%, var(--ceiling-glass-border, rgba(255, 255, 255, 0.1)));

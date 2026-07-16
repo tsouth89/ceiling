@@ -228,8 +228,6 @@ function freshnessChipLabel(freshness: CapacityFreshness): string | null {
       return "stale";
     case "error":
       return "error";
-    case "lifted":
-      return "lifted";
     case "live":
       return null;
   }
