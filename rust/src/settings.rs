@@ -522,11 +522,31 @@ impl Settings {
             settings.start_at_login = Self::sync_start_at_login_registry();
         }
 
+        if let Some(sanitized) = settings.migrate_legacy_credentials() {
+            match sanitized.and_then(|sanitized| {
+                Self::write_to_disk(&sanitized)?;
+                Ok(sanitized)
+            }) {
+                Ok(sanitized) => settings = sanitized,
+                Err(error) => {
+                    tracing::warn!(%error, "Failed to migrate legacy settings credentials");
+                }
+            }
+        }
+
         settings
     }
 
     /// Save settings to disk
     pub fn save(&self) -> anyhow::Result<()> {
+        let sanitized = match self.migrate_legacy_credentials() {
+            Some(result) => result?,
+            None => self.clone(),
+        };
+        Self::write_to_disk(&sanitized)
+    }
+
+    fn write_to_disk(settings: &Self) -> anyhow::Result<()> {
         let path = Self::settings_path()
             .ok_or_else(|| anyhow::anyhow!("Could not determine settings path"))?;
 
@@ -535,10 +555,78 @@ impl Settings {
             std::fs::create_dir_all(parent)?;
         }
 
-        let json = serde_json::to_string_pretty(self)?;
+        let json = serde_json::to_string_pretty(settings)?;
         crate::secure_file::write_string(&path, &json)?;
 
         Ok(())
+    }
+
+    /// Move credentials embedded by older releases into the dedicated secure
+    /// stores. Existing secure-store entries win so a stale settings file can
+    /// never overwrite a newer credential.
+    fn migrate_legacy_credentials(&self) -> Option<anyhow::Result<Self>> {
+        let has_legacy_credentials = self.provider_configs.values().any(|config| {
+            config
+                .manual_cookie_header
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+                || config
+                    .api_token
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+        });
+        if !has_legacy_credentials {
+            return None;
+        }
+
+        Some((|| {
+            // Unlike ordinary runtime reads, migration must fail closed when
+            // an existing secure store cannot be decoded. Treating that store
+            // as empty could replace a newer credential with a stale one.
+            let mut manual_cookies = ManualCookies::try_load()?;
+            let mut api_keys = ApiKeys::try_load()?;
+            let mut cookies_changed = false;
+            let mut keys_changed = false;
+            let mut sanitized = self.clone();
+
+            for (provider, config) in &self.provider_configs {
+                let provider_id = provider.cli_name();
+                if let Some(cookie_header) = config
+                    .manual_cookie_header
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    && manual_cookies.get(provider_id).is_none()
+                {
+                    manual_cookies.set(provider_id, cookie_header);
+                    cookies_changed = true;
+                }
+                if let Some(api_token) = config
+                    .api_token
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    && api_keys.get(provider_id).is_none()
+                {
+                    api_keys.set(provider_id, api_token, Some("Migrated from settings"));
+                    keys_changed = true;
+                }
+
+                if let Some(config) = sanitized.provider_configs.get_mut(provider) {
+                    config.manual_cookie_header = None;
+                    config.api_token = None;
+                }
+            }
+
+            // Do not sanitize settings.json until every changed secure store
+            // has been written successfully. A partial failure is safe to
+            // retry because existing secure-store values remain authoritative.
+            if cookies_changed {
+                manual_cookies.save()?;
+            }
+            if keys_changed {
+                api_keys.save()?;
+            }
+            Ok(sanitized)
+        })())
     }
 
     fn start_at_login_exe_path(current_exe: &std::path::Path) -> std::path::PathBuf {

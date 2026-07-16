@@ -72,6 +72,79 @@ impl Cookie {
     }
 }
 
+/// A private, short-lived copy of a browser cookie database.
+///
+/// The guard removes the copy on every return path, including SQLite query
+/// failures. On Windows the destination ACL is restricted before any cookie
+/// bytes are written.
+struct TemporaryCookieDatabase {
+    path: std::path::PathBuf,
+}
+
+impl TemporaryCookieDatabase {
+    fn create(source_path: &Path) -> Result<Self, CookieError> {
+        let file_name = source_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let path =
+            std::env::temp_dir().join(format!("ceiling_{}_{}", uuid::Uuid::new_v4(), file_name));
+        let mut destination = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let temporary = Self { path };
+
+        let copy_result = (|| -> Result<(), CookieError> {
+            #[cfg(windows)]
+            crate::windows_security::restrict_path_to_current_user(temporary.path())?;
+
+            #[cfg(windows)]
+            let mut source = {
+                use std::os::windows::fs::OpenOptionsExt;
+
+                const FILE_SHARE_READ: u32 = 0x00000001;
+                const FILE_SHARE_WRITE: u32 = 0x00000002;
+                const FILE_SHARE_DELETE: u32 = 0x00000004;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                    .open(source_path)?
+            };
+            #[cfg(not(windows))]
+            let mut source = std::fs::File::open(source_path)?;
+
+            std::io::copy(&mut source, &mut destination)?;
+            destination.sync_all()?;
+            Ok(())
+        })();
+
+        // Close the destination before an error drops the guard so Windows can
+        // remove the partially copied file immediately.
+        drop(destination);
+        copy_result?;
+        Ok(temporary)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryCookieDatabase {
+    fn drop(&mut self) {
+        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
+            let _ = file.set_len(0);
+            let _ = file.sync_all();
+        }
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "Failed to remove temporary browser cookie database");
+        }
+    }
+}
+
 /// Cookie extractor for browsers
 pub struct CookieExtractor;
 
@@ -187,7 +260,7 @@ impl CookieExtractor {
 
         // Copy the database to a temp file (browser may have it locked)
         tracing::debug!("Copying cookies DB to temp...");
-        let temp_db = Self::copy_to_temp(&cookies_db).map_err(|e| {
+        let temp_db = TemporaryCookieDatabase::create(&cookies_db).map_err(|e| {
             tracing::debug!("Failed to copy cookies DB: {}", e);
             e
         })?;
@@ -201,7 +274,7 @@ impl CookieExtractor {
         let mut abe_decrypt_failures: u32 = 0;
         {
             // Keep SQLite handles scoped so Windows can delete the temp DB afterward.
-            let conn = Connection::open(&temp_db)?;
+            let conn = Connection::open(temp_db.path())?;
 
             let mut stmt = conn.prepare(
                 "SELECT name, encrypted_value, host_key, path, expires_utc, is_secure, is_httponly
@@ -267,9 +340,6 @@ impl CookieExtractor {
             domain,
             decrypt_failures
         );
-
-        // Clean up temp file
-        let _ = std::fs::remove_file(&temp_db);
 
         // If every candidate cookie failed to decrypt and no cookies were recovered,
         // check whether Chrome App-Bound Encryption (Chrome 127+) is the culprit.
@@ -491,7 +561,7 @@ impl CookieExtractor {
         }
 
         // Copy to temp (browser may have it locked)
-        let temp_db = Self::copy_to_temp(&cookies_db)?;
+        let temp_db = TemporaryCookieDatabase::create(&cookies_db)?;
 
         let domain_pattern = format!("%{}", domain);
         let dot_domain_pattern = format!(".{}", domain);
@@ -499,7 +569,7 @@ impl CookieExtractor {
         let mut cookies = Vec::new();
         {
             // Keep SQLite handles scoped so Windows can delete the temp DB afterward.
-            let conn = Connection::open(&temp_db)?;
+            let conn = Connection::open(temp_db.path())?;
 
             let mut stmt = conn.prepare(
                 "SELECT name, value, host, path, expiry, isSecure, isHttpOnly
@@ -527,9 +597,6 @@ impl CookieExtractor {
             }
         }
 
-        // Clean up
-        let _ = std::fs::remove_file(&temp_db);
-
         Ok(cookies)
     }
 
@@ -556,49 +623,6 @@ impl CookieExtractor {
     #[cfg(not(windows))]
     fn read_file_shared(path: &Path) -> Result<String, CookieError> {
         Ok(std::fs::read_to_string(path)?)
-    }
-
-    /// Copy a file to a temp location
-    /// Uses Windows-specific file sharing to handle locked files
-    fn copy_to_temp(path: &Path) -> Result<std::path::PathBuf, CookieError> {
-        let temp_dir = std::env::temp_dir();
-        let file_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let temp_path = temp_dir.join(format!("codexbar_{}_{}", uuid::Uuid::new_v4(), file_name));
-
-        // On Windows, use FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
-        // to read files that are locked by other processes
-        #[cfg(windows)]
-        {
-            use std::fs::File;
-            use std::io::{Read, Write};
-            use std::os::windows::fs::OpenOptionsExt;
-
-            const FILE_SHARE_READ: u32 = 0x00000001;
-            const FILE_SHARE_WRITE: u32 = 0x00000002;
-            const FILE_SHARE_DELETE: u32 = 0x00000004;
-
-            let mut src = std::fs::OpenOptions::new()
-                .read(true)
-                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-                .open(path)?;
-
-            let mut contents = Vec::new();
-            src.read_to_end(&mut contents)?;
-
-            let mut dst = File::create(&temp_path)?;
-            dst.write_all(&contents)?;
-        }
-
-        #[cfg(not(windows))]
-        {
-            std::fs::copy(path, &temp_path)?;
-        }
-
-        Ok(temp_path)
     }
 
     /// Build a cookie header string for HTTP requests
@@ -720,6 +744,26 @@ pub fn get_cookie_header_from_browser(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporary_cookie_database_is_removed_on_drop() {
+        let source_path = std::env::temp_dir().join(format!(
+            "ceiling_cookie_source_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&source_path, b"cookie database contents").unwrap();
+
+        let temporary = TemporaryCookieDatabase::create(&source_path).unwrap();
+        let temporary_path = temporary.path().to_path_buf();
+        assert_eq!(
+            std::fs::read(&temporary_path).unwrap(),
+            b"cookie database contents"
+        );
+        drop(temporary);
+
+        assert!(!temporary_path.exists());
+        std::fs::remove_file(source_path).unwrap();
+    }
 
     #[test]
     fn domain_matching_requires_boundary() {
