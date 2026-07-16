@@ -86,14 +86,31 @@ pub fn open_path(path: String) -> Result<(), String> {
     if !pb.exists() {
         return Err(format!("Path not found: {trimmed}"));
     }
+    let canonical = pb
+        .canonicalize()
+        .map_err(|e| format!("Could not resolve path: {e}"))?;
+    let allowed_roots = [Settings::settings_path()]
+        .into_iter()
+        .flatten()
+        .filter_map(|path| path.parent().map(std::path::Path::to_path_buf))
+        .filter_map(|path| path.canonicalize().ok())
+        .collect::<Vec<_>>();
+    let allowed_exact = allowed_open_paths()
+        .into_iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .collect::<Vec<_>>();
+    if !path_is_allowed(&canonical, &allowed_roots, &allowed_exact) {
+        return Err("Path is outside Ceiling's allowed locations".into());
+    }
     // When given a file, open its parent directory so the file is highlighted
     // in a useful way across platforms without needing per-OS --select flags.
-    let target = if pb.is_file() {
-        pb.parent()
+    let target = if canonical.is_file() {
+        canonical
+            .parent()
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| pb.clone())
+            .unwrap_or_else(|| canonical.clone())
     } else {
-        pb.clone()
+        canonical
     };
     let target_str = target.to_string_lossy().into_owned();
 
@@ -117,6 +134,15 @@ pub fn open_path(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open path: {e}"))?;
     }
     Ok(())
+}
+
+pub(super) fn path_is_allowed(
+    path: &std::path::Path,
+    allowed_roots: &[std::path::PathBuf],
+    allowed_exact: &[std::path::PathBuf],
+) -> bool {
+    allowed_exact.iter().any(|allowed| path == allowed)
+        || allowed_roots.iter().any(|root| path.starts_with(root))
 }
 
 // ── Session / environment ─────────────────────────────────────────────

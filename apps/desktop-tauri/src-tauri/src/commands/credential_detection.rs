@@ -63,6 +63,23 @@ fn jetbrains_detected_ide_paths() -> Vec<std::path::PathBuf> {
     codexbar::host::session::jetbrains_detected_ide_paths()
 }
 
+pub(super) fn allowed_open_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    paths.extend(gemini_cli_credentials_path());
+    paths.extend(vertexai_credentials_path_raw());
+    paths.extend(jetbrains_detected_ide_paths());
+    paths.extend(codexbar::providers::kiro::find_kiro_cli());
+
+    let override_path = Settings::load()
+        .jetbrains_ide_base_path()
+        .trim()
+        .to_string();
+    if !override_path.is_empty() {
+        paths.push(std::path::PathBuf::from(override_path));
+    }
+    paths
+}
+
 #[tauri::command]
 pub fn get_gemini_cli_signed_in() -> Result<GeminiCliStatus, String> {
     let path = gemini_cli_credentials_path();
