@@ -380,7 +380,6 @@ locale_keys! {
     StatusLabel,
 
     // Tray - Single icon mode
-    TrayOpenCodexBar,
     TrayPopOutDashboard,
     TrayShowWindow,
     TrayShowTaskbarUsage,
