@@ -300,9 +300,11 @@ describe("FloatBar", () => {
       expect(container.querySelector(".floatbar__pill--crit")).toBeNull();
       // No tiny companion chip anymore.
       expect(container.querySelector(".floatbar__companion")).toBeNull();
-      expect(container.querySelector(".floatbar__chip--lifted")?.textContent).toBe(
-        "lifted",
-      );
+      // Inactive windows no longer paint the whole provider "lifted" (SOU-152).
+      // The provider timestamp is fresh (set above), so the pill is live with
+      // no state chip at all; the inactive lane surfaces in the tray detail.
+      expect(container.querySelector(".floatbar__chip")).toBeNull();
+      expect(container.querySelector(".floatbar__pill--lifted")).toBeNull();
     });
   });
 
