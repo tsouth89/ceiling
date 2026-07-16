@@ -1047,6 +1047,23 @@ fn open_path_rejects_missing_path() {
     assert!(err.contains("not found"));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_shell_path_removes_extended_length_prefixes() {
+    assert_eq!(
+        super::windows_shell_path(std::path::Path::new(r"\\?\C:\Users\Ceiling")),
+        std::path::PathBuf::from(r"C:\Users\Ceiling")
+    );
+    assert_eq!(
+        super::windows_shell_path(std::path::Path::new(r"\\?\UNC\server\share\Ceiling")),
+        std::path::PathBuf::from(r"\\server\share\Ceiling")
+    );
+    assert_eq!(
+        super::windows_shell_path(std::path::Path::new(r"C:\Users\Ceiling")),
+        std::path::PathBuf::from(r"C:\Users\Ceiling")
+    );
+}
+
 #[test]
 fn open_path_allowlist_accepts_roots_and_exact_paths_only() {
     let root = std::path::PathBuf::from(r"C:\Users\example\AppData\Roaming\Ceiling");

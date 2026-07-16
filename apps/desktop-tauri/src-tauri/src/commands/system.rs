@@ -112,6 +112,8 @@ pub fn open_path(path: String) -> Result<(), String> {
     } else {
         canonical
     };
+    #[cfg(target_os = "windows")]
+    let target = windows_shell_path(&target);
     let target_str = target.to_string_lossy().into_owned();
 
     #[cfg(target_os = "windows")]
@@ -134,6 +136,37 @@ pub fn open_path(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open path: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn windows_shell_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const EXTENDED_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC_PREFIX: &[u16] = &[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let Some(remainder) = wide.strip_prefix(EXTENDED_PREFIX) else {
+        return path.to_path_buf();
+    };
+    let normalized = if remainder.len() >= UNC_PREFIX.len()
+        && remainder[..UNC_PREFIX.len()]
+            .iter()
+            .zip(UNC_PREFIX)
+            .all(|(actual, expected)| {
+                actual == expected
+                    || ((*actual >= b'a' as u16 && *actual <= b'z' as u16)
+                        && actual - (b'a' - b'A') as u16 == *expected)
+            }) {
+        [
+            vec![b'\\' as u16, b'\\' as u16],
+            remainder[UNC_PREFIX.len()..].to_vec(),
+        ]
+        .concat()
+    } else {
+        remainder.to_vec()
+    };
+    std::ffi::OsString::from_wide(&normalized).into()
 }
 
 pub(super) fn path_is_allowed(
