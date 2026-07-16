@@ -1,14 +1,15 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ceiling",
-  "main": "worker/index.js",
+  "main": "worker.mjs",
   "compatibility_date": "2026-07-14",
   "observability": {
     "enabled": true
   },
   "assets": {
     "directory": "site",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": true
   },
   "compatibility_flags": [
     "nodejs_compat"
