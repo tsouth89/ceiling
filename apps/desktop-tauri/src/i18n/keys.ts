@@ -602,6 +602,24 @@ export const ALL_LOCALE_KEYS = [
   "TrayPaceBadgeBurning",
   "TrayResetsInLabel",
   "TrayResetsDueNow",
+  // Provider data-source / privacy explainer (SOU-179)
+  "DataSourceSectionTitle",
+  "DataSourcePrivacyNote",
+  "DataSourceLearnMore",
+  "DataSourceClaude",
+  "DataSourceCodex",
+  "DataSourceCursor",
+  "DataSourceCopilot",
+  "DataSourceGemini",
+  "DataSourceGeneric",
+  // First-run checklist (SOU-157)
+  "FirstRunTitle",
+  "FirstRunStepEnable",
+  "FirstRunStepAuth",
+  "FirstRunStepFloatbar",
+  "FirstRunOpenProviders",
+  "FirstRunOpenDisplay",
+  "FirstRunDismiss",
 ] as const;
 
 export type LocaleKey = (typeof ALL_LOCALE_KEYS)[number];

@@ -13,6 +13,11 @@ import ChartsPanel from "./ChartsPanel";
 import AccountsPanel from "./AccountsPanel";
 import ProviderDetailView from "./ProviderDetailView";
 import { MenuEmpty } from "../components/MenuSurface";
+import {
+  FirstRunChecklist,
+  firstRunDismissed,
+  dismissFirstRun,
+} from "../components/FirstRunChecklist";
 import UpdateBanner from "../components/UpdateBanner";
 import DetectedAccountsCard from "../components/DetectedAccountsCard";
 import { orderProviderSnapshots } from "../lib/providerOrder";
@@ -191,6 +196,13 @@ export default function PopOutPanel({
   const openSettings = useCallback(() => {
     openSettingsWindow("general");
   }, []);
+  const [firstRunHidden, setFirstRunHidden] = useState(() =>
+    firstRunDismissed(),
+  );
+  const handleDismissFirstRun = useCallback(() => {
+    dismissFirstRun();
+    setFirstRunHidden(true);
+  }, []);
   const quitApp = useCallback(() => {
     void quitApplication();
   }, []);
@@ -352,10 +364,23 @@ export default function PopOutPanel({
                   onManage={() => openSettingsWindow("providers")}
                 />
                 {sorted.length === 0 ? (
-                  <MenuEmpty
-                    isLoading={isRefreshing && !hasCachedData}
-                    onSettings={openSettings}
-                  />
+                  isRefreshing && !hasCachedData ? (
+                    <MenuEmpty isLoading onSettings={openSettings} />
+                  ) : firstRunHidden ? (
+                    <MenuEmpty isLoading={false} onSettings={openSettings} />
+                  ) : (
+                    <FirstRunChecklist
+                      enabledCount={settings.enabledProviders.length}
+                      hasWorkingAuth={false}
+                      floatbarEnabled={
+                        settings.floatBarEnabled || settings.taskbarWidgetEnabled
+                      }
+                      onOpenProviders={() => openSettingsWindow("providers")}
+                      onOpenDisplay={() => openSettingsWindow("menu")}
+                      onDismiss={handleDismissFirstRun}
+                      t={t}
+                    />
+                  )
                 ) : (
                   <div
                     className={`menu-stack${selectedProviderId === null ? " menu-stack--overview" : ""}`}

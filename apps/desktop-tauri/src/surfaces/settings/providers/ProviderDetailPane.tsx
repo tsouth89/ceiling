@@ -24,6 +24,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 
 import { IdentitySection } from "./sections/IdentitySection";
+import { DataSourceSection } from "./sections/DataSourceSection";
 import { UsageSection } from "./sections/UsageSection";
 import { PaceSection } from "./sections/PaceSection";
 import { CostSection } from "./sections/CostSection";
@@ -282,6 +283,8 @@ export function ProviderDetailPane({
   return (
     <div className="provider-detail">
       <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+
+      <DataSourceSection provider={detail} t={t} />
 
       {detail.lastError && (
         <ProviderIssueNotice

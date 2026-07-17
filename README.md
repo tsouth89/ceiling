@@ -38,7 +38,7 @@ Ceiling runs on Windows 10 and 11.
 
 **[Download for Windows &rarr;](https://ceiling.win/download)** &nbsp;·&nbsp; [ceiling.win](https://ceiling.win) &nbsp;·&nbsp; [all releases](https://github.com/tsouth89/ceiling/releases)
 
-The installer and portable build are code-signed. Everything stays local-first: your credentials and usage data never leave your machine.
+The installer and portable build are code-signed. Ceiling is local-first: it reads usage from sources on your PC or from each provider's own usage endpoint, and never sends your credentials or usage data to Ceiling-operated servers. See [How Ceiling gets your data](docs/DATA_SOURCES.md) for the per-provider detail.
 
 ## Development
 
