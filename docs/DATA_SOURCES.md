@@ -2,10 +2,11 @@
 
 Ceiling is a local-first Windows app. It reads your AI usage from sources that
 already live on your PC, or by calling each provider's own usage endpoint.
-**Your provider credentials and usage data stay on this PC. Ceiling does not
-send them to any Ceiling-operated server.** Network requests go only to the
-provider you enabled (and, for Wayfinder, to the local gateway URL you
-configure yourself).
+**Your provider credentials and usage data are stored only on this PC, and
+Ceiling never sends them to a Ceiling-operated server.** Fetching usage does
+make network requests, but only to the provider you enabled (and, for Wayfinder,
+to the local gateway URL you configure yourself), never to Ceiling's own
+servers.
 
 This document is the maintained reference behind the "How Ceiling gets this
 data" panel in a provider's Settings detail view.

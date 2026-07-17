@@ -594,14 +594,14 @@ TrayResetsDueNow = Resetting…
 
 # Provider data-source / privacy explainer (SOU-179)
 DataSourceSectionTitle = How Ceiling gets this data
-DataSourcePrivacyNote = Ceiling reads your usage from local app sessions and logs on this PC, or by calling the provider's own usage endpoint. Your credentials and usage data stay on this PC. They are never sent to Ceiling-operated servers, only to the provider itself.
+DataSourcePrivacyNote = Ceiling reads your usage from local app sessions and logs on this PC, or by calling the provider's own usage endpoint. Your credentials and usage are stored only on this PC and are never sent to Ceiling-operated servers. Usage requests go only to the provider you enabled, or for Wayfinder the local gateway you configure.
 DataSourceLearnMore = Learn how Ceiling gets each provider's data
 DataSourceClaude = Reads usage from your signed-in Claude Code or Claude Desktop session, an OAuth token, or claude.ai cookies you provide. Talks only to api.anthropic.com and claude.ai.
 DataSourceCodex = Uses the OAuth token from your Codex CLI (~/.codex) plus local session logs on this PC. Talks only to chatgpt.com.
 DataSourceCursor = Uses your signed-in Cursor IDE session, or cursor.com cookies you provide. Talks only to cursor.com.
-DataSourceCopilot = Uses your GitHub CLI or Git Credential Manager token. Talks only to api.github.com, or your configured GitHub Enterprise host.
+DataSourceCopilot = Uses your GitHub CLI or Git Credential Manager token, or a device-flow sign-in. Talks only to api.github.com, or your configured GitHub Enterprise host.
 DataSourceGemini = Reads the OAuth token from the Gemini CLI (~/.gemini). Talks only to Google's Code Assist and OAuth endpoints.
-DataSourceGeneric = Reads this provider's usage from a local session or token on this PC, or by calling the provider's own usage endpoint. Your credentials stay on this PC and are only sent to the provider.
+DataSourceGeneric = Reads this provider's usage from a local session or token on this PC, or by calling the provider's own usage endpoint. Your credentials are stored only on this PC and are never sent to Ceiling-operated servers; usage requests go only to that provider (or, for Wayfinder, your configured gateway).
 
 # First-run checklist (SOU-157)
 FirstRunTitle = Finish setting up Ceiling

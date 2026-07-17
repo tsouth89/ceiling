@@ -371,7 +371,12 @@ export default function PopOutPanel({
                   ) : (
                     <FirstRunChecklist
                       enabledCount={settings.enabledProviders.length}
-                      hasWorkingAuth={false}
+                      hasWorkingAuth={providers.some(
+                        (provider) =>
+                          settings.enabledProviders.includes(
+                            provider.providerId,
+                          ) && !provider.error,
+                      )}
                       floatbarEnabled={
                         settings.floatBarEnabled || settings.taskbarWidgetEnabled
                       }
