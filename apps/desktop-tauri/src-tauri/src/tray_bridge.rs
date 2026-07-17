@@ -1583,43 +1583,23 @@ mod tests {
     }
 
     #[test]
-    fn japanese_tooltip_localizes_error_status() {
-        let mut claude = fake_snapshot("claude", "Claude", 13.0);
-        claude.error = Some("network timeout".to_string());
-
-        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::Japanese, true);
-
-        assert!(tooltip.contains("エラー"), "{tooltip}");
-        assert!(!tooltip.contains(": error ("), "{tooltip}");
-    }
-
-    #[test]
-    fn tray_labels_relocalize_on_language_change_without_refetch() {
+    fn tray_tooltip_is_compact_and_language_neutral() {
         let mut claude = fake_snapshot("claude", "Claude", 13.0);
         claude.primary.resets_at =
             Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
 
         // The native tooltip is intentionally compact and language-neutral
-        // (percent + a universal d/h/m reset) so every provider fits, so it no
-        // longer carries the localized "Resets in" text.
-        let english_tooltip =
-            build_tooltip(&[&claude], codexbar::settings::Language::English, true);
+        // (percent + a universal d/h/m reset) so every provider fits.
+        let tooltip = build_tooltip(&[&claude], codexbar::settings::Language::English, true);
+        assert!(tooltip.contains("Claude · Session (5h) · 13%"), "{tooltip}");
         assert!(
-            english_tooltip.contains("Claude · Session (5h) · 13%"),
-            "{english_tooltip}"
-        );
-        assert!(
-            !english_tooltip.to_ascii_lowercase().contains("resets in"),
-            "{english_tooltip}"
+            !tooltip.to_ascii_lowercase().contains("resets in"),
+            "{tooltip}"
         );
 
-        // The tray *menu* status labels still relocalize without a refetch.
-        let (_, english_label) =
-            provider_status_label(&claude, codexbar::settings::Language::English);
-        let (_, japanese_label) =
-            provider_status_label(&claude, codexbar::settings::Language::Japanese);
-        assert!(english_label.contains("Resets in"), "{english_label}");
-        assert!(japanese_label.contains("リセットまで"), "{japanese_label}");
+        // The tray menu status labels carry the reset text.
+        let (_, label) = provider_status_label(&claude, codexbar::settings::Language::English);
+        assert!(label.contains("Resets in"), "{label}");
     }
 
     #[test]

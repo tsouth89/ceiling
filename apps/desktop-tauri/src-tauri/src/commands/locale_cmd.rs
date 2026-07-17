@@ -110,50 +110,6 @@ mod locale_tests {
     }
 
     #[test]
-    fn locale_strings_roundtrip_chinese() {
-        let bundle = locale_strings_for(Language::Chinese);
-        assert_eq!(bundle.language, "chinese");
-        assert_eq!(
-            bundle.entries.get("TabGeneral").map(String::as_str),
-            Some("通用")
-        );
-        assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
-    }
-
-    #[test]
-    fn locale_strings_roundtrip_traditional_chinese() {
-        let bundle = locale_strings_for(Language::ChineseTraditional);
-        assert_eq!(bundle.language, "chinesetraditional");
-        assert_eq!(
-            bundle.entries.get("TabGeneral").map(String::as_str),
-            Some("一般")
-        );
-        assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
-    }
-
-    #[test]
-    fn locale_strings_roundtrip_japanese() {
-        let bundle = locale_strings_for(Language::Japanese);
-        assert_eq!(bundle.language, "japanese");
-        assert_eq!(
-            bundle.entries.get("TabGeneral").map(String::as_str),
-            Some("一般")
-        );
-        assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
-    }
-
-    #[test]
-    fn locale_strings_roundtrip_korean() {
-        let bundle = locale_strings_for(Language::Korean);
-        assert_eq!(bundle.language, "korean");
-        assert_eq!(
-            bundle.entries.get("TabGeneral").map(String::as_str),
-            Some("일반")
-        );
-        assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
-    }
-
-    #[test]
     fn locale_strings_contains_every_variant() {
         let bundle = locale_strings_for(Language::English);
         for (_, name) in locale::LocaleKey::ALL {

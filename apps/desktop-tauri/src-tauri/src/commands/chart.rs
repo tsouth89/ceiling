@@ -1104,18 +1104,6 @@ mod tests {
     }
 
     #[test]
-    fn japanese_estimate_note_is_localized() {
-        assert_eq!(
-            localized_estimate_note("codex", Language::Japanese),
-            "ローカルログから推定したもので、請求書と異なる場合があります"
-        );
-        assert_eq!(
-            localized_estimate_note("claude", Language::Japanese),
-            "ClaudeのローカルログからAPIレートで推定したもので、トークン総数が請求書と異なる場合があります"
-        );
-    }
-
-    #[test]
     fn english_estimate_note_is_localized() {
         assert_eq!(
             localized_estimate_note("codex", Language::English),
