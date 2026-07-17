@@ -591,23 +591,22 @@ PredictivePaceWarningTitle = Aviso de ritmo de { "{}" } ({ "{}" })
 PredictivePaceWarningBody = La cuota puede agotarse en { "{}" }
 ShowResetWhenExhausted = Mostrar reinicio al agotar la cuota
 ShowResetWhenExhaustedHelper = Reemplaza el porcentaje agotado con la cuenta regresiva del reinicio
+# Provider data-source / privacy explainer (SOU-179) — English only
+DataSourceSectionTitle = How Ceiling gets this data
+DataSourcePrivacyNote = Ceiling reads your usage from local app sessions and logs on this PC, or by calling the provider's own usage endpoint. Your credentials and usage data stay on this PC. They are never sent to Ceiling-operated servers, only to the provider itself.
+DataSourceLearnMore = Learn how Ceiling gets each provider's data
+DataSourceClaude = Reads usage from your signed-in Claude Code or Claude Desktop session, an OAuth token, or claude.ai cookies you provide. Talks only to api.anthropic.com and claude.ai.
+DataSourceCodex = Uses the OAuth token from your Codex CLI (~/.codex) plus local session logs on this PC. Talks only to chatgpt.com.
+DataSourceCursor = Uses your signed-in Cursor IDE session, or cursor.com cookies you provide. Talks only to cursor.com.
+DataSourceCopilot = Uses your GitHub CLI or Git Credential Manager token. Talks only to api.github.com, or your configured GitHub Enterprise host.
+DataSourceGemini = Reads the OAuth token from the Gemini CLI (~/.gemini). Talks only to Google's Code Assist and OAuth endpoints.
+DataSourceGeneric = Reads this provider's usage from a local session or token on this PC, or by calling the provider's own usage endpoint. Your credentials stay on this PC and are only sent to the provider.
 
-# Provider data-source / privacy explainer (SOU-179)
-DataSourceSectionTitle = Cómo obtiene Ceiling estos datos
-DataSourcePrivacyNote = Ceiling lee tu uso desde sesiones y registros de apps locales en esta PC, o llamando al propio endpoint de uso del proveedor. Tus credenciales y datos de uso permanecen en esta PC. Nunca se envían a servidores operados por Ceiling, solo al proveedor.
-DataSourceLearnMore = Descubre cómo Ceiling obtiene los datos de cada proveedor
-DataSourceClaude = Lee el uso desde tu sesión de Claude Code o Claude Desktop, un token OAuth o cookies de claude.ai que proporciones. Solo se comunica con api.anthropic.com y claude.ai.
-DataSourceCodex = Usa el token OAuth de tu CLI de Codex (~/.codex) y los registros de sesión locales en esta PC. Solo se comunica con chatgpt.com.
-DataSourceCursor = Usa tu sesión del IDE de Cursor, o cookies de cursor.com que proporciones. Solo se comunica con cursor.com.
-DataSourceCopilot = Usa el token de tu CLI de GitHub o del Administrador de credenciales de Git. Solo se comunica con api.github.com, o con tu host de GitHub Enterprise configurado.
-DataSourceGemini = Lee el token OAuth de la CLI de Gemini (~/.gemini). Solo se comunica con los endpoints de Code Assist y OAuth de Google.
-DataSourceGeneric = Lee el uso de este proveedor desde una sesión o token local en esta PC, o llamando al propio endpoint de uso del proveedor. Tus credenciales permanecen en esta PC y solo se envían al proveedor.
-
-# First-run checklist (SOU-157)
-FirstRunTitle = Termina de configurar Ceiling
-FirstRunStepEnable = Habilita los proveedores que usas
-FirstRunStepAuth = Conecta o confirma tu inicio de sesión
-FirstRunStepFloatbar = Activa la barra flotante o el vistazo en la barra de tareas
-FirstRunOpenProviders = Abrir configuración de proveedores
-FirstRunOpenDisplay = Abrir configuración de pantalla
-FirstRunDismiss = Descartar
+# First-run checklist (SOU-157) — English only
+FirstRunTitle = Finish setting up Ceiling
+FirstRunStepEnable = Enable the providers you use
+FirstRunStepAuth = Connect or confirm your sign-in
+FirstRunStepFloatbar = Turn on the floating bar or taskbar glance
+FirstRunOpenProviders = Open provider settings
+FirstRunOpenDisplay = Open display settings
+FirstRunDismiss = Dismiss
