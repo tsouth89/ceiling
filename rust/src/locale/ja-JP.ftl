@@ -591,3 +591,23 @@ PredictivePaceWarningTitle = { "{}" } ? { "{}" } ?????
 PredictivePaceWarningBody = ?? { "{}" } ???????????????
 ShowResetWhenExhausted = ???????????????
 ShowResetWhenExhaustedHelper = ??????????????????????????????
+
+# Provider data-source / privacy explainer (SOU-179)
+DataSourceSectionTitle = Ceiling がこのデータを取得する方法
+DataSourcePrivacyNote = Ceiling は、この PC 上のローカルアプリのセッションやログから、またはプロバイダー自身の使用状況エンドポイントを呼び出して使用状況を読み取ります。認証情報と使用状況データはこの PC に留まり、Ceiling が運用するサーバーに送信されることは決してなく、プロバイダー本体にのみ送信されます。
+DataSourceLearnMore = Ceiling が各プロバイダーのデータを取得する方法を見る
+DataSourceClaude = ログイン済みの Claude Code または Claude Desktop のセッション、OAuth トークン、または提供された claude.ai の Cookie から使用状況を読み取ります。api.anthropic.com と claude.ai のみと通信します。
+DataSourceCodex = Codex CLI (~/.codex) の OAuth トークンと、この PC 上のローカルセッションログを使用します。chatgpt.com のみと通信します。
+DataSourceCursor = ログイン済みの Cursor IDE セッション、または提供された cursor.com の Cookie を使用します。cursor.com のみと通信します。
+DataSourceCopilot = GitHub CLI または Git 資格情報マネージャーのトークンを使用します。api.github.com、または設定した GitHub Enterprise ホストのみと通信します。
+DataSourceGemini = Gemini CLI (~/.gemini) から OAuth トークンを読み取ります。Google の Code Assist と OAuth のエンドポイントのみと通信します。
+DataSourceGeneric = この PC 上のローカルセッションまたはトークンから、あるいはプロバイダー自身の使用状況エンドポイントを呼び出して、このプロバイダーの使用状況を読み取ります。認証情報はこの PC に留まり、プロバイダーにのみ送信されます。
+
+# First-run checklist (SOU-157)
+FirstRunTitle = Ceiling のセットアップを完了する
+FirstRunStepEnable = 使用するプロバイダーを有効にする
+FirstRunStepAuth = サインインを接続または確認する
+FirstRunStepFloatbar = フローティングバーまたはタスクバーグランスをオンにする
+FirstRunOpenProviders = プロバイダー設定を開く
+FirstRunOpenDisplay = 表示設定を開く
+FirstRunDismiss = 閉じる

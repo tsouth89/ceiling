@@ -591,3 +591,23 @@ PredictivePaceWarningTitle = { "{}" } { "{}" }??????
 PredictivePaceWarningBody = ????? { "{}" } ???
 ShowResetWhenExhausted = ?????????
 ShowResetWhenExhaustedHelper = ????????????????
+
+# Provider data-source / privacy explainer (SOU-179)
+DataSourceSectionTitle = Ceiling 如何取得這些資料
+DataSourcePrivacyNote = Ceiling 會從本機的本機應用程式工作階段和記錄讀取你的用量，或呼叫服務商自己的用量端點。你的憑證和用量資料會保留在本機，絕不會傳送到 Ceiling 營運的伺服器，只會傳送給服務商本身。
+DataSourceLearnMore = 了解 Ceiling 如何取得各服務商的資料
+DataSourceClaude = 從你已登入的 Claude Code 或 Claude Desktop 工作階段、OAuth 權杖，或你提供的 claude.ai Cookie 讀取用量。僅與 api.anthropic.com 和 claude.ai 通訊。
+DataSourceCodex = 使用你的 Codex CLI (~/.codex) 中的 OAuth 權杖以及本機的本機工作階段記錄。僅與 chatgpt.com 通訊。
+DataSourceCursor = 使用你已登入的 Cursor IDE 工作階段，或你提供的 cursor.com Cookie。僅與 cursor.com 通訊。
+DataSourceCopilot = 使用你的 GitHub CLI 或 Git 認證管理員權杖。僅與 api.github.com 或你設定的 GitHub Enterprise 主機通訊。
+DataSourceGemini = 從 Gemini CLI (~/.gemini) 讀取 OAuth 權杖。僅與 Google 的 Code Assist 和 OAuth 端點通訊。
+DataSourceGeneric = 從本機的本機工作階段或權杖讀取該服務商的用量，或呼叫服務商自己的用量端點。你的憑證會保留在本機，只會傳送給服務商。
+
+# First-run checklist (SOU-157)
+FirstRunTitle = 完成 Ceiling 設定
+FirstRunStepEnable = 啟用你使用的服務商
+FirstRunStepAuth = 連接或確認你的登入
+FirstRunStepFloatbar = 開啟浮動列或工作列一覽
+FirstRunOpenProviders = 開啟服務商設定
+FirstRunOpenDisplay = 開啟顯示設定
+FirstRunDismiss = 略過

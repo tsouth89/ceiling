@@ -591,3 +591,23 @@ PredictivePaceWarningTitle = { "{}" } { "{}" } ?? ?? ??
 PredictivePaceWarningBody = { "{}" } ? ???? ??? ? ????
 ShowResetWhenExhausted = ?? ? ??? ?? ??
 ShowResetWhenExhaustedHelper = ??? ??? ??? ??? ??????? ????
+
+# Provider data-source / privacy explainer (SOU-179)
+DataSourceSectionTitle = Ceiling이 이 데이터를 가져오는 방법
+DataSourcePrivacyNote = Ceiling은 이 PC의 로컬 앱 세션과 로그에서, 또는 제공업체 자체의 사용량 엔드포인트를 호출하여 사용량을 읽습니다. 자격 증명과 사용량 데이터는 이 PC에 남아 있으며, Ceiling이 운영하는 서버로 전송되지 않고 제공업체에만 전송됩니다.
+DataSourceLearnMore = Ceiling이 각 제공업체의 데이터를 가져오는 방법 알아보기
+DataSourceClaude = 로그인된 Claude Code 또는 Claude Desktop 세션, OAuth 토큰, 또는 사용자가 제공한 claude.ai 쿠키에서 사용량을 읽습니다. api.anthropic.com과 claude.ai에만 통신합니다.
+DataSourceCodex = Codex CLI(~/.codex)의 OAuth 토큰과 이 PC의 로컬 세션 로그를 사용합니다. chatgpt.com에만 통신합니다.
+DataSourceCursor = 로그인된 Cursor IDE 세션 또는 사용자가 제공한 cursor.com 쿠키를 사용합니다. cursor.com에만 통신합니다.
+DataSourceCopilot = GitHub CLI 또는 Git 자격 증명 관리자 토큰을 사용합니다. api.github.com 또는 구성한 GitHub Enterprise 호스트에만 통신합니다.
+DataSourceGemini = Gemini CLI(~/.gemini)에서 OAuth 토큰을 읽습니다. Google의 Code Assist 및 OAuth 엔드포인트에만 통신합니다.
+DataSourceGeneric = 이 PC의 로컬 세션이나 토큰에서, 또는 제공업체 자체의 사용량 엔드포인트를 호출하여 이 제공업체의 사용량을 읽습니다. 자격 증명은 이 PC에 남아 있으며 제공업체에만 전송됩니다.
+
+# First-run checklist (SOU-157)
+FirstRunTitle = Ceiling 설정 완료하기
+FirstRunStepEnable = 사용하는 제공업체 활성화
+FirstRunStepAuth = 로그인 연결 또는 확인
+FirstRunStepFloatbar = 플로팅 바 또는 작업 표시줄 미리 보기 켜기
+FirstRunOpenProviders = 제공업체 설정 열기
+FirstRunOpenDisplay = 디스플레이 설정 열기
+FirstRunDismiss = 닫기
