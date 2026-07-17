@@ -1,5 +1,22 @@
 # Changelog
 
+## [Ceiling] 1.0.0-rc.1 - 2026-07-17
+
+First release candidate for Ceiling 1.0.
+
+### Added
+- Guided first-run checklist in the empty dashboard for enabling providers, connecting sign-in, and turning on the floating bar.
+- Per-provider "How Ceiling gets this data" panel and a maintained data-sources reference describing each provider's source and precise local-first privacy behavior.
+
+### Changed
+- Ship English only and remove the unused non-English locale files.
+- Rewrite the browser-cookie documentation for Chromium App-Bound Encryption reality.
+
+### Fixed
+- Theme native dropdowns and checkboxes correctly in both dark and light mode.
+- Stop the pop-out dashboard from reopening at its minimum size.
+- Clarify the browser-cookie empty state and remove the last stale CodexBar naming.
+
 ## [Ceiling] 0.43.3 - 2026-07-16
 
 ### Security
