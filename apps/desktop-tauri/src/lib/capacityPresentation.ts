@@ -130,13 +130,17 @@ function nonPrimaryWindows(
   return out;
 }
 
-/** Available provider-reported resets, including legacy cached snapshots. */
+/**
+ * Provider-reported banked resets, including legacy cached snapshots. Returns
+ * the observed count — `0` is a real reading and stays distinct from `null`,
+ * which means the provider does not report resets (or the fetch is unknown).
+ */
 export function resetCreditsAvailable(
   provider: ProviderUsageSnapshot,
 ): number | null {
   if (
     typeof provider.resetCreditsAvailable === "number" &&
-    provider.resetCreditsAvailable > 0
+    provider.resetCreditsAvailable >= 0
   ) {
     return Math.floor(provider.resetCreditsAvailable);
   }
@@ -145,6 +149,19 @@ export function resetCreditsAvailable(
   );
   const match = legacy?.window.resetDescription?.match(/\d+/);
   return match ? Number(match[0]) : null;
+}
+
+/**
+ * Codex banked resets for the persistent indicator. Codex is the only provider
+ * with this concept, so it is shown Codex-only and always (including the `0`
+ * state) whenever we have a trustworthy reading, keeping the feature visible
+ * and building trust that Ceiling is tracking it.
+ */
+export function codexResetCredits(
+  provider: ProviderUsageSnapshot,
+): number | null {
+  if (provider.providerId !== "codex") return null;
+  return resetCreditsAvailable(provider);
 }
 
 /**

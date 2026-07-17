@@ -6,8 +6,8 @@ import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
 import {
   capacityFreshness,
+  codexResetCredits,
   glanceMeters,
-  resetCreditsAvailable,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
 
@@ -166,7 +166,7 @@ export default function PlanStatusCard({
   const freshness = capacityFreshness(provider);
   const planName = displayPlanName(provider.planName, provider.displayName);
   const inactiveSummary = inactiveWindowSummary(provider);
-  const resetCredits = resetCreditsAvailable(provider);
+  const resetCredits = codexResetCredits(provider);
 
   const className = [
     "plan-status-card",
@@ -205,7 +205,9 @@ export default function PlanStatusCard({
                 </span>
               )}
               {resetCredits != null && (
-                <span className="plan-status-card__reset-credit">
+                <span
+                  className={`plan-status-card__reset-credit${resetCredits === 0 ? " plan-status-card__reset-credit--empty" : ""}`}
+                >
                   ↻ {resetCredits} {resetCredits === 1 ? "reset available" : "resets available"}
                 </span>
               )}

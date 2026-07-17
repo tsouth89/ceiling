@@ -6,7 +6,7 @@ import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { orderProviderSnapshots } from "../lib/providerOrder";
-import { allMeasuredWindows, resetCreditsAvailable, type ConstrainingWindow } from "../lib/capacityPresentation";
+import { allMeasuredWindows, codexResetCredits, type ConstrainingWindow } from "../lib/capacityPresentation";
 import {
   dismissTrayPanel,
   getTaskbarSurfaceColor,
@@ -112,7 +112,7 @@ function ProviderRow({ provider, showAsUsed, now }: {
     );
   }
   const windows = flyoutWindows(provider);
-  const resetCredits = resetCreditsAvailable(provider);
+  const resetCredits = codexResetCredits(provider);
   const hiddenWindowCount = Math.max(
     0,
     allMeasuredWindows(provider).filter(isUtilityWindow).length - windows.length,
@@ -124,7 +124,9 @@ function ProviderRow({ provider, showAsUsed, now }: {
         <div className="taskbar-flyout__provider-topline">
           <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
           {resetCredits != null && (
-            <span className="taskbar-flyout__reset-credit">
+            <span
+              className={`taskbar-flyout__reset-credit${resetCredits === 0 ? " taskbar-flyout__reset-credit--empty" : ""}`}
+            >
               ↻ {resetCredits} {resetCredits === 1 ? "reset ready" : "resets ready"}
             </span>
           )}

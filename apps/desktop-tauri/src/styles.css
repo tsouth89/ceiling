@@ -1273,6 +1273,13 @@ body:has(.taskbar-flyout-frame) #root {
   line-height: 14px;
 }
 
+/* No banked resets: keep the indicator visible but quiet — nothing to act on. */
+.taskbar-flyout__reset-credit--empty {
+  border-color: rgba(224, 247, 255, 0.18);
+  background: transparent;
+  color: rgba(224, 247, 255, 0.6);
+}
+
 .taskbar-flyout__provider-status {
   margin-top: 4px;
   overflow: hidden;
@@ -4375,6 +4382,13 @@ html:has(.menu-surface--tray) {
   line-height: 16px;
 }
 
+/* No banked resets: keep the indicator visible but quiet — nothing to act on. */
+.plan-status-card__reset-credit--empty {
+  border-color: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
 .plan-status-card__error {
   margin: 0;
   font-size: 11px;
@@ -6643,6 +6657,13 @@ body:has(.dashboard-shell) #root {
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+}
+
+/* No banked resets: keep the indicator visible but quiet — nothing to act on. */
+.provider-focus__reset-credit--empty {
+  border-color: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
 }
 .provider-focus__primary {
   padding: 0 0 20px;

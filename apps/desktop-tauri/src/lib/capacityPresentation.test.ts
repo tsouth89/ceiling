@@ -7,6 +7,7 @@ import {
   activePromoInclusions,
   providerGlanceStatus,
   resetCreditsAvailable,
+  codexResetCredits,
 } from "./capacityPresentation";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 
@@ -210,5 +211,24 @@ describe("capacityPresentation", () => {
     });
     expect(resetCreditsAvailable(snap)).toBe(1);
     expect(glanceMeters(snap).companions).toEqual([]);
+  });
+
+  it("reports a known zero banked-reset count instead of hiding it", () => {
+    expect(resetCreditsAvailable(provider({ resetCreditsAvailable: 0 }))).toBe(0);
+  });
+
+  it("exposes Codex banked resets only for Codex, including the zero state", () => {
+    // Codex is the only provider with banked resets, so the persistent
+    // indicator stays Codex-scoped and shows even when the count is zero.
+    expect(
+      codexResetCredits(provider({ providerId: "codex", resetCreditsAvailable: 0 })),
+    ).toBe(0);
+    expect(
+      codexResetCredits(provider({ providerId: "codex", resetCreditsAvailable: 3 })),
+    ).toBe(3);
+    // Another provider reporting the field must never light up the Codex chip.
+    expect(
+      codexResetCredits(provider({ providerId: "cursor", resetCreditsAvailable: 2 })),
+    ).toBeNull();
   });
 });

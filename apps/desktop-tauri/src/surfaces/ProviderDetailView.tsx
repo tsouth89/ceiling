@@ -12,7 +12,7 @@ import { useLocale } from "../hooks/useLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import { getProviderChartData } from "../lib/tauri";
 import { providerSupportsChartData } from "../lib/providerCharts";
-import { allMeasuredWindows, resetCreditsAvailable } from "../lib/capacityPresentation";
+import { allMeasuredWindows, codexResetCredits } from "../lib/capacityPresentation";
 
 type DetailWindow = {
   id: string;
@@ -229,7 +229,7 @@ export default function ProviderDetailView({
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
   const primaryLabel = provider.primaryLabel?.trim() || "Primary";
   const planName = displayPlanName(provider.planName);
-  const resetCredits = resetCreditsAvailable(provider);
+  const resetCredits = codexResetCredits(provider);
   const updated = Number.isNaN(Date.parse(provider.updatedAt))
     ? provider.updatedAt
     : formatRelativeUpdated(Date.parse(provider.updatedAt), t);
@@ -251,7 +251,9 @@ export default function ProviderDetailView({
         <div className="provider-focus__badges">
           {planName && <span className="provider-focus__plan">{planName}</span>}
           {resetCredits != null && (
-            <span className="provider-focus__reset-credit">
+            <span
+              className={`provider-focus__reset-credit${resetCredits === 0 ? " provider-focus__reset-credit--empty" : ""}`}
+            >
               ↻ {resetCredits} {resetCredits === 1 ? "reset available" : "resets available"}
             </span>
           )}
