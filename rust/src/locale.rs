@@ -854,6 +854,26 @@ locale_keys! {
     TrayPaceBadgeBurning,
     TrayResetsInLabel,
     TrayResetsDueNow,
+
+    // Provider data-source / privacy explainer (SOU-179)
+    DataSourceSectionTitle,
+    DataSourcePrivacyNote,
+    DataSourceLearnMore,
+    DataSourceClaude,
+    DataSourceCodex,
+    DataSourceCursor,
+    DataSourceCopilot,
+    DataSourceGemini,
+    DataSourceGeneric,
+
+    // First-run checklist (SOU-157)
+    FirstRunTitle,
+    FirstRunStepEnable,
+    FirstRunStepAuth,
+    FirstRunStepFloatbar,
+    FirstRunOpenProviders,
+    FirstRunOpenDisplay,
+    FirstRunDismiss,
 }
 
 #[cfg(test)]

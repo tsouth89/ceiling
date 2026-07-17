@@ -591,3 +591,22 @@ PredictivePaceWarningTitle = { "{}" } { "{}" }??????
 PredictivePaceWarningBody = ????? { "{}" } ???
 ShowResetWhenExhausted = ?????????
 ShowResetWhenExhaustedHelper = ?????????????????
+# Provider data-source / privacy explainer (SOU-179) — English only
+DataSourceSectionTitle = How Ceiling gets this data
+DataSourcePrivacyNote = Ceiling reads your usage from local app sessions and logs on this PC, or by calling the provider's own usage endpoint. Your credentials and usage data stay on this PC. They are never sent to Ceiling-operated servers, only to the provider itself.
+DataSourceLearnMore = Learn how Ceiling gets each provider's data
+DataSourceClaude = Reads usage from your signed-in Claude Code or Claude Desktop session, an OAuth token, or claude.ai cookies you provide. Talks only to api.anthropic.com and claude.ai.
+DataSourceCodex = Uses the OAuth token from your Codex CLI (~/.codex) plus local session logs on this PC. Talks only to chatgpt.com.
+DataSourceCursor = Uses your signed-in Cursor IDE session, or cursor.com cookies you provide. Talks only to cursor.com.
+DataSourceCopilot = Uses your GitHub CLI or Git Credential Manager token. Talks only to api.github.com, or your configured GitHub Enterprise host.
+DataSourceGemini = Reads the OAuth token from the Gemini CLI (~/.gemini). Talks only to Google's Code Assist and OAuth endpoints.
+DataSourceGeneric = Reads this provider's usage from a local session or token on this PC, or by calling the provider's own usage endpoint. Your credentials stay on this PC and are only sent to the provider.
+
+# First-run checklist (SOU-157) — English only
+FirstRunTitle = Finish setting up Ceiling
+FirstRunStepEnable = Enable the providers you use
+FirstRunStepAuth = Connect or confirm your sign-in
+FirstRunStepFloatbar = Turn on the floating bar or taskbar glance
+FirstRunOpenProviders = Open provider settings
+FirstRunOpenDisplay = Open display settings
+FirstRunDismiss = Dismiss
