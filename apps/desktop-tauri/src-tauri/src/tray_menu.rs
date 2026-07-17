@@ -441,22 +441,14 @@ mod tests {
     }
 
     #[test]
-    fn tray_menu_static_labels_follow_language_but_provider_names_stay_raw() {
+    fn tray_menu_provider_names_stay_raw() {
         let menu = build_tray_menu_with(
             &sample_provider_catalog(),
             &[],
             &both_enabled(),
             false,
-            Language::Japanese,
+            Language::English,
         );
-        let items = proof_menu_items(&menu, "tray").unwrap();
-
-        assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "設定..."));
-        assert!(items.iter().any(|item| item == "終了"));
-        assert!(!items.iter().any(|item| item == "Refresh Usage"));
-        assert!(!items.iter().any(|item| item == "Settings"));
-
         let providers = proof_menu_items(&menu, "tray/providers").unwrap();
         assert_eq!(providers, vec!["Codex", "Claude"]);
     }

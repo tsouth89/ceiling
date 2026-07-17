@@ -3,7 +3,10 @@ use std::collections::HashSet;
 
 #[test]
 fn test_locale_key_english() {
-    assert_eq!(get_text(Language::English, LocaleKey::TabGeneral), "General");
+    assert_eq!(
+        get_text(Language::English, LocaleKey::TabGeneral),
+        "General"
+    );
     assert_eq!(
         get_text(Language::English, LocaleKey::InterfaceLanguage),
         "Interface Language"

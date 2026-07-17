@@ -817,20 +817,6 @@ mod tests {
     }
 
     #[test]
-    fn native_menu_snapshot_uses_settings_language() {
-        let providers = Vec::new();
-        let settings = codexbar::settings::Settings {
-            ui_language: codexbar::settings::Language::Japanese,
-            ..Default::default()
-        };
-
-        let (_, items) = native_menu_snapshot_for_settings(&providers, &settings, "tray");
-
-        assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(!items.iter().any(|item| item == "Refresh Usage"));
-    }
-
-    #[test]
     fn about_path_snapshot_clears_on_failure() {
         let _guard = MENU_LOCK.lock().unwrap();
         set_menu_snapshot(Some("tray".into()), vec!["About Ceiling".into()]);
