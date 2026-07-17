@@ -1,8 +1,10 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { playNotificationSound } from "../../../lib/tauri";
+import { playNotificationSound, sendTestNotification } from "../../../lib/tauri";
 import { Field, NumberInput, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../../Settings";
+
+type TestNotificationStatus = "idle" | "sending" | "sent" | "failed";
 
 export default function GeneralTab({
   mode = "general",
@@ -12,11 +14,22 @@ export default function GeneralTab({
 }: TabProps & { mode?: "general" | "notifications" }) {
   const { t } = useLocale();
   const [playingSound, setPlayingSound] = useState(false);
+  const [testStatus, setTestStatus] = useState<TestNotificationStatus>("idle");
 
   const handleTestSound = useCallback(() => {
     setPlayingSound(true);
     void playNotificationSound().catch(() => {});
     window.setTimeout(() => setPlayingSound(false), 1500);
+  }, []);
+
+  const handleTestNotification = useCallback(() => {
+    setTestStatus("sending");
+    void sendTestNotification()
+      .then(() => setTestStatus("sent"))
+      .catch(() => setTestStatus("failed"))
+      .finally(() => {
+        window.setTimeout(() => setTestStatus("idle"), 4000);
+      });
   }, []);
 
   return (
@@ -72,6 +85,32 @@ export default function GeneralTab({
               disabled={saving || !settings.showNotifications}
               onChange={(v) => set({ capacityEventNotificationsEnabled: v })}
             />
+          </Field>
+          <Field
+            label={t("NotificationTest")}
+            description={t("NotificationTestHelper")}
+            leading
+          >
+            <div className="sound-enabled-row">
+              <button
+                type="button"
+                className="shortcut-capture__button shortcut-capture__button--ghost"
+                disabled={
+                  saving ||
+                  !settings.showNotifications ||
+                  testStatus === "sending"
+                }
+                onClick={handleTestNotification}
+              >
+                {testStatus === "sending"
+                  ? t("NotificationTestSending")
+                  : testStatus === "sent"
+                    ? t("NotificationTestSent")
+                    : testStatus === "failed"
+                      ? t("NotificationTestFailed")
+                      : t("NotificationTestButton")}
+              </button>
+            </div>
           </Field>
           <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
             <div className="sound-enabled-row">
