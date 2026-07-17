@@ -191,7 +191,6 @@ export const ALL_LOCALE_KEYS = [
   "TodayCost",
   "Last30DaysCost",
   "StatusLabel",
-  "TrayOpenCodexBar",
   "TrayPopOutDashboard",
   "TrayShowWindow",
   "TrayShowTaskbarUsage",
