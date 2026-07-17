@@ -663,6 +663,15 @@ html {
   background: rgba(255, 255, 255, 0.9);
 }
 
+/* Keep the accent fill on checked boxes in light theme (the light base rule
+   above has equal specificity to `:checked`, so restate it with higher). */
+[data-theme="light"] .toggle:checked,
+[data-theme="light"] .provider-detail-toggle input[type="checkbox"]:checked,
+[data-theme="light"] .providers-sidebar__checkbox:checked {
+  background: var(--accent, #0a84ff);
+  border-color: var(--accent, #0a84ff);
+}
+
 .toggle-label {
   display: inline-flex;
   align-items: center;
