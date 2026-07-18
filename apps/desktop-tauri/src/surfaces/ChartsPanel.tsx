@@ -55,11 +55,16 @@ export default function ChartsPanel({
   }, [supported, comparisonProviders]);
 
   if (supported.length === 0) {
+    // The API-value card loads its own local totals, so keep it visible even
+    // when no provider reports chart-series data (or a snapshot errored).
     return (
-      <div className="charts-empty">
-        <strong>No charts yet</strong>
-        Limits and local usage history shows up here for providers that report it —
-        Codex, Claude, and OpenAI.
+      <div className="charts-panel">
+        <TotalApiValueCard />
+        <div className="charts-empty">
+          <strong>No charts yet</strong>
+          Limits and local usage history shows up here for providers that report it —
+          Codex, Claude, and OpenAI.
+        </div>
       </div>
     );
   }

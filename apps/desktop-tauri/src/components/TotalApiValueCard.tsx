@@ -93,7 +93,9 @@ export function TotalApiValueCard() {
   const segments = ringSegments(model.slices, CIRCUMFERENCE);
   const coveragePercent =
     model.coverage == null ? null : Math.round(model.coverage * 100);
-  const showCoverage = coveragePercent != null && coveragePercent < 100;
+  // Compare the raw ratio so 99.6% (rounds to 100) still shows the coverage
+  // note when any tokens are unpriced.
+  const showCoverage = model.coverage != null && model.coverage < 1;
 
   const ariaSummary = model.isEmpty
     ? `No local ${metricLabel} data for ${periodLabel}.`
@@ -111,13 +113,12 @@ export function TotalApiValueCard() {
           </p>
         </div>
         <div className="api-value-card__switchers">
-          <div className="api-value-card__switch" role="tablist" aria-label="Period">
+          <div className="api-value-card__switch" role="group" aria-label="Period">
             {PERIODS.map((p) => (
               <button
                 key={p.key}
                 type="button"
-                role="tab"
-                aria-selected={p.key === period}
+                aria-pressed={p.key === period}
                 data-active={p.key === period}
                 className="api-value-card__switch-btn"
                 onClick={() => setPeriod(p.key)}
@@ -126,13 +127,12 @@ export function TotalApiValueCard() {
               </button>
             ))}
           </div>
-          <div className="api-value-card__switch" role="tablist" aria-label="Metric">
+          <div className="api-value-card__switch" role="group" aria-label="Metric">
             {METRICS.map((m) => (
               <button
                 key={m.key}
                 type="button"
-                role="tab"
-                aria-selected={m.key === metric}
+                aria-pressed={m.key === metric}
                 data-active={m.key === metric}
                 className="api-value-card__switch-btn"
                 onClick={() => setMetric(m.key)}
