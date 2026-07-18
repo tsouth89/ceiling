@@ -167,18 +167,26 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
                 }
             }
 
-            if !result.summary.by_speed.is_empty() {
-                println!("  Codex speed:");
-                for bucket in ["standard", "fast"] {
-                    if let Some(cost) = result.summary.by_speed.get(bucket) {
-                        let tokens = result
-                            .summary
-                            .by_speed_tokens
-                            .get(bucket)
-                            .map(|counts| format_number(counts.total()))
-                            .unwrap_or_else(|| "0".to_string());
-                        println!("    {}: ${:.2} ({} tokens)", bucket, cost, tokens);
-                    }
+            // Render every effort tier that has tokens, including unpriced
+            // usage (present in by_effort_tokens but not by_effort). Cost
+            // defaults to $0.00, matching the JSON contract.
+            if !result.summary.by_effort_tokens.is_empty() {
+                println!("  Codex effort:");
+                let cost_of =
+                    |bucket: &str| result.summary.by_effort.get(bucket).copied().unwrap_or(0.0);
+                let mut efforts: Vec<_> = result.summary.by_effort_tokens.iter().collect();
+                efforts.sort_by(|(a, _), (b, _)| {
+                    cost_of(b)
+                        .partial_cmp(&cost_of(a))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for (bucket, counts) in efforts {
+                    println!(
+                        "    {}: ${:.2} ({} tokens)",
+                        bucket,
+                        cost_of(bucket),
+                        format_number(counts.total())
+                    );
                 }
             }
         }
@@ -218,8 +226,8 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     },
                     "sessions_count": r.summary.sessions_count,
                     "by_model": r.summary.by_model,
-                    "by_speed": r.summary.by_speed,
-                    "by_speed_tokens": r.summary.by_speed_tokens.iter().map(|(bucket, counts)| {
+                    "by_effort": r.summary.by_effort,
+                    "by_effort_tokens": r.summary.by_effort_tokens.iter().map(|(bucket, counts)| {
                         (bucket.clone(), serde_json::json!({
                             "input": counts.input_tokens,
                             "output": counts.output_tokens,

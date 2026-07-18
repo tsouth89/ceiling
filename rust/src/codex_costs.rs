@@ -39,7 +39,9 @@ pub(crate) fn add_codex_records_to_summary(
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-        if let Some(cost) = add_codex_tokens_to_summary(summary, &record.model, tokens) {
+        if let Some(cost) =
+            add_codex_tokens_to_summary(summary, &record.model, record.effort.as_deref(), tokens)
+        {
             total_cost += cost;
             has_tokens = true;
         }
@@ -58,7 +60,7 @@ pub(crate) fn add_codex_record_to_summary(
     record: &CodexUsageRecord,
 ) -> Option<f64> {
     let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-    add_codex_tokens_to_summary(summary, &record.model, tokens)
+    add_codex_tokens_to_summary(summary, &record.model, record.effort.as_deref(), tokens)
 }
 
 pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
@@ -114,6 +116,7 @@ fn add_tokens(summary: &mut ModelTokenCounts, tokens: CodexTokenCounts) {
 fn add_codex_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
+    effort: Option<&str>,
     tokens: CodexTokenCounts,
 ) -> Option<f64> {
     if tokens.is_empty() {
@@ -125,7 +128,7 @@ fn add_codex_tokens_to_summary(
     summary.cached_tokens += tokens.cached;
     summary.cache_read_tokens += tokens.cached;
     summary.output_tokens += tokens.output;
-    let speed_bucket = codex_speed_bucket(model);
+    let effort_bucket = codex_effort_bucket(effort);
     add_tokens(
         summary
             .by_model_tokens
@@ -135,8 +138,8 @@ fn add_codex_tokens_to_summary(
     );
     add_tokens(
         summary
-            .by_speed_tokens
-            .entry(speed_bucket.to_string())
+            .by_effort_tokens
+            .entry(effort_bucket.to_string())
             .or_default(),
         tokens,
     );
@@ -151,8 +154,8 @@ fn add_codex_tokens_to_summary(
 
     *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
     *summary
-        .by_speed
-        .entry(speed_bucket.to_string())
+        .by_effort
+        .entry(effort_bucket.to_string())
         .or_insert(0.0) += cost;
     Some(cost)
 }
@@ -181,16 +184,13 @@ fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -
     total_cost
 }
 
-fn codex_speed_bucket(model: &str) -> &'static str {
-    let normalized = model.to_ascii_lowercase();
-    if normalized.contains("fast")
-        || normalized.contains("priority")
-        || normalized.contains("spark")
-        || normalized.contains("smoke")
-    {
-        "fast"
-    } else {
-        "standard"
+/// Map a rollout's reasoning-effort string to a stable bucket key. Codex logs
+/// declare effort in `turn_context` (e.g. "medium"/"high"/"xhigh"); usage
+/// without a declared effort is bucketed as "unknown" rather than guessed.
+fn codex_effort_bucket(effort: Option<&str>) -> String {
+    match effort.map(str::trim).filter(|effort| !effort.is_empty()) {
+        Some(effort) => effort.to_ascii_lowercase(),
+        None => "unknown".to_string(),
     }
 }
 
@@ -209,6 +209,7 @@ mod tests {
                 day_key: "2026-05-31".to_string(),
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
+                effort: Some("high".to_string()),
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -218,6 +219,7 @@ mod tests {
                 day_key: "2026-05-31".to_string(),
                 timestamp: None,
                 model: "gpt-4o".to_string(),
+                effort: Some("medium".to_string()),
                 input: 1_000_000,
                 cached: 0,
                 output: 1_000_000,
@@ -235,6 +237,12 @@ mod tests {
         assert!(summary.unknown_models.contains("gpt-4o"));
         // Both models' tokens are preserved for coverage.
         assert_eq!(summary.input_tokens, 1_200_000);
+        // Effort tiers: only the priced record adds dollars, but both tiers
+        // record tokens.
+        assert!(summary.by_effort.contains_key("high"));
+        assert!(!summary.by_effort.contains_key("medium"));
+        assert!(summary.by_effort_tokens.contains_key("high"));
+        assert!(summary.by_effort_tokens.contains_key("medium"));
     }
 
     #[test]
@@ -246,6 +254,7 @@ mod tests {
                 day_key: "2026-05-31".to_string(),
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
+                effort: Some("high".to_string()),
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -254,6 +263,7 @@ mod tests {
                 day_key: "2026-05-31".to_string(),
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
+                effort: Some("high".to_string()),
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -262,6 +272,7 @@ mod tests {
                 day_key: "2026-05-30".to_string(),
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
+                effort: Some("high".to_string()),
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -286,6 +297,7 @@ mod tests {
             day_key: "2026-05-31".to_string(),
             timestamp: None,
             model: "gpt-mystery".to_string(),
+            effort: None,
             input: 1_000_000,
             cached: 0,
             output: 1_000_000,
@@ -302,9 +314,34 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_speed_bucket() {
-        assert_eq!(codex_speed_bucket("gpt-5.5-fast"), "fast");
-        assert_eq!(codex_speed_bucket("gpt-5.3-codex-spark"), "fast");
-        assert_eq!(codex_speed_bucket("gpt-5-codex"), "standard");
+    fn test_codex_effort_bucket() {
+        // Declared effort is lowercased and trimmed to a stable key.
+        assert_eq!(codex_effort_bucket(Some("high")), "high");
+        assert_eq!(codex_effort_bucket(Some("  XHigh ")), "xhigh");
+        // Missing or blank effort buckets as "unknown", never guessed.
+        assert_eq!(codex_effort_bucket(None), "unknown");
+        assert_eq!(codex_effort_bucket(Some("   ")), "unknown");
+    }
+
+    #[test]
+    fn unpriced_usage_still_records_effort_tokens() {
+        let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let records = vec![CodexUsageRecord {
+            day_key: "2026-05-31".to_string(),
+            timestamp: None,
+            model: "gpt-mystery".to_string(),
+            effort: None,
+            input: 1_000_000,
+            cached: 0,
+            output: 0,
+        }];
+        let mut summary = CostSummary::default();
+
+        add_codex_records_to_summary(&mut summary, &records, &range);
+
+        // No dollars for the unknown model, but the effort tier keeps tokens.
+        assert!(summary.by_effort.is_empty());
+        assert!(summary.by_effort_tokens.contains_key("unknown"));
     }
 }

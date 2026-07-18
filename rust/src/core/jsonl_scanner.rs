@@ -69,6 +69,10 @@ pub struct CodexUsageRecord {
     pub day_key: String,
     pub timestamp: Option<DateTime<chrono::Utc>>,
     pub model: String,
+    /// Reasoning effort in force when this delta was billed (from the enclosing
+    /// `turn_context`, e.g. "medium"/"high"/"xhigh"). `None` when the log never
+    /// declared one.
+    pub effort: Option<String>,
     pub input: i32,
     pub cached: i32,
     pub output: i32,
@@ -128,6 +132,9 @@ enum ReplayGate {
 
 struct CodexParserState {
     current_model: Option<String>,
+    /// Reasoning effort from the most recent `turn_context`, attached to each
+    /// token delta so cost can be split by effort tier.
+    current_effort: Option<String>,
     previous_totals: Option<CodexTotals>,
     records: Vec<CodexUsageRecord>,
     /// `Some` while suppressing a child session's replayed parent history.
@@ -156,6 +163,8 @@ struct CodexFastPayload<'a> {
     model: Option<&'a str>,
     #[serde(default, borrow)]
     model_name: Option<&'a str>,
+    #[serde(default, borrow)]
+    effort: Option<&'a str>,
     #[serde(default, borrow)]
     info: Option<CodexFastInfo<'a>>,
     #[serde(default)]
@@ -195,6 +204,7 @@ struct CodexFastTotals {
 enum CodexFastEvent<'a> {
     TurnContext {
         model: Option<&'a str>,
+        effort: Option<&'a str>,
     },
     TokenCount {
         timestamp: &'a str,
@@ -206,6 +216,7 @@ impl CodexParserState {
     fn new(initial_model: Option<String>, initial_totals: Option<CodexTotals>) -> Self {
         Self {
             current_model: initial_model,
+            current_effort: None,
             previous_totals: initial_totals,
             records: Vec::new(),
             replay_gate: None,
@@ -265,10 +276,16 @@ impl CodexParserState {
 
     fn process_fast_event(&mut self, event: CodexFastEvent<'_>, range: &CostUsageDayRange) {
         match event {
-            CodexFastEvent::TurnContext { model } => {
+            CodexFastEvent::TurnContext { model, effort } => {
                 if let Some(model) = model.filter(|model| !model.is_empty()) {
                     self.current_model = Some(model.to_string());
                 }
+                // Effort is a per-turn setting: reset it for every turn_context
+                // so a turn that omits it (or leaves it blank) becomes
+                // "unknown" rather than inheriting the previous turn's tier.
+                self.current_effort = effort
+                    .filter(|effort| !effort.trim().is_empty())
+                    .map(|effort| effort.to_string());
             }
             CodexFastEvent::TokenCount { timestamp, payload } => {
                 self.record_fast_token_count(payload, timestamp, range);
@@ -289,6 +306,15 @@ impl CodexParserState {
         {
             self.current_model = Some(model.to_string());
         }
+        // Effort is a per-turn setting: reset it for every turn_context so a
+        // turn that omits it (or leaves it blank) becomes "unknown" rather
+        // than inheriting the previous turn's tier.
+        self.current_effort = obj
+            .get("effort")
+            .or_else(|| obj.get("payload").and_then(|payload| payload.get("effort")))
+            .and_then(|v| v.as_str())
+            .filter(|effort| !effort.trim().is_empty())
+            .map(|effort| effort.to_string());
     }
 
     fn record_token_count(&mut self, obj: &Value, range: &CostUsageDayRange) {
@@ -387,6 +413,7 @@ impl CodexParserState {
             day_key,
             timestamp,
             model: CostUsagePricing::normalize_codex_model(model),
+            effort: self.current_effort.clone(),
             input,
             cached: cached.min(input),
             output,
@@ -481,7 +508,8 @@ fn parse_codex_fast_event(line: &str) -> Option<CodexFastEvent<'_>> {
                     })
                 })
                 .or(parsed.model);
-            Some(CodexFastEvent::TurnContext { model })
+            let effort = parsed.payload.as_ref().and_then(|payload| payload.effort);
+            Some(CodexFastEvent::TurnContext { model, effort })
         }
         "event_msg" => {
             let payload = parsed.payload.or(parsed.event_msg)?;
@@ -953,6 +981,79 @@ mod tests {
         assert_eq!(totals.input, 1250);
         assert_eq!(totals.cached, 260);
         assert_eq!(totals.output, 90);
+    }
+
+    #[test]
+    fn turn_context_effort_attaches_to_following_token_records() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        // A turn at "high" effort, then usage.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"high"}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":50}}}}"#,
+            &range,
+        );
+        // A later turn switches to "xhigh"; the next delta carries the new tier.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:05:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:05:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1500,"cached_input_tokens":0,"output_tokens":90}}}}"#,
+            &range,
+        );
+        // A turn that omits effort must NOT inherit "xhigh" — it resets to None.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:10:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:10:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1600,"cached_input_tokens":0,"output_tokens":95}}}}"#,
+            &range,
+        );
+        // A whitespace-only effort is treated the same as missing.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:15:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"  "}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:15:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1700,"cached_input_tokens":0,"output_tokens":99}}}}"#,
+            &range,
+        );
+
+        let efforts: Vec<_> = parser
+            .records
+            .iter()
+            .map(|record| record.effort.as_deref())
+            .collect();
+        assert_eq!(efforts, vec![Some("high"), Some("xhigh"), None, None]);
+    }
+
+    #[test]
+    fn update_current_model_resets_effort_each_turn_on_json_path() {
+        // The serde_json fallback path must also reset effort per turn_context.
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        parser.update_current_model(
+            &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"high"}}),
+        );
+        assert_eq!(parser.current_effort.as_deref(), Some("high"));
+        // A turn without effort clears the prior tier instead of inheriting it.
+        parser.update_current_model(
+            &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}),
+        );
+        assert_eq!(parser.current_effort, None);
+        // Whitespace-only effort is treated as missing.
+        parser.update_current_model(
+            &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"  "}}),
+        );
+        assert_eq!(parser.current_effort, None);
     }
 
     #[test]
