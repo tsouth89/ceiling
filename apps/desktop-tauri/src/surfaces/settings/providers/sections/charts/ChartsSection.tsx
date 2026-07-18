@@ -5,6 +5,7 @@ import {
   providerSupportsChartData,
 } from "../../../../../lib/providerCharts";
 import type {
+  LocalModelCost,
   LocalTokenBreakdown,
   ProviderChartData,
   ProviderUsageSnapshot,
@@ -82,6 +83,44 @@ function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function formatUsd(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(value);
+}
+
+function ModelBreakdown({ models }: { models: LocalModelCost[] }) {
+  const priced = models.reduce((sum, model) => sum + (model.cost ?? 0), 0);
+  const hasUnpriced = models.some((model) => model.cost == null);
+  return (
+    <div className="usage-model-costs" aria-label="Cost by model over 30 days">
+      <div className="usage-model-costs__header">
+        <span className="usage-model-costs__title">Cost by model · 30 days</span>
+        <span className="usage-model-costs__total">{formatUsd(priced)}</span>
+      </div>
+      <ul className="usage-model-costs__rows">
+        {models.map((model) => (
+          <li className="usage-model-costs__row" key={model.model}>
+            <span className="usage-model-costs__name" title={model.model}>
+              {model.model}
+            </span>
+            <span className="usage-model-costs__tokens">{formatTokens(model.tokens)}</span>
+            <span className="usage-model-costs__cost">
+              {model.cost == null ? "Not priced" : formatUsd(model.cost)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {hasUnpriced && (
+        <p className="usage-model-costs__note">
+          Not priced · tokens counted, but no public rate is available for this model.
+        </p>
+      )}
     </div>
   );
 }
@@ -331,6 +370,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
             )}
             <span>Processed includes fresh input, output, cache reads, and cache writes.</span>
           </div>
+          {data.localUsage.modelBreakdown && data.localUsage.modelBreakdown.length > 0 && (
+            <ModelBreakdown models={data.localUsage.modelBreakdown} />
+          )}
         </div>
       )}
       {available.length > 1 && (

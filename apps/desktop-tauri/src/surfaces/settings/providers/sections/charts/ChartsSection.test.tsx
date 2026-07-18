@@ -57,6 +57,11 @@ const enrichedData = {
     comparisonPeriods: [],
     latestTokens: 2_100_000,
     topModel: "claude-opus-4-8",
+    modelBreakdown: [
+      { model: "claude-opus-4-8", cost: 15_000, tokens: 20_000_000_000 },
+      { model: "claude-sonnet-5", cost: 2_700, tokens: 3_500_000_000 },
+      { model: "claude-retired-x", cost: null, tokens: 50_000_000 },
+    ],
     estimateNote: "API-equivalent estimate from local logs; not subscription spend",
     tokenCostUpdatedAtMs: 1,
     sevenDayTokenBreakdown: {
@@ -97,6 +102,18 @@ describe("ChartsSection local usage summary", () => {
     expect(mix.textContent).toContain("Output14.1M");
     expect(mix.textContent).toContain("Cache read4.8B");
     expect(mix.textContent).toContain("Cache write118.6M");
+
+    const models = getByLabelText("Cost by model over 30 days");
+    // Priced models show dollars; the total sums only priced rows.
+    expect(models.textContent).toContain("claude-opus-4-8");
+    expect(models.textContent).toContain("$15,000.00");
+    expect(models.textContent).toContain("claude-sonnet-5");
+    expect(models.textContent).toContain("$2,700.00");
+    // Unpriced model keeps its tokens but shows "Not priced", no dollars.
+    expect(models.textContent).toContain("claude-retired-x");
+    expect(models.textContent).toContain("Not priced");
+    // Header total = sum of priced rows only ($15,000 + $2,700).
+    expect(models.textContent).toContain("$17,700.00");
   });
 
   it("keeps quota history visible while local history loads, then enriches promptly", async () => {

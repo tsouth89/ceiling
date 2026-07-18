@@ -7801,6 +7801,73 @@ body:has(.dashboard-shell) #root {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.usage-model-costs {
+  grid-column: 1 / -1;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+}
+.usage-model-costs__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 7px;
+}
+.usage-model-costs__title {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.usage-model-costs__total {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.usage-model-costs__rows {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.usage-model-costs__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: baseline;
+}
+.usage-model-costs__name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-model-costs__tokens {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.usage-model-costs__cost {
+  min-width: 56px;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.usage-model-costs__note {
+  margin: 7px 0 0;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  line-height: 1.4;
+}
 .quota-history {
   display: grid;
   gap: 12px;
