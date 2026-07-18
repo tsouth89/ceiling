@@ -57,6 +57,56 @@ The release directory must contain:
 Test install, launch, tray behavior, provider refresh, the capacity strip,
 autostart, and uninstall on a clean Windows user profile before publishing.
 
+### Build cache
+
+To keep the signed path fast, the Cargo dependency sources (`~/.cargo/registry`,
+`~/.cargo/git`), the release-mode Cargo target directories, and the pnpm store
+are cached with a pinned `actions/cache`, keyed by runner OS, MSVC toolchain,
+resolved `rustc` version, `Cargo.lock`, and `pnpm-lock.yaml`, with prefix
+restore-keys so a small dependency bump still reuses most artifacts.
+
+GitHub Actions caches are **ref-scoped**: a tag run cannot read another tag's
+cache, and only default-branch runs can write the scope every tag run can read.
+So the cache is **warmed on `main`** by `.github/workflows/warm-release-cache.yml`
+(on pushes that change the build graph, a weekly schedule, and manual dispatch);
+`release.yml` only **restores** it. The warm workflow does the same unsigned
+build and saves the cache — it does no signing and touches no secrets.
+
+Safety properties:
+
+- The release (tag) run only restores; it never writes a cache, so no signed
+  binary, credential, signing material, or release asset is ever cached.
+- The warm workflow saves only after a successful build (`success()`-gated), so
+  a failed build never poisons the cache, and it saves before it would ever have
+  produced a signed artifact (it never signs at all).
+- A cache miss falls back to a full cold build (the original behavior), so
+  caching can only make a release faster, never break it.
+
+The release run summary reports whether the build was warm, partial, or cold;
+per-phase timing is visible as the individual step durations. The first release
+after a build-graph change may be partial/cold until the next warm run repopulates
+the default-branch cache.
+
+Invalidation and no-cache recovery:
+
+- To force a clean rebuild, bump `$cacheVersion` in the **Compute release cache
+  key** step of *both* `release.yml` and `warm-release-cache.yml` (keep them in
+  sync), merge or push those changes to `main`, and wait for the **Warm release
+  cache** workflow to complete successfully before creating and pushing the
+  release tag.
+- To purge stored caches, delete them from the repository's Actions cache UI or
+  with `gh cache delete --all` (or a specific key). A release with no cache
+  simply cold-builds.
+- To warm on demand, run the **Warm release cache** workflow via *Run workflow*
+  (workflow_dispatch) on `main`.
+
+> Follow-up (evaluated, not yet applied): the build script uses separate Cargo
+> target directories for the desktop and CLI builds, so the shared dependency
+> graph compiles twice even on a warm run. Unifying them into one target
+> directory would cut cold-build time and roughly halve the cache size; it is a
+> build-script change worth measuring against the timing this cache change now
+> records.
+
 ## Publish
 
 1. Review the draft release created by the signed workflow and replace generated
