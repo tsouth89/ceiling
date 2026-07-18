@@ -466,20 +466,28 @@ fn api_value_period(provider_id: &str, summary: &CostSummary) -> LocalApiValuePe
     }
 }
 
-/// Local-calendar midnight for `date`, as a UTC instant. DST-safe: on a
-/// spring-forward day where local midnight doesn't exist, step to the first
-/// valid instant; on a fall-back day pick the earliest of the two.
+/// Local-calendar midnight for `date`, as a UTC instant.
 fn local_midnight_utc(date: NaiveDate) -> DateTime<Utc> {
-    let naive = date.and_hms_opt(0, 0, 0).expect("valid midnight");
-    match Local.from_local_datetime(&naive) {
-        LocalResult::Single(dt) => dt.with_timezone(&Utc),
-        LocalResult::Ambiguous(earliest, _) => earliest.with_timezone(&Utc),
-        LocalResult::None => Local
-            .from_local_datetime(&(naive + chrono::Duration::hours(1)))
-            .earliest()
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|| Utc.from_utc_datetime(&naive)),
+    local_midnight_in_tz(&Local, date)
+}
+
+/// Resolve local midnight of `date` in `tz` to a UTC instant. DST-safe: a
+/// fall-back (ambiguous) midnight picks the earliest instant; a spring-forward
+/// (skipped) midnight advances minute by minute to the first local time that
+/// actually exists, so it never mis-interprets the naive time as UTC.
+fn local_midnight_in_tz<Tz: TimeZone>(tz: &Tz, date: NaiveDate) -> DateTime<Utc> {
+    let mut naive = date.and_hms_opt(0, 0, 0).expect("valid midnight");
+    // A DST gap is at most a couple of hours; bound the walk so a pathological
+    // zone can't loop forever.
+    for _ in 0..=180 {
+        match tz.from_local_datetime(&naive) {
+            LocalResult::Single(dt) => return dt.with_timezone(&Utc),
+            LocalResult::Ambiguous(earliest, _) => return earliest.with_timezone(&Utc),
+            LocalResult::None => naive += chrono::Duration::minutes(1),
+        }
     }
+    // Unreachable for real zones (gaps never exceed a few hours).
+    Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("valid midnight"))
 }
 
 /// The user's local "yesterday" as a `[start, end)` UTC window: yesterday's
@@ -491,12 +499,14 @@ fn local_yesterday_window_utc(now: DateTime<Local>) -> (DateTime<Utc>, DateTime<
 }
 
 #[tauri::command]
-pub async fn get_local_api_value_totals() -> Vec<LocalApiValueProvider> {
+pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, String> {
+    // A worker panic/cancel must surface as an error, not an empty result —
+    // "unavailable" and "genuinely no data" are distinct on this card.
     tauri::async_runtime::spawn_blocking(|| load_local_api_value_totals(Local::now()))
         .await
-        .unwrap_or_else(|err| {
+        .map_err(|err| {
             tracing::warn!("Local API-value totals worker failed: {}", err);
-            Vec::new()
+            "Unable to load local API-value totals.".to_string()
         })
 }
 
@@ -1160,12 +1170,12 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalTokenBreakdown,
         ProviderLocalUsageSummary, api_value_period, comparison_period_specs,
-        cost_fetch_failure_allows_early_retry, effort_breakdown, local_usage_summary_from_report,
-        local_yesterday_window_utc, localized_estimate_note, model_breakdown, token_breakdown,
-        token_cost_cache_is_fresh,
+        cost_fetch_failure_allows_early_retry, effort_breakdown, local_midnight_in_tz,
+        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
+        model_breakdown, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
-    use chrono::{Local, Utc};
+    use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
     use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
     use codexbar::settings::Language;
     use std::time::{Duration, Instant};
@@ -1452,6 +1462,57 @@ mod tests {
         // A local calendar day is 24h, or 23h/25h across a DST transition.
         let hours = (end - start).num_hours();
         assert!((23..=25).contains(&hours), "unexpected span: {hours}h");
+    }
+
+    #[test]
+    fn local_midnight_resolves_dst_gap_and_overlap() {
+        // Several zones move their clocks at/around local midnight, so both a
+        // skipped ("None") and an ambiguous ("Ambiguous") midnight exist. Find
+        // real ones near the present rather than hard-coding transition dates.
+        use chrono_tz::Tz;
+        let zones: [Tz; 4] = [
+            chrono_tz::America::Santiago,
+            chrono_tz::America::Asuncion,
+            chrono_tz::America::Havana,
+            chrono_tz::Asia::Beirut,
+        ];
+        let find = |want_gap: bool| -> Option<(Tz, NaiveDate)> {
+            for tz in zones {
+                let mut date = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+                let last = NaiveDate::from_ymd_opt(2027, 12, 31).unwrap();
+                while date <= last {
+                    let naive = date.and_hms_opt(0, 0, 0).unwrap();
+                    match tz.from_local_datetime(&naive) {
+                        LocalResult::None if want_gap => return Some((tz, date)),
+                        LocalResult::Ambiguous(..) if !want_gap => return Some((tz, date)),
+                        _ => {}
+                    }
+                    date += chrono::Duration::days(1);
+                }
+            }
+            None
+        };
+
+        let (gap_tz, gap) = find(true).expect("a skipped midnight exists in some zone");
+        // Skipped midnight resolves to the first local instant that exists,
+        // never the naive-as-UTC fallback.
+        let resolved = local_midnight_in_tz(&gap_tz, gap).with_timezone(&gap_tz);
+        assert_eq!(resolved.date_naive(), gap);
+        assert!(resolved.time() > NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        assert!(matches!(
+            gap_tz.from_local_datetime(&resolved.naive_local()),
+            LocalResult::Single(_)
+        ));
+
+        let (ov_tz, overlap) = find(false).expect("an ambiguous midnight exists in some zone");
+        // Ambiguous midnight picks the earliest of the two valid instants.
+        let naive = overlap.and_hms_opt(0, 0, 0).unwrap();
+        if let LocalResult::Ambiguous(earliest, _) = ov_tz.from_local_datetime(&naive) {
+            assert_eq!(
+                local_midnight_in_tz(&ov_tz, overlap),
+                earliest.with_timezone(&Utc)
+            );
+        }
     }
 
     #[test]
