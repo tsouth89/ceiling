@@ -495,12 +495,15 @@ export interface CapacityEventPayload {
     | "scheduledReset"
     | "surpriseReset"
     | "partialReset"
+    | "bankedResetGranted"
     | "resetTimeShift"
     | "windowLifted"
     | "windowRestored"
     | "allowanceGranted";
   previousUsedPercent: number;
   currentUsedPercent: number;
+  previousResetCredits?: number;
+  currentResetCredits?: number;
   previousResetAt: string;
   currentResetAt: string;
   occurredAt: string;

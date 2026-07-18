@@ -324,11 +324,18 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
     if notification_settings.show_notifications
         && notification_settings.capacity_event_notifications_enabled
         && let Some((title, body)) = capacity_event_notification(&capacity_events)
-        && let Ok(mut guard) = state.lock()
     {
-        guard
-            .notification_manager
-            .notify_capacity_event(&title, &body);
+        let notified = state.lock().is_ok_and(|mut guard| {
+            guard
+                .notification_manager
+                .notify_capacity_event(&title, &body)
+        });
+        if notified {
+            codexbar::sound::play_alert(
+                codexbar::sound::AlertSound::Success,
+                &notification_settings,
+            );
+        }
     }
 }
 
@@ -340,6 +347,7 @@ fn capacity_event_uses_windows_notification(
         crate::capacity_events::CapacityEventKind::ScheduledReset
             | crate::capacity_events::CapacityEventKind::SurpriseReset
             | crate::capacity_events::CapacityEventKind::PartialReset
+            | crate::capacity_events::CapacityEventKind::BankedResetGranted
     )
 }
 
@@ -358,10 +366,20 @@ fn capacity_event_notification(
             let body = events
                 .iter()
                 .map(|event| {
-                    format!(
-                        "{} {:.0}% → {:.0}% used",
-                        event.window_label, event.previous_used_percent, event.current_used_percent
-                    )
+                    if event.kind == crate::capacity_events::CapacityEventKind::BankedResetGranted {
+                        let available = event.current_reset_credits.unwrap_or(1);
+                        format!(
+                            "{available} banked reset{} available",
+                            if available == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        format!(
+                            "{} {:.0}% → {:.0}% used",
+                            event.window_label,
+                            event.previous_used_percent,
+                            event.current_used_percent
+                        )
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
@@ -851,6 +869,9 @@ mod predictive_warning_tests {
         assert!(capacity_event_uses_windows_notification(
             CapacityEventKind::PartialReset
         ));
+        assert!(capacity_event_uses_windows_notification(
+            CapacityEventKind::BankedResetGranted
+        ));
         for visual_only in [
             CapacityEventKind::ResetTimeShift,
             CapacityEventKind::WindowLifted,
@@ -874,6 +895,8 @@ mod predictive_warning_tests {
                 kind: CapacityEventKind::PartialReset,
                 previous_used_percent: before,
                 current_used_percent: after,
+                previous_reset_credits: None,
+                current_reset_credits: None,
                 previous_reset_at: "2026-08-06T22:49:57Z".into(),
                 current_reset_at: "2026-08-06T22:49:57Z".into(),
                 occurred_at: "2026-07-15T20:21:45Z".into(),

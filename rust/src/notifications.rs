@@ -243,6 +243,11 @@ impl NotificationManager {
             );
             return false;
         }
+        #[cfg(all(target_os = "windows", not(test)))]
+        if let Err(reason) = windows_notification_delivery_check() {
+            tracing::warn!(title, %reason, "Windows notification delivery is disabled");
+            return false;
+        }
         if self.refresh_cycle_active {
             let now = std::time::Instant::now();
             while self
@@ -781,6 +786,7 @@ pub fn send_test_notification() -> Result<(), String> {
     use std::process::Command;
 
     ensure_aumid_registered_once();
+    windows_notification_delivery_check()?;
 
     let title = "Ceiling notifications are on";
     let body = "This is a test. Unexpected resets and usage alerts will look like this.";
@@ -810,6 +816,45 @@ pub fn send_test_notification() -> Result<(), String> {
     } else {
         Err(detail.to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_notification_delivery_check() -> Result<(), String> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(key) =
+        hkcu.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications")
+        && key.get_value::<u32, _>("ToastEnabled").ok() == Some(0)
+    {
+        return Err(
+            "Windows notifications are turned off. Turn them on in Settings > System > Notifications."
+                .to_string(),
+        );
+    }
+
+    if let Ok(key) = hkcu
+        .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Ceiling")
+    {
+        let disabled = notification_channel_is_disabled(key.get_value::<u32, _>("Enabled").ok());
+        if disabled {
+            return Err(
+                "Windows notifications are turned off for Ceiling. Enable Ceiling in Settings > System > Notifications."
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn notification_channel_is_disabled(enabled: Option<u32>) -> bool {
+    // `ShowInActionCenter=0` only disables notification-center history. Windows
+    // may leave it behind after the user re-enables the app channel, while
+    // banners are deliverable again. Only the explicit app toggle blocks us.
+    enabled == Some(0)
 }
 
 /// Non-Windows fallback for the test-notification button.
@@ -880,6 +925,14 @@ mod tests {
             eta_seconds,
             will_last_to_reset,
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn notification_channel_only_blocks_explicit_disable_flags() {
+        assert!(!notification_channel_is_disabled(None));
+        assert!(!notification_channel_is_disabled(Some(1)));
+        assert!(notification_channel_is_disabled(Some(0)));
     }
 
     fn window(now: DateTime<Utc>, offset: Duration, minutes: u32) -> RateWindow {
