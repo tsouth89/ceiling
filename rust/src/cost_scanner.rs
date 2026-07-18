@@ -101,6 +101,31 @@ fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel.is_some_and(|flag| flag.load(Ordering::Relaxed))
 }
 
+/// Record a Codex rollout by file name and report whether it is new. The same
+/// rollout can live in `sessions/`, `archived_sessions/`, and across homes/WSL
+/// roots; deduping by name (not full path) counts it once. An unnamed path is
+/// always parsed rather than silently dropped.
+fn mark_unseen_rollout(path: &Path, seen: &mut HashSet<String>) -> bool {
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some(name) => seen.insert(name.to_string()),
+        None => true,
+    }
+}
+
+/// Cheap date gate for the flat archived dir: files are `rollout-YYYY-MM-DD…`.
+/// An unrecognized name falls through to the parser's own timestamp filter.
+fn archived_rollout_day_in_range(name: &str, range: &CostUsageDayRange) -> bool {
+    match name
+        .strip_prefix("rollout-")
+        .and_then(|rest| rest.get(0..10))
+    {
+        Some(day) if day.len() == 10 && day.as_bytes()[4] == b'-' && day.as_bytes()[7] == b'-' => {
+            CostUsageDayRange::is_in_range(day, &range.scan_since_key, &range.scan_until_key)
+        }
+        _ => true,
+    }
+}
+
 /// Fallback Claude model used when a scanned model isn't in the canonical
 /// pricing table (unknown or retired IDs). Prices as Sonnet 4.6.
 const FALLBACK_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
@@ -296,12 +321,36 @@ impl CostScanner {
         summary.period_start = Some(start_date);
         summary.period_end = Some(today);
 
+        // One rollout can appear in the date-nested `sessions/` tree, the flat
+        // `archived_sessions/` dir, and across multiple homes/WSL roots. Dedup
+        // by rollout file name so it is counted exactly once.
+        let mut seen = HashSet::new();
         for sessions_dir in self.get_codex_sessions_dirs() {
             if is_cancelled(cancel) {
                 break;
             }
             if sessions_dir.exists() {
-                self.scan_codex_sessions_dir(&sessions_dir, &range, &mut summary, cancel);
+                self.scan_codex_sessions_dir(
+                    &sessions_dir,
+                    &range,
+                    &mut summary,
+                    &mut seen,
+                    cancel,
+                );
+            }
+        }
+        for archived_dir in self.get_codex_archived_dirs() {
+            if is_cancelled(cancel) {
+                break;
+            }
+            if archived_dir.exists() {
+                self.scan_codex_archived_dir(
+                    &archived_dir,
+                    &range,
+                    &mut summary,
+                    &mut seen,
+                    cancel,
+                );
             }
         }
 
@@ -361,11 +410,21 @@ impl CostScanner {
         )
     }
 
+    /// The `archived_sessions` dir that sits beside each `sessions` candidate.
+    /// Codex moves older rollouts here, so skipping it under-counts history.
+    fn get_codex_archived_dirs(&self) -> Vec<PathBuf> {
+        self.get_codex_sessions_dirs()
+            .iter()
+            .filter_map(|dir| dir.parent().map(|parent| parent.join("archived_sessions")))
+            .collect()
+    }
+
     fn scan_codex_sessions_dir(
         &self,
         sessions_dir: &Path,
         range: &CostUsageDayRange,
         summary: &mut CostSummary,
+        seen: &mut HashSet<String>,
         cancel: Option<&AtomicBool>,
     ) {
         // Iterate through the date-based directory structure with one day of
@@ -390,11 +449,47 @@ impl CostScanner {
                         break;
                     }
                     let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "jsonl") {
+                    if path.extension().is_some_and(|e| e == "jsonl")
+                        && mark_unseen_rollout(&path, seen)
+                    {
                         self.parse_codex_file(&path, summary, cancel);
                     }
                 }
             }
+        }
+    }
+
+    /// Scan the flat `archived_sessions` dir. Files are `rollout-<date>-<id>.jsonl`;
+    /// the date prefix keeps us from parsing rollouts far outside the window.
+    fn scan_codex_archived_dir(
+        &self,
+        archived_dir: &Path,
+        range: &CostUsageDayRange,
+        summary: &mut CostSummary,
+        seen: &mut HashSet<String>,
+        cancel: Option<&AtomicBool>,
+    ) {
+        let Ok(entries) = fs::read_dir(archived_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if is_cancelled(cancel) {
+                break;
+            }
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "jsonl") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !archived_rollout_day_in_range(name, range) {
+                continue;
+            }
+            if !mark_unseen_rollout(&path, seen) {
+                continue;
+            }
+            self.parse_codex_file(&path, summary, cancel);
         }
     }
 
@@ -1157,6 +1252,88 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn archived_rollout_day_in_range_gates_by_filename_date() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 10).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
+        );
+        assert!(archived_rollout_day_in_range(
+            "rollout-2026-05-15T10-00-00-abc.jsonl",
+            &range
+        ));
+        // Outside the padded window.
+        assert!(!archived_rollout_day_in_range(
+            "rollout-2026-04-01T10-00-00-abc.jsonl",
+            &range
+        ));
+        // Unrecognized names fall through to the parser's own timestamp filter.
+        assert!(archived_rollout_day_in_range("weird-name.jsonl", &range));
+    }
+
+    #[test]
+    fn mark_unseen_rollout_dedups_by_file_name_not_path() {
+        let mut seen = HashSet::new();
+        assert!(mark_unseen_rollout(
+            Path::new("/a/sessions/2026/05/15/rollout-x.jsonl"),
+            &mut seen
+        ));
+        // Same rollout name in a different directory is a duplicate.
+        assert!(!mark_unseen_rollout(
+            Path::new("/a/archived_sessions/rollout-x.jsonl"),
+            &mut seen
+        ));
+        assert!(mark_unseen_rollout(
+            Path::new("/a/archived_sessions/rollout-y.jsonl"),
+            &mut seen
+        ));
+    }
+
+    #[test]
+    fn codex_scan_dedups_same_rollout_across_sessions_and_archived() {
+        let today = Local::now().date_naive();
+        let day = today.format("%Y-%m-%d").to_string();
+        let ts = format!("{day}T10:00:00.000Z");
+        let token_line = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":500}}}}}}}}"#
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let day_dir = tmp
+            .path()
+            .join("sessions")
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let archived = tmp.path().join("archived_sessions");
+        std::fs::create_dir_all(&archived).unwrap();
+
+        let shared = format!("rollout-{day}-11111111-1111-1111-1111-111111111111.jsonl");
+        let unique = format!("rollout-{day}-22222222-2222-2222-2222-222222222222.jsonl");
+        // The same rollout lives in both the nested and archived trees.
+        std::fs::write(day_dir.join(&shared), &token_line).unwrap();
+        std::fs::write(archived.join(&shared), &token_line).unwrap();
+        // A second rollout only in archived/.
+        std::fs::write(archived.join(&unique), &token_line).unwrap();
+
+        let scanner = CostScanner::new(2);
+        let range = CostUsageDayRange::new(today - Duration::days(1), today);
+        let mut summary = CostSummary::default();
+        let mut seen = HashSet::new();
+        scanner.scan_codex_sessions_dir(
+            &tmp.path().join("sessions"),
+            &range,
+            &mut summary,
+            &mut seen,
+            None,
+        );
+        scanner.scan_codex_archived_dir(&archived, &range, &mut summary, &mut seen, None);
+
+        // The shared rollout is counted once, plus the unique one: two sessions.
+        assert_eq!(summary.sessions_count, 2);
+    }
 
     #[test]
     fn claude_line_prefilter_accepts_usage_events_and_rejects_other_payloads() {
