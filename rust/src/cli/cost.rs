@@ -167,18 +167,26 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
                 }
             }
 
-            if !result.summary.by_effort.is_empty() {
+            // Render every effort tier that has tokens, including unpriced
+            // usage (present in by_effort_tokens but not by_effort). Cost
+            // defaults to $0.00, matching the JSON contract.
+            if !result.summary.by_effort_tokens.is_empty() {
                 println!("  Codex effort:");
-                let mut efforts: Vec<_> = result.summary.by_effort.iter().collect();
-                efforts.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
-                for (bucket, cost) in efforts {
-                    let tokens = result
-                        .summary
-                        .by_effort_tokens
-                        .get(bucket)
-                        .map(|counts| format_number(counts.total()))
-                        .unwrap_or_else(|| "0".to_string());
-                    println!("    {}: ${:.2} ({} tokens)", bucket, cost, tokens);
+                let cost_of =
+                    |bucket: &str| result.summary.by_effort.get(bucket).copied().unwrap_or(0.0);
+                let mut efforts: Vec<_> = result.summary.by_effort_tokens.iter().collect();
+                efforts.sort_by(|(a, _), (b, _)| {
+                    cost_of(b)
+                        .partial_cmp(&cost_of(a))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for (bucket, counts) in efforts {
+                    println!(
+                        "    {}: ${:.2} ({} tokens)",
+                        bucket,
+                        cost_of(bucket),
+                        format_number(counts.total())
+                    );
                 }
             }
         }

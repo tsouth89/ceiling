@@ -280,9 +280,12 @@ impl CodexParserState {
                 if let Some(model) = model.filter(|model| !model.is_empty()) {
                     self.current_model = Some(model.to_string());
                 }
-                if let Some(effort) = effort.filter(|effort| !effort.is_empty()) {
-                    self.current_effort = Some(effort.to_string());
-                }
+                // Effort is a per-turn setting: reset it for every turn_context
+                // so a turn that omits it (or leaves it blank) becomes
+                // "unknown" rather than inheriting the previous turn's tier.
+                self.current_effort = effort
+                    .filter(|effort| !effort.trim().is_empty())
+                    .map(|effort| effort.to_string());
             }
             CodexFastEvent::TokenCount { timestamp, payload } => {
                 self.record_fast_token_count(payload, timestamp, range);
@@ -303,14 +306,15 @@ impl CodexParserState {
         {
             self.current_model = Some(model.to_string());
         }
-        if let Some(effort) = obj
+        // Effort is a per-turn setting: reset it for every turn_context so a
+        // turn that omits it (or leaves it blank) becomes "unknown" rather
+        // than inheriting the previous turn's tier.
+        self.current_effort = obj
             .get("effort")
             .or_else(|| obj.get("payload").and_then(|payload| payload.get("effort")))
             .and_then(|v| v.as_str())
-            .filter(|effort| !effort.is_empty())
-        {
-            self.current_effort = Some(effort.to_string());
-        }
+            .filter(|effort| !effort.trim().is_empty())
+            .map(|effort| effort.to_string());
     }
 
     fn record_token_count(&mut self, obj: &Value, range: &CostUsageDayRange) {
@@ -1005,13 +1009,51 @@ mod tests {
             r#"{"timestamp":"2026-05-31T10:05:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1500,"cached_input_tokens":0,"output_tokens":90}}}}"#,
             &range,
         );
+        // A turn that omits effort must NOT inherit "xhigh" — it resets to None.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:10:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:10:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1600,"cached_input_tokens":0,"output_tokens":95}}}}"#,
+            &range,
+        );
+        // A whitespace-only effort is treated the same as missing.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:15:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"  "}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:15:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1700,"cached_input_tokens":0,"output_tokens":99}}}}"#,
+            &range,
+        );
 
         let efforts: Vec<_> = parser
             .records
             .iter()
             .map(|record| record.effort.as_deref())
             .collect();
-        assert_eq!(efforts, vec![Some("high"), Some("xhigh")]);
+        assert_eq!(efforts, vec![Some("high"), Some("xhigh"), None, None]);
+    }
+
+    #[test]
+    fn update_current_model_resets_effort_each_turn_on_json_path() {
+        // The serde_json fallback path must also reset effort per turn_context.
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        parser.update_current_model(
+            &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"high"}}),
+        );
+        assert_eq!(parser.current_effort.as_deref(), Some("high"));
+        // A turn without effort clears the prior tier instead of inheriting it.
+        parser.update_current_model(
+            &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}),
+        );
+        assert_eq!(parser.current_effort, None);
+        // Whitespace-only effort is treated as missing.
+        parser.update_current_model(
+            &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"  "}}),
+        );
+        assert_eq!(parser.current_effort, None);
     }
 
     #[test]
