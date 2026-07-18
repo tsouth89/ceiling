@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -36,9 +37,11 @@ import {
   capacityFreshness,
   constrainingWindow,
   activePromoBoosts,
+  calmPresentation,
   type CapacityFreshness,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
+import type { FloatBarInformationMode } from "../types/bridge";
 import "./FloatBar.css";
 
 function ResetIcon({ size }: { size: number }) {
@@ -117,6 +120,9 @@ function ProviderPill({
   usedSuffix,
   remainingSuffix,
   capacityEventKind,
+  informationMode,
+  expanded,
+  onToggleExpand,
 }: {
   provider: ProviderUsageSnapshot;
   highRemaining: number;
@@ -128,6 +134,9 @@ function ProviderPill({
   usedSuffix: string;
   remainingSuffix: string;
   capacityEventKind?: CapacityEventPayload["kind"];
+  informationMode: FloatBarInformationMode;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   // Keep the number, label, and tone tied to the same displayed window.
   const hero = floatBarWindow(provider);
@@ -171,17 +180,75 @@ function ProviderPill({
     .filter(Boolean)
     .join("\n");
 
+  const pillClass = [
+    "floatbar__pill",
+    `floatbar__pill--${tone}`,
+    freshness !== "live" ? `floatbar__pill--${freshness}` : null,
+    capacityEventKind ? "floatbar__pill--capacity-event" : null,
+    capacityEventKind ? `floatbar__pill--${capacityEventKind}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  // Calm mode: lead with a trustworthy pace state and the next reset; exact %
+  // stays one keyboard/click away. The pill becomes an expandable button, so it
+  // opts out of the native drag region (drag the bar by its handle instead).
+  if (informationMode === "calm") {
+    const calm = calmPresentation(provider, hero);
+    const showExact = calm.showExactFallback || expanded;
+    const onKeyToggle = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onToggleExpand();
+      }
+    };
+    return (
+      <div
+        className={`${pillClass} floatbar__pill--calm${expanded ? " floatbar__pill--expanded" : ""}`}
+        title={titleBits}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={titleBits}
+        onClick={onToggleExpand}
+        onKeyDown={onKeyToggle}
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{ "--brand": brand } as CSSProperties}
+      >
+        <span className="floatbar__provider-icon">
+          <ProviderIcon providerId={provider.providerId} size={iconSize} />
+        </span>
+        <span className="floatbar__text">
+          {calm.pace ? (
+            <span className={`floatbar__pace floatbar__pace--${calm.pace.tone}`}>
+              {calm.pace.label}
+            </span>
+          ) : null}
+          {calm.hasReset ? (
+            <span className="floatbar__calm-reset">
+              <span className="floatbar__window">{hero.label}</span>
+              {inlineReset ? (
+                <>
+                  <span className="floatbar__calm-sep" aria-hidden>
+                    ·
+                  </span>
+                  <ResetIcon size={resetIconSize} />
+                  <span className="floatbar__reset-time">{inlineReset}</span>
+                </>
+              ) : null}
+            </span>
+          ) : null}
+          {showExact ? (
+            <span className="floatbar__pct floatbar__pct--calm">{label}</span>
+          ) : null}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div
-      className={[
-        "floatbar__pill",
-        `floatbar__pill--${tone}`,
-        freshness !== "live" ? `floatbar__pill--${freshness}` : null,
-        capacityEventKind ? "floatbar__pill--capacity-event" : null,
-        capacityEventKind ? `floatbar__pill--${capacityEventKind}` : null,
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      className={pillClass}
       title={titleBits}
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
@@ -277,6 +344,16 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuOpenRef = useRef(menuOpen);
   menuOpenRef.current = menuOpen;
+  // Calm-mode pills the user has expanded to reveal the exact percentage.
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   const startDrag = useCallback((event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0 || lockedRef.current || menuOpenRef.current) return;
@@ -405,6 +482,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     ? settings.floatBarDensity
     : "standard";
   const contrast = settings.floatBarContrast ?? "light-text";
+  const informationMode: FloatBarInformationMode =
+    settings.floatBarInformationMode === "calm" ? "calm" : "exact";
   const darkText =
     contrast === "dark-text" || (contrast === "auto" && systemPrefersLight);
   const filterIds = settings.floatBarProviderIds;
@@ -459,6 +538,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     scale,
     showResetInline,
     settings.resetTimeRelative,
+    informationMode,
+    expandedKeys,
     menuOpen,
   ]);
 
@@ -503,7 +584,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
 
   return (
     <div
-      className={`floatbar floatbar--${orientation} floatbar--${style} floatbar--density-${density}${darkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}${menuOpen ? " floatbar--menu-open" : ""}`}
+      className={`floatbar floatbar--${orientation} floatbar--${style} floatbar--density-${density} floatbar--mode-${informationMode}${darkText ? " floatbar--light-bg" : ""}${locked ? " floatbar--locked" : ""}${menuOpen ? " floatbar--menu-open" : ""}`}
       data-tauri-drag-region
       onMouseDown={startDrag}
       style={
@@ -566,6 +647,9 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               usedSuffix={t("PanelUsedSuffix")}
               remainingSuffix={t("FloatBarRemainingSuffix")}
               capacityEventKind={capacityEvents[p.providerId]}
+              informationMode={informationMode}
+              expanded={expandedKeys.has(providerKey(p))}
+              onToggleExpand={() => toggleExpanded(providerKey(p))}
             />
           ))}
         </div>

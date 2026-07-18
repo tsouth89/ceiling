@@ -63,6 +63,7 @@ const settings: SettingsSnapshot = {
   floatBarStyle: "floating",
   taskbarWidgetOpenOnHover: true,
   floatBarDensity: "standard",
+  floatBarInformationMode: "exact",
   floatBarContrast: "auto",
   floatBarClickThrough: false,
   floatBarProviderIds: [],
