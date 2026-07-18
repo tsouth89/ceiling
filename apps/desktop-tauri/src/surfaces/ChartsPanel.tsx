@@ -5,6 +5,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
 import ProviderComparison from "./ProviderComparison";
+import { TotalApiValueCard } from "../components/TotalApiValueCard";
 
 const COMPARE_ID = "compare";
 
@@ -54,11 +55,16 @@ export default function ChartsPanel({
   }, [supported, comparisonProviders]);
 
   if (supported.length === 0) {
+    // The API-value card loads its own local totals, so keep it visible even
+    // when no provider reports chart-series data (or a snapshot errored).
     return (
-      <div className="charts-empty">
-        <strong>No charts yet</strong>
-        Limits and local usage history shows up here for providers that report it —
-        Codex, Claude, and OpenAI.
+      <div className="charts-panel">
+        <TotalApiValueCard />
+        <div className="charts-empty">
+          <strong>No charts yet</strong>
+          Limits and local usage history shows up here for providers that report it —
+          Codex, Claude, and OpenAI.
+        </div>
       </div>
     );
   }
@@ -69,6 +75,7 @@ export default function ChartsPanel({
 
   return (
     <div className="charts-panel">
+      <TotalApiValueCard />
       {tabCount > 1 && (
         <div className="charts-provider-tabs" role="tablist" aria-label="Provider">
           {comparisonProviders && (
