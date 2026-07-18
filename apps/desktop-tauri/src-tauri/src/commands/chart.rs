@@ -1373,11 +1373,13 @@ mod tests {
 
     #[test]
     fn api_value_period_reports_partial_pricing_coverage() {
-        let mut summary = CostSummary::default();
-        summary.total_cost_usd = 5.0;
-        summary.sessions_count = 2;
-        summary.input_tokens = 400;
-        summary.output_tokens = 100;
+        let mut summary = CostSummary {
+            total_cost_usd: 5.0,
+            sessions_count: 2,
+            input_tokens: 400,
+            output_tokens: 100,
+            ..Default::default()
+        };
         // One priced model (400 tokens) and one unpriced (100 tokens).
         summary.by_model.insert("gpt-5.6-sol".to_string(), 5.0);
         summary.by_model_tokens.insert(
@@ -1419,10 +1421,12 @@ mod tests {
 
     #[test]
     fn api_value_period_fully_priced_has_full_coverage() {
-        let mut summary = CostSummary::default();
-        summary.total_cost_usd = 3.0;
-        summary.input_tokens = 200;
-        summary.output_tokens = 50;
+        let mut summary = CostSummary {
+            total_cost_usd: 3.0,
+            input_tokens: 200,
+            output_tokens: 50,
+            ..Default::default()
+        };
         summary.by_model.insert("gpt-5.6-sol".to_string(), 3.0);
         summary.by_model_tokens.insert(
             "gpt-5.6-sol".to_string(),
