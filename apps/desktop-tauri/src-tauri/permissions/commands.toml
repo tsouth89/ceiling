@@ -52,6 +52,7 @@ commands.allow = [
   "get_app_info",
   "get_provider_chart_data",
   "get_provider_local_usage_summary",
+  "get_local_api_value_totals",
   "reorder_providers",
   "set_provider_cookie_source",
   "get_provider_cookie_source",

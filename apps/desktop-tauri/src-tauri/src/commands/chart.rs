@@ -5,7 +5,7 @@
 //! the Codex / OpenAI dashboard cache and require an `account_email` to scope
 //! reads to the right cached bundle.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, LocalResult, NaiveDate, TimeZone, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow,
@@ -198,6 +198,35 @@ pub struct LocalEffortCost {
     pub effort: String,
     pub cost: Option<f64>,
     pub tokens: u64,
+}
+
+/// One provider's local usage for a single period, for the aggregate
+/// API-value card. Dollars are token-derived "estimated API value", never a
+/// bill; unpriced models contribute tokens but no dollars.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalApiValuePeriod {
+    /// Estimated API value in USD (priced models only).
+    pub api_value_usd: f64,
+    /// Processed tokens (fresh input + output + cache read/write).
+    pub tokens: u64,
+    /// Model tokens (input + output) that have a canonical price.
+    pub priced_tokens: u64,
+    /// All model tokens (priced + unpriced) — the pricing-coverage denominator.
+    pub total_tokens: u64,
+    /// Whether the provider had any source data in this period. A provider with
+    /// no data is omitted from the card rather than counted as zero.
+    pub has_data: bool,
+}
+
+/// One provider's local usage across the card's three periods.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalApiValueProvider {
+    pub provider_id: String,
+    pub today: LocalApiValuePeriod,
+    pub yesterday: LocalApiValuePeriod,
+    pub thirty_days: LocalApiValuePeriod,
 }
 
 /// Full chart data bundle for one provider.
@@ -401,6 +430,115 @@ fn persist_chart_cache(cache: &PersistedChartCache) {
         }
         Err(error) => tracing::warn!("failed to serialize chart cache: {error}"),
     }
+}
+
+/// Providers that expose token-derived local usage for the aggregate card.
+/// Inclusion is by capability, not by merely having some other dollar balance.
+const API_VALUE_PROVIDERS: [&str; 2] = ["codex", "claude"];
+
+/// Aggregate one period's usage for one provider into the card shape.
+fn api_value_period(provider_id: &str, summary: &CostSummary) -> LocalApiValuePeriod {
+    let processed = token_breakdown(provider_id, summary).processed_tokens;
+    let total_tokens: u64 = summary
+        .by_model_tokens
+        .values()
+        .map(|counts| counts.total())
+        .sum();
+    // Unpriced models are exactly those the scanner flagged as unknown; their
+    // tokens still count toward the total but not toward priced coverage.
+    let unpriced_tokens: u64 = summary
+        .unknown_models
+        .iter()
+        .filter_map(|model| summary.by_model_tokens.get(model))
+        .map(|counts| counts.total())
+        .sum();
+    let priced_tokens = total_tokens.saturating_sub(unpriced_tokens);
+    let has_data = summary.sessions_count > 0
+        || total_tokens > 0
+        || processed > 0
+        || summary.total_cost_usd > 0.0;
+    LocalApiValuePeriod {
+        api_value_usd: summary.total_cost_usd,
+        tokens: processed,
+        priced_tokens,
+        total_tokens,
+        has_data,
+    }
+}
+
+/// Local-calendar midnight for `date`, as a UTC instant.
+fn local_midnight_utc(date: NaiveDate) -> DateTime<Utc> {
+    local_midnight_in_tz(&Local, date)
+}
+
+/// Resolve local midnight of `date` in `tz` to a UTC instant. DST-safe: a
+/// fall-back (ambiguous) midnight picks the earliest instant; a spring-forward
+/// (skipped) midnight advances minute by minute to the first local time that
+/// actually exists, so it never mis-interprets the naive time as UTC.
+fn local_midnight_in_tz<Tz: TimeZone>(tz: &Tz, date: NaiveDate) -> DateTime<Utc> {
+    let mut naive = date.and_hms_opt(0, 0, 0).expect("valid midnight");
+    // A DST gap is at most a couple of hours; bound the walk so a pathological
+    // zone can't loop forever.
+    for _ in 0..=180 {
+        match tz.from_local_datetime(&naive) {
+            LocalResult::Single(dt) => return dt.with_timezone(&Utc),
+            LocalResult::Ambiguous(earliest, _) => return earliest.with_timezone(&Utc),
+            LocalResult::None => naive += chrono::Duration::minutes(1),
+        }
+    }
+    // Unreachable for real zones (gaps never exceed a few hours).
+    Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("valid midnight"))
+}
+
+/// The user's local "yesterday" as a `[start, end)` UTC window: yesterday's
+/// local midnight up to today's local midnight.
+fn local_yesterday_window_utc(now: DateTime<Local>) -> (DateTime<Utc>, DateTime<Utc>) {
+    let today = now.date_naive();
+    let yesterday = today - chrono::Duration::days(1);
+    (local_midnight_utc(yesterday), local_midnight_utc(today))
+}
+
+#[tauri::command]
+pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, String> {
+    // A worker panic/cancel must surface as an error, not an empty result —
+    // "unavailable" and "genuinely no data" are distinct on this card.
+    tauri::async_runtime::spawn_blocking(|| load_local_api_value_totals(Local::now()))
+        .await
+        .map_err(|err| {
+            tracing::warn!("Local API-value totals worker failed: {}", err);
+            "Unable to load local API-value totals.".to_string()
+        })
+}
+
+fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvider> {
+    let (start, end) = local_yesterday_window_utc(now);
+    API_VALUE_PROVIDERS
+        .iter()
+        .filter_map(|provider_id| {
+            let windows = vec![CurrentUsageWindow {
+                id: "yesterday".to_string(),
+                starts_at: start,
+                ends_at: end,
+            }];
+            let report = get_cost_usage_report_with_windows(provider_id, 30, &windows)?;
+            let yesterday = report
+                .current_windows
+                .get("yesterday")
+                .cloned()
+                .unwrap_or_default();
+            let provider = LocalApiValueProvider {
+                provider_id: provider_id.to_string(),
+                today: api_value_period(provider_id, &report.today),
+                yesterday: api_value_period(provider_id, &yesterday),
+                thirty_days: api_value_period(provider_id, &report.thirty_days),
+            };
+            // Omit providers with no source data in any period.
+            (provider.today.has_data
+                || provider.yesterday.has_data
+                || provider.thirty_days.has_data)
+                .then_some(provider)
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -1031,12 +1169,13 @@ fn load_openai_dashboard_chart_data(
 mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalTokenBreakdown,
-        ProviderLocalUsageSummary, comparison_period_specs, cost_fetch_failure_allows_early_retry,
-        effort_breakdown, local_usage_summary_from_report, localized_estimate_note,
+        ProviderLocalUsageSummary, api_value_period, comparison_period_specs,
+        cost_fetch_failure_allows_early_retry, effort_breakdown, local_midnight_in_tz,
+        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
         model_breakdown, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
-    use chrono::Utc;
+    use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
     use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
     use codexbar::settings::Language;
     use std::time::{Duration, Instant};
@@ -1240,6 +1379,140 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn api_value_period_reports_partial_pricing_coverage() {
+        let mut summary = CostSummary {
+            total_cost_usd: 5.0,
+            sessions_count: 2,
+            input_tokens: 400,
+            output_tokens: 100,
+            ..Default::default()
+        };
+        // One priced model (400 tokens) and one unpriced (100 tokens).
+        summary.by_model.insert("gpt-5.6-sol".to_string(), 5.0);
+        summary.by_model_tokens.insert(
+            "gpt-5.6-sol".to_string(),
+            ModelTokenCounts {
+                input_tokens: 300,
+                output_tokens: 100,
+                cached_tokens: 0,
+            },
+        );
+        summary.by_model_tokens.insert(
+            "gpt-mystery".to_string(),
+            ModelTokenCounts {
+                input_tokens: 100,
+                output_tokens: 0,
+                cached_tokens: 0,
+            },
+        );
+        summary.unknown_models.insert("gpt-mystery".to_string());
+
+        let period = api_value_period("codex", &summary);
+
+        assert_eq!(period.api_value_usd, 5.0);
+        assert_eq!(period.tokens, 500); // processed = fresh input + output
+        assert_eq!(period.total_tokens, 500); // model tokens: 400 priced + 100 unpriced
+        assert_eq!(period.priced_tokens, 400);
+        assert!(period.has_data);
+    }
+
+    #[test]
+    fn api_value_period_empty_summary_has_no_data() {
+        let period = api_value_period("codex", &CostSummary::default());
+        assert_eq!(period.api_value_usd, 0.0);
+        assert_eq!(period.tokens, 0);
+        assert_eq!(period.total_tokens, 0);
+        assert_eq!(period.priced_tokens, 0);
+        assert!(!period.has_data);
+    }
+
+    #[test]
+    fn api_value_period_fully_priced_has_full_coverage() {
+        let mut summary = CostSummary {
+            total_cost_usd: 3.0,
+            input_tokens: 200,
+            output_tokens: 50,
+            ..Default::default()
+        };
+        summary.by_model.insert("gpt-5.6-sol".to_string(), 3.0);
+        summary.by_model_tokens.insert(
+            "gpt-5.6-sol".to_string(),
+            ModelTokenCounts {
+                input_tokens: 200,
+                output_tokens: 50,
+                cached_tokens: 0,
+            },
+        );
+
+        let period = api_value_period("codex", &summary);
+
+        // No unknown models: every token is priced.
+        assert_eq!(period.priced_tokens, period.total_tokens);
+        assert_eq!(period.total_tokens, 250);
+        assert!(period.has_data);
+    }
+
+    #[test]
+    fn local_yesterday_window_spans_one_local_day() {
+        let (start, end) = local_yesterday_window_utc(Local::now());
+        assert!(start < end);
+        // A local calendar day is 24h, or 23h/25h across a DST transition.
+        let hours = (end - start).num_hours();
+        assert!((23..=25).contains(&hours), "unexpected span: {hours}h");
+    }
+
+    #[test]
+    fn local_midnight_resolves_dst_gap_and_overlap() {
+        // Several zones move their clocks at/around local midnight, so both a
+        // skipped ("None") and an ambiguous ("Ambiguous") midnight exist. Find
+        // real ones near the present rather than hard-coding transition dates.
+        use chrono_tz::Tz;
+        let zones: [Tz; 4] = [
+            chrono_tz::America::Santiago,
+            chrono_tz::America::Asuncion,
+            chrono_tz::America::Havana,
+            chrono_tz::Asia::Beirut,
+        ];
+        let find = |want_gap: bool| -> Option<(Tz, NaiveDate)> {
+            for tz in zones {
+                let mut date = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+                let last = NaiveDate::from_ymd_opt(2027, 12, 31).unwrap();
+                while date <= last {
+                    let naive = date.and_hms_opt(0, 0, 0).unwrap();
+                    match tz.from_local_datetime(&naive) {
+                        LocalResult::None if want_gap => return Some((tz, date)),
+                        LocalResult::Ambiguous(..) if !want_gap => return Some((tz, date)),
+                        _ => {}
+                    }
+                    date += chrono::Duration::days(1);
+                }
+            }
+            None
+        };
+
+        let (gap_tz, gap) = find(true).expect("a skipped midnight exists in some zone");
+        // Skipped midnight resolves to the first local instant that exists,
+        // never the naive-as-UTC fallback.
+        let resolved = local_midnight_in_tz(&gap_tz, gap).with_timezone(&gap_tz);
+        assert_eq!(resolved.date_naive(), gap);
+        assert!(resolved.time() > NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        assert!(matches!(
+            gap_tz.from_local_datetime(&resolved.naive_local()),
+            LocalResult::Single(_)
+        ));
+
+        let (ov_tz, overlap) = find(false).expect("an ambiguous midnight exists in some zone");
+        // Ambiguous midnight picks the earliest of the two valid instants.
+        let naive = overlap.and_hms_opt(0, 0, 0).unwrap();
+        if let LocalResult::Ambiguous(earliest, _) = ov_tz.from_local_datetime(&naive) {
+            assert_eq!(
+                local_midnight_in_tz(&ov_tz, overlap),
+                earliest.with_timezone(&Utc)
+            );
+        }
     }
 
     #[test]

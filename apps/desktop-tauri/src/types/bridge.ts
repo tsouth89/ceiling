@@ -641,6 +641,26 @@ export interface LocalEffortCost {
   tokens: number;
 }
 
+export interface LocalApiValuePeriod {
+  /** Estimated API value in USD (priced models only) - never a bill. */
+  apiValueUsd: number;
+  /** Processed tokens (fresh input + output + cache read/write). */
+  tokens: number;
+  /** Model tokens (input + output) with a canonical price. */
+  pricedTokens: number;
+  /** All model tokens (priced + unpriced) - the pricing-coverage denominator. */
+  totalTokens: number;
+  /** Whether the provider had any source data this period. */
+  hasData: boolean;
+}
+
+export interface LocalApiValueProvider {
+  providerId: string;
+  today: LocalApiValuePeriod;
+  yesterday: LocalApiValuePeriod;
+  thirtyDays: LocalApiValuePeriod;
+}
+
 export interface LocalUsageWindowRequest {
   id: string;
   label: string;

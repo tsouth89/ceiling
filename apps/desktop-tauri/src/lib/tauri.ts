@@ -16,6 +16,7 @@ import type {
   ProviderChartData,
   ProviderDetail,
   ProviderLocalUsageSummary,
+  LocalApiValueProvider,
   ProviderSummary,
   ProviderUsageSnapshot,
   ProviderTokenAccountsBridge,
@@ -262,6 +263,10 @@ export function getProviderLocalUsageSummary(
   providerId: string,
 ): Promise<ProviderLocalUsageSummary | null> {
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
+}
+
+export function getLocalApiValueTotals(): Promise<LocalApiValueProvider[]> {
+  return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
 }
 
 // ── Token account bridge ─────────────────────────────────────────────

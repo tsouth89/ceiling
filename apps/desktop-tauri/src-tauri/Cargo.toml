@@ -26,3 +26,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Com",
     "Win32_UI_Accessibility",
 ] }
+
+[dev-dependencies]
+# Deterministic DST-transition tests for local-day window boundaries.
+chrono-tz = "0.10"

@@ -708,6 +708,7 @@ name = "codexbar-desktop-tauri"
 version = "1.0.0"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "codexbar",
  "raw-window-handle",
  "serde",
