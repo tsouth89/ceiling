@@ -658,57 +658,18 @@ impl NotificationManager {
     fn show_toast(&self, title: &str, body: &str) {
         use std::os::windows::process::CommandExt;
         use std::process::Command;
-        use std::sync::Once;
 
-        // Register our AUMID (App User Model ID) exactly once per process so that
-        // CreateToastNotifier("Ceiling") finds a valid registration rather than
-        // silently returning a null notifier.
-        static AUMID_INIT: Once = Once::new();
-        AUMID_INIT.call_once(ensure_aumid_registered);
+        ensure_aumid_registered_once();
 
-        // Escape for XML content to prevent injection
-        fn xml_escape(s: &str) -> String {
-            s.replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;")
-        }
-
-        let safe_title = xml_escape(title);
-        let safe_body = xml_escape(body);
-
-        // Uses ToastGeneric (Win 10+) and wraps in try/catch so PowerShell exits
-        // with code 1 on failure rather than swallowing the error silently.
-        // Single-quoted here-string (@'...'@) prevents variable expansion of the
-        // XML content by PowerShell.
-        let script = format!(
-            r#"try {{
-    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-    [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-    $template = @'
-<toast><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual></toast>
-'@
-    $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-    $xml.LoadXml($template)
-    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Ceiling")
-    if ($null -eq $notifier) {{ throw "CreateToastNotifier returned null" }}
-    $notifier.Show($toast)
-}} catch {{
-    [System.Console]::Error.WriteLine("Ceiling toast failed: $_")
-    exit 1
-}}"#,
-            safe_title, safe_body
-        );
-
+        // Fire-and-forget on the normal notification path: a provider refresh must
+        // never block on PowerShell. Failures are logged, not surfaced.
         match Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                &script,
+                &toast_powershell_script(title, body),
             ])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
@@ -758,6 +719,127 @@ fn format_duration(seconds: f64) -> String {
 impl Default for NotificationManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Escape a string for inclusion in the toast XML payload.
+#[cfg(target_os = "windows")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Build the PowerShell snippet that shows a single Ceiling toast. Uses
+/// ToastGeneric (Win 10+) and wraps the body in try/catch so PowerShell exits
+/// with code 1 on failure instead of swallowing the error. A single-quoted
+/// here-string (@'...'@) prevents PowerShell from expanding the XML content.
+#[cfg(target_os = "windows")]
+fn toast_powershell_script(title: &str, body: &str) -> String {
+    format!(
+        r#"try {{
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+    [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+    $template = @'
+<toast><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual></toast>
+'@
+    $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $xml.LoadXml($template)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Ceiling")
+    if ($null -eq $notifier) {{ throw "CreateToastNotifier returned null" }}
+    $notifier.Show($toast)
+}} catch {{
+    [System.Console]::Error.WriteLine("Ceiling toast failed: $_")
+    exit 1
+}}"#,
+        xml_escape(title),
+        xml_escape(body)
+    )
+}
+
+/// Register the AUMID at most once per process before showing a toast.
+#[cfg(target_os = "windows")]
+fn ensure_aumid_registered_once() {
+    use std::sync::Once;
+    static AUMID_INIT: Once = Once::new();
+    AUMID_INIT.call_once(ensure_aumid_registered);
+}
+
+/// Show a Ceiling toast synchronously and report whether the OS actually
+/// accepted it. Powers the Settings "Send test notification" button, so it
+/// deliberately bypasses the startup-baseline gate, the per-refresh limit, and
+/// the rolling cooldown: the user asked for it right now and needs to see the
+/// real Windows toast pipeline (AUMID registration + PowerShell + WinRT)
+/// succeed or fail end-to-end. Blocking is fine — this runs off a user click,
+/// never the refresh loop.
+#[cfg(target_os = "windows")]
+pub fn send_test_notification() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    ensure_aumid_registered_once();
+
+    let title = "Ceiling notifications are on";
+    let body = "This is a test. Unexpected resets and usage alerts will look like this.";
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &toast_powershell_script(title, body),
+        ])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .map_err(|e| format!("Could not launch the Windows notifier: {e}"))?;
+
+    if output.status.success() {
+        tracing::debug!("Test toast notification shown");
+        return Ok(());
+    }
+
+    let detail = String::from_utf8_lossy(&output.stderr);
+    let detail = detail.trim();
+    tracing::warn!("Test toast notification failed: {detail}");
+    if detail.is_empty() {
+        Err("Windows rejected the notification. Check notification settings.".to_string())
+    } else {
+        Err(detail.to_string())
+    }
+}
+
+/// Non-Windows fallback for the test-notification button.
+#[cfg(not(target_os = "windows"))]
+pub fn send_test_notification() -> Result<(), String> {
+    use std::process::Command;
+
+    let title = "Ceiling notifications are on";
+    let body = "This is a test. Unexpected resets and usage alerts will look like this.";
+
+    match Command::new("notify-send")
+        .args([
+            "--app-name=Ceiling",
+            "--icon=dialog-information",
+            title,
+            body,
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            let detail = detail.trim();
+            if detail.is_empty() {
+                Err("The system notifier rejected the notification.".to_string())
+            } else {
+                Err(detail.to_string())
+            }
+        }
+        Err(e) => Err(format!("No system notifier available: {e}")),
     }
 }
 

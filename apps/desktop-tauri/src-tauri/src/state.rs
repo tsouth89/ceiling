@@ -137,6 +137,9 @@ pub struct AppState {
     pub notification_manager: codexbar::notifications::NotificationManager,
     /// Provider-authoritative reset observer persisted separately from settings.
     pub capacity_event_observer: crate::capacity_events::CapacityEventObserver,
+    /// Tracks which windows each provider scope is reporting so a window that
+    /// drops out of a successful response can be surfaced as `unavailable`.
+    pub enforcement_tracker: crate::enforcement::EnforcementTracker,
     /// Instant when the tray panel was last shown — used to suppress
     /// spurious blur-dismiss during the show animation on Windows.
     pub last_shown_at: Option<std::time::Instant>,
@@ -197,6 +200,7 @@ impl AppState {
             proof_config: None,
             notification_manager: codexbar::notifications::NotificationManager::new(),
             capacity_event_observer: crate::capacity_events::CapacityEventObserver::load_default(),
+            enforcement_tracker: crate::enforcement::EnforcementTracker::new(),
             last_shown_at: None,
             startup_tray_blur_grace_until: None,
             suppress_geometry_capture_until: None,

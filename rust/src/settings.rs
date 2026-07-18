@@ -245,6 +245,13 @@ pub struct Settings {
     #[serde(default = "default_float_bar_density")]
     pub float_bar_density: String,
 
+    /// Floating-bar information mode: "exact" (provider icon + exact percentage
+    /// and label) or "calm" (a trustworthy pace state plus the next reset, with
+    /// exact percentages on expand). Separate from density, which is geometry.
+    /// Exact is the migration default so existing bars are unchanged.
+    #[serde(default = "default_float_bar_information_mode")]
+    pub float_bar_information_mode: String,
+
     /// Floating-bar contrast mode. `None` means a pre-density settings file;
     /// resolve it through the legacy `float_bar_dark_text` preference so
     /// upgrades preserve their appearance. New installs default to auto.
@@ -310,6 +317,10 @@ fn default_float_bar_density() -> String {
     "standard".to_string()
 }
 
+fn default_float_bar_information_mode() -> String {
+    "exact".to_string()
+}
+
 /// Clamp the floating-bar opacity to the supported range.
 ///
 /// Opacity values below 30% would make the bar effectively invisible, so we
@@ -350,6 +361,15 @@ pub fn normalize_float_bar_density(value: &str) -> String {
         "compact" => "compact".to_string(),
         "detailed" => "detailed".to_string(),
         _ => "standard".to_string(),
+    }
+}
+
+/// Normalize a floating-bar information mode. Unknown or older values fall back
+/// to "exact" so an upgrade never silently switches a user into calm mode.
+pub fn normalize_float_bar_information_mode(value: &str) -> String {
+    match value {
+        "calm" => "calm".to_string(),
+        _ => "exact".to_string(),
     }
 }
 
@@ -497,6 +517,7 @@ impl Default for Settings {
             float_bar_style: "floating".to_string(),
             taskbar_widget_open_on_hover: true,
             float_bar_density: default_float_bar_density(),
+            float_bar_information_mode: default_float_bar_information_mode(),
             float_bar_contrast: Some("auto".to_string()),
             float_bar_click_through: false,
             float_bar_provider_ids: Vec::new(),

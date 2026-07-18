@@ -704,8 +704,11 @@ fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<DateTime<Utc>> {
 }
 
 fn with_reset_credits(mut usage: UsageSnapshot, reset_credits: &ResetCredits) -> UsageSnapshot {
-    usage.reset_credits_available =
-        (reset_credits.available_count > 0).then_some(reset_credits.available_count);
+    // Record the observed count even when it is zero. A successful fetch that
+    // reports no banked resets is a real, trustworthy reading, and surfaces show
+    // an explicit "0 resets" state so the feature stays discoverable. `None`
+    // remains reserved for "not fetched / unknown" (e.g. the sub-request failed).
+    usage.reset_credits_available = Some(reset_credits.available_count);
     usage
 }
 
@@ -933,6 +936,21 @@ mod tests {
             .expect("reset credits");
         assert_eq!(credits.available_count, 2);
         assert_eq!(credits.credits.len(), 1);
+    }
+
+    #[test]
+    fn zero_reset_credits_are_recorded_as_a_known_zero() {
+        // A successful fetch reporting no banked resets must surface as Some(0),
+        // not None, so the UI can show an explicit, discoverable "0 resets"
+        // state instead of hiding the feature entirely.
+        let usage = with_reset_credits(
+            UsageSnapshot::new(RateWindow::default()),
+            &ResetCredits {
+                credits: Vec::new(),
+                available_count: 0,
+            },
+        );
+        assert_eq!(usage.reset_credits_available, Some(0));
     }
 
     #[test]

@@ -134,6 +134,7 @@ fn float_bar_defaults_are_safe() {
     assert_eq!(settings.float_bar_style, "floating");
     assert!(settings.taskbar_widget_open_on_hover);
     assert_eq!(settings.float_bar_density, "standard");
+    assert_eq!(settings.float_bar_information_mode, "exact");
     assert_eq!(resolved_float_bar_contrast(&settings), "auto");
     assert!(!settings.float_bar_click_through);
     assert!(settings.float_bar_provider_ids.is_empty());
@@ -247,6 +248,13 @@ fn float_bar_density_and_contrast_normalization_reject_unknown_values() {
     assert_eq!(normalize_float_bar_density("detailed"), "detailed");
     assert_eq!(normalize_float_bar_density("dense"), "standard");
 
+    assert_eq!(normalize_float_bar_information_mode("exact"), "exact");
+    assert_eq!(normalize_float_bar_information_mode("calm"), "calm");
+    // Unknown/older values migrate to exact, never silently into calm.
+    assert_eq!(normalize_float_bar_information_mode(""), "exact");
+    assert_eq!(normalize_float_bar_information_mode("Calm"), "exact");
+    assert_eq!(normalize_float_bar_information_mode("minimal"), "exact");
+
     assert_eq!(normalize_float_bar_contrast("auto"), "auto");
     assert_eq!(normalize_float_bar_contrast("light-text"), "light-text");
     assert_eq!(normalize_float_bar_contrast("dark-text"), "dark-text");
@@ -281,6 +289,7 @@ fn float_bar_settings_round_trip_through_raw() {
         float_bar_style: "floating".to_string(),
         taskbar_widget_open_on_hover: false,
         float_bar_density: "compact".to_string(),
+        float_bar_information_mode: "calm".to_string(),
         float_bar_contrast: Some("dark-text".to_string()),
         float_bar_click_through: true,
         float_bar_provider_ids: vec!["claude".into(), "codex".into()],
@@ -301,6 +310,7 @@ fn float_bar_settings_round_trip_through_raw() {
     assert_eq!(back.float_bar_style, "floating");
     assert!(!back.taskbar_widget_open_on_hover);
     assert_eq!(back.float_bar_density, "compact");
+    assert_eq!(back.float_bar_information_mode, "calm");
     assert_eq!(resolved_float_bar_contrast(&back), "dark-text");
     assert!(back.float_bar_click_through);
     assert_eq!(back.float_bar_provider_ids, vec!["claude", "codex"]);

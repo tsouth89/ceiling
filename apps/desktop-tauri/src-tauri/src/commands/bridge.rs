@@ -75,6 +75,9 @@ pub struct InactiveRateWindowSnapshot {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// "notEnforced" (provider reported no active limit) or "unavailable" (the
+    /// window dropped out of an otherwise-successful response).
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -275,6 +278,7 @@ impl ProviderUsageSnapshot {
                     id: window.id.clone(),
                     title: window.title.clone(),
                     description: window.description.clone(),
+                    state: window.state.as_str().to_string(),
                 })
                 .collect(),
             promo_signals: usage
@@ -557,6 +561,7 @@ pub struct SettingsSnapshot {
     float_bar_style: String,
     taskbar_widget_open_on_hover: bool,
     float_bar_density: String,
+    float_bar_information_mode: String,
     float_bar_contrast: String,
     float_bar_click_through: bool,
     float_bar_provider_ids: Vec<String>,
@@ -657,6 +662,7 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_style: settings.float_bar_style,
             taskbar_widget_open_on_hover: settings.taskbar_widget_open_on_hover,
             float_bar_density: settings.float_bar_density,
+            float_bar_information_mode: settings.float_bar_information_mode,
             float_bar_contrast,
             float_bar_click_through: settings.float_bar_click_through,
             float_bar_provider_ids: settings.float_bar_provider_ids,

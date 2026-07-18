@@ -46,17 +46,55 @@ pub struct NamedRateWindow {
     pub window: RateWindow,
 }
 
-/// A known provider limit window that was deliberately not reported in an
-/// otherwise-successful snapshot. This is distinct from a 0% usage window:
-/// the provider has not supplied a limit to meter right now.
+/// Explicit enforcement state for a known limit window, so surfaces never have
+/// to fabricate a percentage for a window that is not actively metering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EnforcementState {
+    /// The provider is actively metering this window; it carries a real
+    /// percentage and appears as a normal `RateWindow`, not here.
+    Tracked,
+    /// The provider responded successfully and explicitly reported no active
+    /// limit for this window (e.g. a lifted five-hour cap).
+    NotEnforced,
+    /// A window we were tracking is absent from an otherwise-successful
+    /// response. We do not know whether it was lifted or merely omitted, so we
+    /// surface honest uncertainty instead of a made-up value.
+    Unavailable,
+}
+
+impl EnforcementState {
+    /// The wire/UI token for this state (matches the camelCase serde form).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EnforcementState::Tracked => "tracked",
+            EnforcementState::NotEnforced => "notEnforced",
+            EnforcementState::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// A known provider limit window that was not reported as an active meter in an
+/// otherwise-successful snapshot. This is distinct from a 0% usage window: the
+/// provider has not supplied a limit to meter right now (`NotEnforced`), or the
+/// window we track dropped out of the response entirely (`Unavailable`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InactiveRateWindow {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// Why this window is not actively metering. Defaults to `NotEnforced` so
+    /// existing producers and any persisted snapshots keep their meaning.
+    #[serde(default = "default_inactive_state")]
+    pub state: EnforcementState,
+}
+
+fn default_inactive_state() -> EnforcementState {
+    EnforcementState::NotEnforced
 }
 
 impl InactiveRateWindow {
+    /// A window the provider explicitly reports as not currently enforced.
     pub fn new(
         id: impl Into<String>,
         title: impl Into<String>,
@@ -66,6 +104,21 @@ impl InactiveRateWindow {
             id: id.into(),
             title: title.into(),
             description: description.into(),
+            state: EnforcementState::NotEnforced,
+        }
+    }
+
+    /// A tracked window that dropped out of an otherwise-successful response.
+    pub fn unavailable(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description: description.into(),
+            state: EnforcementState::Unavailable,
         }
     }
 }
@@ -239,7 +292,8 @@ impl UsageSnapshot {
         self
     }
 
-    /// Builder pattern: append a named window with no active provider meter.
+    /// Builder pattern: append a named window the provider explicitly reports
+    /// as not currently enforced.
     pub fn with_inactive_rate_window(
         mut self,
         id: impl Into<String>,
@@ -248,6 +302,19 @@ impl UsageSnapshot {
     ) -> Self {
         self.inactive_rate_windows
             .push(InactiveRateWindow::new(id, title, description));
+        self
+    }
+
+    /// Builder pattern: append a tracked window that dropped out of an
+    /// otherwise-successful response (state `Unavailable`).
+    pub fn with_unavailable_rate_window(
+        mut self,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.inactive_rate_windows
+            .push(InactiveRateWindow::unavailable(id, title, description));
         self
     }
 
@@ -467,5 +534,31 @@ mod tests {
         assert_eq!(cost.limit, None);
         assert_eq!(cost.used_percent(), None);
         assert_eq!(cost.format_used(), "$0.00");
+    }
+
+    #[test]
+    fn enforcement_state_serializes_as_camel_case() {
+        assert_eq!(
+            serde_json::to_string(&EnforcementState::NotEnforced).unwrap(),
+            "\"notEnforced\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EnforcementState::Unavailable).unwrap(),
+            "\"unavailable\""
+        );
+        assert_eq!(EnforcementState::Unavailable.as_str(), "unavailable");
+    }
+
+    #[test]
+    fn inactive_rate_window_state_defaults_to_not_enforced_for_legacy_json() {
+        // Snapshots persisted before the state field must still deserialize.
+        let legacy = r#"{"id":"codex-weekly","title":"Weekly","description":"x"}"#;
+        let window: InactiveRateWindow = serde_json::from_str(legacy).unwrap();
+        assert_eq!(window.state, EnforcementState::NotEnforced);
+
+        let unavailable = InactiveRateWindow::unavailable("weekly", "Weekly", "gone");
+        let round_tripped: InactiveRateWindow =
+            serde_json::from_str(&serde_json::to_string(&unavailable).unwrap()).unwrap();
+        assert_eq!(round_tripped.state, EnforcementState::Unavailable);
     }
 }

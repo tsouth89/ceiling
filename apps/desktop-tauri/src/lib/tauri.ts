@@ -436,6 +436,11 @@ export function playNotificationSound(): Promise<void> {
   return invoke<void>("play_notification_sound");
 }
 
+/** Show a real toast so the user can confirm notifications are delivered. */
+export function sendTestNotification(): Promise<void> {
+  return invoke<void>("send_test_notification");
+}
+
 export function reanchorTrayPanel(): Promise<void> {
   return invoke<void>("reanchor_tray_panel");
 }

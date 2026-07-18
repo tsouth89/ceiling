@@ -601,6 +601,12 @@ locale_keys! {
     ShortcutEmptyPlaceholder,
     NotificationTestSound,
     NotificationTestSoundPlaying,
+    NotificationTest,
+    NotificationTestHelper,
+    NotificationTestButton,
+    NotificationTestSending,
+    NotificationTestSent,
+    NotificationTestFailed,
 
     // Tauri desktop shell — Display tab fields
     TrayIconModeLabel,

@@ -137,6 +137,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarStyle: "floating",
     taskbarWidgetOpenOnHover: true,
     floatBarDensity: "standard",
+    floatBarInformationMode: "exact",
     floatBarContrast: "light-text",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
@@ -219,6 +220,73 @@ describe("FloatBar", () => {
     // Highest used (codex, 75%) shows first; display follows showAsUsed.
     expect(titles[0]).toMatch(/Codex: 75% used/);
     expect(titles[1]).toMatch(/Claude: 20% used/);
+  });
+
+  it("calm mode leads with a pace state and expands to the exact % on click", async () => {
+    const calmProvider: ProviderUsageSnapshot = {
+      ...snapshot("codex", "Codex", 60, {
+        resetsAt: new Date(Date.now() + 2 * 3600_000).toISOString(),
+      }),
+      updatedAt: new Date().toISOString(),
+      pace: {
+        windowLabel: "Weekly",
+        stage: "on_track",
+        deltaPercent: 0,
+        willLastToReset: true,
+        etaSeconds: null,
+        expectedUsedPercent: 60,
+        actualUsedPercent: 60,
+      },
+    };
+    tauriMocks.getCachedProviders.mockResolvedValue([calmProvider]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarInformationMode: "calm" }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarInformationMode: "calm" }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill--calm")).toBeInTheDocument();
+    });
+
+    // Calm leads with the trustworthy pace state; the exact % is hidden until
+    // the user expands, and the pill is a keyboard-accessible button.
+    expect(container.querySelector(".floatbar__pace")).toHaveTextContent("On pace");
+    expect(container.querySelector(".floatbar__pct--calm")).toBeNull();
+    const pill = container.querySelector<HTMLElement>(".floatbar__pill--calm")!;
+    expect(pill.getAttribute("role")).toBe("button");
+    expect(pill.getAttribute("tabindex")).toBe("0");
+
+    act(() => {
+      pill.click();
+    });
+    expect(container.querySelector(".floatbar__pct--calm")).toHaveTextContent("60%");
+  });
+
+  it("calm + compact stays non-blank and drops the window·reset row", async () => {
+    // No fresh pace + compact density (which hides the window/reset): the pill
+    // must still show the exact % rather than collapse to just the icon, and
+    // the calm reset row (with its separator) must not render.
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 60, {
+        resetsAt: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarInformationMode: "calm", floatBarDensity: "compact" }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarInformationMode: "calm", floatBarDensity: "compact" }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill--calm")).toBeInTheDocument();
+    });
+
+    expect(container.querySelector(".floatbar__calm-reset")).toBeNull();
+    expect(container.querySelector(".floatbar__calm-sep")).toBeNull();
+    expect(container.querySelector(".floatbar__pct--calm")).toHaveTextContent("60%");
   });
 
   it("does not render hypothetical local costs from the legacy setting", async () => {

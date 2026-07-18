@@ -17,6 +17,7 @@ const settings = {
   floatBarStyle: "floating",
   taskbarWidgetOpenOnHover: true,
   floatBarDensity: "standard",
+  floatBarInformationMode: "exact",
   floatBarContrast: "auto",
   floatBarShowCost: false,
   floatBarShowResetInline: false,

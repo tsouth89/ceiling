@@ -1,4 +1,5 @@
 import type {
+  PaceSnapshot,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
 } from "../types/bridge";
@@ -130,13 +131,17 @@ function nonPrimaryWindows(
   return out;
 }
 
-/** Available provider-reported resets, including legacy cached snapshots. */
+/**
+ * Provider-reported banked resets, including legacy cached snapshots. Returns
+ * the observed count — `0` is a real reading and stays distinct from `null`,
+ * which means the provider does not report resets (or the fetch is unknown).
+ */
 export function resetCreditsAvailable(
   provider: ProviderUsageSnapshot,
 ): number | null {
   if (
     typeof provider.resetCreditsAvailable === "number" &&
-    provider.resetCreditsAvailable > 0
+    provider.resetCreditsAvailable >= 0
   ) {
     return Math.floor(provider.resetCreditsAvailable);
   }
@@ -145,6 +150,19 @@ export function resetCreditsAvailable(
   );
   const match = legacy?.window.resetDescription?.match(/\d+/);
   return match ? Number(match[0]) : null;
+}
+
+/**
+ * Codex banked resets for the persistent indicator. Codex is the only provider
+ * with this concept, so it is shown Codex-only and always (including the `0`
+ * state) whenever we have a trustworthy reading, keeping the feature visible
+ * and building trust that Ceiling is tracking it.
+ */
+export function codexResetCredits(
+  provider: ProviderUsageSnapshot,
+): number | null {
+  if (provider.providerId !== "codex") return null;
+  return resetCreditsAvailable(provider);
 }
 
 /**
@@ -195,6 +213,60 @@ export function capacityFreshness(
     return "stale";
   }
   return "live";
+}
+
+export type CalmPaceTone = "steady" | "watch";
+export type CalmPaceState = { label: string; tone: CalmPaceTone };
+export type CalmPresentation = {
+  /** Trustworthy pace state, or null when pace isn't fresh + supported. */
+  pace: CalmPaceState | null;
+  /** The window whose reset + label headline the calm pill. */
+  window: ConstrainingWindow;
+  /** Whether that window exposes a reset (a time or a description). */
+  hasReset: boolean;
+  /** No pace and no reset — callers fall back to the exact percentage. */
+  showExactFallback: boolean;
+};
+
+/**
+ * Trustworthy pace state for Calm mode, or null when there isn't enough signal.
+ * Never invents an "on pace" state (SOU-178): it only speaks when the provider
+ * actually reports usable pace data.
+ */
+function calmPaceState(pace: PaceSnapshot | null): CalmPaceState | null {
+  if (!pace) return null;
+  // Data-backed and reassuring: the current pace lasts to the reset.
+  if (pace.willLastToReset) return { label: "On pace", tone: "steady" };
+  // Only warn when there is a real, finite estimate of running out; otherwise
+  // stay silent rather than fabricate a state.
+  if (
+    typeof pace.etaSeconds === "number" &&
+    Number.isFinite(pace.etaSeconds) &&
+    pace.etaSeconds > 0
+  ) {
+    return { label: "Running low", tone: "watch" };
+  }
+  return null;
+}
+
+/**
+ * What Calm mode surfaces for a provider: a trustworthy pace state plus the
+ * next reset of the displayed window, with exact percentages left to expand.
+ * Pace is claimed only when the snapshot is live and the provider reports
+ * usable pace data. When pace is unavailable we fall back to the next reset;
+ * when that is missing too, callers show the exact percentage instead.
+ */
+export function calmPresentation(
+  provider: ProviderUsageSnapshot,
+  window: ConstrainingWindow,
+  nowMs: number = Date.now(),
+): CalmPresentation {
+  const fresh = capacityFreshness(provider, nowMs) === "live";
+  const pace = fresh && !provider.error ? calmPaceState(provider.pace) : null;
+  const hasReset = Boolean(
+    window.window.resetsAt || window.window.resetDescription,
+  );
+  return { pace, window, hasReset, showExactFallback: !pace && !hasReset };
 }
 
 /** Boost promos that affect glance surfaces (strip / overview hero). */
