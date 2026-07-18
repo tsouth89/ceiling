@@ -121,6 +121,7 @@ function ProviderPill({
   remainingSuffix,
   capacityEventKind,
   informationMode,
+  isCompact,
   expanded,
   onToggleExpand,
 }: {
@@ -135,6 +136,7 @@ function ProviderPill({
   remainingSuffix: string;
   capacityEventKind?: CapacityEventPayload["kind"];
   informationMode: FloatBarInformationMode;
+  isCompact: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
 }) {
@@ -195,7 +197,12 @@ function ProviderPill({
   // opts out of the native drag region (drag the bar by its handle instead).
   if (informationMode === "calm") {
     const calm = calmPresentation(provider, hero);
-    const showExact = calm.showExactFallback || expanded;
+    // Compact hides the window·reset row, so calm degrades to pace-or-exact.
+    // Otherwise show exact only when there is no pace and no reset time to show.
+    // Either way the pill is never blank.
+    const showResetRow = !isCompact && calm.hasReset;
+    const showExact =
+      expanded || (isCompact ? !calm.pace : !calm.pace && !inlineReset);
     const onKeyToggle = (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
@@ -224,7 +231,7 @@ function ProviderPill({
               {calm.pace.label}
             </span>
           ) : null}
-          {calm.hasReset ? (
+          {showResetRow ? (
             <span className="floatbar__calm-reset">
               <span className="floatbar__window">{hero.label}</span>
               {inlineReset ? (
@@ -648,6 +655,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               remainingSuffix={t("FloatBarRemainingSuffix")}
               capacityEventKind={capacityEvents[p.providerId]}
               informationMode={informationMode}
+              isCompact={density === "compact"}
               expanded={expandedKeys.has(providerKey(p))}
               onToggleExpand={() => toggleExpanded(providerKey(p))}
             />

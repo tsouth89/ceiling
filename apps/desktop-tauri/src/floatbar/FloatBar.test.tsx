@@ -264,6 +264,31 @@ describe("FloatBar", () => {
     expect(container.querySelector(".floatbar__pct--calm")).toHaveTextContent("60%");
   });
 
+  it("calm + compact stays non-blank and drops the window·reset row", async () => {
+    // No fresh pace + compact density (which hides the window/reset): the pill
+    // must still show the exact % rather than collapse to just the icon, and
+    // the calm reset row (with its separator) must not render.
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 60, {
+        resetsAt: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarInformationMode: "calm", floatBarDensity: "compact" }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarInformationMode: "calm", floatBarDensity: "compact" }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill--calm")).toBeInTheDocument();
+    });
+
+    expect(container.querySelector(".floatbar__calm-reset")).toBeNull();
+    expect(container.querySelector(".floatbar__calm-sep")).toBeNull();
+    expect(container.querySelector(".floatbar__pct--calm")).toHaveTextContent("60%");
+  });
+
   it("does not render hypothetical local costs from the legacy setting", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("codex", "Codex", 75),
