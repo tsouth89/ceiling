@@ -11,10 +11,12 @@ on:
     branches: [main]
     paths:
       - "Cargo.lock"
+      - "Cargo.toml"
       - "rust/**"
       - "apps/desktop-tauri/src-tauri/**"
       - "apps/desktop-tauri/pnpm-lock.yaml"
       - "scripts/windows-release-build.ps1"
+      - ".github/workflows/release.yml"
       - ".github/workflows/warm-release-cache.yml"
   schedule:
     # Weekly refresh so a release is warm even after a quiet stretch.
@@ -25,11 +27,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: warm-release-cache
+  group: warm-release-cache-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   warm:
+    # workflow_dispatch can target any ref; only main can populate the
+    # default-branch cache scope that release tags are allowed to restore.
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     name: Build and cache release artifacts
     runs-on: windows-latest
     timeout-minutes: 120

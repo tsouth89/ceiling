@@ -91,7 +91,9 @@ Invalidation and no-cache recovery:
 
 - To force a clean rebuild, bump `$cacheVersion` in the **Compute release cache
   key** step of *both* `release.yml` and `warm-release-cache.yml` (keep them in
-  sync) and push a new tag.
+  sync), merge or push those changes to `main`, and wait for the **Warm release
+  cache** workflow to complete successfully before creating and pushing the
+  release tag.
 - To purge stored caches, delete them from the repository's Actions cache UI or
   with `gh cache delete --all` (or a specific key). A release with no cache
   simply cold-builds.
