@@ -620,8 +620,16 @@ export interface ProviderLocalUsageSummary {
   comparisonPeriods: LocalUsageComparisonPeriod[];
   latestTokens: number | null;
   topModel: string | null;
+  modelBreakdown?: LocalModelCost[];
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+}
+
+export interface LocalModelCost {
+  model: string;
+  /** Dollar cost for the period, or null when the model has no canonical price. */
+  cost: number | null;
+  tokens: number;
 }
 
 export interface LocalUsageWindowRequest {

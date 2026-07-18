@@ -82,6 +82,10 @@ pub struct ProviderLocalUsageSummary {
     /// transcript/session, rather than today's aggregate.
     pub latest_tokens: Option<u64>,
     pub top_model: Option<String>,
+    /// Per-model spend over the 30-day period, sorted by cost then tokens.
+    /// Priced and unpriced models are both included.
+    #[serde(default)]
+    pub model_breakdown: Vec<LocalModelCost>,
     pub estimate_note: String,
     pub token_cost_updated_at_ms: i64,
 }
@@ -170,6 +174,16 @@ pub struct LocalTokenBreakdown {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+}
+
+/// Per-model local spend for a period. `cost` is `None` for models with no
+/// canonical price (their tokens still count, but no dollars are fabricated).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelCost {
+    pub model: String,
+    pub cost: Option<f64>,
+    pub tokens: u64,
 }
 
 /// Full chart data bundle for one provider.
@@ -554,6 +568,7 @@ fn local_usage_summary_from_report(
         comparison_periods,
         latest_tokens: non_zero_u64(last_session_tokens),
         top_model: top_model(&report.thirty_days),
+        model_breakdown: model_breakdown(&report.thirty_days),
         estimate_note: localized_estimate_note(provider_id, lang),
         token_cost_updated_at_ms: current_unix_ms(),
     })
@@ -638,6 +653,7 @@ fn load_local_usage_summary_with_unknown_models(
             comparison_periods: Vec::new(),
             latest_tokens: non_zero_u64(latest_tokens),
             top_model: top_model(&thirty_day),
+            model_breakdown: model_breakdown(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
         }),
@@ -871,6 +887,33 @@ fn non_zero_u64(value: u64) -> Option<u64> {
     (value > 0).then_some(value)
 }
 
+/// Per-model spend for a period: every model that recorded tokens, with its
+/// dollar cost when the model is priced (`None` otherwise). Sorted by cost
+/// descending, then tokens descending, so the priciest models lead and
+/// unpriced models fall to the end.
+fn model_breakdown(summary: &CostSummary) -> Vec<LocalModelCost> {
+    let mut rows: Vec<LocalModelCost> = summary
+        .by_model_tokens
+        .iter()
+        .map(|(model, counts)| LocalModelCost {
+            model: model.clone(),
+            cost: summary.by_model.get(model).copied(),
+            tokens: counts.total(),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        // Priced models always lead unpriced ones, even a priced $0.00 model,
+        // so an unpriced row can't jump ahead on token count alone.
+        b.cost
+            .is_some()
+            .cmp(&a.cost.is_some())
+            .then_with(|| b.cost.unwrap_or(0.0).total_cmp(&a.cost.unwrap_or(0.0)))
+            .then(b.tokens.cmp(&a.tokens))
+            .then(a.model.cmp(&b.model))
+    });
+    rows
+}
+
 fn top_model(summary: &CostSummary) -> Option<String> {
     summary
         .by_model_tokens
@@ -947,13 +990,14 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, LocalTokenBreakdown, ProviderLocalUsageSummary, comparison_period_specs,
-        cost_fetch_failure_allows_early_retry, local_usage_summary_from_report,
-        localized_estimate_note, token_breakdown, token_cost_cache_is_fresh,
+        CostFetchFailure, LocalModelCost, LocalTokenBreakdown, ProviderLocalUsageSummary,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry,
+        local_usage_summary_from_report, localized_estimate_note, model_breakdown, token_breakdown,
+        token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::Utc;
-    use codexbar::cost_scanner::{CostSummary, CostUsageReport};
+    use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
     use codexbar::settings::Language;
     use std::time::{Duration, Instant};
 
@@ -1000,6 +1044,11 @@ mod tests {
             comparison_periods: Vec::new(),
             latest_tokens: Some(40),
             top_model: Some("gpt-5".to_string()),
+            model_breakdown: vec![LocalModelCost {
+                model: "gpt-5".to_string(),
+                cost: Some(2.0),
+                tokens: 300,
+            }],
             estimate_note: "estimated".to_string(),
             token_cost_updated_at_ms: 1234,
         };
@@ -1008,6 +1057,85 @@ mod tests {
         assert_eq!(
             json.get("tokenCostUpdatedAtMs").and_then(|v| v.as_i64()),
             Some(1234)
+        );
+        assert_eq!(
+            json.get("modelBreakdown")
+                .and_then(|v| v.as_array())
+                .map(|rows| rows.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn model_breakdown_orders_priced_first_and_keeps_unpriced() {
+        let mut summary = CostSummary::default();
+        // Two priced models and one unpriced (tokens only, no dollars).
+        summary.by_model.insert("cheap".to_string(), 1.0);
+        summary.by_model.insert("pricey".to_string(), 9.0);
+        // A priced $0.00 model must still lead any unpriced model, even though
+        // the unpriced one below has far more tokens.
+        summary.by_model.insert("free".to_string(), 0.0);
+        summary.by_model_tokens.insert(
+            "free".to_string(),
+            ModelTokenCounts {
+                input_tokens: 1,
+                output_tokens: 1,
+                cached_tokens: 0,
+            },
+        );
+        summary.by_model_tokens.insert(
+            "cheap".to_string(),
+            ModelTokenCounts {
+                input_tokens: 100,
+                output_tokens: 100,
+                cached_tokens: 0,
+            },
+        );
+        summary.by_model_tokens.insert(
+            "pricey".to_string(),
+            ModelTokenCounts {
+                input_tokens: 10,
+                output_tokens: 10,
+                cached_tokens: 0,
+            },
+        );
+        summary.by_model_tokens.insert(
+            "unpriced".to_string(),
+            ModelTokenCounts {
+                input_tokens: 500,
+                output_tokens: 500,
+                cached_tokens: 0,
+            },
+        );
+
+        let rows = model_breakdown(&summary);
+
+        assert_eq!(
+            rows,
+            vec![
+                LocalModelCost {
+                    model: "pricey".to_string(),
+                    cost: Some(9.0),
+                    tokens: 20,
+                },
+                LocalModelCost {
+                    model: "cheap".to_string(),
+                    cost: Some(1.0),
+                    tokens: 200,
+                },
+                // Priced $0.00 still leads the unpriced model despite fewer tokens.
+                LocalModelCost {
+                    model: "free".to_string(),
+                    cost: Some(0.0),
+                    tokens: 2,
+                },
+                // Unpriced model keeps its tokens but sorts last with no dollars.
+                LocalModelCost {
+                    model: "unpriced".to_string(),
+                    cost: None,
+                    tokens: 1000,
+                },
+            ]
         );
     }
 
