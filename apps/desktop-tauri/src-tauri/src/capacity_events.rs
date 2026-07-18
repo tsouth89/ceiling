@@ -629,14 +629,14 @@ fn normalize_window_id(value: &str) -> String {
 }
 
 pub(crate) fn observation_scope(snapshot: &ProviderUsageSnapshot) -> String {
-    let identity = snapshot
-        .account_email
-        .as_deref()
-        .or(snapshot.account_organization.as_deref())
-        .unwrap_or("anonymous");
+    // Scope by BOTH account identifiers, not either/or: the same email can
+    // belong to different organizations (e.g. a personal vs a business
+    // workspace) with distinct limits, and those must never share a baseline.
+    let email = snapshot.account_email.as_deref().unwrap_or("");
+    let organization = snapshot.account_organization.as_deref().unwrap_or("");
     let raw = format!(
-        "{}|{}|{}",
-        snapshot.provider_id, snapshot.source_label, identity
+        "{}|{}|{}|{}",
+        snapshot.provider_id, snapshot.source_label, email, organization
     );
     format!("{}:{:016x}", snapshot.provider_id, fnv1a64(raw.as_bytes()))
 }

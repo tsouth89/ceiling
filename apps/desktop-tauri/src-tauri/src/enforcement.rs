@@ -346,6 +346,21 @@ mod tests {
     }
 
     #[test]
+    fn different_organizations_under_the_same_email_do_not_flag_each_other() {
+        // The same email can span a personal and a business workspace with
+        // different limits; switching between them must not reuse a baseline.
+        let mut tracker = EnforcementTracker::new();
+        tracker.annotate(&mut codex_snapshot());
+
+        let mut other_org = codex_snapshot();
+        other_org.account_organization = Some("org_business".into());
+        other_org.secondary = None;
+        other_org.secondary_label = None;
+        assert!(tracker.annotate(&mut other_org).is_empty());
+        assert!(other_org.inactive_rate_windows.is_empty());
+    }
+
+    #[test]
     fn conditional_bonus_windows_are_never_flagged_unavailable() {
         // Bonus pools (Spark, promos, additional budget) legitimately end. Their
         // disappearance must not be reported as an unreadable core limit.
