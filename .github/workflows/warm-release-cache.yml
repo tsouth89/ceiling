@@ -1,0 +1,117 @@
+name: Warm release cache
+
+# Populates the release-mode Cargo/pnpm caches on the default branch so the
+# signed release workflow (triggered by a v* tag) can restore them. Caches are
+# ref-scoped: only default-branch runs can write the scope that every tag run
+# can read, so this deliberately runs on main — never on a tag. It performs the
+# same unsigned build as the release, then saves the cache. No signing, no
+# secrets, no release assets.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "rust/**"
+      - "apps/desktop-tauri/src-tauri/**"
+      - "apps/desktop-tauri/pnpm-lock.yaml"
+      - "scripts/windows-release-build.ps1"
+      - ".github/workflows/warm-release-cache.yml"
+  schedule:
+    # Weekly refresh so a release is warm even after a quiet stretch.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-release-cache
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: Build and cache release artifacts
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare release paths
+        shell: pwsh
+        run: |
+          $workRoot = Join-Path $env:RUNNER_TEMP "Ceiling-release"
+          "RELEASE_WORK_ROOT=$workRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.18.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Must stay identical to the same-named step in release.yml so the tag run
+      # restores exactly what this run saves.
+      - name: Compute release cache key
+        id: cachekey
+        shell: pwsh
+        run: |
+          $cacheVersion = "v1"
+          $rustDescription = (rustc --version --verbose | Out-String)
+          $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+            [System.Text.Encoding]::UTF8.GetBytes($rustDescription))
+          $rustHash = ([System.BitConverter]::ToString($sha) -replace '-', '').Substring(0, 16).ToLower()
+          "cache_version=$cacheVersion" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "rust_hash=$rustHash" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Restore release build caches
+        id: cache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target-cli
+            ${{ runner.temp }}/Ceiling-release/cache/pnpm-store
+          key: release-${{ steps.cachekey.outputs.cache_version }}-${{ runner.os }}-msvc-${{ steps.cachekey.outputs.rust_hash }}-${{ hashFiles('Cargo.lock', 'apps/desktop-tauri/pnpm-lock.yaml') }}
+          restore-keys: |
+            release-${{ steps.cachekey.outputs.cache_version }}-${{ runner.os }}-msvc-${{ steps.cachekey.outputs.rust_hash }}-
+            release-${{ steps.cachekey.outputs.cache_version }}-${{ runner.os }}-msvc-
+
+      - name: Build unsigned application binaries
+        shell: pwsh
+        run: |
+          & .\scripts\windows-release-build.ps1 `
+            -Ref $env:GITHUB_SHA `
+            -RepoUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git" `
+            -WorkRoot $env:RELEASE_WORK_ROOT `
+            -BuildOnly
+
+      # Runs on main / schedule / dispatch, so it may write the default-branch
+      # cache scope that every tag run can read. Exact-hit runs skip the save.
+      - name: Save release build caches
+        if: success() && steps.cache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target-cli
+            ${{ runner.temp }}/Ceiling-release/cache/pnpm-store
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}

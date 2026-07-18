@@ -59,33 +59,44 @@ autostart, and uninstall on a clean Windows user profile before publishing.
 
 ### Build cache
 
-To keep the signed path fast, the workflow restores and saves the Cargo
-dependency sources (`~/.cargo/registry`, `~/.cargo/git`), the release-mode
-Cargo target directories, and the pnpm store across tag runs with a pinned
-`actions/cache`. The cache is keyed by the runner OS, the MSVC toolchain, the
+To keep the signed path fast, the Cargo dependency sources (`~/.cargo/registry`,
+`~/.cargo/git`), the release-mode Cargo target directories, and the pnpm store
+are cached with a pinned `actions/cache`, keyed by runner OS, MSVC toolchain,
 resolved `rustc` version, `Cargo.lock`, and `pnpm-lock.yaml`, with prefix
 restore-keys so a small dependency bump still reuses most artifacts.
 
+GitHub Actions caches are **ref-scoped**: a tag run cannot read another tag's
+cache, and only default-branch runs can write the scope every tag run can read.
+So the cache is **warmed on `main`** by `.github/workflows/warm-release-cache.yml`
+(on pushes that change the build graph, a weekly schedule, and manual dispatch);
+`release.yml` only **restores** it. The warm workflow does the same unsigned
+build and saves the cache — it does no signing and touches no secrets.
+
 Safety properties:
 
-- The cache is saved immediately after the unsigned build and **before any
-  signing step**, so it never contains signed binaries, credentials, signing
-  material, or release assets.
+- The release (tag) run only restores; it never writes a cache, so no signed
+  binary, credential, signing material, or release asset is ever cached.
+- The warm workflow saves only after a successful build (`success()`-gated), so
+  a failed build never poisons the cache, and it saves before it would ever have
+  produced a signed artifact (it never signs at all).
 - A cache miss falls back to a full cold build (the original behavior), so
   caching can only make a release faster, never break it.
-- The save step is gated on `success()`, so a failed build never poisons the
-  cache.
 
-The run summary reports whether the build was warm, partial, or cold; per-phase
-timing is visible as the individual step durations.
+The release run summary reports whether the build was warm, partial, or cold;
+per-phase timing is visible as the individual step durations. The first release
+after a build-graph change may be partial/cold until the next warm run repopulates
+the default-branch cache.
 
 Invalidation and no-cache recovery:
 
-- To force a clean rebuild without touching the cache store, bump
-  `$cacheVersion` in the workflow's **Compute release cache key** step (for
-  example `v1` to `v2`) and push a new tag.
+- To force a clean rebuild, bump `$cacheVersion` in the **Compute release cache
+  key** step of *both* `release.yml` and `warm-release-cache.yml` (keep them in
+  sync) and push a new tag.
 - To purge stored caches, delete them from the repository's Actions cache UI or
-  with `gh cache delete --all` (or a specific key), then re-run the release.
+  with `gh cache delete --all` (or a specific key). A release with no cache
+  simply cold-builds.
+- To warm on demand, run the **Warm release cache** workflow via *Run workflow*
+  (workflow_dispatch) on `main`.
 
 > Follow-up (evaluated, not yet applied): the build script uses separate Cargo
 > target directories for the desktop and CLI builds, so the shared dependency

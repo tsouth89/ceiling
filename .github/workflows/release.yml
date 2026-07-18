@@ -104,12 +104,13 @@ jobs:
           "rust_hash=$rustHash" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Rust toolchain hash: $rustHash (cache version $cacheVersion)"
 
-      # Restore Cargo dependency sources and release-mode build artifacts from a
-      # previous trusted tag run. A miss falls back to a full cold build (the
-      # prior behavior), so caching can only make the release faster, never
-      # break it. Saved BEFORE signing (below) so no signed binary is ever
-      # cached. Only dependency/build caches are stored — never credentials,
-      # signing material, or release assets.
+      # Restore the release-mode Cargo/pnpm caches warmed on main by
+      # warm-release-cache.yml. Caches are ref-scoped, so a tag run cannot read
+      # another tag's cache — but it CAN read the default-branch scope this
+      # restores from. A miss falls back to a full cold build (the prior
+      # behavior), so caching can only make the release faster, never break it.
+      # This tag run only restores; it never writes a cache (warming is done on
+      # main), so no signed binary or release asset is ever cached here.
       - name: Restore release build caches
         id: cache-restore
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -148,25 +149,6 @@ jobs:
             -RepoUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git" `
             -WorkRoot $env:RELEASE_WORK_ROOT `
             -BuildOnly
-
-      # Save the dependency and build-artifact caches now, immediately after the
-      # unsigned build and BEFORE any signing step, so the cache can never
-      # contain signed binaries. Skipped on an exact key hit (nothing new to
-      # save) and only runs when the build above succeeded.
-      - name: Save release build caches
-        # success() is required: a custom `if` drops the implicit success gate,
-        # and a failed/partial build must never poison the cache.
-        if: success() && steps.cache-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ runner.temp }}/Ceiling-release/cache/cargo-target
-            ${{ runner.temp }}/Ceiling-release/cache/cargo-target-cli
-            ${{ runner.temp }}/Ceiling-release/cache/pnpm-store
-          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
 
       - name: Report release cache status
         if: always()
