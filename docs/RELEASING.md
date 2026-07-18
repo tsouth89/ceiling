@@ -57,6 +57,43 @@ The release directory must contain:
 Test install, launch, tray behavior, provider refresh, the capacity strip,
 autostart, and uninstall on a clean Windows user profile before publishing.
 
+### Build cache
+
+To keep the signed path fast, the workflow restores and saves the Cargo
+dependency sources (`~/.cargo/registry`, `~/.cargo/git`), the release-mode
+Cargo target directories, and the pnpm store across tag runs with a pinned
+`actions/cache`. The cache is keyed by the runner OS, the MSVC toolchain, the
+resolved `rustc` version, `Cargo.lock`, and `pnpm-lock.yaml`, with prefix
+restore-keys so a small dependency bump still reuses most artifacts.
+
+Safety properties:
+
+- The cache is saved immediately after the unsigned build and **before any
+  signing step**, so it never contains signed binaries, credentials, signing
+  material, or release assets.
+- A cache miss falls back to a full cold build (the original behavior), so
+  caching can only make a release faster, never break it.
+- The save step is gated on `success()`, so a failed build never poisons the
+  cache.
+
+The run summary reports whether the build was warm, partial, or cold; per-phase
+timing is visible as the individual step durations.
+
+Invalidation and no-cache recovery:
+
+- To force a clean rebuild without touching the cache store, bump
+  `$cacheVersion` in the workflow's **Compute release cache key** step (for
+  example `v1` to `v2`) and push a new tag.
+- To purge stored caches, delete them from the repository's Actions cache UI or
+  with `gh cache delete --all` (or a specific key), then re-run the release.
+
+> Follow-up (evaluated, not yet applied): the build script uses separate Cargo
+> target directories for the desktop and CLI builds, so the shared dependency
+> graph compiles twice even on a warm run. Unifying them into one target
+> directory would cut cold-build time and roughly halve the cache size; it is a
+> build-script change worth measuring against the timing this cache change now
+> records.
+
 ## Publish
 
 1. Review the draft release created by the signed workflow and replace generated

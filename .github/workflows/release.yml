@@ -89,6 +89,43 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Compute release cache key
+        id: cachekey
+        shell: pwsh
+        run: |
+          # Bump RELEASE_CACHE_VERSION to force a clean, no-cache rebuild without
+          # deleting caches by hand (see docs/RELEASING.md).
+          $cacheVersion = "v1"
+          $rustDescription = (rustc --version --verbose | Out-String)
+          $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+            [System.Text.Encoding]::UTF8.GetBytes($rustDescription))
+          $rustHash = ([System.BitConverter]::ToString($sha) -replace '-', '').Substring(0, 16).ToLower()
+          "cache_version=$cacheVersion" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "rust_hash=$rustHash" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Rust toolchain hash: $rustHash (cache version $cacheVersion)"
+
+      # Restore Cargo dependency sources and release-mode build artifacts from a
+      # previous trusted tag run. A miss falls back to a full cold build (the
+      # prior behavior), so caching can only make the release faster, never
+      # break it. Saved BEFORE signing (below) so no signed binary is ever
+      # cached. Only dependency/build caches are stored — never credentials,
+      # signing material, or release assets.
+      - name: Restore release build caches
+        id: cache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target-cli
+            ${{ runner.temp }}/Ceiling-release/cache/pnpm-store
+          key: release-${{ steps.cachekey.outputs.cache_version }}-${{ runner.os }}-msvc-${{ steps.cachekey.outputs.rust_hash }}-${{ hashFiles('Cargo.lock', 'apps/desktop-tauri/pnpm-lock.yaml') }}
+          restore-keys: |
+            release-${{ steps.cachekey.outputs.cache_version }}-${{ runner.os }}-msvc-${{ steps.cachekey.outputs.rust_hash }}-
+            release-${{ steps.cachekey.outputs.cache_version }}-${{ runner.os }}-msvc-
+
       - name: Ensure Inno Setup is installed
         shell: pwsh
         run: |
@@ -111,6 +148,42 @@ jobs:
             -RepoUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git" `
             -WorkRoot $env:RELEASE_WORK_ROOT `
             -BuildOnly
+
+      # Save the dependency and build-artifact caches now, immediately after the
+      # unsigned build and BEFORE any signing step, so the cache can never
+      # contain signed binaries. Skipped on an exact key hit (nothing new to
+      # save) and only runs when the build above succeeded.
+      - name: Save release build caches
+        # success() is required: a custom `if` drops the implicit success gate,
+        # and a failed/partial build must never poison the cache.
+        if: success() && steps.cache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target
+            ${{ runner.temp }}/Ceiling-release/cache/cargo-target-cli
+            ${{ runner.temp }}/Ceiling-release/cache/pnpm-store
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+
+      - name: Report release cache status
+        if: always()
+        shell: pwsh
+        run: |
+          $hit = "${{ steps.cache-restore.outputs.cache-hit }}"
+          $matched = "${{ steps.cache-restore.outputs.cache-matched-key }}"
+          if ($hit -eq 'true') {
+            $status = "warm (exact cache hit)"
+          } elseif ($matched) {
+            $status = "partial (prefix restore of $matched)"
+          } else {
+            $status = "cold (no usable cache)"
+          }
+          "### Release build cache: $status" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Per-phase timing is the step durations in this run (Build / Sign / Package / Smoke / Doctor)." |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Sign in to Azure with GitHub OIDC
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
