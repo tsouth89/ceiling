@@ -225,6 +225,22 @@ mod tests {
     }
 
     #[test]
+    fn information_mode_only_change_is_a_non_empty_patch() {
+        // A mode-only change must count as a float-bar patch so the detached
+        // bar is told to re-fetch (after_settings_saved notifies when the patch
+        // is non-empty), and so it applies the new mode on disk.
+        let patch = SettingsPatch {
+            information_mode: Some("calm".into()),
+            ..SettingsPatch::default()
+        };
+        assert!(!patch.is_empty());
+
+        let mut settings = Settings::default();
+        patch.apply(&mut settings);
+        assert_eq!(settings.float_bar_information_mode, "calm");
+    }
+
+    #[test]
     fn settings_patch_apply_only_writes_present_fields() {
         let mut s = Settings {
             float_bar_enabled: false,

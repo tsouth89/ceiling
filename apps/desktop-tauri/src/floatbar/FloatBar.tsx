@@ -209,6 +209,19 @@ function ProviderPill({
         onToggleExpand();
       }
     };
+    // Announce what the pill actually shows, not the exact % it hides — screen
+    // readers should hear the pace/reset state, and the % only once revealed.
+    const calmLabel = [
+      `${provider.displayName}:`,
+      calm.pace?.label ?? null,
+      showResetRow
+        ? `${hero.label}${resetText ? ` ${resetText}` : ""}`
+        : null,
+      showExact ? `${label} ${displaySuffix}` : null,
+      stateChip ? `state ${stateChip}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
     return (
       <div
         className={`${pillClass} floatbar__pill--calm${expanded ? " floatbar__pill--expanded" : ""}`}
@@ -216,7 +229,7 @@ function ProviderPill({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        aria-label={titleBits}
+        aria-label={calmLabel}
         onClick={onToggleExpand}
         onKeyDown={onKeyToggle}
         onMouseDown={(event) => event.stopPropagation()}
