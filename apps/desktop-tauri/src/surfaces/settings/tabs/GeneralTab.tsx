@@ -15,6 +15,7 @@ export default function GeneralTab({
   const { t } = useLocale();
   const [playingSound, setPlayingSound] = useState(false);
   const [testStatus, setTestStatus] = useState<TestNotificationStatus>("idle");
+  const [testError, setTestError] = useState<string | null>(null);
 
   const handleTestSound = useCallback(() => {
     setPlayingSound(true);
@@ -24,13 +25,19 @@ export default function GeneralTab({
 
   const handleTestNotification = useCallback(() => {
     setTestStatus("sending");
+    setTestError(null);
     void sendTestNotification()
       .then(() => setTestStatus("sent"))
-      .catch(() => setTestStatus("failed"))
+      .catch((error: unknown) => {
+        setTestStatus("failed");
+        setTestError(
+          typeof error === "string" ? error : t("NotificationTestFailed"),
+        );
+      })
       .finally(() => {
         window.setTimeout(() => setTestStatus("idle"), 4000);
       });
-  }, []);
+  }, [t]);
 
   return (
     <>
@@ -111,6 +118,11 @@ export default function GeneralTab({
                       : t("NotificationTestButton")}
               </button>
             </div>
+            {testError && (
+              <div className="settings-status settings-status--error" role="alert">
+                {testError}
+              </div>
+            )}
           </Field>
           <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
             <div className="sound-enabled-row">

@@ -324,11 +324,22 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
     if notification_settings.show_notifications
         && notification_settings.capacity_event_notifications_enabled
         && let Some((title, body)) = capacity_event_notification(&capacity_events)
-        && let Ok(mut guard) = state.lock()
     {
-        guard
-            .notification_manager
-            .notify_capacity_event(&title, &body);
+        let notified = match state.lock() {
+            Ok(mut guard) => guard
+                .notification_manager
+                .notify_capacity_event(&title, &body),
+            Err(error) => {
+                tracing::warn!("failed to lock app state for capacity notification: {error}");
+                false
+            }
+        };
+        if notified {
+            codexbar::sound::play_alert(
+                codexbar::sound::AlertSound::Success,
+                &notification_settings,
+            );
+        }
     }
 }
 
@@ -340,6 +351,7 @@ fn capacity_event_uses_windows_notification(
         crate::capacity_events::CapacityEventKind::ScheduledReset
             | crate::capacity_events::CapacityEventKind::SurpriseReset
             | crate::capacity_events::CapacityEventKind::PartialReset
+            | crate::capacity_events::CapacityEventKind::BankedResetGranted
     )
 }
 
@@ -358,10 +370,20 @@ fn capacity_event_notification(
             let body = events
                 .iter()
                 .map(|event| {
-                    format!(
-                        "{} {:.0}% → {:.0}% used",
-                        event.window_label, event.previous_used_percent, event.current_used_percent
-                    )
+                    if event.kind == crate::capacity_events::CapacityEventKind::BankedResetGranted {
+                        let available = event.current_reset_credits.unwrap_or(1);
+                        format!(
+                            "{available} banked reset{} available",
+                            if available == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        format!(
+                            "{} {:.0}% → {:.0}% used",
+                            event.window_label,
+                            event.previous_used_percent,
+                            event.current_used_percent
+                        )
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
@@ -851,6 +873,9 @@ mod predictive_warning_tests {
         assert!(capacity_event_uses_windows_notification(
             CapacityEventKind::PartialReset
         ));
+        assert!(capacity_event_uses_windows_notification(
+            CapacityEventKind::BankedResetGranted
+        ));
         for visual_only in [
             CapacityEventKind::ResetTimeShift,
             CapacityEventKind::WindowLifted,
@@ -874,6 +899,8 @@ mod predictive_warning_tests {
                 kind: CapacityEventKind::PartialReset,
                 previous_used_percent: before,
                 current_used_percent: after,
+                previous_reset_credits: None,
+                current_reset_credits: None,
                 previous_reset_at: "2026-08-06T22:49:57Z".into(),
                 current_reset_at: "2026-08-06T22:49:57Z".into(),
                 occurred_at: "2026-07-15T20:21:45Z".into(),
@@ -886,5 +913,43 @@ mod predictive_warning_tests {
         let (title, body) = capacity_event_notification(&events).unwrap();
         assert_eq!(title, "Cursor capacity restored");
         assert_eq!(body, "Auto 99% → 50% used; Plan 85% → 48% used.");
+    }
+
+    #[test]
+    fn batched_banked_resets_pluralize_without_disturbing_window_formatting() {
+        use crate::capacity_events::{CapacityEventKind, CapacityEventPayload};
+
+        let partial = CapacityEventPayload {
+            provider_id: "codex".into(),
+            display_name: "Codex".into(),
+            window_id: "weekly".into(),
+            window_label: "Weekly".into(),
+            kind: CapacityEventKind::PartialReset,
+            previous_used_percent: 90.0,
+            current_used_percent: 10.0,
+            previous_reset_credits: None,
+            current_reset_credits: None,
+            previous_reset_at: "2026-07-25T03:42:20Z".into(),
+            current_reset_at: "2026-07-25T03:42:20Z".into(),
+            occurred_at: "2026-07-18T03:25:06Z".into(),
+        };
+        let banked = CapacityEventPayload {
+            provider_id: "codex".into(),
+            display_name: "Codex".into(),
+            window_id: "banked-resets".into(),
+            window_label: "Banked resets".into(),
+            kind: CapacityEventKind::BankedResetGranted,
+            previous_used_percent: 0.0,
+            current_used_percent: 0.0,
+            previous_reset_credits: Some(1),
+            current_reset_credits: Some(2),
+            previous_reset_at: "2026-07-18T03:20:05Z".into(),
+            current_reset_at: "2026-07-18T03:25:06Z".into(),
+            occurred_at: "2026-07-18T03:25:06Z".into(),
+        };
+
+        let (title, body) = capacity_event_notification(&[partial, banked]).unwrap();
+        assert_eq!(title, "Codex capacity restored");
+        assert_eq!(body, "Weekly 90% → 10% used; 2 banked resets available.");
     }
 }

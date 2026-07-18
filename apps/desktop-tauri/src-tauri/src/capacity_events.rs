@@ -19,6 +19,7 @@ pub enum CapacityEventKind {
     ScheduledReset,
     SurpriseReset,
     PartialReset,
+    BankedResetGranted,
     ResetTimeShift,
     WindowLifted,
     WindowRestored,
@@ -35,6 +36,10 @@ pub struct CapacityEventPayload {
     pub kind: CapacityEventKind,
     pub previous_used_percent: f64,
     pub current_used_percent: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_reset_credits: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_reset_credits: Option<u32>,
     pub previous_reset_at: String,
     pub current_reset_at: String,
     pub occurred_at: String,
@@ -49,6 +54,9 @@ impl CapacityEventPayload {
             }
             CapacityEventKind::PartialReset => {
                 format!("{} capacity partially restored", self.display_name)
+            }
+            CapacityEventKind::BankedResetGranted => {
+                format!("{} banked reset available", self.display_name)
             }
             CapacityEventKind::ResetTimeShift => {
                 format!("{} reset time changed", self.display_name)
@@ -80,6 +88,14 @@ impl CapacityEventPayload {
                 "{} dropped from {:.0}% to {:.0}% used. {:.0}% available now.",
                 self.window_label, self.previous_used_percent, self.current_used_percent, remaining
             ),
+            CapacityEventKind::BankedResetGranted => {
+                let available = self.current_reset_credits.unwrap_or(1);
+                format!(
+                    "{} banked reset{} available now.",
+                    available,
+                    if available == 1 { " is" } else { "s are" }
+                )
+            }
             CapacityEventKind::ResetTimeShift => {
                 format!("{} now has a different reset time.", self.window_label)
             }
@@ -116,12 +132,20 @@ struct ProviderObservation {
     inactive_windows: HashMap<String, String>,
     #[serde(default)]
     extra_window_ids: HashSet<String>,
+    #[serde(default)]
+    reset_credits_available: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingReset {
     event: PersistedEvent,
     candidate: ObservedWindow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingResetCredits {
+    event: PersistedEvent,
+    candidate: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +169,10 @@ struct PersistedEvent {
     kind: CapacityEventKind,
     previous_used_percent: f64,
     current_used_percent: f64,
+    #[serde(default)]
+    previous_reset_credits: Option<u32>,
+    #[serde(default)]
+    current_reset_credits: Option<u32>,
     previous_reset_at: DateTime<Utc>,
     current_reset_at: DateTime<Utc>,
     occurred_at: DateTime<Utc>,
@@ -160,6 +188,8 @@ impl PersistedEvent {
             kind: self.kind,
             previous_used_percent: self.previous_used_percent,
             current_used_percent: self.current_used_percent,
+            previous_reset_credits: self.previous_reset_credits,
+            current_reset_credits: self.current_reset_credits,
             previous_reset_at: self.previous_reset_at.to_rfc3339(),
             current_reset_at: self.current_reset_at.to_rfc3339(),
             occurred_at: self.occurred_at.to_rfc3339(),
@@ -174,6 +204,8 @@ pub struct CapacityEventObserver {
     /// unfinished event from the previous run as a fresh launch notification.
     #[serde(skip)]
     pending_resets: HashMap<String, PendingReset>,
+    #[serde(skip)]
+    pending_reset_credits: HashMap<String, PendingResetCredits>,
     #[serde(skip)]
     pending_transitions: HashMap<String, PendingTransition>,
     /// Every provider/account scope is re-baselined on its first live reading
@@ -197,6 +229,7 @@ impl CapacityEventObserver {
             .unwrap_or_default();
         // Explicitly discard candidates written by older builds.
         observer.pending_resets.clear();
+        observer.pending_reset_credits.clear();
         observer.pending_transitions.clear();
         observer.persistence_path = path;
         observer
@@ -216,6 +249,7 @@ impl CapacityEventObserver {
             windows,
             inactive_windows: inactive_windows(snapshot),
             extra_window_ids,
+            reset_credits_available: snapshot.reset_credits_available,
         };
 
         if self.seen_scopes.insert(scope.clone()) {
@@ -233,6 +267,30 @@ impl CapacityEventObserver {
         let mut emitted = Vec::new();
         let mut held_for_confirmation = false;
         let mut confirmed_windows = HashSet::new();
+        let reset_credit_key = format!("{scope}:banked-resets");
+        let mut confirmed_reset_credits = false;
+        if let Some(pending) = self.pending_reset_credits.get(&reset_credit_key).cloned() {
+            if current.reset_credits_available == Some(pending.candidate) {
+                if confirmation_is_mature(pending.event.occurred_at, current.observed_at) {
+                    self.pending_reset_credits.remove(&reset_credit_key);
+                    emitted.push(pending.event.payload());
+                    confirmed_reset_credits = true;
+                } else {
+                    held_for_confirmation = true;
+                }
+            } else {
+                self.pending_reset_credits.remove(&reset_credit_key);
+            }
+        }
+        if !confirmed_reset_credits
+            && !self.pending_reset_credits.contains_key(&reset_credit_key)
+            && let Some(event) = detect_banked_reset_grant(snapshot, &previous, &current)
+        {
+            let candidate = current.reset_credits_available.unwrap_or_default();
+            self.pending_reset_credits
+                .insert(reset_credit_key, PendingResetCredits { event, candidate });
+            held_for_confirmation = true;
+        }
         for (window_id, current_window) in &current.windows {
             let pending_key = format!("{scope}:{window_id}");
             if let Some(pending) = self.pending_resets.get(&pending_key).cloned() {
@@ -371,9 +429,40 @@ fn detect_reset(
         kind,
         previous_used_percent: previous.used_percent,
         current_used_percent: current.used_percent,
+        previous_reset_credits: None,
+        current_reset_credits: None,
         previous_reset_at: previous.resets_at,
         current_reset_at: current.resets_at,
         occurred_at: current_observation.observed_at,
+    })
+}
+
+fn detect_banked_reset_grant(
+    snapshot: &ProviderUsageSnapshot,
+    previous: &ProviderObservation,
+    current: &ProviderObservation,
+) -> Option<PersistedEvent> {
+    if snapshot.provider_id != "codex" {
+        return None;
+    }
+    let previous_credits = previous.reset_credits_available?;
+    let current_credits = current.reset_credits_available?;
+    if current_credits <= previous_credits {
+        return None;
+    }
+    Some(PersistedEvent {
+        provider_id: snapshot.provider_id.clone(),
+        display_name: snapshot.display_name.clone(),
+        window_id: "banked-resets".to_string(),
+        window_label: "Banked resets".to_string(),
+        kind: CapacityEventKind::BankedResetGranted,
+        previous_used_percent: 0.0,
+        current_used_percent: 0.0,
+        previous_reset_credits: Some(previous_credits),
+        current_reset_credits: Some(current_credits),
+        previous_reset_at: previous.observed_at,
+        current_reset_at: current.observed_at,
+        occurred_at: current.observed_at,
     })
 }
 
@@ -472,6 +561,8 @@ fn detect_transition(
             kind,
             previous_used_percent,
             current_used_percent,
+            previous_reset_credits: None,
+            current_reset_credits: None,
             previous_reset_at,
             current_reset_at,
             occurred_at: current.observed_at,
@@ -738,6 +829,14 @@ mod tests {
         snapshot
     }
 
+    fn with_reset_credits(
+        mut snapshot: ProviderUsageSnapshot,
+        available: u32,
+    ) -> ProviderUsageSnapshot {
+        snapshot.reset_credits_available = Some(available);
+        snapshot
+    }
+
     #[test]
     fn surprise_reset_requires_a_consistent_second_read() {
         let start = Utc::now();
@@ -762,6 +861,69 @@ mod tests {
         ));
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, CapacityEventKind::SurpriseReset);
+    }
+
+    #[test]
+    fn banked_reset_grant_requires_a_consistent_second_read() {
+        let start = Utc::now();
+        let reset = start + Duration::days(7);
+        let mut observer = CapacityEventObserver::default();
+
+        assert!(
+            observer
+                .observe(&with_reset_credits(snapshot(start, 45.0, reset), 0))
+                .is_empty()
+        );
+        assert!(
+            observer
+                .observe(&with_reset_credits(
+                    snapshot(start + Duration::minutes(5), 46.0, reset),
+                    1,
+                ))
+                .is_empty()
+        );
+        let events = observer.observe(&with_reset_credits(
+            snapshot(start + Duration::minutes(10), 47.0, reset),
+            1,
+        ));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, CapacityEventKind::BankedResetGranted);
+        assert_eq!(events[0].previous_reset_credits, Some(0));
+        assert_eq!(events[0].current_reset_credits, Some(1));
+        assert_eq!(
+            events[0].notification_title(),
+            "Codex banked reset available"
+        );
+        assert_eq!(
+            events[0].notification_body(),
+            "1 banked reset is available now."
+        );
+    }
+
+    #[test]
+    fn startup_and_consumed_banked_resets_do_not_emit() {
+        let start = Utc::now();
+        let reset = start + Duration::days(7);
+        let mut observer = CapacityEventObserver::default();
+
+        observer.observe(&with_reset_credits(snapshot(start, 45.0, reset), 1));
+        assert!(
+            observer
+                .observe(&with_reset_credits(
+                    snapshot(start + Duration::minutes(5), 46.0, reset),
+                    0,
+                ))
+                .is_empty()
+        );
+        assert!(
+            observer
+                .observe(&with_reset_credits(
+                    snapshot(start + Duration::minutes(10), 47.0, reset),
+                    0,
+                ))
+                .is_empty()
+        );
     }
 
     #[test]

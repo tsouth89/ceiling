@@ -137,6 +137,29 @@ describe("GeneralTab", () => {
     );
   });
 
+  it("shows the Windows delivery error returned by the notification test", async () => {
+    sendTestNotificationMock.mockRejectedValueOnce(
+      "Windows notifications are turned off for Ceiling.",
+    );
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={settings}
+        set={vi.fn()}
+        saving={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "NotificationTestButton" }));
+
+    expect(
+      await screen.findByRole("alert"),
+    ).toHaveTextContent("Windows notifications are turned off for Ceiling.");
+    expect(
+      screen.getByRole("button", { name: "NotificationTestFailed" }),
+    ).toBeInTheDocument();
+  });
+
   it("disables the test notification button when notifications are off", () => {
     render(
       <GeneralTab
