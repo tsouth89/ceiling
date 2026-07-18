@@ -237,16 +237,16 @@ impl CodexParserState {
             return;
         }
 
-        let Some(day_key) = codex_line_day_key(&obj, range) else {
-            return;
-        };
-
         if obj.get("type").and_then(|v| v.as_str()) == Some("turn_context") {
             self.update_current_model(&obj);
+            return;
         }
 
+        // The day-range filter is applied inside record_token_count, after the
+        // cumulative baseline is seeded — a replayed line outside the range must
+        // still advance previous_totals so later in-range deltas are correct.
         if token_count_payload(&obj).is_some() {
-            self.record_token_count(&obj, day_key);
+            self.record_token_count(&obj, range);
         }
     }
 
@@ -271,17 +271,7 @@ impl CodexParserState {
                 }
             }
             CodexFastEvent::TokenCount { timestamp, payload } => {
-                let Some(day_key) = codex_timestamp_day_key(timestamp) else {
-                    return;
-                };
-                if !CostUsageDayRange::is_in_range(
-                    &day_key,
-                    &range.scan_since_key,
-                    &range.scan_until_key,
-                ) {
-                    return;
-                }
-                self.record_fast_token_count(payload, day_key, timestamp);
+                self.record_fast_token_count(payload, timestamp, range);
             }
         }
     }
@@ -301,21 +291,25 @@ impl CodexParserState {
         }
     }
 
-    fn record_token_count(&mut self, obj: &Value, day_key: String) {
+    fn record_token_count(&mut self, obj: &Value, range: &CostUsageDayRange) {
         let Some(payload) = token_count_payload(obj) else {
             return;
         };
+        // Seed `previous_totals` first — even while gated or out of range — so a
+        // replayed parent total (often dated before the scan window) advances
+        // the baseline instead of being re-emitted by the next in-range line.
         let Some((delta_input, delta_cached, delta_output)) = self.token_deltas(payload) else {
             return;
         };
-        // The delta above has already seeded `previous_totals`; while a child
-        // session is replaying its parent history, seed but do not emit.
         if self.replay_gate.is_some() {
             return;
         }
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
             return;
         }
+        let Some(day_key) = codex_line_day_key(obj, range) else {
+            return;
+        };
 
         let info = payload.get("info");
         let model = self.token_model(info, payload, obj);
@@ -337,18 +331,25 @@ impl CodexParserState {
     fn record_fast_token_count(
         &mut self,
         payload: CodexFastPayload<'_>,
-        day_key: String,
         timestamp: &str,
+        range: &CostUsageDayRange,
     ) {
+        // Seed the baseline first (even while gated or out of range), then
+        // suppress emission for gated / zero / out-of-range lines.
         let Some((delta_input, delta_cached, delta_output)) = self.fast_token_deltas(&payload)
         else {
             return;
         };
-        // Seed the delta baseline but suppress emission during child replay.
         if self.replay_gate.is_some() {
             return;
         }
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
+            return;
+        }
+        let Some(day_key) = codex_timestamp_day_key(timestamp) else {
+            return;
+        };
+        if !CostUsageDayRange::is_in_range(&day_key, &range.scan_since_key, &range.scan_until_key) {
             return;
         }
 
@@ -511,9 +512,12 @@ fn detect_child_session_gate(obj: &Value) -> Option<ReplayGate> {
     if !is_child {
         return None;
     }
+    // Prefer the payload's own creation time; fall back to the line's top-level
+    // timestamp before the weaker first-task_started gate.
     let epoch = payload
         .get("timestamp")
         .and_then(|v| v.as_str())
+        .or_else(|| obj.get("timestamp").and_then(|v| v.as_str()))
         .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
         .map(|ts| ts.timestamp());
     Some(match epoch {
@@ -887,6 +891,10 @@ mod tests {
 
     #[test]
     fn serde_token_path_preserves_offset_timestamps_and_tolerates_malformed_values() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
+        );
         let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
         let offset = serde_json::json!({
             "timestamp": "2026-05-31T06:00:02-04:00",
@@ -895,12 +903,15 @@ mod tests {
                 "info": {"last_token_usage": {"input_tokens": 4, "output_tokens": 2}}
             }
         });
-        parser.record_token_count(&offset, "2026-05-31".to_string());
+        parser.record_token_count(&offset, &range);
+        assert_eq!(parser.records.len(), 1);
         assert_eq!(
             parser.records[0].timestamp,
             Some(Utc.with_ymd_and_hms(2026, 5, 31, 10, 0, 2).unwrap())
         );
 
+        // A malformed timestamp has no attributable day; it is dropped rather
+        // than crashing the parser or being counted under a wrong day.
         let malformed = serde_json::json!({
             "timestamp": "not-a-timestamp",
             "payload": {
@@ -908,8 +919,8 @@ mod tests {
                 "info": {"last_token_usage": {"input_tokens": 1, "output_tokens": 1}}
             }
         });
-        parser.record_token_count(&malformed, "2026-05-31".to_string());
-        assert_eq!(parser.records[1].timestamp, None);
+        parser.record_token_count(&malformed, &range);
+        assert_eq!(parser.records.len(), 1);
     }
 
     #[test]
@@ -1041,6 +1052,51 @@ mod tests {
             JsonlScanner::parse_codex_file(file.path(), &range, 0, None, None).expect("parse");
 
         // Only the child's real delta is recorded — not the replayed 5M parent total.
+        assert_eq!(parsed.records.len(), 1);
+        assert_eq!(
+            (parsed.records[0].input, parsed.records[0].output),
+            (100, 5)
+        );
+    }
+
+    #[test]
+    fn child_replay_history_outside_scan_range_still_seeds_baseline() {
+        // The replayed parent totals are dated well before the scan window. They
+        // must still advance the baseline (while suppressed), or the child's
+        // first in-range line re-emits the entire parent history.
+        let creation = DateTime::parse_from_rfc3339("2026-05-31T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:00.000Z","type":"session_meta","payload":{{"id":"child","timestamp":"2026-05-31T10:00:00.000Z","thread_source":"subagent"}}}}"#
+        )
+        .unwrap();
+        // Replayed parent cumulative usage, dated a month before the scan range.
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-04-01T09:00:00.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":5000000,"cached_input_tokens":0,"output_tokens":1000000}}}}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{{"type":"task_started","started_at":{creation}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":5000100,"cached_input_tokens":0,"output_tokens":1000005}}}}}}}}"#
+        )
+        .unwrap();
+
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let parsed =
+            JsonlScanner::parse_codex_file(file.path(), &range, 0, None, None).expect("parse");
+
         assert_eq!(parsed.records.len(), 1);
         assert_eq!(
             (parsed.records[0].input, parsed.records[0].output),
