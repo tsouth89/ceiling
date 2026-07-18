@@ -8,8 +8,13 @@ import {
   providerGlanceStatus,
   resetCreditsAvailable,
   codexResetCredits,
+  calmPresentation,
 } from "./capacityPresentation";
-import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
+import type {
+  PaceSnapshot,
+  ProviderUsageSnapshot,
+  RateWindowSnapshot,
+} from "../types/bridge";
 
 function window(usedPercent: number): RateWindowSnapshot {
   return {
@@ -230,5 +235,71 @@ describe("capacityPresentation", () => {
     expect(
       codexResetCredits(provider({ providerId: "cursor", resetCreditsAvailable: 2 })),
     ).toBeNull();
+  });
+
+  describe("calmPresentation", () => {
+    const pace = (over: Partial<PaceSnapshot> = {}): PaceSnapshot => ({
+      windowLabel: "Weekly",
+      stage: "on_track",
+      deltaPercent: 0,
+      willLastToReset: true,
+      etaSeconds: null,
+      expectedUsedPercent: 40,
+      actualUsedPercent: 40,
+      ...over,
+    });
+    const withReset = (usedPercent: number): RateWindowSnapshot => ({
+      ...window(usedPercent),
+      resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+
+    it("shows a steady pace state when fresh pace lasts to reset", () => {
+      const snap = provider({ pace: pace({ willLastToReset: true }) });
+      const result = calmPresentation(snap, constrainingWindow(snap));
+      expect(result.pace).toEqual({ label: "On pace", tone: "steady" });
+      expect(result.showExactFallback).toBe(false);
+    });
+
+    it("warns only when there is a real finite ETA to run out", () => {
+      const risky = provider({
+        pace: pace({ willLastToReset: false, etaSeconds: 3600 }),
+      });
+      expect(calmPresentation(risky, constrainingWindow(risky)).pace).toEqual({
+        label: "Running low",
+        tone: "watch",
+      });
+
+      // No usable ETA: stay silent rather than invent a state.
+      const vague = provider({
+        pace: pace({ willLastToReset: false, etaSeconds: null }),
+      });
+      expect(calmPresentation(vague, constrainingWindow(vague)).pace).toBeNull();
+    });
+
+    it("never invents a pace state when pace is missing, stale, or errored", () => {
+      const noPace = provider({ pace: null });
+      expect(calmPresentation(noPace, constrainingWindow(noPace)).pace).toBeNull();
+
+      const stale = provider({
+        pace: pace({ willLastToReset: true }),
+        updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      });
+      expect(calmPresentation(stale, constrainingWindow(stale)).pace).toBeNull();
+
+      const errored = provider({ pace: pace({ willLastToReset: true }), error: "boom" });
+      expect(calmPresentation(errored, constrainingWindow(errored)).pace).toBeNull();
+    });
+
+    it("falls back to exact percentage only when neither pace nor a reset exists", () => {
+      const noReset = provider({ pace: null, primary: window(30) });
+      const bare = calmPresentation(noReset, constrainingWindow(noReset));
+      expect(bare.hasReset).toBe(false);
+      expect(bare.showExactFallback).toBe(true);
+
+      const withResetSnap = provider({ pace: null, primary: withReset(30) });
+      const reset = calmPresentation(withResetSnap, constrainingWindow(withResetSnap));
+      expect(reset.hasReset).toBe(true);
+      expect(reset.showExactFallback).toBe(false);
+    });
   });
 });
