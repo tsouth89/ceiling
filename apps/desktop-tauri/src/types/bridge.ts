@@ -621,6 +621,7 @@ export interface ProviderLocalUsageSummary {
   latestTokens: number | null;
   topModel: string | null;
   modelBreakdown?: LocalModelCost[];
+  effortBreakdown?: LocalEffortCost[];
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
 }
@@ -628,6 +629,14 @@ export interface ProviderLocalUsageSummary {
 export interface LocalModelCost {
   model: string;
   /** Dollar cost for the period, or null when the model has no canonical price. */
+  cost: number | null;
+  tokens: number;
+}
+
+export interface LocalEffortCost {
+  /** Reasoning-effort tier (Codex only): "high" / "xhigh" / "medium" / "unknown". */
+  effort: string;
+  /** Dollar cost for the tier, or null when its models have no canonical price. */
   cost: number | null;
   tokens: number;
 }

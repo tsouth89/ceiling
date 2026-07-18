@@ -5,6 +5,7 @@ import {
   providerSupportsChartData,
 } from "../../../../../lib/providerCharts";
 import type {
+  LocalEffortCost,
   LocalModelCost,
   LocalTokenBreakdown,
   ProviderChartData,
@@ -121,6 +122,41 @@ function ModelBreakdown({ models }: { models: LocalModelCost[] }) {
           Not priced · tokens counted, but no public rate is available for this model.
         </p>
       )}
+    </div>
+  );
+}
+
+const EFFORT_LABELS: Record<string, string> = {
+  xhigh: "Extra high",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+  unknown: "Unspecified",
+};
+
+function effortLabel(effort: string): string {
+  return EFFORT_LABELS[effort] ?? effort;
+}
+
+function EffortBreakdown({ efforts }: { efforts: LocalEffortCost[] }) {
+  const priced = efforts.reduce((sum, tier) => sum + (tier.cost ?? 0), 0);
+  return (
+    <div className="usage-model-costs" aria-label="Cost by reasoning effort over 30 days">
+      <div className="usage-model-costs__header">
+        <span className="usage-model-costs__title">Cost by effort · 30 days</span>
+        <span className="usage-model-costs__total">{formatUsd(priced)}</span>
+      </div>
+      <ul className="usage-model-costs__rows">
+        {efforts.map((tier) => (
+          <li className="usage-model-costs__row" key={tier.effort}>
+            <span className="usage-model-costs__name">{effortLabel(tier.effort)}</span>
+            <span className="usage-model-costs__tokens">{formatTokens(tier.tokens)}</span>
+            <span className="usage-model-costs__cost">
+              {tier.cost == null ? "Not priced" : formatUsd(tier.cost)}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -372,6 +408,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           </div>
           {data.localUsage.modelBreakdown && data.localUsage.modelBreakdown.length > 0 && (
             <ModelBreakdown models={data.localUsage.modelBreakdown} />
+          )}
+          {data.localUsage.effortBreakdown && data.localUsage.effortBreakdown.length > 0 && (
+            <EffortBreakdown efforts={data.localUsage.effortBreakdown} />
           )}
         </div>
       )}
