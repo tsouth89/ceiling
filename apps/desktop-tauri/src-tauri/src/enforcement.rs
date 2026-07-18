@@ -34,8 +34,9 @@ const FIRST_CLASS_PROVIDERS: &[&str] =
 /// and go, so treating their disappearance as `unavailable` would be a false
 /// alarm. These are exactly the ids `core_window_id` / the primary-label match
 /// in `capacity_events` resolve to.
-const CORE_WINDOW_IDS: &[&str] =
-    &["session", "weekly", "monthly", "plan", "auto", "api", "total"];
+const CORE_WINDOW_IDS: &[&str] = &[
+    "session", "weekly", "monthly", "plan", "auto", "api", "total",
+];
 
 const UNAVAILABLE_DESCRIPTION: &str = "Not reported in the latest update";
 
@@ -94,12 +95,14 @@ impl EnforcementTracker {
 
         let mut newly_unavailable = Vec::new();
         for (id, title) in missing {
-            snapshot.inactive_rate_windows.push(InactiveRateWindowSnapshot {
-                id: id.clone(),
-                title: title.clone(),
-                description: UNAVAILABLE_DESCRIPTION.to_string(),
-                state: "unavailable".to_string(),
-            });
+            snapshot
+                .inactive_rate_windows
+                .push(InactiveRateWindowSnapshot {
+                    id: id.clone(),
+                    title: title.clone(),
+                    description: UNAVAILABLE_DESCRIPTION.to_string(),
+                    state: "unavailable".to_string(),
+                });
             newly_unavailable.push(title);
         }
 
@@ -269,12 +272,14 @@ mod tests {
         let mut lifted = codex_snapshot();
         lifted.secondary = None;
         lifted.secondary_label = None;
-        lifted.inactive_rate_windows.push(InactiveRateWindowSnapshot {
-            id: "codex-weekly".into(),
-            title: "Weekly".into(),
-            description: "Not currently enforced".into(),
-            state: "notEnforced".into(),
-        });
+        lifted
+            .inactive_rate_windows
+            .push(InactiveRateWindowSnapshot {
+                id: "codex-weekly".into(),
+                title: "Weekly".into(),
+                description: "Not currently enforced".into(),
+                state: "notEnforced".into(),
+            });
 
         assert!(tracker.annotate(&mut lifted).is_empty());
         assert!(unavailable_titles(&lifted).is_empty());

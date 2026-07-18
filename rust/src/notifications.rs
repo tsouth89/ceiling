@@ -821,7 +821,12 @@ pub fn send_test_notification() -> Result<(), String> {
     let body = "This is a test. Unexpected resets and usage alerts will look like this.";
 
     match Command::new("notify-send")
-        .args(["--app-name=Ceiling", "--icon=dialog-information", title, body])
+        .args([
+            "--app-name=Ceiling",
+            "--icon=dialog-information",
+            title,
+            body,
+        ])
         .output()
     {
         Ok(output) if output.status.success() => Ok(()),
