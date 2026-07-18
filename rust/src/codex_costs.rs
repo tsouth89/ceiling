@@ -105,6 +105,12 @@ fn add_tokens(summary: &mut ModelTokenCounts, tokens: CodexTokenCounts) {
     summary.cached_tokens += tokens.cached;
 }
 
+/// Add one Codex token delta to the summary.
+///
+/// Returns `None` for empty tokens, `Some(0.0)` for usage of an unknown model
+/// (tokens are still recorded, but no dollars are fabricated), and `Some(cost)`
+/// when the model has canonical pricing. Unknown-model dollars are never added
+/// to the totals — a period of only-unpriced usage must not read as `$0.00`.
 fn add_codex_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
@@ -114,25 +120,12 @@ fn add_codex_tokens_to_summary(
         return None;
     }
 
-    let uses_fallback_pricing =
-        CostUsagePricing::codex_cost_usd(model, tokens.input, tokens.cached, tokens.output)
-            .is_none();
-    let cost = codex_cost_usd(model, tokens.input, tokens.cached, tokens.output);
-    if uses_fallback_pricing {
-        summary.unknown_models.insert(model.to_string());
-    }
-
+    // Always preserve tokens and the model name so pricing coverage is visible.
     summary.input_tokens += tokens.input;
     summary.cached_tokens += tokens.cached;
     summary.cache_read_tokens += tokens.cached;
     summary.output_tokens += tokens.output;
-    *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
-
     let speed_bucket = codex_speed_bucket(model);
-    *summary
-        .by_speed
-        .entry(speed_bucket.to_string())
-        .or_insert(0.0) += cost;
     add_tokens(
         summary
             .by_model_tokens
@@ -147,6 +140,20 @@ fn add_codex_tokens_to_summary(
             .or_default(),
         tokens,
     );
+
+    // Unknown models stay unpriced: never fall back to a guessed rate.
+    let Some(cost) =
+        CostUsagePricing::codex_cost_usd(model, tokens.input, tokens.cached, tokens.output)
+    else {
+        summary.unknown_models.insert(model.to_string());
+        return Some(0.0);
+    };
+
+    *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
+    *summary
+        .by_speed
+        .entry(speed_bucket.to_string())
+        .or_insert(0.0) += cost;
     Some(cost)
 }
 
@@ -157,8 +164,17 @@ fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-        if !tokens.is_empty() {
-            total_cost += codex_cost_usd(&record.model, tokens.input, tokens.cached, tokens.output);
+        if tokens.is_empty() {
+            continue;
+        }
+        // Unknown models contribute no dollars (no fabricated fallback rate).
+        if let Some(cost) = CostUsagePricing::codex_cost_usd(
+            &record.model,
+            tokens.input,
+            tokens.cached,
+            tokens.output,
+        ) {
+            total_cost += cost;
         }
     }
 
@@ -178,50 +194,47 @@ fn codex_speed_bucket(model: &str) -> &'static str {
     }
 }
 
-fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
-    if let Some(cost) = CostUsagePricing::codex_cost_usd(model, input, cached, output) {
-        return cost;
-    }
-
-    let (input_price, cached_price, output_price) = match model.to_lowercase().as_str() {
-        m if m.contains("gpt-4o-mini") => (0.15, 0.075, 0.60),
-        m if m.contains("gpt-4o") => (2.50, 1.25, 10.00),
-        m if m.contains("gpt-4-turbo") => (10.00, 5.00, 30.00),
-        m if m.contains("gpt-4") => (30.00, 15.00, 60.00),
-        m if m.contains("o1-mini") => (3.00, 1.50, 12.00),
-        m if m.contains("o1") => (15.00, 7.50, 60.00),
-        _ => (2.50, 1.25, 10.00),
-    };
-
-    let cached = cached.min(input);
-    let non_cached = input.saturating_sub(cached);
-    let input_cost = (non_cached as f64 / 1_000_000.0) * input_price;
-    let cached_cost = (cached as f64 / 1_000_000.0) * cached_price;
-    let output_cost = (output as f64 / 1_000_000.0) * output_price;
-
-    input_cost + cached_cost + output_cost
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::CodexUsageRecord;
 
     #[test]
-    fn test_codex_pricing() {
-        // Test GPT-4o pricing: $2.50/1M input, $10/1M output
-        let cost = codex_cost_usd("gpt-4o", 1_000_000, 0, 1_000_000);
-        assert!((cost - 12.50).abs() < 0.01);
-    }
+    fn summary_prices_known_model_and_leaves_unknown_model_unpriced() {
+        let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let records = vec![
+            // Canonical model: priced normally.
+            CodexUsageRecord {
+                day_key: "2026-05-31".to_string(),
+                timestamp: None,
+                model: "gpt-5.6-sol".to_string(),
+                input: 200_000,
+                cached: 0,
+                output: 0,
+            },
+            // Unknown model: tokens kept, but no fabricated dollars.
+            CodexUsageRecord {
+                day_key: "2026-05-31".to_string(),
+                timestamp: None,
+                model: "gpt-4o".to_string(),
+                input: 1_000_000,
+                cached: 0,
+                output: 1_000_000,
+            },
+        ];
+        let mut summary = CostSummary::default();
 
-    #[test]
-    fn test_codex_pricing_uses_gpt55_standard_short_context_rates() {
-        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+        let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
 
-        // GPT-5.5 standard short-context pricing:
-        // 600k non-cached input at $5/M, 400k cached input at $0.50/M,
-        // and 1M output at $30/M.
-        assert!((cost - 33.20).abs() < 0.01);
+        assert!(has_tokens);
+        // Only the known model contributes dollars; the unknown one does not.
+        assert!(cost > 0.0);
+        assert!(summary.by_model.contains_key("gpt-5.6-sol"));
+        assert!(!summary.by_model.contains_key("gpt-4o"));
+        assert!(summary.unknown_models.contains("gpt-4o"));
+        // Both models' tokens are preserved for coverage.
+        assert_eq!(summary.input_tokens, 1_200_000);
     }
 
     #[test]
@@ -264,7 +277,9 @@ mod tests {
     }
 
     #[test]
-    fn records_unknown_codex_model_while_using_fallback_cost() {
+    fn only_unpriced_usage_yields_no_dollars_but_keeps_tokens() {
+        // A period containing only unknown-model usage must report tokens and
+        // the unknown model, but zero dollars — never a fabricated estimate.
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let records = vec![CodexUsageRecord {
@@ -280,8 +295,10 @@ mod tests {
         let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
 
         assert!(has_tokens);
-        assert!(cost > 0.0);
+        assert_eq!(cost, 0.0);
+        assert!(summary.by_model.is_empty());
         assert!(summary.unknown_models.contains("gpt-mystery"));
+        assert_eq!(summary.input_tokens, 1_000_000);
     }
 
     #[test]
