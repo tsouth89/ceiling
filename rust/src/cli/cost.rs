@@ -167,18 +167,18 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
                 }
             }
 
-            if !result.summary.by_speed.is_empty() {
-                println!("  Codex speed:");
-                for bucket in ["standard", "fast"] {
-                    if let Some(cost) = result.summary.by_speed.get(bucket) {
-                        let tokens = result
-                            .summary
-                            .by_speed_tokens
-                            .get(bucket)
-                            .map(|counts| format_number(counts.total()))
-                            .unwrap_or_else(|| "0".to_string());
-                        println!("    {}: ${:.2} ({} tokens)", bucket, cost, tokens);
-                    }
+            if !result.summary.by_effort.is_empty() {
+                println!("  Codex effort:");
+                let mut efforts: Vec<_> = result.summary.by_effort.iter().collect();
+                efforts.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+                for (bucket, cost) in efforts {
+                    let tokens = result
+                        .summary
+                        .by_effort_tokens
+                        .get(bucket)
+                        .map(|counts| format_number(counts.total()))
+                        .unwrap_or_else(|| "0".to_string());
+                    println!("    {}: ${:.2} ({} tokens)", bucket, cost, tokens);
                 }
             }
         }
@@ -218,8 +218,8 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     },
                     "sessions_count": r.summary.sessions_count,
                     "by_model": r.summary.by_model,
-                    "by_speed": r.summary.by_speed,
-                    "by_speed_tokens": r.summary.by_speed_tokens.iter().map(|(bucket, counts)| {
+                    "by_effort": r.summary.by_effort,
+                    "by_effort_tokens": r.summary.by_effort_tokens.iter().map(|(bucket, counts)| {
                         (bucket.clone(), serde_json::json!({
                             "input": counts.input_tokens,
                             "output": counts.output_tokens,

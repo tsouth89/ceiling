@@ -69,6 +69,10 @@ pub struct CodexUsageRecord {
     pub day_key: String,
     pub timestamp: Option<DateTime<chrono::Utc>>,
     pub model: String,
+    /// Reasoning effort in force when this delta was billed (from the enclosing
+    /// `turn_context`, e.g. "medium"/"high"/"xhigh"). `None` when the log never
+    /// declared one.
+    pub effort: Option<String>,
     pub input: i32,
     pub cached: i32,
     pub output: i32,
@@ -128,6 +132,9 @@ enum ReplayGate {
 
 struct CodexParserState {
     current_model: Option<String>,
+    /// Reasoning effort from the most recent `turn_context`, attached to each
+    /// token delta so cost can be split by effort tier.
+    current_effort: Option<String>,
     previous_totals: Option<CodexTotals>,
     records: Vec<CodexUsageRecord>,
     /// `Some` while suppressing a child session's replayed parent history.
@@ -156,6 +163,8 @@ struct CodexFastPayload<'a> {
     model: Option<&'a str>,
     #[serde(default, borrow)]
     model_name: Option<&'a str>,
+    #[serde(default, borrow)]
+    effort: Option<&'a str>,
     #[serde(default, borrow)]
     info: Option<CodexFastInfo<'a>>,
     #[serde(default)]
@@ -195,6 +204,7 @@ struct CodexFastTotals {
 enum CodexFastEvent<'a> {
     TurnContext {
         model: Option<&'a str>,
+        effort: Option<&'a str>,
     },
     TokenCount {
         timestamp: &'a str,
@@ -206,6 +216,7 @@ impl CodexParserState {
     fn new(initial_model: Option<String>, initial_totals: Option<CodexTotals>) -> Self {
         Self {
             current_model: initial_model,
+            current_effort: None,
             previous_totals: initial_totals,
             records: Vec::new(),
             replay_gate: None,
@@ -265,9 +276,12 @@ impl CodexParserState {
 
     fn process_fast_event(&mut self, event: CodexFastEvent<'_>, range: &CostUsageDayRange) {
         match event {
-            CodexFastEvent::TurnContext { model } => {
+            CodexFastEvent::TurnContext { model, effort } => {
                 if let Some(model) = model.filter(|model| !model.is_empty()) {
                     self.current_model = Some(model.to_string());
+                }
+                if let Some(effort) = effort.filter(|effort| !effort.is_empty()) {
+                    self.current_effort = Some(effort.to_string());
                 }
             }
             CodexFastEvent::TokenCount { timestamp, payload } => {
@@ -288,6 +302,14 @@ impl CodexParserState {
             .and_then(|v| v.as_str())
         {
             self.current_model = Some(model.to_string());
+        }
+        if let Some(effort) = obj
+            .get("effort")
+            .or_else(|| obj.get("payload").and_then(|payload| payload.get("effort")))
+            .and_then(|v| v.as_str())
+            .filter(|effort| !effort.is_empty())
+        {
+            self.current_effort = Some(effort.to_string());
         }
     }
 
@@ -387,6 +409,7 @@ impl CodexParserState {
             day_key,
             timestamp,
             model: CostUsagePricing::normalize_codex_model(model),
+            effort: self.current_effort.clone(),
             input,
             cached: cached.min(input),
             output,
@@ -481,7 +504,8 @@ fn parse_codex_fast_event(line: &str) -> Option<CodexFastEvent<'_>> {
                     })
                 })
                 .or(parsed.model);
-            Some(CodexFastEvent::TurnContext { model })
+            let effort = parsed.payload.as_ref().and_then(|payload| payload.effort);
+            Some(CodexFastEvent::TurnContext { model, effort })
         }
         "event_msg" => {
             let payload = parsed.payload.or(parsed.event_msg)?;
@@ -953,6 +977,41 @@ mod tests {
         assert_eq!(totals.input, 1250);
         assert_eq!(totals.cached, 260);
         assert_eq!(totals.output, 90);
+    }
+
+    #[test]
+    fn turn_context_effort_attaches_to_following_token_records() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        // A turn at "high" effort, then usage.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"high"}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":50}}}}"#,
+            &range,
+        );
+        // A later turn switches to "xhigh"; the next delta carries the new tier.
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:05:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:05:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1500,"cached_input_tokens":0,"output_tokens":90}}}}"#,
+            &range,
+        );
+
+        let efforts: Vec<_> = parser
+            .records
+            .iter()
+            .map(|record| record.effort.as_deref())
+            .collect();
+        assert_eq!(efforts, vec![Some("high"), Some("xhigh")]);
     }
 
     #[test]

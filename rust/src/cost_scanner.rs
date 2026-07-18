@@ -41,10 +41,11 @@ pub struct CostSummary {
     pub by_model: HashMap<String, f64>,
     /// Token breakdown by model
     pub by_model_tokens: HashMap<String, ModelTokenCounts>,
-    /// Codex cost split by speed/tier when local logs expose it.
-    pub by_speed: HashMap<String, f64>,
-    /// Codex token split by speed/tier when local logs expose it.
-    pub by_speed_tokens: HashMap<String, ModelTokenCounts>,
+    /// Codex cost split by reasoning-effort tier (e.g. medium/high/xhigh) from
+    /// the rollout `turn_context`; keyed "unknown" when the log omits it.
+    pub by_effort: HashMap<String, f64>,
+    /// Codex token split by reasoning-effort tier, matching `by_effort`.
+    pub by_effort_tokens: HashMap<String, ModelTokenCounts>,
     /// Model IDs that were priced with fallback rates because no canonical rate is available.
     pub unknown_models: HashSet<String>,
     /// Period start date
@@ -920,11 +921,11 @@ fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
         entry.output_tokens += tokens.output_tokens;
         entry.cached_tokens += tokens.cached_tokens;
     }
-    for (speed, cost) in &source.by_speed {
-        *target.by_speed.entry(speed.clone()).or_insert(0.0) += cost;
+    for (effort, cost) in &source.by_effort {
+        *target.by_effort.entry(effort.clone()).or_insert(0.0) += cost;
     }
-    for (speed, tokens) in &source.by_speed_tokens {
-        let entry = target.by_speed_tokens.entry(speed.clone()).or_default();
+    for (effort, tokens) in &source.by_effort_tokens {
+        let entry = target.by_effort_tokens.entry(effort.clone()).or_default();
         entry.input_tokens += tokens.input_tokens;
         entry.output_tokens += tokens.output_tokens;
         entry.cached_tokens += tokens.cached_tokens;
