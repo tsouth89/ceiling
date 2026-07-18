@@ -525,7 +525,11 @@ fn inactive_windows(snapshot: &ProviderUsageSnapshot) -> HashMap<String, String>
         .collect()
 }
 
-fn ignored_capacity_window(snapshot: &ProviderUsageSnapshot, id: &str, title: &str) -> bool {
+pub(crate) fn ignored_capacity_window(
+    snapshot: &ProviderUsageSnapshot,
+    id: &str,
+    title: &str,
+) -> bool {
     if snapshot.provider_id != "cursor" {
         return false;
     }
@@ -535,7 +539,7 @@ fn ignored_capacity_window(snapshot: &ProviderUsageSnapshot, id: &str, title: &s
         || identity.contains("ondemand")
 }
 
-fn semantic_inactive_window_id(provider_id: &str, id: &str, title: &str) -> String {
+pub(crate) fn semantic_inactive_window_id(provider_id: &str, id: &str, title: &str) -> String {
     let title_id = normalize_window_id(title);
     if let Some(core_id) = core_window_id(&title_id) {
         return core_id.to_string();
@@ -592,7 +596,7 @@ fn to_observed_window(label: &str, window: &RateWindowSnapshot) -> Option<Observ
     })
 }
 
-fn semantic_window_id(label: &str, window_minutes: Option<u32>) -> String {
+pub(crate) fn semantic_window_id(label: &str, window_minutes: Option<u32>) -> String {
     let normalized = normalize_window_id(label);
     if matches!(
         normalized.as_str(),
@@ -624,7 +628,7 @@ fn normalize_window_id(value: &str) -> String {
         .to_string()
 }
 
-fn observation_scope(snapshot: &ProviderUsageSnapshot) -> String {
+pub(crate) fn observation_scope(snapshot: &ProviderUsageSnapshot) -> String {
     let identity = snapshot
         .account_email
         .as_deref()
@@ -729,6 +733,7 @@ mod tests {
                 id: id.into(),
                 title: title.into(),
                 description: "Not currently limited".into(),
+                state: "notEnforced".into(),
             });
         snapshot
     }

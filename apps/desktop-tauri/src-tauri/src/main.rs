@@ -5,6 +5,7 @@ use std::time::Duration;
 mod auto_refresh;
 mod capacity_events;
 mod commands;
+mod enforcement;
 mod events;
 mod floatbar;
 mod geometry_store;

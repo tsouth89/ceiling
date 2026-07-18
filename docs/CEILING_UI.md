@@ -85,9 +85,10 @@ Detail lists **every** measured window plus inactive rows. Do not truncate to tw
 | Live | Normal pill, no chip | Quiet freshness text |
 | Cached / stale | Muted pill + `stale` chip | Dim metrics + stale label |
 | Error | Crit outline + `error` chip | Error line, no fake bars |
-| Not enforced | No chip from inactive windows; the active window headlines and normal/stale/error freshness still controls the pill | Quiet named text row via `inactiveRateWindows` |
+| Not enforced | No chip from inactive windows; the active window headlines and normal/stale/error freshness still controls the pill | Quiet named text row via `inactiveRateWindows` (`state: "notEnforced"`) |
+| Unavailable | Same quiet treatment, in a caution (amber) tone; the window was tracked but dropped out of a successful response | Named row via `inactiveRateWindows` (`state: "unavailable"`), labeled "Unavailable" |
 
-Never invent `0%` or `100%` for an inactive window.
+`inactiveRateWindows[].state` carries the explicit enforcement state: `notEnforced` (provider reported no active limit) vs `unavailable` (a first-class provider's window vanished from an otherwise-successful response, detected by the cross-snapshot enforcement tracker). Never invent `0%` or `100%` for either — surface the named state instead.
 
 ## Promo signals
 

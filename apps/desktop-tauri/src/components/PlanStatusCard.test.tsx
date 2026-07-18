@@ -197,4 +197,33 @@ describe("PlanStatusCard", () => {
     expect(screen.getByText("not currently enforced")).toBeTruthy();
     expect(screen.queryByText("lifted")).toBeNull();
   });
+
+  it("separates unavailable windows from not-enforced ones", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          inactiveRateWindows: [
+            {
+              id: "session",
+              title: "5-hour",
+              description: "Not currently enforced by OpenAI",
+              state: "notEnforced",
+            },
+            {
+              id: "weekly",
+              title: "Weekly",
+              description: "Not reported in the latest update",
+              state: "unavailable",
+            },
+          ],
+        })}
+        resetTimeRelative
+      />,
+    );
+
+    expect(screen.getByText("not currently enforced")).toBeTruthy();
+    expect(screen.getByText("unavailable")).toBeTruthy();
+    // The unavailable window must not be lumped under "not currently enforced".
+    expect(screen.getByText("Weekly")).toBeTruthy();
+  });
 });

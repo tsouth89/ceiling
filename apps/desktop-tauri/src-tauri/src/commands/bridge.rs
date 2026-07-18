@@ -75,6 +75,9 @@ pub struct InactiveRateWindowSnapshot {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// "notEnforced" (provider reported no active limit) or "unavailable" (the
+    /// window dropped out of an otherwise-successful response).
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -275,6 +278,7 @@ impl ProviderUsageSnapshot {
                     id: window.id.clone(),
                     title: window.title.clone(),
                     description: window.description.clone(),
+                    state: window.state.as_str().to_string(),
                 })
                 .collect(),
             promo_signals: usage

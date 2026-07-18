@@ -415,6 +415,12 @@ export interface ProviderUsageSnapshot {
     id: string;
     title: string;
     description: string;
+    /**
+     * "notEnforced": the provider reported no active limit for this window.
+     * "unavailable": a tracked window dropped out of an otherwise-successful
+     * response. Optional for back-compat; treat a missing value as notEnforced.
+     */
+    state?: "notEnforced" | "unavailable";
   }>;
   promoSignals?: Array<{
     id: string;

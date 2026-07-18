@@ -301,13 +301,20 @@ export default function ProviderDetailView({
                   showAsUsed={showAsUsed}
                 />
               ))}
-              {(provider.inactiveRateWindows ?? []).map((metric) => (
-                <div className="provider-focus__inactive" key={metric.id}>
-                  <strong>{metric.title}</strong>
-                  <span className="provider-focus__info" aria-hidden>i</span>
-                  <span>Not currently enforced</span>
-                </div>
-              ))}
+              {(provider.inactiveRateWindows ?? []).map((metric) => {
+                const unavailable = metric.state === "unavailable";
+                return (
+                  <div
+                    className={`provider-focus__inactive${unavailable ? " provider-focus__inactive--unavailable" : ""}`}
+                    key={metric.id}
+                    title={metric.description || undefined}
+                  >
+                    <strong>{metric.title}</strong>
+                    <span className="provider-focus__info" aria-hidden>i</span>
+                    <span>{unavailable ? "Unavailable" : "Not currently enforced"}</span>
+                  </div>
+                );
+              })}
             </section>
           )}
 
