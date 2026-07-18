@@ -902,9 +902,12 @@ fn model_breakdown(summary: &CostSummary) -> Vec<LocalModelCost> {
         })
         .collect();
     rows.sort_by(|a, b| {
+        // Priced models always lead unpriced ones, even a priced $0.00 model,
+        // so an unpriced row can't jump ahead on token count alone.
         b.cost
-            .unwrap_or(0.0)
-            .total_cmp(&a.cost.unwrap_or(0.0))
+            .is_some()
+            .cmp(&a.cost.is_some())
+            .then_with(|| b.cost.unwrap_or(0.0).total_cmp(&a.cost.unwrap_or(0.0)))
             .then(b.tokens.cmp(&a.tokens))
             .then(a.model.cmp(&b.model))
     });
@@ -1069,6 +1072,17 @@ mod tests {
         // Two priced models and one unpriced (tokens only, no dollars).
         summary.by_model.insert("cheap".to_string(), 1.0);
         summary.by_model.insert("pricey".to_string(), 9.0);
+        // A priced $0.00 model must still lead any unpriced model, even though
+        // the unpriced one below has far more tokens.
+        summary.by_model.insert("free".to_string(), 0.0);
+        summary.by_model_tokens.insert(
+            "free".to_string(),
+            ModelTokenCounts {
+                input_tokens: 1,
+                output_tokens: 1,
+                cached_tokens: 0,
+            },
+        );
         summary.by_model_tokens.insert(
             "cheap".to_string(),
             ModelTokenCounts {
@@ -1108,6 +1122,12 @@ mod tests {
                     model: "cheap".to_string(),
                     cost: Some(1.0),
                     tokens: 200,
+                },
+                // Priced $0.00 still leads the unpriced model despite fewer tokens.
+                LocalModelCost {
+                    model: "free".to_string(),
+                    cost: Some(0.0),
+                    tokens: 2,
                 },
                 // Unpriced model keeps its tokens but sorts last with no dollars.
                 LocalModelCost {
