@@ -1,5 +1,13 @@
 # Changelog
 
+## [Ceiling] 1.0.0-rc.2 - 2026-07-17
+
+### Added
+- Show Codex banked rate-limit resets on every surface, including an explicit "0 available" so the count stays visible even when none are banked.
+- Add a "Send test notification" button in Settings that runs the real Windows toast pipeline and reports whether it was delivered.
+- Add Exact and Calm information modes for the floating bar. Calm leads with a trustworthy pace state and the next reset, with exact percentages one keyboard or click away, and never invents an "on pace" state from insufficient data.
+- Surface a tracked limit window as "unavailable" when it drops out of an otherwise-successful provider response, instead of silently losing it or fabricating a percentage.
+
 ## [Ceiling] 1.0.0-rc.1 - 2026-07-17
 
 First release candidate for Ceiling 1.0.
