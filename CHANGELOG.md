@@ -1,5 +1,17 @@
 # Changelog
 
+## [Ceiling] 1.0.0-rc.3 - 2026-07-18
+
+### Added
+- Notify when Codex gains banked reset credits after the grant is confirmed by a second fresh reading.
+
+### Changed
+- Warm trusted Cargo and pnpm release caches from `main` so signed tag builds can restore them without caching credentials or signed artifacts.
+
+### Fixed
+- Deliver confirmed unexpected-reset and banked-reset notifications through the Windows toast pipeline, with the success sound playing only after delivery.
+- Report global or per-app Windows notification blocks from the Settings test instead of claiming a notification was sent.
+
 ## [Ceiling] 1.0.0-rc.2 - 2026-07-17
 
 ### Added
