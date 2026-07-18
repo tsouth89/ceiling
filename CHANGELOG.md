@@ -1,5 +1,26 @@
 # Changelog
 
+## [Ceiling] 1.0.0 - 2026-07-18
+
+First stable release of Ceiling for Windows.
+
+### Added
+- Monitor provider-reported capacity and reset windows for Codex, Claude, Cursor, Gemini, and GitHub Copilot from the tray, dashboard, and taskbar-adjacent floating bar.
+- Detect confirmed unexpected resets, restored or lifted windows, reset-time shifts, and newly granted banked resets without replaying old events at startup.
+- Offer Exact and Calm information modes, taskbar-aware placement, persistent history, charts, and guided first-run provider setup.
+
+### Changed
+- Ship an English-only v1 with explicit provider data-source and privacy explanations.
+- Treat provider meters as authoritative and show unavailable or not-currently-enforced windows without inventing entitlement data.
+
+### Security
+- Protect local credentials with user-scoped DPAPI and current-user NTFS ACLs, restrict the optional PowerToys status pipe, and narrow Tauri command capabilities by window.
+- Remove legacy plaintext cookie storage, harden temporary browser database handling, and update the dependency chain for known advisories.
+
+### Fixed
+- Deliver confirmed reset notifications through the Windows toast pipeline and report Windows notification blocks accurately.
+- Keep the pop-out dashboard, native controls, taskbar placement, chart tooltips, and provider-window presentation stable across supported Windows configurations.
+
 ## [Ceiling] 1.0.0-rc.3 - 2026-07-18
 
 ### Added
