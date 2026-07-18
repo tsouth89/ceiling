@@ -119,7 +119,10 @@ fn archived_rollout_day_in_range(name: &str, range: &CostUsageDayRange) -> bool 
         .strip_prefix("rollout-")
         .and_then(|rest| rest.get(0..10))
     {
-        Some(day) if day.len() == 10 && day.as_bytes()[4] == b'-' && day.as_bytes()[7] == b'-' => {
+        // Only gate on a real calendar date. A date-shaped but invalid name
+        // (e.g. rollout-2026-99-99) must fall through so the parser's own
+        // timestamp filter decides, rather than being skipped lexicographically.
+        Some(day) if CostUsageDayRange::parse_day_key(day).is_some() => {
             CostUsageDayRange::is_in_range(day, &range.scan_since_key, &range.scan_until_key)
         }
         _ => true,
@@ -1270,6 +1273,12 @@ mod tests {
         ));
         // Unrecognized names fall through to the parser's own timestamp filter.
         assert!(archived_rollout_day_in_range("weird-name.jsonl", &range));
+        // Date-shaped but invalid calendar dates must also fall through, not be
+        // skipped lexicographically ("99" would sort past any real month/day).
+        assert!(archived_rollout_day_in_range(
+            "rollout-2026-99-99T10-00-00-abc.jsonl",
+            &range
+        ));
     }
 
     #[test]
