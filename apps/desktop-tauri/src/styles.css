@@ -7868,6 +7868,154 @@ body:has(.dashboard-shell) #root {
   font-size: 9.5px;
   line-height: 1.4;
 }
+.api-value-card {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 75%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 2.5%, transparent);
+}
+.api-value-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.api-value-card__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.api-value-card__subtitle {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.api-value-card__switchers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.api-value-card__switch {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 8px;
+  gap: 2px;
+}
+.api-value-card__switch-btn {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.api-value-card__switch-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  color: var(--text-primary);
+}
+.api-value-card__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+.api-value-card__ring {
+  position: relative;
+  flex: 0 0 auto;
+  width: 132px;
+  height: 132px;
+}
+.api-value-card__ring-svg {
+  width: 100%;
+  height: 100%;
+}
+.api-value-card__ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+.api-value-card__ring-center strong {
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.api-value-card__ring-center small {
+  margin-top: 1px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.api-value-card__legend {
+  flex: 1 1 160px;
+  min-width: 150px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+.api-value-card__legend-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 8px;
+}
+.api-value-card__legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  align-self: center;
+}
+.api-value-card__legend-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.api-value-card__legend-share {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.api-value-card__legend-value {
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.api-value-card__note {
+  margin: 12px 0 0;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+.api-value-card__estimate-marker {
+  margin-right: 3px;
+  font-weight: 700;
+}
+.api-value-card__status {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+@media (max-width: 420px) {
+  .api-value-card__body {
+    justify-content: center;
+  }
+}
 .quota-history {
   display: grid;
   gap: 12px;

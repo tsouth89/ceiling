@@ -5,6 +5,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
 import ProviderComparison from "./ProviderComparison";
+import { TotalApiValueCard } from "../components/TotalApiValueCard";
 
 const COMPARE_ID = "compare";
 
@@ -69,6 +70,7 @@ export default function ChartsPanel({
 
   return (
     <div className="charts-panel">
+      <TotalApiValueCard />
       {tabCount > 1 && (
         <div className="charts-provider-tabs" role="tablist" aria-label="Provider">
           {comparisonProviders && (
