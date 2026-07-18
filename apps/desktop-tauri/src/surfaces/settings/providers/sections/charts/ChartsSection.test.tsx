@@ -62,6 +62,11 @@ const enrichedData = {
       { model: "claude-sonnet-5", cost: 2_700, tokens: 3_500_000_000 },
       { model: "claude-retired-x", cost: null, tokens: 50_000_000 },
     ],
+    effortBreakdown: [
+      { effort: "high", cost: 12_000, tokens: 16_000_000_000 },
+      { effort: "xhigh", cost: 5_700, tokens: 7_500_000_000 },
+      { effort: "unknown", cost: null, tokens: 50_000_000 },
+    ],
     estimateNote: "API-equivalent estimate from local logs; not subscription spend",
     tokenCostUpdatedAtMs: 1,
     sevenDayTokenBreakdown: {
@@ -114,6 +119,15 @@ describe("ChartsSection local usage summary", () => {
     expect(models.textContent).toContain("Not priced");
     // Header total = sum of priced rows only ($15,000 + $2,700).
     expect(models.textContent).toContain("$17,700.00");
+
+    const efforts = getByLabelText("Cost by reasoning effort over 30 days");
+    // Effort tiers show friendly labels and dollars; total sums priced rows.
+    expect(efforts.textContent).toContain("High");
+    expect(efforts.textContent).toContain("$12,000.00");
+    expect(efforts.textContent).toContain("Extra high");
+    expect(efforts.textContent).toContain("$5,700.00");
+    expect(efforts.textContent).toContain("Unspecified");
+    expect(efforts.textContent).toContain("$17,700.00");
   });
 
   it("keeps quota history visible while local history loads, then enriches promptly", async () => {

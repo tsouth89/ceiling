@@ -86,6 +86,10 @@ pub struct ProviderLocalUsageSummary {
     /// Priced and unpriced models are both included.
     #[serde(default)]
     pub model_breakdown: Vec<LocalModelCost>,
+    /// Per-reasoning-effort spend over the 30-day period (Codex only; empty
+    /// for providers without an effort tier). Sorted by cost then tokens.
+    #[serde(default)]
+    pub effort_breakdown: Vec<LocalEffortCost>,
     pub estimate_note: String,
     pub token_cost_updated_at_ms: i64,
 }
@@ -182,6 +186,16 @@ pub struct LocalTokenBreakdown {
 #[serde(rename_all = "camelCase")]
 pub struct LocalModelCost {
     pub model: String,
+    pub cost: Option<f64>,
+    pub tokens: u64,
+}
+
+/// Per-reasoning-effort local spend for a period (Codex only: "high"/"xhigh"/
+/// "medium"/"unknown"). `cost` is `None` when the tier's models are unpriced.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEffortCost {
+    pub effort: String,
     pub cost: Option<f64>,
     pub tokens: u64,
 }
@@ -569,6 +583,7 @@ fn local_usage_summary_from_report(
         latest_tokens: non_zero_u64(last_session_tokens),
         top_model: top_model(&report.thirty_days),
         model_breakdown: model_breakdown(&report.thirty_days),
+        effort_breakdown: effort_breakdown(&report.thirty_days),
         estimate_note: localized_estimate_note(provider_id, lang),
         token_cost_updated_at_ms: current_unix_ms(),
     })
@@ -654,6 +669,7 @@ fn load_local_usage_summary_with_unknown_models(
             latest_tokens: non_zero_u64(latest_tokens),
             top_model: top_model(&thirty_day),
             model_breakdown: model_breakdown(&thirty_day),
+            effort_breakdown: effort_breakdown(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
         }),
@@ -914,6 +930,30 @@ fn model_breakdown(summary: &CostSummary) -> Vec<LocalModelCost> {
     rows
 }
 
+/// Per-reasoning-effort spend for a period, mirroring `model_breakdown`.
+/// Codex populates `by_effort` / `by_effort_tokens`; other providers leave
+/// them empty, so this returns an empty vec for them.
+fn effort_breakdown(summary: &CostSummary) -> Vec<LocalEffortCost> {
+    let mut rows: Vec<LocalEffortCost> = summary
+        .by_effort_tokens
+        .iter()
+        .map(|(effort, counts)| LocalEffortCost {
+            effort: effort.clone(),
+            cost: summary.by_effort.get(effort).copied(),
+            tokens: counts.total(),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.cost
+            .is_some()
+            .cmp(&a.cost.is_some())
+            .then_with(|| b.cost.unwrap_or(0.0).total_cmp(&a.cost.unwrap_or(0.0)))
+            .then(b.tokens.cmp(&a.tokens))
+            .then(a.effort.cmp(&b.effort))
+    });
+    rows
+}
+
 fn top_model(summary: &CostSummary) -> Option<String> {
     summary
         .by_model_tokens
@@ -990,10 +1030,10 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, LocalModelCost, LocalTokenBreakdown, ProviderLocalUsageSummary,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry,
-        local_usage_summary_from_report, localized_estimate_note, model_breakdown, token_breakdown,
-        token_cost_cache_is_fresh,
+        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalTokenBreakdown,
+        ProviderLocalUsageSummary, comparison_period_specs, cost_fetch_failure_allows_early_retry,
+        effort_breakdown, local_usage_summary_from_report, localized_estimate_note,
+        model_breakdown, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::Utc;
@@ -1046,6 +1086,11 @@ mod tests {
             top_model: Some("gpt-5".to_string()),
             model_breakdown: vec![LocalModelCost {
                 model: "gpt-5".to_string(),
+                cost: Some(2.0),
+                tokens: 300,
+            }],
+            effort_breakdown: vec![LocalEffortCost {
+                effort: "high".to_string(),
                 cost: Some(2.0),
                 tokens: 300,
             }],
@@ -1134,6 +1179,64 @@ mod tests {
                     model: "unpriced".to_string(),
                     cost: None,
                     tokens: 1000,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn effort_breakdown_orders_by_cost_and_is_empty_without_effort_data() {
+        // No effort data (e.g. Claude) yields an empty breakdown.
+        assert!(effort_breakdown(&CostSummary::default()).is_empty());
+
+        let mut summary = CostSummary::default();
+        summary.by_effort.insert("high".to_string(), 8.0);
+        summary.by_effort.insert("medium".to_string(), 2.0);
+        summary.by_effort_tokens.insert(
+            "high".to_string(),
+            ModelTokenCounts {
+                input_tokens: 50,
+                output_tokens: 50,
+                cached_tokens: 0,
+            },
+        );
+        summary.by_effort_tokens.insert(
+            "medium".to_string(),
+            ModelTokenCounts {
+                input_tokens: 200,
+                output_tokens: 200,
+                cached_tokens: 0,
+            },
+        );
+        // Unknown-effort usage with no price sorts last.
+        summary.by_effort_tokens.insert(
+            "unknown".to_string(),
+            ModelTokenCounts {
+                input_tokens: 900,
+                output_tokens: 900,
+                cached_tokens: 0,
+            },
+        );
+
+        let rows = effort_breakdown(&summary);
+
+        assert_eq!(
+            rows,
+            vec![
+                LocalEffortCost {
+                    effort: "high".to_string(),
+                    cost: Some(8.0),
+                    tokens: 100,
+                },
+                LocalEffortCost {
+                    effort: "medium".to_string(),
+                    cost: Some(2.0),
+                    tokens: 400,
+                },
+                LocalEffortCost {
+                    effort: "unknown".to_string(),
+                    cost: None,
+                    tokens: 1800,
                 },
             ]
         );
