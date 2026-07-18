@@ -286,8 +286,18 @@ async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchConte
 
     let state = app.state::<Mutex<AppState>>();
     let (snapshot, capacity_events, notifications_armed) = if let Ok(mut guard) = state.lock() {
-        let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
+        let mut snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
+        // Detect resets/lifts against the real response first, so the synthetic
+        // `unavailable` rows added next are never mistaken for a lifted window.
         let capacity_events = guard.capacity_event_observer.observe(&snapshot);
+        let unavailable = guard.enforcement_tracker.annotate(&mut snapshot);
+        if !unavailable.is_empty() {
+            tracing::debug!(
+                provider = %snapshot.provider_id,
+                windows = ?unavailable,
+                "windows dropped out of a successful response; marked unavailable"
+            );
+        }
         let notifications_armed = guard.notification_manager.notifications_are_armed();
         upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
         (snapshot, capacity_events, notifications_armed)

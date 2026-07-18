@@ -6,8 +6,8 @@ import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
 import {
   capacityFreshness,
+  codexResetCredits,
   glanceMeters,
-  resetCreditsAvailable,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
 
@@ -40,9 +40,13 @@ function pressureLabel(level: string): string | null {
   return null;
 }
 
-function inactiveWindowSummary(provider: ProviderUsageSnapshot): string | null {
+function inactiveWindowSummary(
+  provider: ProviderUsageSnapshot,
+  state: "notEnforced" | "unavailable",
+): string | null {
   const labels = [...new Set(
     (provider.inactiveRateWindows ?? [])
+      .filter((window) => (window.state ?? "notEnforced") === state)
       .map((window) => window.title.trim())
       .filter(Boolean),
   )];
@@ -165,8 +169,9 @@ export default function PlanStatusCard({
   const meters = glanceMeters(provider);
   const freshness = capacityFreshness(provider);
   const planName = displayPlanName(provider.planName, provider.displayName);
-  const inactiveSummary = inactiveWindowSummary(provider);
-  const resetCredits = resetCreditsAvailable(provider);
+  const notEnforcedSummary = inactiveWindowSummary(provider, "notEnforced");
+  const unavailableSummary = inactiveWindowSummary(provider, "unavailable");
+  const resetCredits = codexResetCredits(provider);
 
   const className = [
     "plan-status-card",
@@ -205,7 +210,9 @@ export default function PlanStatusCard({
                 </span>
               )}
               {resetCredits != null && (
-                <span className="plan-status-card__reset-credit">
+                <span
+                  className={`plan-status-card__reset-credit${resetCredits === 0 ? " plan-status-card__reset-credit--empty" : ""}`}
+                >
                   ↻ {resetCredits} {resetCredits === 1 ? "reset available" : "resets available"}
                 </span>
               )}
@@ -235,13 +242,22 @@ export default function PlanStatusCard({
               hero={false}
             />
           ))}
-          {inactiveSummary && (
+          {notEnforcedSummary && (
             <div className="plan-status-card__inactive">
               <span className="plan-status-card__inactive-mark" aria-hidden />
               <span className="plan-status-card__inactive-name">
-                {inactiveSummary}
+                {notEnforcedSummary}
               </span>
               <span>not currently enforced</span>
+            </div>
+          )}
+          {unavailableSummary && (
+            <div className="plan-status-card__inactive plan-status-card__inactive--unavailable">
+              <span className="plan-status-card__inactive-mark" aria-hidden />
+              <span className="plan-status-card__inactive-name">
+                {unavailableSummary}
+              </span>
+              <span>unavailable</span>
             </div>
           )}
         </div>

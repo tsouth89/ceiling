@@ -1296,6 +1296,13 @@ body:has(.taskbar-flyout-frame) #root {
   line-height: 14px;
 }
 
+/* No banked resets: keep the indicator visible but quiet — nothing to act on. */
+.taskbar-flyout__reset-credit--empty {
+  border-color: rgba(224, 247, 255, 0.18);
+  background: transparent;
+  color: rgba(224, 247, 255, 0.6);
+}
+
 .taskbar-flyout__provider-status {
   margin-top: 4px;
   overflow: hidden;
@@ -4383,6 +4390,13 @@ html:has(.menu-surface--tray) {
   line-height: 16px;
 }
 
+/* No banked resets: keep the indicator visible but quiet — nothing to act on. */
+.plan-status-card__reset-credit--empty {
+  border-color: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
 .plan-status-card__error {
   margin: 0;
   font-size: 11px;
@@ -4411,6 +4425,16 @@ html:has(.menu-surface--tray) {
   width: 10px;
   flex: 0 0 10px;
   border-top: 1px dashed color-mix(in srgb, var(--state-lifted) 70%, transparent);
+}
+
+/* Unavailable reads as caution (a tracked window we could not read), distinct
+   from the calm "not currently enforced" state. */
+.plan-status-card__inactive--unavailable .plan-status-card__inactive-mark {
+  border-top-style: solid;
+  border-top-color: color-mix(in srgb, var(--usage-bar-high) 80%, transparent);
+}
+.plan-status-card__inactive--unavailable > span:last-child {
+  color: var(--usage-bar-high);
 }
 
 .plan-status-card__inactive-name {
@@ -6652,6 +6676,13 @@ body:has(.dashboard-shell) #root {
   line-height: 1;
   white-space: nowrap;
 }
+
+/* No banked resets: keep the indicator visible but quiet — nothing to act on. */
+.provider-focus__reset-credit--empty {
+  border-color: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+}
 .provider-focus__primary {
   padding: 0 0 20px;
 }
@@ -6791,6 +6822,10 @@ body:has(.dashboard-shell) #root {
 .provider-focus__inactive > span:last-child {
   color: var(--text-secondary);
   font-size: 11px;
+}
+.provider-focus__inactive--unavailable > span:last-child {
+  color: var(--usage-bar-high);
+  font-weight: 600;
 }
 .provider-focus__info {
   display: grid;

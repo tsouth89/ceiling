@@ -107,6 +107,7 @@ pub struct SettingsPatch {
     pub style: Option<String>,
     pub open_on_hover: Option<bool>,
     pub density: Option<String>,
+    pub information_mode: Option<String>,
     pub contrast: Option<String>,
     pub click_through: Option<bool>,
     pub provider_ids: Option<Vec<String>>,
@@ -126,6 +127,7 @@ impl SettingsPatch {
             && self.style.is_none()
             && self.open_on_hover.is_none()
             && self.density.is_none()
+            && self.information_mode.is_none()
             && self.contrast.is_none()
             && self.click_through.is_none()
             && self.provider_ids.is_none()
@@ -163,6 +165,10 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.density {
             settings.float_bar_density = codexbar::settings::normalize_float_bar_density(v);
+        }
+        if let Some(v) = &self.information_mode {
+            settings.float_bar_information_mode =
+                codexbar::settings::normalize_float_bar_information_mode(v);
         }
         if let Some(v) = &self.contrast {
             settings.float_bar_contrast = Some(codexbar::settings::normalize_float_bar_contrast(v));
@@ -216,6 +222,22 @@ mod tests {
     #[test]
     fn settings_patch_is_empty_by_default() {
         assert!(SettingsPatch::default().is_empty());
+    }
+
+    #[test]
+    fn information_mode_only_change_is_a_non_empty_patch() {
+        // A mode-only change must count as a float-bar patch so the detached
+        // bar is told to re-fetch (after_settings_saved notifies when the patch
+        // is non-empty), and so it applies the new mode on disk.
+        let patch = SettingsPatch {
+            information_mode: Some("calm".into()),
+            ..SettingsPatch::default()
+        };
+        assert!(!patch.is_empty());
+
+        let mut settings = Settings::default();
+        patch.apply(&mut settings);
+        assert_eq!(settings.float_bar_information_mode, "calm");
     }
 
     #[test]

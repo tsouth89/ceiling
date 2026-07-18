@@ -47,6 +47,7 @@ export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
 export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
 export type FloatBarDensity = "compact" | "standard" | "detailed";
+export type FloatBarInformationMode = "exact" | "calm";
 export type FloatBarContrast = "auto" | "light-text" | "dark-text";
 export type ProofProviderId =
   | "codex"
@@ -264,6 +265,8 @@ export interface SettingsSnapshot {
   /** Open the taskbar glance panel after a short pointer dwell. */
   taskbarWidgetOpenOnHover: boolean;
   floatBarDensity: FloatBarDensity;
+  /** "exact" (icon + %) or "calm" (pace state + next reset). Separate from density. */
+  floatBarInformationMode: FloatBarInformationMode;
   floatBarContrast: FloatBarContrast;
   floatBarClickThrough: boolean;
   /** Empty array = show all enabled providers. */
@@ -328,6 +331,7 @@ export interface SettingsUpdate {
   floatBarStyle?: FloatBarStyle;
   taskbarWidgetOpenOnHover?: boolean;
   floatBarDensity?: FloatBarDensity;
+  floatBarInformationMode?: FloatBarInformationMode;
   floatBarContrast?: FloatBarContrast;
   floatBarClickThrough?: boolean;
   floatBarProviderIds?: string[];
@@ -415,6 +419,12 @@ export interface ProviderUsageSnapshot {
     id: string;
     title: string;
     description: string;
+    /**
+     * "notEnforced": the provider reported no active limit for this window.
+     * "unavailable": a tracked window dropped out of an otherwise-successful
+     * response. Optional for back-compat; treat a missing value as notEnforced.
+     */
+    state?: "notEnforced" | "unavailable";
   }>;
   promoSignals?: Array<{
     id: string;

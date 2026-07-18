@@ -4,6 +4,7 @@ import type {
   FloatBarOrientation,
   FloatBarContrast,
   FloatBarDensity,
+  FloatBarInformationMode,
   SettingsSnapshot,
   SettingsUpdate,
 } from "../types/bridge";
@@ -148,6 +149,22 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                 { value: "detailed", label: "Detailed" },
               ]}
               onChange={(v) => set({ floatBarDensity: v as FloatBarDensity })}
+            />
+          </Field>
+          <Field
+            label="Information"
+            description="Exact shows the percentage. Calm shows a pace state and the next reset, with the exact percentage on click."
+          >
+            <Select
+              value={settings.floatBarInformationMode}
+              disabled={saving || !settings.floatBarEnabled}
+              options={[
+                { value: "exact", label: "Exact" },
+                { value: "calm", label: "Calm" },
+              ]}
+              onChange={(v) =>
+                set({ floatBarInformationMode: v as FloatBarInformationMode })
+              }
             />
           </Field>
           <>

@@ -287,6 +287,51 @@ body.floatbar-window #root {
 .floatbar__reset--emphasis .floatbar__reset-time {
   font-weight: 650;
 }
+/* ── Calm information mode ─────────────────────────────────────────────
+   The pill leads with a trustworthy pace state + next reset and becomes an
+   expandable button. No new motion, so reduced-motion is unaffected. */
+.floatbar__pill--calm {
+  cursor: pointer;
+}
+.floatbar__pill--calm:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ceiling-accent, #26b5ce) 70%, white);
+  outline-offset: 1px;
+}
+.floatbar__pace {
+  font-size: 0.86em;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+.floatbar__pace--steady {
+  color: color-mix(in srgb, #34d399 62%, white);
+}
+.floatbar__pace--watch {
+  color: color-mix(in srgb, #f59e0b 68%, white);
+}
+.floatbar__calm-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3px * var(--floatbar-scale, 1));
+  opacity: 0.66;
+  line-height: 1;
+}
+.floatbar__calm-sep {
+  opacity: 0.5;
+}
+.floatbar__pct--calm {
+  padding-left: calc(6px * var(--floatbar-scale, 1));
+  margin-left: calc(2px * var(--floatbar-scale, 1));
+  border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 0.98em;
+}
+.floatbar--light-bg .floatbar__pace--steady {
+  color: color-mix(in srgb, #059669 78%, black);
+}
+.floatbar--light-bg .floatbar__pace--watch {
+  color: color-mix(in srgb, #b45309 82%, black);
+}
+
 .floatbar--vertical .floatbar__text {
   flex-direction: column;
   align-items: center;

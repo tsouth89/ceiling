@@ -247,6 +247,14 @@ pub fn play_notification_sound() -> Result<(), String> {
     Ok(())
 }
 
+/// Show a real Windows toast on demand so the user can confirm notifications
+/// are delivered on their machine. Runs the full toast pipeline synchronously
+/// and surfaces any failure back to the Settings button.
+#[tauri::command]
+pub fn send_test_notification() -> Result<(), String> {
+    codexbar::notifications::send_test_notification()
+}
+
 /// Reposition the flyout window so its bottom-right corner stays anchored to
 /// the system-tray area. Called from the frontend after dynamic resize.
 ///

@@ -43,6 +43,13 @@ function codex(): ProviderUsageSnapshot {
         id: "session",
         title: "5-hour session",
         description: "Not currently enforced by OpenAI",
+        state: "notEnforced",
+      },
+      {
+        id: "weekly",
+        title: "Weekly",
+        description: "Not reported in the latest update",
+        state: "unavailable",
       },
     ],
     cost: null,
@@ -114,6 +121,9 @@ describe("ProviderDetailView", () => {
     expect(screen.getByText("Codex Spark")).toBeInTheDocument();
     expect(screen.getByText("5-hour session")).toBeInTheDocument();
     expect(screen.getByText("Not currently enforced")).toBeInTheDocument();
+    // A window that dropped out of a successful response reads as Unavailable,
+    // never as "not currently enforced" or a fabricated percentage.
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.queryByText("Promotional")).toBeNull();
     expect(screen.getAllByText(/Weekly pace/)).toHaveLength(2);
     expect(screen.getAllByText(/Far ahead of budget/)).toHaveLength(2);

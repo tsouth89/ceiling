@@ -75,6 +75,7 @@ commands.allow = [
   "get_launch_block_reason",
   "get_work_area_rect",
   "play_notification_sound",
+  "send_test_notification",
   "open_external_url",
   "reanchor_tray_panel",
   "quit_app",

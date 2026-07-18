@@ -5,6 +5,7 @@ use std::time::Duration;
 mod auto_refresh;
 mod capacity_events;
 mod commands;
+mod enforcement;
 mod events;
 mod floatbar;
 mod geometry_store;
@@ -209,6 +210,7 @@ fn main() {
             commands::get_launch_block_reason,
             commands::get_work_area_rect,
             commands::play_notification_sound,
+            commands::send_test_notification,
             commands::open_external_url,
             commands::reanchor_tray_panel,
             commands::quit_app,

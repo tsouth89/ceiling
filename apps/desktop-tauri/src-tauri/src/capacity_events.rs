@@ -525,7 +525,11 @@ fn inactive_windows(snapshot: &ProviderUsageSnapshot) -> HashMap<String, String>
         .collect()
 }
 
-fn ignored_capacity_window(snapshot: &ProviderUsageSnapshot, id: &str, title: &str) -> bool {
+pub(crate) fn ignored_capacity_window(
+    snapshot: &ProviderUsageSnapshot,
+    id: &str,
+    title: &str,
+) -> bool {
     if snapshot.provider_id != "cursor" {
         return false;
     }
@@ -535,7 +539,7 @@ fn ignored_capacity_window(snapshot: &ProviderUsageSnapshot, id: &str, title: &s
         || identity.contains("ondemand")
 }
 
-fn semantic_inactive_window_id(provider_id: &str, id: &str, title: &str) -> String {
+pub(crate) fn semantic_inactive_window_id(provider_id: &str, id: &str, title: &str) -> String {
     let title_id = normalize_window_id(title);
     if let Some(core_id) = core_window_id(&title_id) {
         return core_id.to_string();
@@ -592,7 +596,7 @@ fn to_observed_window(label: &str, window: &RateWindowSnapshot) -> Option<Observ
     })
 }
 
-fn semantic_window_id(label: &str, window_minutes: Option<u32>) -> String {
+pub(crate) fn semantic_window_id(label: &str, window_minutes: Option<u32>) -> String {
     let normalized = normalize_window_id(label);
     if matches!(
         normalized.as_str(),
@@ -624,15 +628,15 @@ fn normalize_window_id(value: &str) -> String {
         .to_string()
 }
 
-fn observation_scope(snapshot: &ProviderUsageSnapshot) -> String {
-    let identity = snapshot
-        .account_email
-        .as_deref()
-        .or(snapshot.account_organization.as_deref())
-        .unwrap_or("anonymous");
+pub(crate) fn observation_scope(snapshot: &ProviderUsageSnapshot) -> String {
+    // Scope by BOTH account identifiers, not either/or: the same email can
+    // belong to different organizations (e.g. a personal vs a business
+    // workspace) with distinct limits, and those must never share a baseline.
+    let email = snapshot.account_email.as_deref().unwrap_or("");
+    let organization = snapshot.account_organization.as_deref().unwrap_or("");
     let raw = format!(
-        "{}|{}|{}",
-        snapshot.provider_id, snapshot.source_label, identity
+        "{}|{}|{}|{}",
+        snapshot.provider_id, snapshot.source_label, email, organization
     );
     format!("{}:{:016x}", snapshot.provider_id, fnv1a64(raw.as_bytes()))
 }
@@ -729,6 +733,7 @@ mod tests {
                 id: id.into(),
                 title: title.into(),
                 description: "Not currently limited".into(),
+                state: "notEnforced".into(),
             });
         snapshot
     }
