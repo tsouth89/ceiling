@@ -1,5 +1,21 @@
 # Changelog
 
+## [Ceiling] 1.1.0 - 2026-07-18
+
+### Added
+- Show a total estimated API-value card that aggregates local usage across Codex and Claude, with Today, Yesterday, and 30-day views, an API value or Tokens metric, a provider ring, and a ranked legend.
+- Break down 30-day spend by model, and by Codex reasoning effort, each with a running total and clear "Not priced" rows for models without a public rate.
+- Surface pricing coverage (for example, "96% of tokens priced") and name the unpriced models, so estimated totals stay transparent.
+
+### Changed
+- Label token-derived dollars as estimated API value, not a bill or subscription spend, across the new cost views.
+
+### Fixed
+- Stop counting a child or sub-agent session's replayed parent history, which could inflate Codex token and cost estimates many times over.
+- Include archived Codex sessions and de-duplicate rollouts across locations, so 30-day usage is neither under-counted nor double-counted.
+- Stop reporting dollars for models without a canonical price (their tokens are still counted), so a period of only unpriced usage no longer reads as $0.00.
+- Attribute Codex usage to the real reasoning-effort tier recorded in the session logs instead of guessing from the model name.
+
 ## [Ceiling] 1.0.0 - 2026-07-18
 
 First stable release of Ceiling for Windows.
