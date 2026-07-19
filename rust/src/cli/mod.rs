@@ -15,6 +15,7 @@ pub mod cost;
 pub mod diagnose;
 pub mod serve;
 pub mod sessions;
+pub mod statusline;
 pub mod tty_runner;
 pub mod usage;
 
@@ -123,6 +124,9 @@ pub enum Commands {
 
     /// Serve usage and cost JSON on 127.0.0.1
     Serve(serve::ServeArgs),
+
+    /// Print one compact usage line for an editor status bar (cache-only)
+    Statusline(statusline::StatuslineArgs),
 
     /// Manage auto-start on Windows boot
     Autostart(autostart::AutostartArgs),
