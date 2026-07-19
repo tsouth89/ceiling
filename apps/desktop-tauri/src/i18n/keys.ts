@@ -369,6 +369,8 @@ export const ALL_LOCALE_KEYS = [
   "CriticalUsageWarningHelper",
   "GlobalShortcutFieldLabel",
   "GlobalShortcutToggleHelper",
+  "TaskbarToggleShortcutFieldLabel",
+  "TaskbarToggleShortcutHelper",
   "ShortcutRecordButton",
   "ShortcutRecordingLabel",
   "ShortcutRecordingHint",

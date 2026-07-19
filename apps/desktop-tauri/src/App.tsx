@@ -100,16 +100,6 @@ function AppInner() {
             .catch(() => {});
         }, 2_000);
 
-    // Listen for user-registered global shortcut events from the
-    // `register_global_shortcut` command. The persistent shortcut (bound via
-    // shortcut_bridge::plugin) already opens the PopOut dashboard natively;
-    // this listener is the fallback for ad-hoc capture-mode registrations.
-    const unlistenPromise = auxiliaryWindow
-      ? Promise.resolve(null)
-      : listen<string>("global-shortcut-triggered", () => {
-          void setSurfaceMode("popOut", { kind: "dashboard" }).catch(() => {});
-        });
-
     const unlistenSettingsChangePromise = isSettingsWindow()
       ? listen<string>("settings-change-tab", () => {
           void reloadBootstrapState()
@@ -139,7 +129,6 @@ function AppInner() {
 
     return () => {
       cancelled = true;
-      void unlistenPromise.then((unlisten) => unlisten?.()).catch(() => {});
       void unlistenSettingsChangePromise
         .then((unlisten) => unlisten?.())
         .catch(() => {});

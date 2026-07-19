@@ -237,6 +237,8 @@ export interface SettingsSnapshot {
   autoDownloadUpdates: boolean;
   installUpdatesOnQuit: boolean;
   globalShortcut: string;
+  /** Optional while reading settings saved before the taskbar shortcut existed. */
+  taskbarToggleShortcut?: string;
   /** Extra Codex home or sessions directories scanned for local usage history. */
   codexCustomSessionsDirs: string[];
   agentSessionsEnabled?: boolean;
@@ -309,6 +311,7 @@ export interface SettingsUpdate {
   autoDownloadUpdates?: boolean;
   installUpdatesOnQuit?: boolean;
   globalShortcut?: string;
+  taskbarToggleShortcut?: string;
   codexCustomSessionsDirs?: string[];
   agentSessionsEnabled?: boolean;
   agentSessionSshHosts?: string[];
@@ -794,12 +797,6 @@ export interface WorkAreaRect {
   width: number;
   height: number;
 }
-
-// ── Phase 4 — event payloads ─────────────────────────────────────────
-
-/** Payload emitted for the `global-shortcut-triggered` event: the
- *  accelerator string that fired, e.g. `"Ctrl+Shift+U"`. */
-export type GlobalShortcutTriggeredPayload = string;
 
 // ── Phase 5 — i18n ────────────────────────────────────────────────────
 

@@ -104,79 +104,165 @@ fn parse_key(token: &str) -> Option<Code> {
         .find_map(|(alias, code)| (*alias == normalized).then_some(*code))
 }
 
-/// Build the Tauri global-shortcut plugin with the primary-window handler.
+/// Build the Tauri global-shortcut plugin. Individual shortcuts get focused
+/// handlers when they are registered so the taskbar toggle never needs to
+/// activate a webview just to hide the strip.
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(|app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                let _ = shell::reopen_to_target(
-                    app,
-                    crate::surface::SurfaceMode::PopOut,
-                    crate::surface_target::SurfaceTarget::Dashboard,
-                    None,
-                );
-            }
-        })
-        .build()
+    tauri_plugin_global_shortcut::Builder::new().build()
 }
 
-/// Register the persisted global shortcut from settings.
+#[derive(Clone, Copy)]
+enum ShortcutAction {
+    OpenDashboard,
+    ToggleTaskbarStrip,
+}
+
+#[derive(Default)]
+struct ShortcutPair {
+    dashboard: Option<Shortcut>,
+    taskbar_toggle: Option<Shortcut>,
+}
+
+fn configured_shortcuts(dashboard: &str, taskbar_toggle: &str) -> Result<ShortcutPair, String> {
+    let parse_optional = |value: &str, label: &str| {
+        if value.trim().is_empty() {
+            Ok(None)
+        } else {
+            parse_shortcut(value)
+                .map(Some)
+                .ok_or_else(|| format!("Invalid {label} shortcut \"{value}\"."))
+        }
+    };
+
+    let shortcuts = ShortcutPair {
+        dashboard: parse_optional(dashboard, "dashboard")?,
+        taskbar_toggle: parse_optional(taskbar_toggle, "taskbar strip")?,
+    };
+
+    if shortcuts
+        .dashboard
+        .as_ref()
+        .zip(shortcuts.taskbar_toggle.as_ref())
+        .is_some_and(|(dashboard, taskbar_toggle)| dashboard.id() == taskbar_toggle.id())
+    {
+        return Err("The dashboard and taskbar strip shortcuts must be different.".into());
+    }
+
+    Ok(shortcuts)
+}
+
+fn register_action(
+    app: &AppHandle,
+    shortcut: Shortcut,
+    action: ShortcutAction,
+) -> Result<(), String> {
+    match action {
+        ShortcutAction::OpenDashboard => {
+            app.global_shortcut()
+                .on_shortcut(shortcut, |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = shell::reopen_to_target(
+                            app,
+                            crate::surface::SurfaceMode::PopOut,
+                            crate::surface_target::SurfaceTarget::Dashboard,
+                            None,
+                        );
+                    }
+                })
+        }
+        ShortcutAction::ToggleTaskbarStrip => {
+            app.global_shortcut()
+                .on_shortcut(shortcut, |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        crate::floatbar::toggle(app);
+                    }
+                })
+        }
+    }
+    .map_err(|error| format!("Failed to register shortcut: {error}"))
+}
+
+fn unregister_pair(app: &AppHandle, shortcuts: &ShortcutPair) {
+    for shortcut in [shortcuts.dashboard, shortcuts.taskbar_toggle]
+        .into_iter()
+        .flatten()
+    {
+        let _ = app.global_shortcut().unregister(shortcut);
+    }
+}
+
+fn register_pair(app: &AppHandle, shortcuts: &ShortcutPair) -> Result<(), String> {
+    if let Some(shortcut) = shortcuts.dashboard {
+        register_action(app, shortcut, ShortcutAction::OpenDashboard)?;
+    }
+    if let Some(shortcut) = shortcuts.taskbar_toggle
+        && let Err(error) = register_action(app, shortcut, ShortcutAction::ToggleTaskbarStrip)
+    {
+        if let Some(dashboard) = shortcuts.dashboard {
+            let _ = app.global_shortcut().unregister(dashboard);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Register the persisted global shortcuts from settings.
 ///
 /// Call this in the Tauri `setup` closure after the plugin is initialised.
 pub fn register(app: &AppHandle) {
     let settings = codexbar::settings::Settings::load();
-    let shortcut_str = &settings.global_shortcut;
+    let shortcuts =
+        match configured_shortcuts(&settings.global_shortcut, &settings.taskbar_toggle_shortcut) {
+            Ok(shortcuts) => shortcuts,
+            Err(error) => {
+                tracing::warn!(%error, "Could not parse configured global shortcuts");
+                return;
+            }
+        };
 
-    let Some(shortcut) = parse_shortcut(shortcut_str) else {
-        tracing::warn!("Could not parse global shortcut: {shortcut_str}");
-        return;
-    };
-
-    match app.global_shortcut().register(shortcut) {
-        Ok(()) => {
-            tracing::info!("Registered global shortcut: {shortcut_str}");
-        }
-        Err(e) => {
-            tracing::warn!("Failed to register global shortcut '{shortcut_str}': {e}");
-        }
+    if let Err(error) = register_pair(app, &shortcuts) {
+        tracing::warn!(%error, "Could not register configured global shortcuts");
     }
 }
 
-/// Live-swap the global shortcut: unregister `old` and register `new`.
-///
-/// Called from `update_settings` when the user changes the shortcut in the
-/// Settings UI. Returns `Err` with a user-facing message when the new
-/// shortcut string cannot be parsed or registration fails. On error the old
-/// shortcut is left registered (best-effort).
-pub fn reregister_shortcut(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
-    let new_shortcut = parse_shortcut(new).ok_or_else(|| {
-        format!("Invalid shortcut \"{new}\". Use a combination like Ctrl+Shift+U.")
-    })?;
+/// Live-swap both persisted global shortcuts without leaving the app with a
+/// half-registered pair when one of the new accelerators is unavailable.
+pub fn reregister_shortcuts(
+    app: &AppHandle,
+    old_dashboard: &str,
+    old_taskbar_toggle: &str,
+    new_dashboard: &str,
+    new_taskbar_toggle: &str,
+) -> Result<(), String> {
+    let next = configured_shortcuts(new_dashboard, new_taskbar_toggle)?;
+    let previous =
+        configured_shortcuts(old_dashboard, old_taskbar_toggle).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Ignoring invalid previously saved global shortcut");
+            ShortcutPair::default()
+        });
 
-    // Unregister the previous shortcut (ignore errors — it may not be registered).
-    if let Some(old_shortcut) = parse_shortcut(old) {
-        let _ = app.global_shortcut().unregister(old_shortcut);
+    unregister_pair(app, &previous);
+    if let Err(error) = register_pair(app, &next) {
+        unregister_pair(app, &next);
+        if let Err(restore_error) = register_pair(app, &previous) {
+            tracing::error!(%restore_error, "Could not restore previous global shortcuts");
+        }
+        return Err(error);
     }
 
-    app.global_shortcut().register(new_shortcut).map_err(|e| {
-        // Best-effort: try to restore the old shortcut.
-        if let Some(old_shortcut) = parse_shortcut(old) {
-            let _ = app.global_shortcut().register(old_shortcut);
-        }
-        format!("Failed to register shortcut \"{new}\": {e}")
-    })?;
-
-    tracing::info!("Re-registered global shortcut: {old} → {new}");
     Ok(())
 }
 
-pub fn unregister_shortcut(app: &AppHandle, old: &str) -> Result<(), String> {
-    if let Some(old_shortcut) = parse_shortcut(old) {
-        app.global_shortcut()
-            .unregister(old_shortcut)
-            .map_err(|e| format!("Failed to unregister shortcut \"{old}\": {e}"))?;
-        tracing::info!("Unregistered global shortcut: {old}");
-    }
+/// Verify that an accelerator is syntactically valid and can be reserved by
+/// Windows before Settings asks the bridge to persist it. The probe is removed
+/// immediately; `reregister_shortcuts` performs the real atomic swap.
+pub fn validate_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
+    let shortcut = parse_shortcut(accelerator)
+        .ok_or_else(|| format!("Invalid shortcut \"{accelerator}\". Use e.g. Ctrl+Shift+H."))?;
+    app.global_shortcut()
+        .register(shortcut)
+        .map_err(|error| format!("Failed to register shortcut \"{accelerator}\": {error}"))?;
+    let _ = app.global_shortcut().unregister(shortcut);
     Ok(())
 }
 
@@ -209,6 +295,20 @@ mod tests {
     #[test]
     fn parse_empty_returns_none() {
         assert!(parse_shortcut("").is_none());
+    }
+
+    #[test]
+    fn configured_shortcuts_allow_an_unbound_taskbar_toggle() {
+        let shortcuts = configured_shortcuts("Ctrl+Shift+U", "").unwrap();
+        assert!(shortcuts.dashboard.is_some());
+        assert!(shortcuts.taskbar_toggle.is_none());
+    }
+
+    #[test]
+    fn configured_shortcuts_reject_duplicate_accelerators() {
+        let result = configured_shortcuts("Ctrl+Shift+U", "Ctrl+Shift+U");
+        assert!(result.is_err());
+        assert!(result.err().unwrap().contains("must be different"));
     }
 
     #[test]

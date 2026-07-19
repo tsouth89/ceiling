@@ -36,6 +36,7 @@ pub struct SettingsUpdate {
     pub auto_download_updates: Option<bool>,
     pub install_updates_on_quit: Option<bool>,
     pub global_shortcut: Option<String>,
+    pub taskbar_toggle_shortcut: Option<String>,
     pub codex_custom_sessions_dirs: Option<Vec<String>>,
     pub agent_sessions_enabled: Option<bool>,
     pub agent_session_ssh_hosts: Option<Vec<String>>,
@@ -102,22 +103,34 @@ impl SettingsUpdate {
             || self.ui_language.is_some()
     }
 
-    fn validate_shortcut_change(
+    fn validate_shortcut_changes(
         &self,
         app: &tauri::AppHandle,
-        current_shortcut: &str,
+        current_dashboard_shortcut: &str,
+        current_taskbar_toggle_shortcut: &str,
     ) -> Result<(), String> {
-        let Some(new_shortcut) = &self.global_shortcut else {
-            return Ok(());
-        };
+        let next_dashboard_shortcut = self
+            .global_shortcut
+            .as_deref()
+            .unwrap_or(current_dashboard_shortcut);
+        let next_taskbar_toggle_shortcut = self
+            .taskbar_toggle_shortcut
+            .as_deref()
+            .unwrap_or(current_taskbar_toggle_shortcut);
 
-        if new_shortcut.trim().is_empty() {
-            crate::shortcut_bridge::unregister_shortcut(app, current_shortcut)?;
-        } else if new_shortcut != current_shortcut {
-            crate::shortcut_bridge::reregister_shortcut(app, current_shortcut, new_shortcut)?;
+        if next_dashboard_shortcut == current_dashboard_shortcut
+            && next_taskbar_toggle_shortcut == current_taskbar_toggle_shortcut
+        {
+            return Ok(());
         }
 
-        Ok(())
+        crate::shortcut_bridge::reregister_shortcuts(
+            app,
+            current_dashboard_shortcut,
+            current_taskbar_toggle_shortcut,
+            next_dashboard_shortcut,
+            next_taskbar_toggle_shortcut,
+        )
     }
 
     fn apply_provider_settings(self, settings: &mut Settings) -> Self {
@@ -150,6 +163,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.global_shortcut.clone() {
             settings.global_shortcut = v;
+        }
+        if let Some(v) = self.taskbar_toggle_shortcut.clone() {
+            settings.taskbar_toggle_shortcut = v;
         }
         if let Some(v) = self.ui_language.as_deref().and_then(parse_language)
             && settings.ui_language != v
@@ -368,7 +384,11 @@ pub async fn update_settings(
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
     let previous_language = settings.ui_language;
 
-    patch.validate_shortcut_change(&app, &settings.global_shortcut)?;
+    patch.validate_shortcut_changes(
+        &app,
+        &settings.global_shortcut,
+        &settings.taskbar_toggle_shortcut,
+    )?;
     let float_bar_patch = patch.apply_to(&mut settings)?;
 
     if settings.ui_language != previous_language {

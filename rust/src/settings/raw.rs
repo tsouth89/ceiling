@@ -111,6 +111,8 @@ pub(super) struct RawSettings {
     provider_order: Vec<String>,
     #[serde(default = "default_global_shortcut")]
     global_shortcut: String,
+    #[serde(default = "default_taskbar_toggle_shortcut")]
+    taskbar_toggle_shortcut: String,
     codex_custom_sessions_dirs: Vec<String>,
     agent_sessions_enabled: bool,
     agent_session_ssh_hosts: Vec<String>,
@@ -223,6 +225,7 @@ impl Default for RawSettings {
             provider_metrics: s.provider_metrics,
             provider_order: s.provider_order,
             global_shortcut: s.global_shortcut,
+            taskbar_toggle_shortcut: s.taskbar_toggle_shortcut,
             codex_custom_sessions_dirs: s.codex_custom_sessions_dirs,
             agent_sessions_enabled: s.agent_sessions_enabled,
             agent_session_ssh_hosts: s.agent_session_ssh_hosts,
@@ -525,6 +528,7 @@ impl From<RawSettings> for Settings {
                 normalize_provider_order(&raw.provider_order)
             },
             global_shortcut: raw.global_shortcut,
+            taskbar_toggle_shortcut: raw.taskbar_toggle_shortcut,
             codex_custom_sessions_dirs: raw.codex_custom_sessions_dirs,
             agent_sessions_enabled: raw.agent_sessions_enabled,
             agent_session_ssh_hosts: raw.agent_session_ssh_hosts,

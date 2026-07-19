@@ -2,8 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
-  registerGlobalShortcut: vi.fn(),
-  unregisterGlobalShortcut: vi.fn(),
+  validateGlobalShortcut: vi.fn(),
 }));
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -17,6 +16,7 @@ import type { SettingsSnapshot } from "../../../types/bridge";
 
 const settings = {
   globalShortcut: "Ctrl+Shift+U",
+  taskbarToggleShortcut: "Ctrl+Shift+H",
   codexCustomSessionsDirs: [],
   agentSessionSshHosts: [],
   activeAgentSessionsEnabled: false,
@@ -29,14 +29,35 @@ const settings = {
 describe("AdvancedTab shortcut registration", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("shows registration failures and does not persist a shortcut that is inactive", async () => {
+  it("validates and saves the dashboard shortcut", async () => {
     const set = vi.fn();
-    tauriMocks.registerGlobalShortcut.mockRejectedValue(
+    render(<AdvancedTab settings={settings} set={set} saving={false} />);
+
+    const recordButtons = screen.getAllByRole("button", { name: "ShortcutRecordButton" });
+    expect(recordButtons).toHaveLength(2);
+    fireEvent.click(recordButtons[0]);
+    fireEvent.keyDown(window, {
+      key: "K",
+      code: "KeyK",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    await waitFor(() =>
+      expect(tauriMocks.validateGlobalShortcut).toHaveBeenCalledWith("Ctrl+Shift+K"),
+    );
+    expect(set).toHaveBeenCalledWith({ globalShortcut: "Ctrl+Shift+K" });
+  });
+
+  it("does not persist an unavailable taskbar shortcut", async () => {
+    const set = vi.fn();
+    tauriMocks.validateGlobalShortcut.mockRejectedValue(
       new Error("Shortcut is already in use"),
     );
 
     render(<AdvancedTab settings={settings} set={set} saving={false} />);
-    fireEvent.click(screen.getByRole("button", { name: "ShortcutRecordButton" }));
+    const recordButtons = screen.getAllByRole("button", { name: "ShortcutRecordButton" });
+    fireEvent.click(recordButtons[1]);
     fireEvent.keyDown(window, {
       key: "K",
       code: "KeyK",
@@ -47,21 +68,35 @@ describe("AdvancedTab shortcut registration", () => {
     await waitFor(() =>
       expect(screen.getByText("Shortcut is already in use")).toBeInTheDocument(),
     );
-    expect(set).not.toHaveBeenCalledWith({ globalShortcut: "Ctrl+Shift+K" });
+    expect(set).not.toHaveBeenCalledWith({ taskbarToggleShortcut: "Ctrl+Shift+K" });
   });
 
-  it("keeps the saved shortcut when unregistering fails", async () => {
+  it("leaves an unchanged shortcut alone", async () => {
     const set = vi.fn();
-    tauriMocks.unregisterGlobalShortcut.mockRejectedValue(
-      new Error("Could not unregister shortcut"),
-    );
-
     render(<AdvancedTab settings={settings} set={set} saving={false} />);
-    fireEvent.click(screen.getByRole("button", { name: "ShortcutClearButton" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("Could not unregister shortcut")).toBeInTheDocument(),
-    );
+    const recordButtons = screen.getAllByRole("button", { name: "ShortcutRecordButton" });
+    fireEvent.click(recordButtons[1]);
+    fireEvent.keyDown(window, {
+      key: "H",
+      code: "KeyH",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    await waitFor(() => expect(tauriMocks.validateGlobalShortcut).not.toHaveBeenCalled());
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("clears only the selected shortcut", () => {
+    const set = vi.fn();
+    render(<AdvancedTab settings={settings} set={set} saving={false} />);
+
+    const clearButtons = screen.getAllByRole("button", { name: "ShortcutClearButton" });
+    expect(clearButtons).toHaveLength(2);
+    fireEvent.click(clearButtons[1]);
+
+    expect(set).toHaveBeenCalledWith({ taskbarToggleShortcut: "" });
     expect(set).not.toHaveBeenCalledWith({ globalShortcut: "" });
   });
 });

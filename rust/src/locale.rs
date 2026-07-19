@@ -594,6 +594,8 @@ locale_keys! {
     CriticalUsageWarningHelper,
     GlobalShortcutFieldLabel,
     GlobalShortcutToggleHelper,
+    TaskbarToggleShortcutFieldLabel,
+    TaskbarToggleShortcutHelper,
     ShortcutRecordButton,
     ShortcutRecordingLabel,
     ShortcutRecordingHint,
