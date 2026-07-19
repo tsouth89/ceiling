@@ -121,6 +121,46 @@ describe("ProvidersSidebar", () => {
     ]);
   });
 
+  it("keeps an optimistic reorder when parent props are recreated", async () => {
+    const onReorder = vi.fn();
+    const { container, rerender } = render(
+      <LocaleProvider>
+        <ProvidersSidebar
+          providers={rows()}
+          selectedId="codex"
+          searchText=""
+          onSearchTextChange={vi.fn()}
+          onSelect={vi.fn()}
+          onReorder={onReorder}
+          onToggleEnabled={vi.fn()}
+        />
+      </LocaleProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Move down Codex" }));
+    rerender(
+      <LocaleProvider>
+        <ProvidersSidebar
+          providers={rows()}
+          selectedId="codex"
+          searchText=""
+          onSearchTextChange={vi.fn()}
+          onSelect={vi.fn()}
+          onReorder={onReorder}
+          onToggleEnabled={vi.fn()}
+        />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => {
+      const names = Array.from(
+        container.querySelectorAll(".providers-sidebar__name"),
+        (node) => node.textContent,
+      );
+      expect(names.slice(0, 3)).toEqual(["Claude", "Codex", "Cursor"]);
+    });
+  });
+
   it("does not let the first provider move up", async () => {
     render(
       <LocaleProvider>

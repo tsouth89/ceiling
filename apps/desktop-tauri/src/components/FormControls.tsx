@@ -43,11 +43,13 @@ export function Select({
   options,
   onChange,
   disabled,
+  ariaLabel,
 }: {
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   // Size for the longest option, not only the selected value. Native select
   // popovers use their longest label, so a narrow closed control can otherwise
@@ -70,6 +72,7 @@ export function Select({
       options={options}
       onChange={onChange}
       disabled={disabled}
+      ariaLabel={ariaLabel}
       style={{ width }}
     />
   );
@@ -82,6 +85,7 @@ export function NumberInput({
   step,
   onChange,
   disabled,
+  ariaLabel,
 }: {
   value: number;
   min?: number;
@@ -89,6 +93,7 @@ export function NumberInput({
   step?: number;
   onChange: (v: number) => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <input
@@ -98,6 +103,7 @@ export function NumberInput({
       min={min}
       max={max}
       step={step}
+      aria-label={ariaLabel}
       disabled={disabled}
       onChange={(e) => {
         const n = Number(e.target.value);

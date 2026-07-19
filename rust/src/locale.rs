@@ -185,6 +185,15 @@ locale_keys! {
     PredictivePaceWarningsHelper,
     PredictivePaceWarningTitle,
     PredictivePaceWarningBody,
+    SectionSpendBudget,
+    SpendBudgetAlerts,
+    SpendBudgetAlertsHelper,
+    SpendBudgetPeriod,
+    SpendBudgetDaily,
+    SpendBudgetMonthly,
+    SpendBudgetWarning,
+    SpendBudgetCap,
+    SpendBudgetThresholdsHelper,
 
     // Display settings (Preferences)
     UsageDisplay,

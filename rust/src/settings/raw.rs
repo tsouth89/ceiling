@@ -27,6 +27,14 @@ pub(super) struct RawSettings {
     high_usage_threshold: f64,
     critical_usage_threshold: f64,
     #[serde(default)]
+    spend_budget_alerts_enabled: bool,
+    #[serde(default = "default_spend_budget_period")]
+    spend_budget_period: String,
+    #[serde(default = "default_spend_budget_warning_usd")]
+    spend_budget_warning_usd: f64,
+    #[serde(default = "default_spend_budget_limit_usd")]
+    spend_budget_limit_usd: f64,
+    #[serde(default)]
     notification_policy_version: Option<u8>,
     provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
     merge_tray_icons: bool,
@@ -176,6 +184,10 @@ impl Default for RawSettings {
             sound_volume: s.sound_volume,
             high_usage_threshold: s.high_usage_threshold,
             critical_usage_threshold: s.critical_usage_threshold,
+            spend_budget_alerts_enabled: s.spend_budget_alerts_enabled,
+            spend_budget_period: s.spend_budget_period,
+            spend_budget_warning_usd: s.spend_budget_warning_usd,
+            spend_budget_limit_usd: s.spend_budget_limit_usd,
             notification_policy_version: Some(s.notification_policy_version),
             provider_usage_thresholds: HashMap::new(),
             merge_tray_icons: s.merge_tray_icons,
@@ -486,6 +498,10 @@ impl From<RawSettings> for Settings {
             raw.high_usage_threshold
         };
 
+        let spend_budget_limit_usd = normalize_spend_budget_usd(raw.spend_budget_limit_usd);
+        let spend_budget_warning_usd =
+            normalize_spend_budget_usd(raw.spend_budget_warning_usd).min(spend_budget_limit_usd);
+
         Settings {
             enabled_providers: raw.enabled_providers,
             refresh_interval_secs: raw.refresh_interval_secs,
@@ -498,6 +514,10 @@ impl From<RawSettings> for Settings {
             sound_volume: raw.sound_volume,
             high_usage_threshold,
             critical_usage_threshold: raw.critical_usage_threshold,
+            spend_budget_alerts_enabled: raw.spend_budget_alerts_enabled,
+            spend_budget_period: normalize_spend_budget_period(&raw.spend_budget_period),
+            spend_budget_warning_usd,
+            spend_budget_limit_usd,
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: normalize_usage_threshold_overrides(
                 raw.provider_usage_thresholds,

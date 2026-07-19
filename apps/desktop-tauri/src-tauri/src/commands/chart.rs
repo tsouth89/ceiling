@@ -5,7 +5,7 @@
 //! the Codex / OpenAI dashboard cache and require an `account_email` to scope
 //! reads to the right cached bundle.
 
-use chrono::{DateTime, Local, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow,
@@ -510,6 +510,68 @@ fn local_yesterday_window_utc(now: DateTime<Local>) -> (DateTime<Utc>, DateTime<
     let today = now.date_naive();
     let yesterday = today - chrono::Duration::days(1);
     (local_midnight_utc(yesterday), local_midnight_utc(today))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SpendBudgetTotal {
+    pub cycle_id: String,
+    pub period_label: &'static str,
+    pub estimated_usd: f64,
+}
+
+fn spend_budget_period_details(
+    date: NaiveDate,
+    period: &str,
+) -> Option<(String, &'static str, NaiveDate, u32)> {
+    if period == "monthly" {
+        let month_start = NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?;
+        Some((
+            format!("monthly:{:04}-{:02}", date.year(), date.month()),
+            "Month to date",
+            month_start,
+            date.day(),
+        ))
+    } else {
+        Some((format!("daily:{}", date.format("%F")), "Daily", date, 1))
+    }
+}
+
+/// Scan the selected local-log period once per supported provider. This uses a
+/// real local-calendar start rather than presenting a rolling 30-day number as
+/// "monthly".
+pub(crate) async fn load_spend_budget_total(
+    provider_ids: Vec<String>,
+    period: String,
+) -> Option<SpendBudgetTotal> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let now = Local::now();
+        let date = now.date_naive();
+        let (cycle_id, period_label, start_date, days) =
+            spend_budget_period_details(date, &period)?;
+        let start = local_midnight_utc(start_date);
+        let end = now.with_timezone(&Utc);
+        let window = CurrentUsageWindow {
+            id: "spend-budget".to_string(),
+            starts_at: start,
+            ends_at: end,
+        };
+        let estimated_usd = provider_ids
+            .iter()
+            .filter_map(|provider_id| {
+                get_cost_usage_report_with_windows(provider_id, days, std::slice::from_ref(&window))
+            })
+            .filter_map(|report| report.current_windows.get("spend-budget").cloned())
+            .map(|summary| summary.total_cost_usd)
+            .sum();
+        Some(SpendBudgetTotal {
+            cycle_id,
+            period_label,
+            estimated_usd,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[tauri::command]
@@ -1313,8 +1375,8 @@ mod tests {
         ProviderLocalUsageSummary, api_value_period, comparison_period_specs,
         cost_fetch_failure_allows_early_retry, effort_breakdown, format_cost_csv,
         local_midnight_in_tz, local_usage_summary_from_report, local_yesterday_window_utc,
-        localized_estimate_note, model_breakdown, project_breakdown, token_breakdown,
-        token_cost_cache_is_fresh,
+        localized_estimate_note, model_breakdown, project_breakdown, spend_budget_period_details,
+        token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
@@ -1662,6 +1724,17 @@ mod tests {
         // A local calendar day is 24h, or 23h/25h across a DST transition.
         let hours = (end - start).num_hours();
         assert!((23..=25).contains(&hours), "unexpected span: {hours}h");
+    }
+
+    #[test]
+    fn monthly_spend_budget_uses_calendar_month_not_rolling_thirty_days() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 31).unwrap();
+        let (cycle, label, start, days) = spend_budget_period_details(date, "monthly").unwrap();
+
+        assert_eq!(cycle, "monthly:2026-07");
+        assert_eq!(label, "Month to date");
+        assert_eq!(start, NaiveDate::from_ymd_opt(2026, 7, 1).unwrap());
+        assert_eq!(days, 31);
     }
 
     #[test]

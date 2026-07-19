@@ -135,6 +135,12 @@ struct ThresholdWindowKey {
     window: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SpendBudgetAlertLevel {
+    Warning,
+    NearCap,
+}
+
 /// Notification manager
 pub struct NotificationManager {
     /// Track which threshold notifications have been sent to avoid spam.
@@ -153,6 +159,12 @@ pub struct NotificationManager {
     pending_session_states: std::collections::HashMap<ProviderId, bool>,
     predictive_warning_keys: std::collections::HashSet<PredictiveWarningKey>,
     observed_predictive_windows: std::collections::HashSet<PredictiveObservationKey>,
+    /// A budget is global, but its total resets at the boundary represented by
+    /// this key (for example, `daily:2026-07-19`).
+    spend_budget_cycle: Option<String>,
+    spend_budget_observed: bool,
+    spend_budget_sent: std::collections::HashSet<SpendBudgetAlertLevel>,
+    spend_budget_pending: Option<SpendBudgetAlertLevel>,
     /// Remains false until the initial provider refresh has established a
     /// trustworthy in-process baseline for every enabled provider.
     notifications_armed: bool,
@@ -177,6 +189,10 @@ impl NotificationManager {
             pending_session_states: std::collections::HashMap::new(),
             predictive_warning_keys: std::collections::HashSet::new(),
             observed_predictive_windows: std::collections::HashSet::new(),
+            spend_budget_cycle: None,
+            spend_budget_observed: false,
+            spend_budget_sent: std::collections::HashSet::new(),
+            spend_budget_pending: None,
             notifications_armed: false,
             refresh_cycle_active: false,
             toast_emitted_this_refresh: false,
@@ -472,6 +488,97 @@ impl NotificationManager {
                 self.sent_notifications.insert(key);
                 self.send_notification(provider, window, used_percent, notif_type, settings);
             }
+        }
+    }
+
+    /// Check the global, locally-estimated API-value budget. Like quota alerts,
+    /// a crossing must survive two scans and a current-period startup reading is
+    /// only a baseline. The budget uses its own cycle key so daily and calendar
+    /// month-to-date totals re-arm naturally at their reset boundary.
+    pub fn check_spend_budget(
+        &mut self,
+        cycle_id: &str,
+        period_label: &str,
+        estimated_usd: f64,
+        settings: &Settings,
+    ) {
+        let enabled = settings.show_notifications
+            && settings.spend_budget_alerts_enabled
+            && settings.spend_budget_limit_usd.is_finite()
+            && settings.spend_budget_limit_usd > 0.0;
+        if !enabled || !estimated_usd.is_finite() || estimated_usd < 0.0 {
+            self.spend_budget_cycle = None;
+            self.spend_budget_observed = false;
+            self.spend_budget_sent.clear();
+            self.spend_budget_pending = None;
+            return;
+        }
+
+        if self.spend_budget_cycle.as_deref() != Some(cycle_id) {
+            self.spend_budget_cycle = Some(cycle_id.to_string());
+            self.spend_budget_observed = false;
+            self.spend_budget_sent.clear();
+            self.spend_budget_pending = None;
+        }
+
+        let level = if estimated_usd >= settings.spend_budget_limit_usd {
+            Some(SpendBudgetAlertLevel::NearCap)
+        } else if settings.spend_budget_warning_usd.is_finite()
+            && settings.spend_budget_warning_usd > 0.0
+            && estimated_usd >= settings.spend_budget_warning_usd
+        {
+            Some(SpendBudgetAlertLevel::Warning)
+        } else {
+            None
+        };
+
+        // Never reinterpret an already-high total at startup (or immediately
+        // after enabling the feature) as a fresh threshold crossing.
+        if !self.spend_budget_observed {
+            self.spend_budget_observed = true;
+            if let Some(level) = level {
+                self.spend_budget_sent.insert(level);
+            }
+            return;
+        }
+
+        let Some(level) = level else {
+            self.spend_budget_pending = None;
+            return;
+        };
+        if self.spend_budget_sent.contains(&level) {
+            return;
+        }
+        if self.spend_budget_pending != Some(level) {
+            self.spend_budget_pending = Some(level);
+            return;
+        }
+
+        self.spend_budget_pending = None;
+        self.spend_budget_sent.insert(level);
+        let title = match level {
+            SpendBudgetAlertLevel::Warning => "Estimated API value budget warning",
+            SpendBudgetAlertLevel::NearCap => "Estimated API value near cap",
+        };
+        let threshold = match level {
+            SpendBudgetAlertLevel::Warning => settings.spend_budget_warning_usd,
+            SpendBudgetAlertLevel::NearCap => settings.spend_budget_limit_usd,
+        };
+        let body = format!(
+            "{period_label} estimated API value is ${estimated_usd:.2}; your {} is ${threshold:.2}. This is an estimate from local Codex and Claude logs, not a bill.",
+            match level {
+                SpendBudgetAlertLevel::Warning => "warning budget",
+                SpendBudgetAlertLevel::NearCap => "cap",
+            }
+        );
+        if self.emit_toast(title, &body) {
+            play_alert(
+                match level {
+                    SpendBudgetAlertLevel::Warning => AlertSound::Warning,
+                    SpendBudgetAlertLevel::NearCap => AlertSound::Critical,
+                },
+                settings,
+            );
         }
     }
 
@@ -1328,5 +1435,55 @@ mod tests {
         manager.check_and_notify(ProviderId::Codex, "weekly", 100.0, &settings);
 
         assert_eq!(manager.toasts_shown, 1);
+    }
+
+    #[test]
+    fn spend_budget_requires_a_new_confirmed_crossing_per_cycle() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings {
+            spend_budget_alerts_enabled: true,
+            spend_budget_warning_usd: 5.0,
+            spend_budget_limit_usd: 15.0,
+            ..Settings::default()
+        };
+
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 4.0, &settings);
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 5.2, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 5.3, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 15.1, &settings);
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 15.2, &settings);
+        assert_eq!(manager.toasts_shown, 2);
+
+        manager.check_spend_budget("daily:2026-07-20", "Daily", 16.0, &settings);
+        manager.check_spend_budget("daily:2026-07-20", "Daily", 16.0, &settings);
+        assert_eq!(
+            manager.toasts_shown, 2,
+            "a high first reading of the next day is a quiet baseline"
+        );
+    }
+
+    #[test]
+    fn disabling_spend_budget_alerts_clears_its_in_memory_state() {
+        let mut manager = NotificationManager::new_armed();
+        let enabled = Settings {
+            spend_budget_alerts_enabled: true,
+            spend_budget_warning_usd: 5.0,
+            spend_budget_limit_usd: 15.0,
+            ..Settings::default()
+        };
+
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 4.0, &enabled);
+        assert!(manager.spend_budget_observed);
+        assert!(manager.spend_budget_cycle.is_some());
+
+        manager.check_spend_budget("", "", 0.0, &Settings::default());
+
+        assert!(!manager.spend_budget_observed);
+        assert!(manager.spend_budget_cycle.is_none());
+        assert!(manager.spend_budget_sent.is_empty());
+        assert!(manager.spend_budget_pending.is_none());
     }
 }

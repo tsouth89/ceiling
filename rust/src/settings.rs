@@ -82,6 +82,22 @@ pub struct Settings {
     /// Critical usage threshold for visual severity (percentage)
     pub critical_usage_threshold: f64,
 
+    /// Whether to monitor estimated local API value against a user-set budget.
+    #[serde(default)]
+    pub spend_budget_alerts_enabled: bool,
+
+    /// Budget period: "daily" or calendar-month-to-date "monthly".
+    #[serde(default = "default_spend_budget_period")]
+    pub spend_budget_period: String,
+
+    /// Soft alert threshold for estimated API value in USD.
+    #[serde(default = "default_spend_budget_warning_usd")]
+    pub spend_budget_warning_usd: f64,
+
+    /// Near-cap alert threshold for estimated API value in USD.
+    #[serde(default = "default_spend_budget_limit_usd")]
+    pub spend_budget_limit_usd: f64,
+
     /// Internal migration marker for notification defaults. This is not a UI
     /// preference; it prevents old default values from surviving policy fixes.
     #[serde(default)]
@@ -466,6 +482,33 @@ fn default_api_region(id: ProviderId) -> &'static str {
 const DEFAULT_CODEX_OPENAI_WEB_EXTRAS: bool = true;
 const DEFAULT_CODEX_SPARK_USAGE_VISIBLE: bool = true;
 
+pub fn default_spend_budget_period() -> String {
+    "daily".to_string()
+}
+
+pub const fn default_spend_budget_warning_usd() -> f64 {
+    5.0
+}
+
+pub const fn default_spend_budget_limit_usd() -> f64 {
+    15.0
+}
+
+pub fn normalize_spend_budget_period(value: &str) -> String {
+    match value {
+        "monthly" => "monthly".to_string(),
+        _ => default_spend_budget_period(),
+    }
+}
+
+pub fn normalize_spend_budget_usd(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1_000_000.0)
+    } else {
+        0.0
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         let mut enabled = HashSet::new();
@@ -485,6 +528,10 @@ impl Default for Settings {
             sound_volume: 100,
             high_usage_threshold: 85.0,
             critical_usage_threshold: 90.0,
+            spend_budget_alerts_enabled: false,
+            spend_budget_period: default_spend_budget_period(),
+            spend_budget_warning_usd: default_spend_budget_warning_usd(),
+            spend_budget_limit_usd: default_spend_budget_limit_usd(),
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: HashMap::new(),
             merge_tray_icons: false, // Show single provider by default

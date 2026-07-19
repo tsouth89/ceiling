@@ -18,6 +18,10 @@ pub struct SettingsUpdate {
     pub sound_volume: Option<u8>,
     pub high_usage_threshold: Option<f64>,
     pub critical_usage_threshold: Option<f64>,
+    pub spend_budget_alerts_enabled: Option<bool>,
+    pub spend_budget_period: Option<String>,
+    pub spend_budget_warning_usd: Option<f64>,
+    pub spend_budget_limit_usd: Option<f64>,
     pub provider_usage_thresholds:
         Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
     pub predictive_pace_warning_enabled: Option<bool>,
@@ -230,6 +234,22 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.critical_usage_threshold {
             settings.critical_usage_threshold = v.clamp(0.0, 100.0);
+        }
+        if let Some(v) = self.spend_budget_alerts_enabled {
+            settings.spend_budget_alerts_enabled = v;
+        }
+        if let Some(v) = self.spend_budget_period.as_deref() {
+            settings.spend_budget_period = codexbar::settings::normalize_spend_budget_period(v);
+        }
+        if let Some(v) = self.spend_budget_warning_usd {
+            settings.spend_budget_warning_usd = codexbar::settings::normalize_spend_budget_usd(v)
+                .min(settings.spend_budget_limit_usd.max(0.0));
+        }
+        if let Some(v) = self.spend_budget_limit_usd {
+            settings.spend_budget_limit_usd = codexbar::settings::normalize_spend_budget_usd(v);
+            settings.spend_budget_warning_usd = settings
+                .spend_budget_warning_usd
+                .min(settings.spend_budget_limit_usd);
         }
         if let Some(values) = self.provider_usage_thresholds.clone() {
             settings.provider_usage_thresholds =
@@ -509,5 +529,22 @@ mod tests {
         }
         .apply_display_settings(&mut settings);
         assert_eq!(settings.tray_scale_percent, 100);
+    }
+
+    #[test]
+    fn spend_budget_settings_normalize_period_and_thresholds() {
+        let mut settings = Settings::default();
+
+        SettingsUpdate {
+            spend_budget_period: Some("not-a-period".to_string()),
+            spend_budget_warning_usd: Some(99.0),
+            spend_budget_limit_usd: Some(10.0),
+            ..Default::default()
+        }
+        .apply_notification_settings(&mut settings);
+
+        assert_eq!(settings.spend_budget_period, "daily");
+        assert_eq!(settings.spend_budget_limit_usd, 10.0);
+        assert_eq!(settings.spend_budget_warning_usd, 10.0);
     }
 }

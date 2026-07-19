@@ -220,6 +220,12 @@ export interface SettingsSnapshot {
   soundVolume: number;
   highUsageThreshold: number;
   criticalUsageThreshold: number;
+  /** Optional while reading snapshots from a backend before budget alerts shipped. */
+  spendBudgetAlertsEnabled?: boolean;
+  /** "daily" or calendar-month-to-date "monthly". */
+  spendBudgetPeriod?: "daily" | "monthly";
+  spendBudgetWarningUsd?: number;
+  spendBudgetLimitUsd?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
   trayIconMode: TrayIconMode;
@@ -294,6 +300,10 @@ export interface SettingsUpdate {
   soundVolume?: number;
   highUsageThreshold?: number;
   criticalUsageThreshold?: number;
+  spendBudgetAlertsEnabled?: boolean;
+  spendBudgetPeriod?: "daily" | "monthly";
+  spendBudgetWarningUsd?: number;
+  spendBudgetLimitUsd?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
   trayIconMode?: TrayIconMode;
