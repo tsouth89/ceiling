@@ -3,22 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Ceiling — AI usage and limit tracker for Windows</title>
+    <title>Ceiling — AI capacity, limits, and resets for Windows</title>
     <meta
       name="description"
-      content="Ceiling keeps your AI usage visible in one quiet, local-first Windows app. Track Codex, Claude, Cursor, Gemini, and Copilot limits and resets from the taskbar."
+      content="Ceiling is a local-first Windows app that keeps AI capacity, reset times, alerts, and usage history nearby. Track Codex, Claude, Cursor, Gemini, and Copilot from the taskbar."
     />
-    <meta name="theme-color" content="#050607" />
+    <meta name="theme-color" content="#07090c" />
     <link rel="canonical" href="https://ceiling.win/" />
     <link rel="icon" href="/favicon.png" type="image/png" />
     <link rel="apple-touch-icon" href="/favicon.png" />
     <link rel="preload" as="image" href="/ceiling-taskbar.png" />
 
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Ceiling — Stay below the ceiling." />
+    <meta property="og:title" content="Ceiling — Know what you have left before it stops you." />
     <meta
       property="og:description"
-      content="Track your Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar."
+      content="Keep AI capacity, reset times, alerts, and usage history visible from the Windows taskbar."
     />
     <meta property="og:url" content="https://ceiling.win/" />
     <meta property="og:image" content="https://ceiling.win/og.png" />
@@ -26,8 +26,8 @@
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Ceiling's taskbar capacity strip and usage overview" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Ceiling — AI usage and limit tracker for Windows" />
-    <meta name="twitter:description" content="Track Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar." />
+    <meta name="twitter:title" content="Ceiling — AI capacity and reset tracker for Windows" />
+    <meta name="twitter:description" content="Keep AI capacity, reset times, alerts, and usage history visible from the Windows taskbar." />
     <meta name="twitter:image" content="https://ceiling.win/og.png" />
 
     <script type="application/ld+json">
@@ -37,7 +37,7 @@
         "name": "Ceiling",
         "operatingSystem": "Windows",
         "applicationCategory": "UtilitiesApplication",
-        "description": "A quiet, local-first Windows app that tracks your AI subscription usage, limits, and reset windows for Codex, Claude, Cursor, Gemini, and Copilot from the taskbar.",
+        "description": "A local-first Windows app that tracks AI subscription capacity, reset windows, alerts, and usage history for Codex, Claude, Cursor, Gemini, and Copilot.",
         "url": "https://ceiling.win/",
         "downloadUrl": "https://ceiling.win/download",
         "offers": {
@@ -51,142 +51,154 @@
     <style>
       :root {
         color-scheme: dark;
-        --black: #050607;
-        --panel: #111315;
-        --white: #e9ebe8;
-        --muted: #858987;
-        --edge: rgba(236, 239, 235, 0.3);
-        --edge-soft: rgba(255, 255, 255, 0.08);
-        font-family: "Helvetica Neue", "Arial Nova", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+        --black: #07090c;
+        --surface: #11161c;
+        --surface-raised: #171d24;
+        --text: #edf2f4;
+        --muted: #929ca7;
+        --line: rgba(205, 221, 231, 0.14);
+        --line-strong: rgba(205, 221, 231, 0.25);
+        --cyan: #4ad7e8;
+        --cyan-soft: rgba(74, 215, 232, 0.14);
+        font-family: "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         font-synthesis: none;
       }
 
-      * {
-        box-sizing: border-box;
-      }
+      * { box-sizing: border-box; }
 
-      html,
+      html { scroll-behavior: smooth; }
+
       body {
+        min-width: 320px;
         margin: 0;
-        min-height: 100%;
-        background: var(--black);
-        color: var(--white);
-      }
-
-      body {
-        min-height: 100svh;
         overflow-x: hidden;
+        background:
+          radial-gradient(70rem 42rem at 50% -18rem, rgba(41, 151, 170, 0.17), transparent 62%),
+          var(--black);
+        color: var(--text);
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
       }
 
-      a {
-        color: inherit;
-      }
+      a { color: inherit; }
 
       .page {
-        width: min(1440px, 100%);
-        min-height: 100svh;
+        width: min(1180px, 100%);
         margin: 0 auto;
-        padding-inline: clamp(20px, 3vw, 36px);
+        padding: 0 clamp(20px, 4vw, 48px) 56px;
       }
 
       .topbar {
-        height: 78px;
+        min-height: 76px;
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 24px;
       }
 
-      .brand,
-      .github {
-        display: inline-flex;
+      .brand, .nav, .actions, .trust-item, .release, .provider-list, .footer-links {
+        display: flex;
         align-items: center;
-        color: #d7dad6;
-        font-size: 15px;
-        font-weight: 450;
-        letter-spacing: -0.015em;
-        text-decoration: none;
       }
 
       .brand {
         gap: 10px;
+        color: var(--text);
+        font-size: 15px;
+        font-weight: 650;
+        letter-spacing: -0.025em;
+        text-decoration: none;
       }
 
       .brand img {
         width: 25px;
         height: 25px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.13);
+        border-radius: 7px;
       }
 
-      .github {
-        color: #8d918e;
+      .nav { gap: 22px; }
+
+      .nav a, .release, .footer, .eyebrow, .kicker, .feature-label {
+        color: var(--muted);
         font-size: 13px;
-        letter-spacing: 0;
-        transition: color 150ms ease;
+        line-height: 1.4;
       }
 
-      .github:hover {
-        color: var(--white);
+      .nav a, .release, .footer a {
+        text-decoration: none;
+        transition: color 160ms ease;
       }
+
+      .nav a:hover, .release:hover, .footer a:hover { color: var(--text); }
 
       .hero {
-        display: flex;
-        align-items: center;
-        flex-direction: column;
-        padding-top: clamp(10px, 3svh, 30px);
+        padding: clamp(52px, 9vw, 106px) 0 54px;
         text-align: center;
       }
 
+      .eyebrow, .feature-label {
+        margin: 0 0 16px;
+        color: #b9c3cb;
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      h1, h2, h3, p { margin-top: 0; }
+
       h1 {
-        margin: 0;
-        color: #a9adaa;
-        font-size: clamp(16px, 1.35vw, 19px);
-        font-weight: 400;
-        line-height: 1.3;
-        letter-spacing: -0.018em;
+        max-width: 850px;
+        margin: 0 auto;
+        color: #f0f5f6;
+        font-size: clamp(42px, 7vw, 82px);
+        font-weight: 650;
+        line-height: 0.99;
+        letter-spacing: -0.065em;
       }
 
-      .tagline {
-        margin: 9px 0 0;
-        max-width: 46ch;
-        color: var(--muted);
-        font-size: 13px;
-        font-weight: 400;
-        line-height: 1.45;
-        letter-spacing: -0.005em;
+      .hero-copy {
+        max-width: 625px;
+        margin: 25px auto 0;
+        color: #aeb7c0;
+        font-size: clamp(17px, 2.15vw, 20px);
+        line-height: 1.5;
+        letter-spacing: -0.02em;
       }
 
-      .download {
+      .actions { justify-content: center; gap: 14px; margin-top: 30px; }
+
+      .button {
         min-height: 48px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 11px;
-        margin-top: 24px;
-        padding: 0 20px;
-        border: 1px solid rgba(222, 226, 222, 0.28);
-        border-radius: 7px;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
-        color: #f0f2ef;
-        font-size: 15px;
-        font-weight: 450;
-        letter-spacing: -0.012em;
+        gap: 10px;
+        padding: 0 19px;
+        border: 1px solid var(--line-strong);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.035);
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
         text-decoration: none;
-        transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
       }
 
-      .download:hover {
-        border-color: rgba(240, 243, 239, 0.52);
-        background: rgba(255, 255, 255, 0.055);
+      .button:hover {
+        border-color: rgba(213, 243, 247, 0.58);
+        background: rgba(112, 218, 232, 0.11);
         transform: translateY(-1px);
       }
 
+      .button--quiet { border-color: transparent; background: transparent; color: #b2bec7; }
+      .button--quiet:hover { border-color: transparent; background: transparent; color: var(--text); }
+
       .windows-mark {
-        width: 18px;
-        height: 18px;
+        width: 15px;
+        height: 15px;
         display: grid;
         grid-template-columns: repeat(2, 1fr);
         grid-template-rows: repeat(2, 1fr);
@@ -194,171 +206,239 @@
         transform: perspective(20px) rotateY(-6deg);
       }
 
-      .windows-mark span {
-        display: block;
-        background: currentColor;
-      }
+      .windows-mark span { background: currentColor; }
 
-      .release {
-        margin-top: 14px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 400;
-        letter-spacing: -0.005em;
-        text-decoration: none;
-        transition: color 150ms ease;
-      }
+      .release { justify-content: center; margin: 15px 0 0; }
 
-      .release:hover {
-        color: #aaaeaa;
-      }
-
-      .product {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        flex-direction: column;
-        margin-top: 27px;
+      .hero-product {
+        position: relative;
+        width: min(940px, 100%);
+        margin: clamp(49px, 7vw, 80px) auto 0;
+        padding-bottom: clamp(38px, 8vw, 82px);
       }
 
       .taskbar {
-        width: min(840px, 92vw);
+        position: relative;
+        z-index: 2;
+        width: min(855px, 100%);
+        margin: 0 auto;
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.09);
+        border: 1px solid rgba(255, 255, 255, 0.13);
         border-radius: 9px;
-        filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.55));
+        box-shadow: 0 20px 44px rgba(0, 0, 0, 0.54);
       }
 
-      .taskbar img {
-        width: 100%;
-        height: auto;
-        display: block;
-      }
+      .taskbar img, .shot img { display: block; width: 100%; height: auto; }
 
-      .dashboard-frame {
-        width: min(525px, 92vw);
-        margin-top: 24px;
-        padding: 7px;
-        border: 1px solid var(--edge);
-        border-radius: 24px;
-        background:
-          linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.018) 28%, rgba(255, 255, 255, 0.04) 100%),
-          var(--panel);
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.11),
-          inset 0 -1px 0 rgba(0, 0, 0, 0.65),
-          0 28px 70px rgba(0, 0, 0, 0.62),
-          0 3px 10px rgba(0, 0, 0, 0.7);
-      }
-
-      .dashboard-inner {
+      .overview-shot {
+        width: min(492px, 61vw);
+        margin: 28px auto 0;
         overflow: hidden;
-        border: 1px solid var(--edge-soft);
+        border: 1px solid var(--line-strong);
+        border-radius: 18px;
+        background: #1a2026;
+        box-shadow: 0 31px 76px rgba(0, 0, 0, 0.53), inset 0 1px rgba(255,255,255,0.07);
+      }
+
+      .trust-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .trust-item {
+        min-height: 168px;
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 31px 30px;
+      }
+
+      .trust-item + .trust-item { border-left: 1px solid var(--line); }
+
+      .trust-icon {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 20px;
+        border: 1px solid rgba(75, 214, 232, 0.25);
+        border-radius: 8px;
+        background: var(--cyan-soft);
+        color: var(--cyan);
+        font-size: 15px;
+        font-weight: 650;
+      }
+
+      .trust-item strong { margin-bottom: 7px; font-size: 15px; letter-spacing: -0.02em; }
+      .trust-item span { color: var(--muted); font-size: 13px; line-height: 1.48; }
+
+      .section { padding: clamp(82px, 12vw, 142px) 0; }
+
+      .section-heading { max-width: 700px; margin-bottom: clamp(34px, 5vw, 57px); }
+
+      h2 {
+        margin-bottom: 15px;
+        font-size: clamp(31px, 4.5vw, 51px);
+        font-weight: 625;
+        line-height: 1.05;
+        letter-spacing: -0.055em;
+      }
+
+      .section-heading p, .feature-copy p, .data-copy p {
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.57;
+        letter-spacing: -0.012em;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.24fr) minmax(275px, 0.76fr);
+        gap: clamp(25px, 5vw, 64px);
+        align-items: center;
+      }
+
+      .shot {
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
         border-radius: 17px;
-        background: #1b1f23;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        background: #151b21;
+        box-shadow: 0 26px 62px rgba(0, 0, 0, 0.4);
       }
 
-      .dashboard-inner img {
-        width: 100%;
-        height: auto;
-        display: block;
+      .feature-copy h3, .data-copy h3 {
+        margin-bottom: 14px;
+        color: #e5edf0;
+        font-size: clamp(24px, 3vw, 32px);
+        font-weight: 625;
+        line-height: 1.1;
+        letter-spacing: -0.045em;
       }
 
-      :focus-visible {
-        outline: 2px solid #dce0dc;
-        outline-offset: 5px;
-        border-radius: 5px;
+      .feature-copy p { margin-bottom: 0; }
+
+      .feature-points {
+        display: grid;
+        gap: 14px;
+        margin: 27px 0 0;
+        padding: 0;
+        list-style: none;
       }
 
-      @media (max-height: 920px) and (min-width: 600px) {
-        .topbar {
-          height: 64px;
-        }
+      .feature-points li { display: grid; grid-template-columns: 17px 1fr; gap: 11px; color: #b8c2ca; font-size: 14px; line-height: 1.45; }
+      .feature-points li::before { content: ""; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 4px var(--cyan-soft); }
 
-        .hero {
-          padding-top: 4px;
-        }
-
-        .download {
-          min-height: 43px;
-          margin-top: 17px;
-        }
-
-        .release {
-          margin-top: 10px;
-        }
-
-        .product {
-          margin-top: 18px;
-        }
-
-        .taskbar {
-          width: min(720px, 88vw);
-        }
-
-        .dashboard-frame {
-          width: min(455px, 78vw);
-          margin-top: 17px;
-        }
+      .split-feature {
+        display: grid;
+        grid-template-columns: minmax(270px, 0.84fr) minmax(0, 1.16fr);
+        gap: clamp(28px, 8vw, 106px);
+        align-items: center;
+        padding-top: clamp(82px, 12vw, 138px);
       }
 
-      @media (max-height: 800px) and (min-width: 600px) {
-        .dashboard-frame {
-          width: min(390px, 70vw);
-        }
+      .taskbar-shot { border-radius: 11px; }
+      .taskbar-shot img { width: 100%; }
 
-        .taskbar {
-          width: min(640px, 80vw);
-        }
+      .callout {
+        margin-top: 28px;
+        padding: 18px 19px;
+        border: 1px solid rgba(74, 215, 232, 0.2);
+        border-radius: 11px;
+        background: rgba(62, 183, 202, 0.07);
+        color: #b9cbd2;
+        font-size: 14px;
+        line-height: 1.5;
       }
 
-      @media (max-width: 599px) {
-        .page {
-          padding-inline: 14px;
-        }
+      .providers {
+        padding: clamp(58px, 8vw, 86px) 0;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        text-align: center;
+      }
 
-        .topbar {
-          height: 60px;
-        }
+      .providers h2 { margin-bottom: 13px; font-size: clamp(28px, 4vw, 42px); }
+      .providers p { max-width: 540px; margin: 0 auto; color: var(--muted); font-size: 15px; line-height: 1.55; }
 
-        .hero {
-          padding-top: 14px;
-        }
+      .provider-list { justify-content: center; flex-wrap: wrap; gap: 9px; margin-top: 29px; }
+      .provider-list span { padding: 9px 13px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,0.025); color: #c5ced4; font-size: 13px; }
 
-        .download {
-          min-height: 44px;
-          margin-top: 19px;
-          padding-inline: 17px;
-          font-size: 14px;
-        }
+      .data {
+        display: grid;
+        grid-template-columns: 104px minmax(0, 1fr);
+        gap: 32px;
+        align-items: start;
+        padding: clamp(73px, 10vw, 113px) 0;
+      }
 
-        .product {
-          margin-top: 24px;
-        }
+      .data-mark {
+        width: 72px;
+        height: 72px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(74, 215, 232, 0.24);
+        border-radius: 17px;
+        background: linear-gradient(145deg, rgba(76, 212, 229, 0.18), rgba(76, 212, 229, 0.05));
+        color: var(--cyan);
+        font-size: 27px;
+      }
 
-        .taskbar {
-          width: min(525px, 96vw);
-        }
+      .data-copy { max-width: 700px; }
+      .data-copy p { margin-bottom: 20px; }
+      .inline-link { color: #cfeff3; text-underline-offset: 3px; }
+      .inline-link:hover { color: white; }
 
-        .dashboard-frame {
-          width: min(525px, 96vw);
-          margin-top: 18px;
-          padding: 5px;
-          border-radius: 18px;
-        }
+      .final-cta {
+        padding: clamp(60px, 9vw, 102px) 20px;
+        border: 1px solid var(--line-strong);
+        border-radius: 20px;
+        background: radial-gradient(40rem 21rem at 50% 0, rgba(49, 168, 187, 0.16), transparent 72%), rgba(255,255,255,0.018);
+        text-align: center;
+      }
 
-        .dashboard-inner {
-          border-radius: 13px;
-        }
+      .final-cta h2 { max-width: 620px; margin: 0 auto 16px; }
+      .final-cta p { max-width: 525px; margin: 0 auto; color: var(--muted); font-size: 16px; line-height: 1.55; }
+      .final-cta .actions { margin-top: 27px; }
+
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 31px 1px 4px;
+      }
+
+      .footer-links { gap: 17px; }
+
+      :focus-visible { outline: 2px solid #82e8f3; outline-offset: 4px; border-radius: 4px; }
+
+      @media (max-width: 720px) {
+        .page { padding-inline: 17px; }
+        .topbar { min-height: 63px; }
+        .nav a:first-child { display: none; }
+        .nav { gap: 0; }
+        .hero { padding-top: 53px; }
+        .actions { flex-direction: column; }
+        .button { width: min(280px, 100%); }
+        .button--quiet { min-height: 34px; }
+        .overview-shot { width: min(480px, 86vw); border-radius: 14px; }
+        .trust-grid { grid-template-columns: 1fr; }
+        .trust-item { min-height: auto; padding: 25px 20px; }
+        .trust-item + .trust-item { border-top: 1px solid var(--line); border-left: 0; }
+        .trust-icon { margin-bottom: 15px; }
+        .feature-grid, .split-feature, .data { grid-template-columns: 1fr; }
+        .feature-grid { gap: 33px; }
+        .split-feature { gap: 38px; }
+        .split-feature .feature-copy { order: -1; }
+        .data { gap: 22px; }
+        .data-mark { width: 56px; height: 56px; border-radius: 14px; font-size: 22px; }
+        .footer { align-items: flex-start; flex-direction: column; }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .download,
-        .github,
-        .release {
-          transition: none;
-        }
+        html { scroll-behavior: auto; }
+        .button, .nav a, .release, .footer a { transition: none; }
       }
     </style>
   </head>
@@ -370,50 +450,154 @@
           <img src="/favicon.png" alt="" />
           <span>Ceiling</span>
         </a>
-        <a class="github" href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="#how-it-works">How it works</a>
+          <a href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
+        </nav>
       </header>
 
-      <main class="hero">
-        <h1>Stay below the ceiling.</h1>
-        <p class="tagline">
-          Track your Codex, Claude, Cursor, Gemini, and Copilot limits from the Windows taskbar.
-        </p>
+      <main>
+        <section class="hero" aria-labelledby="hero-heading">
+          <p class="eyebrow">Local-first AI capacity for Windows</p>
+          <h1 id="hero-heading">Know what you have left before it stops you.</h1>
+          <p class="hero-copy">
+            Ceiling keeps remaining capacity, reset times, alerts, and usage history close to the Windows taskbar—across the AI plans you actually use.
+          </p>
 
-        <a class="download" href="/download" data-analytics="download_clicked" data-asset="windows-installer">
-          <span class="windows-mark" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
-          </span>
-          Download for Windows
-        </a>
-
-        <a class="release" href="https://github.com/tsouth89/ceiling/releases/latest">
-          Latest release · Windows · local-first
-        </a>
-
-        <section class="product" aria-label="Ceiling interface preview">
-          <div class="taskbar">
-            <img
-              src="/ceiling-taskbar.png"
-              width="863"
-              height="47"
-              fetchpriority="high"
-              alt="Ceiling's capacity strip in the Windows taskbar, next to the weather widget"
-            />
+          <div class="actions">
+            <a class="button" href="/download" data-analytics="download_clicked" data-asset="windows-installer">
+              <span class="windows-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+              Download for Windows
+            </a>
+            <a class="button button--quiet" href="#how-it-works">See how it works</a>
           </div>
+          <a class="release" href="https://github.com/tsouth89/ceiling/releases/latest">Free and open source · Windows 10 / 11 · Signed builds</a>
 
-          <div class="dashboard-frame">
-            <div class="dashboard-inner">
+          <div class="hero-product" aria-label="Ceiling interface preview">
+            <div class="taskbar">
+              <img
+                src="/ceiling-taskbar.png"
+                width="863"
+                height="47"
+                fetchpriority="high"
+                alt="Ceiling's capacity strip placed just above the Windows taskbar"
+              />
+            </div>
+            <div class="overview-shot shot">
               <img
                 src="/ceiling-overview.png"
                 width="569"
                 height="685"
-                loading="lazy"
                 alt="Ceiling's overview showing Codex, Claude, and Cursor usage at a glance"
               />
             </div>
           </div>
         </section>
+
+        <section class="trust-grid" aria-label="Ceiling principles">
+          <div class="trust-item">
+            <div class="trust-icon" aria-hidden="true">↗</div>
+            <strong>No Ceiling account</strong>
+            <span>Your data stays with the app on your PC, not a Ceiling-hosted dashboard.</span>
+          </div>
+          <div class="trust-item">
+            <div class="trust-icon" aria-hidden="true">⌁</div>
+            <strong>Designed for Windows</strong>
+            <span>A quiet capacity strip, tray flyout, and notifications instead of another browser tab.</span>
+          </div>
+          <div class="trust-item">
+            <div class="trust-icon" aria-hidden="true">⌘</div>
+            <strong>Built to inspect</strong>
+            <span>Ceiling is open source, with releases and the full implementation on GitHub.</span>
+          </div>
+        </section>
+
+        <section class="section" id="how-it-works" aria-labelledby="history-heading">
+          <div class="section-heading">
+            <p class="feature-label">More than a reset timer</p>
+            <h2 id="history-heading">See the capacity you use over time.</h2>
+            <p>Compare providers, understand the rolling window you are in, and keep a local record of activity instead of guessing why a limit changed.</p>
+          </div>
+
+          <div class="feature-grid">
+            <div class="shot">
+              <img
+                src="/ceiling-charts.png"
+                width="680"
+                height="672"
+                loading="lazy"
+                alt="Ceiling's Charts view comparing Codex and Claude capacity across the same rolling window"
+              />
+            </div>
+            <div class="feature-copy">
+              <p class="feature-label">Usage history</p>
+              <h3>Capacity is clearer with context.</h3>
+              <p>Ceiling turns a changing percentage into a useful history: how much was used, which window is active, and what changed since the previous check.</p>
+              <ul class="feature-points">
+                <li>Compare provider usage on the same clock.</li>
+                <li>Review local activity without exporting it to a third-party dashboard.</li>
+                <li>Keep reset times next to the usage that explains them.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="split-feature">
+            <div class="feature-copy">
+              <p class="feature-label">Always nearby</p>
+              <h3>Useful when you are working, quiet when you are not.</h3>
+              <p>The capacity strip sits above the taskbar without stealing focus. Hover for a fuller view, open the tray flyout when you need detail, and stay out of a dashboard the rest of the time.</p>
+              <div class="callout">Optional alerts can flag a limit approaching, an unexpected reset, restored capacity, or a banked reset.</div>
+            </div>
+            <div class="shot taskbar-shot">
+              <img
+                src="/ceiling-taskbar.png"
+                width="863"
+                height="47"
+                loading="lazy"
+                alt="Ceiling's capacity strip integrated above the Windows taskbar"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="providers" aria-labelledby="providers-heading">
+          <h2 id="providers-heading">One quiet view for the plans you use.</h2>
+          <p>Ceiling currently supports the AI subscriptions and sessions that are hardest to keep track of during a working day.</p>
+          <div class="provider-list" aria-label="Supported providers">
+            <span>OpenAI Codex</span><span>Claude</span><span>Cursor</span><span>Gemini</span><span>GitHub Copilot</span>
+          </div>
+        </section>
+
+        <section class="data" aria-labelledby="data-heading">
+          <div class="data-mark" aria-hidden="true">⌁</div>
+          <div class="data-copy">
+            <p class="feature-label">Local means local</p>
+            <h3 id="data-heading">Ceiling does not run a server for your usage data.</h3>
+            <p>It reads usage from sources on your PC or each provider’s own usage endpoint. Credentials, cookies, API keys, and browser imports are opt-in and remain on your machine.</p>
+            <a class="inline-link" href="https://github.com/tsouth89/ceiling/blob/main/docs/DATA_SOURCES.md">Read exactly how Ceiling gets data</a>
+          </div>
+        </section>
+
+        <section class="final-cta" aria-labelledby="cta-heading">
+          <h2 id="cta-heading">Keep your next reset in sight.</h2>
+          <p>Free, local-first, and built specifically for Windows.</p>
+          <div class="actions">
+            <a class="button" href="/download" data-analytics="download_clicked" data-asset="windows-installer-bottom">
+              <span class="windows-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+              Download Ceiling
+            </a>
+          </div>
+        </section>
       </main>
+
+      <footer class="footer">
+        <span>Ceiling for Windows</span>
+        <div class="footer-links">
+          <a href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
+          <a href="https://github.com/tsouth89/ceiling/releases/latest">Releases</a>
+          <a href="https://github.com/tsouth89/ceiling/blob/main/docs/DATA_SOURCES.md">Data sources</a>
+        </div>
+      </footer>
     </div>
     <script>
       (() => {
@@ -422,12 +606,7 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             keepalive: true,
-            body: JSON.stringify({
-              event,
-              pathname: location.pathname,
-              referrer: document.referrer,
-              ...details,
-            }),
+            body: JSON.stringify({ event, pathname: location.pathname, referrer: document.referrer, ...details }),
           }).catch(() => {});
         };
 
@@ -435,10 +614,7 @@
         document.addEventListener("click", (event) => {
           const link = event.target.closest("[data-analytics]");
           if (!link) return;
-          send(link.dataset.analytics, {
-            asset: link.dataset.asset || "",
-            release: link.dataset.release || "",
-          });
+          send(link.dataset.analytics, { asset: link.dataset.asset || "", release: link.dataset.release || "" });
         });
       })();
     </script>
