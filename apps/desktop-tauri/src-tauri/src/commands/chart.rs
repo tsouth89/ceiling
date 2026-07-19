@@ -541,6 +541,35 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
         .collect()
 }
 
+/// One model's local Cursor activity. This is code-contribution activity from
+/// Cursor's on-disk tracking, NOT tokens or dollars (Cursor logs neither).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelActivityRow {
+    pub model: String,
+    pub contributions: u64,
+    pub requests: u64,
+}
+
+#[tauri::command]
+pub async fn get_cursor_model_activity() -> Vec<CursorModelActivityRow> {
+    tauri::async_runtime::spawn_blocking(|| {
+        codexbar::cursor_activity::cursor_model_activity(current_unix_ms(), 30)
+            .into_iter()
+            .map(|activity| CursorModelActivityRow {
+                model: activity.model,
+                contributions: activity.contributions,
+                requests: activity.requests,
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!("Cursor model-activity worker failed: {}", err);
+        Vec::new()
+    })
+}
+
 #[tauri::command]
 pub async fn get_provider_local_usage_summary(
     provider_id: String,

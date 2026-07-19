@@ -17,6 +17,7 @@ import type {
   ProviderDetail,
   ProviderLocalUsageSummary,
   LocalApiValueProvider,
+  CursorModelActivity,
   ProviderSummary,
   ProviderUsageSnapshot,
   ProviderTokenAccountsBridge,
@@ -267,6 +268,10 @@ export function getProviderLocalUsageSummary(
 
 export function getLocalApiValueTotals(): Promise<LocalApiValueProvider[]> {
   return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
+}
+
+export function getCursorModelActivity(): Promise<CursorModelActivity[]> {
+  return invoke<CursorModelActivity[]>("get_cursor_model_activity");
 }
 
 // ── Token account bridge ─────────────────────────────────────────────

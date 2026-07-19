@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const tauriMocks = vi.hoisted(() => ({
   getProviderChartData: vi.fn(),
   getSettingsSnapshot: vi.fn(),
+  getCursorModelActivity: vi.fn(),
 }));
 
 vi.mock("../../../../../lib/tauri", () => tauriMocks);
@@ -84,6 +85,7 @@ describe("ChartsSection local usage summary", () => {
     vi.clearAllMocks();
     tauriMocks.getSettingsSnapshot.mockResolvedValue({ enableAnimations: false });
     tauriMocks.getProviderChartData.mockResolvedValue(enrichedData);
+    tauriMocks.getCursorModelActivity.mockResolvedValue([]);
   });
 
   it("shows comparable processed totals and the seven-day token mix", async () => {
@@ -151,5 +153,48 @@ describe("ChartsSection local usage summary", () => {
     await waitFor(() => expect(getByRole("status").textContent).toContain("Reading local token history"));
     await waitFor(() => expect(getByText("4.9B")).toBeTruthy(), { timeout: 2_500 });
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a Cursor activity-by-model card with shares and Auto relabel", async () => {
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      ...enrichedData,
+      providerId: "cursor",
+      localUsage: null,
+    });
+    tauriMocks.getCursorModelActivity.mockResolvedValue([
+      { model: "grok-4.5", contributions: 750, requests: 30 },
+      { model: "claude-sonnet-5", contributions: 250, requests: 10 },
+      { model: "default", contributions: 0, requests: 1 },
+    ]);
+
+    const { getByLabelText } = render(
+      <ChartsSection providerId="cursor" accountEmail={null} t={(key) => key} />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
+    expect(card.textContent).toContain("grok-4.5");
+    expect(card.textContent).toContain("75%"); // 750 of 1000
+    expect(card.textContent).toContain("claude-sonnet-5");
+    expect(card.textContent).toContain("25%");
+    // "default" is relabeled to "Auto".
+    expect(card.textContent).toContain("Auto");
+    // Honest framing: activity, not spend.
+    expect(card.textContent).toMatch(/activity, not tokens or spend/i);
+  });
+
+  it("shows Cursor activity even when chart history fails to load", async () => {
+    tauriMocks.getProviderChartData.mockRejectedValue(new Error("no history"));
+    tauriMocks.getCursorModelActivity.mockResolvedValue([
+      { model: "grok-4.5", contributions: 100, requests: 5 },
+    ]);
+
+    const { getByLabelText, queryByText } = render(
+      <ChartsSection providerId="cursor" accountEmail={null} t={(key) => key} />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
+    expect(card.textContent).toContain("grok-4.5");
+    // The bare "History unavailable" error must not replace the card.
+    expect(queryByText("History unavailable")).toBeNull();
   });
 });
