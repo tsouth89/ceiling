@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { playNotificationSound, sendTestNotification } from "../../../lib/tauri";
-import { Field, NumberInput, Toggle } from "../../../components/FormControls";
+import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../../Settings";
 
 type TestNotificationStatus = "idle" | "sending" | "sent" | "failed";
@@ -13,6 +13,10 @@ export default function GeneralTab({
   saving,
 }: TabProps & { mode?: "general" | "notifications" }) {
   const { t } = useLocale();
+  const spendBudgetAlertsEnabled = settings.spendBudgetAlertsEnabled ?? false;
+  const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
+  const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
+  const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
   const [playingSound, setPlayingSound] = useState(false);
   const [testStatus, setTestStatus] = useState<TestNotificationStatus>("idle");
   const [testError, setTestError] = useState<string | null>(null);
@@ -163,6 +167,58 @@ export default function GeneralTab({
               disabled={saving}
               onChange={(v) => set({
                 highUsageThreshold: Math.min(v, settings.criticalUsageThreshold),
+              })}
+            />
+          </Field>
+        </div>
+      </section>}
+
+      {mode === "notifications" && <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionSpendBudget")}</h3>
+        <div className="settings-section__group">
+          <Field
+            label={t("SpendBudgetAlerts")}
+            description={t("SpendBudgetAlertsHelper")}
+            leading
+          >
+            <Toggle
+              checked={spendBudgetAlertsEnabled}
+              ariaLabel={t("SpendBudgetAlerts")}
+              disabled={saving || !settings.showNotifications}
+              onChange={(v) => set({ spendBudgetAlertsEnabled: v })}
+            />
+          </Field>
+          <Field label={t("SpendBudgetPeriod")}>
+            <Select
+              value={spendBudgetPeriod}
+              options={[
+                { value: "daily", label: t("SpendBudgetDaily") },
+                { value: "monthly", label: t("SpendBudgetMonthly") },
+              ]}
+              disabled={saving || !settings.showNotifications || !spendBudgetAlertsEnabled}
+              onChange={(v) => set({ spendBudgetPeriod: v as "daily" | "monthly" })}
+            />
+          </Field>
+          <Field label={t("SpendBudgetWarning")} description={t("SpendBudgetThresholdsHelper")}>
+            <NumberInput
+              value={spendBudgetWarningUsd}
+              min={0}
+              max={spendBudgetLimitUsd}
+              step={1}
+              disabled={saving || !settings.showNotifications || !spendBudgetAlertsEnabled}
+              onChange={(v) => set({
+                spendBudgetWarningUsd: Math.min(v, spendBudgetLimitUsd),
+              })}
+            />
+          </Field>
+          <Field label={t("SpendBudgetCap")}>
+            <NumberInput
+              value={spendBudgetLimitUsd}
+              min={spendBudgetWarningUsd}
+              step={1}
+              disabled={saving || !settings.showNotifications || !spendBudgetAlertsEnabled}
+              onChange={(v) => set({
+                spendBudgetLimitUsd: Math.max(v, spendBudgetWarningUsd),
               })}
             />
           </Field>

@@ -1,7 +1,10 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use codexbar::settings::Settings;
+use tauri::Manager;
+
+use crate::state::AppState;
 
 const AUTO_REFRESH_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -42,8 +45,9 @@ fn next_fixed_tick(
     scheduled_at
 }
 
-fn powertoys_local_usage_provider_ids(settings: &Settings) -> Vec<String> {
-    if !settings.powertoys_status_pipe_enabled {
+fn local_usage_provider_ids(settings: &Settings) -> Vec<String> {
+    let budget_alerts_enabled = settings.show_notifications && settings.spend_budget_alerts_enabled;
+    if !settings.powertoys_status_pipe_enabled && !budget_alerts_enabled {
         return Vec::new();
     }
 
@@ -55,11 +59,13 @@ fn powertoys_local_usage_provider_ids(settings: &Settings) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn schedule_refresh_enrichment(settings: &Settings) {
-    let provider_ids = powertoys_local_usage_provider_ids(settings);
+pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Settings) {
+    let provider_ids = local_usage_provider_ids(settings);
     if provider_ids.is_empty() {
         return;
     }
+    let app = app.clone();
+    let settings = settings.clone();
     static ENRICHMENT: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
     let Ok(guard) = Arc::clone(ENRICHMENT.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))))
         .try_lock_owned()
@@ -68,7 +74,31 @@ pub(crate) fn schedule_refresh_enrichment(settings: &Settings) {
     };
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
-        crate::commands::refresh_provider_local_usage_cache(provider_ids).await;
+        crate::commands::refresh_provider_local_usage_cache(provider_ids.clone()).await;
+        if !settings.show_notifications || !settings.spend_budget_alerts_enabled {
+            return;
+        }
+        let Some(total) = crate::commands::load_spend_budget_total(
+            provider_ids,
+            settings.spend_budget_period.clone(),
+        )
+        .await
+        else {
+            tracing::warn!("Unable to calculate local estimated API-value budget");
+            return;
+        };
+        let state = app.state::<Mutex<AppState>>();
+        match state.lock() {
+            Ok(mut guard) => guard.notification_manager.check_spend_budget(
+                &total.cycle_id,
+                total.period_label,
+                total.estimated_usd,
+                &settings,
+            ),
+            Err(error) => {
+                tracing::warn!("failed to lock app state for spend budget notification: {error}")
+            }
+        }
     });
 }
 
@@ -93,9 +123,9 @@ mod tests {
     }
 
     #[test]
-    fn powertoys_local_usage_refresh_only_includes_supported_enabled_providers() {
+    fn local_usage_refresh_only_includes_supported_enabled_providers() {
         let mut settings = Settings::default();
-        assert!(powertoys_local_usage_provider_ids(&settings).is_empty());
+        assert!(local_usage_provider_ids(&settings).is_empty());
 
         settings.powertoys_status_pipe_enabled = true;
         settings.enabled_providers = ["codex".to_string(), "cursor".to_string()]
@@ -103,8 +133,24 @@ mod tests {
             .collect();
 
         assert_eq!(
-            powertoys_local_usage_provider_ids(&settings),
+            local_usage_provider_ids(&settings),
             vec!["codex".to_string()]
+        );
+    }
+
+    #[test]
+    fn spend_budget_also_enriches_supported_enabled_providers() {
+        let settings = Settings {
+            spend_budget_alerts_enabled: true,
+            enabled_providers: ["claude".to_string(), "cursor".to_string()]
+                .into_iter()
+                .collect(),
+            ..Settings::default()
+        };
+
+        assert_eq!(
+            local_usage_provider_ids(&settings),
+            vec!["claude".to_string()]
         );
     }
 }

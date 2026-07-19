@@ -29,6 +29,10 @@ const settings: SettingsSnapshot = {
   soundVolume: 100,
   highUsageThreshold: 70,
   criticalUsageThreshold: 90,
+  spendBudgetAlertsEnabled: false,
+  spendBudgetPeriod: "daily",
+  spendBudgetWarningUsd: 5,
+  spendBudgetLimitUsd: 15,
   predictivePaceWarningEnabled: false,
   trayIconMode: "single",
   switcherShowsIcons: true,
@@ -181,12 +185,22 @@ describe("GeneralTab", () => {
       <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
     );
 
-    expect(screen.getAllByRole("spinbutton")).toHaveLength(1);
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
     expect(screen.queryByText("PredictivePaceWarnings")).not.toBeInTheDocument();
     expect(screen.queryByText("CriticalUsageAlert")).not.toBeInTheDocument();
     expect(screen.queryByText("Codex · ProviderSession")).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "80" } });
+    fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "80" } });
     expect(set).toHaveBeenCalledWith({ highUsageThreshold: 80 });
+  });
+
+  it("configures a daily or month-to-date estimated API value budget", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "SpendBudgetAlerts" }));
+    expect(set).toHaveBeenCalledWith({ spendBudgetAlertsEnabled: true });
   });
 });

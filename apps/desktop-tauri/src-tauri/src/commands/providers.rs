@@ -193,7 +193,7 @@ async fn do_refresh_providers_with_policy(
     }
 
     events::emit_refresh_complete(app, enabled_count, error_count);
-    crate::auto_refresh::schedule_refresh_enrichment(&inputs.settings);
+    crate::auto_refresh::schedule_refresh_enrichment(app, &inputs.settings);
 
     Ok(())
 }
