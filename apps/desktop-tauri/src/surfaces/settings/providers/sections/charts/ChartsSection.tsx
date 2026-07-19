@@ -515,7 +515,8 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const hasLimits = data.quotaHistory.length > 0;
   const hasLocalSummary = data.localUsage !== null;
 
-  if (!hasCredits && !hasUsage && !hasLimits && !hasLocalSummary && !hasCursorActivity) {
+  if (!hasCredits && !hasUsage && !hasLimits && !hasLocalSummary && !hasCursorActivity
+    && !resetBoundaryUnavailable) {
     return (
       <section className="provider-detail-section provider-detail-charts charts-data-empty">
         <strong>History starts here</strong>
@@ -589,11 +590,6 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
               <small>{period.detail}</small>
             </div>
           ))}
-          {resetBoundaryUnavailable && (
-            <div className="usage-periods__note" role="status">
-              Reset boundary unavailable. Ceiling will not substitute a rolling period.
-            </div>
-          )}
           {data.localUsage.sevenDayTokenBreakdown && (
             <TokenMix breakdown={data.localUsage.sevenDayTokenBreakdown} />
           )}
@@ -615,6 +611,11 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
             <ProjectBreakdown projects={data.localUsage.projectBreakdown} />
           )}
           <ExportCsvButton providerId={providerId} />
+        </div>
+      )}
+      {resetBoundaryUnavailable && (
+        <div className="usage-periods__note" role="status">
+          Reset boundary unavailable. Ceiling will not substitute a rolling period.
         </div>
       )}
       {available.length > 1 && (

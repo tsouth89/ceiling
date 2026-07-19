@@ -73,4 +73,11 @@ describe("providerLocalUsageWindows", () => {
     expect(providerLocalUsageWindows(snapshot)).toEqual([]);
     expect(providerHasUnavailableResetBoundary(snapshot)).toBe(true);
   });
+
+  it("reports a malformed reset timestamp as an unavailable boundary", () => {
+    const snapshot = provider("not-a-timestamp");
+
+    expect(providerLocalUsageWindows(snapshot)).toEqual([]);
+    expect(providerHasUnavailableResetBoundary(snapshot)).toBe(true);
+  });
 });

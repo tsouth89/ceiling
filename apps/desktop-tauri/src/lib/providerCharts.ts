@@ -21,7 +21,11 @@ function currentWindowLabel(label: string): string {
 }
 
 function hasUnavailableResetBoundary(window: RateWindowSnapshot | null | undefined): boolean {
-  return window != null && (!window.resetsAt || !window.windowMinutes || window.windowMinutes <= 0);
+  return window != null
+    && (!window.resetsAt
+      || !Number.isFinite(Date.parse(window.resetsAt))
+      || !window.windowMinutes
+      || window.windowMinutes <= 0);
 }
 
 function usageWindowRequest(

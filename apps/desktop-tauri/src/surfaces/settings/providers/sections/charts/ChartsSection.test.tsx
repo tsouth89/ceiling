@@ -172,6 +172,16 @@ describe("ChartsSection local usage summary", () => {
   });
 
   it("does not substitute a rolling period when the provider reset is unavailable", async () => {
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      ...enrichedData,
+      localUsage: null,
+      quotaHistory: [
+        {
+          recordedAt: "2026-07-19T12:00:00.000Z",
+          windows: [{ id: "primary", label: "Session", usedPercent: 20 }],
+        },
+      ],
+    });
     const providerSnapshot: ProviderUsageSnapshot = {
       providerId: "claude",
       displayName: "Claude",
