@@ -1464,4 +1464,26 @@ mod tests {
             "a high first reading of the next day is a quiet baseline"
         );
     }
+
+    #[test]
+    fn disabling_spend_budget_alerts_clears_its_in_memory_state() {
+        let mut manager = NotificationManager::new_armed();
+        let enabled = Settings {
+            spend_budget_alerts_enabled: true,
+            spend_budget_warning_usd: 5.0,
+            spend_budget_limit_usd: 15.0,
+            ..Settings::default()
+        };
+
+        manager.check_spend_budget("daily:2026-07-19", "Daily", 4.0, &enabled);
+        assert!(manager.spend_budget_observed);
+        assert!(manager.spend_budget_cycle.is_some());
+
+        manager.check_spend_budget("", "", 0.0, &Settings::default());
+
+        assert!(!manager.spend_budget_observed);
+        assert!(manager.spend_budget_cycle.is_none());
+        assert!(manager.spend_budget_sent.is_empty());
+        assert!(manager.spend_budget_pending.is_none());
+    }
 }

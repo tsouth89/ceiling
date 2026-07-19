@@ -498,6 +498,10 @@ impl From<RawSettings> for Settings {
             raw.high_usage_threshold
         };
 
+        let spend_budget_limit_usd = normalize_spend_budget_usd(raw.spend_budget_limit_usd);
+        let spend_budget_warning_usd =
+            normalize_spend_budget_usd(raw.spend_budget_warning_usd).min(spend_budget_limit_usd);
+
         Settings {
             enabled_providers: raw.enabled_providers,
             refresh_interval_secs: raw.refresh_interval_secs,
@@ -512,8 +516,8 @@ impl From<RawSettings> for Settings {
             critical_usage_threshold: raw.critical_usage_threshold,
             spend_budget_alerts_enabled: raw.spend_budget_alerts_enabled,
             spend_budget_period: normalize_spend_budget_period(&raw.spend_budget_period),
-            spend_budget_warning_usd: normalize_spend_budget_usd(raw.spend_budget_warning_usd),
-            spend_budget_limit_usd: normalize_spend_budget_usd(raw.spend_budget_limit_usd),
+            spend_budget_warning_usd,
+            spend_budget_limit_usd,
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: normalize_usage_threshold_overrides(
                 raw.provider_usage_thresholds,

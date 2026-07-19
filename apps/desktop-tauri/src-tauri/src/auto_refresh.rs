@@ -59,7 +59,28 @@ fn local_usage_provider_ids(settings: &Settings) -> Vec<String> {
         .collect()
 }
 
+fn clear_spend_budget_alert_state(app: &tauri::AppHandle, settings: &Settings) {
+    if settings.show_notifications && settings.spend_budget_alerts_enabled {
+        return;
+    }
+
+    let state = app.state::<Mutex<AppState>>();
+    match state.lock() {
+        Ok(mut guard) => guard
+            .notification_manager
+            .check_spend_budget("", "", 0.0, settings),
+        Err(error) => {
+            tracing::warn!("failed to lock app state to clear spend budget notification: {error}")
+        }
+    }
+}
+
 pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Settings) {
+    // Clear the manager before a disabled budget path can return early. This
+    // also handles the no-provider case, so re-enabling starts from a fresh
+    // baseline rather than stale threshold state.
+    clear_spend_budget_alert_state(app, settings);
+
     let provider_ids = local_usage_provider_ids(settings);
     if provider_ids.is_empty() {
         return;
@@ -75,28 +96,29 @@ pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Set
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
         crate::commands::refresh_provider_local_usage_cache(provider_ids.clone()).await;
-        if !settings.show_notifications || !settings.spend_budget_alerts_enabled {
-            return;
-        }
-        let Some(total) = crate::commands::load_spend_budget_total(
-            provider_ids,
-            settings.spend_budget_period.clone(),
-        )
-        .await
-        else {
-            tracing::warn!("Unable to calculate local estimated API-value budget");
-            return;
-        };
-        let state = app.state::<Mutex<AppState>>();
-        match state.lock() {
-            Ok(mut guard) => guard.notification_manager.check_spend_budget(
-                &total.cycle_id,
-                total.period_label,
-                total.estimated_usd,
-                &settings,
-            ),
-            Err(error) => {
-                tracing::warn!("failed to lock app state for spend budget notification: {error}")
+        if settings.show_notifications && settings.spend_budget_alerts_enabled {
+            let Some(total) = crate::commands::load_spend_budget_total(
+                provider_ids,
+                settings.spend_budget_period.clone(),
+            )
+            .await
+            else {
+                tracing::warn!("Unable to calculate local estimated API-value budget");
+                return;
+            };
+            let state = app.state::<Mutex<AppState>>();
+            match state.lock() {
+                Ok(mut guard) => guard.notification_manager.check_spend_budget(
+                    &total.cycle_id,
+                    total.period_label,
+                    total.estimated_usd,
+                    &settings,
+                ),
+                Err(error) => {
+                    tracing::warn!(
+                        "failed to lock app state for spend budget notification: {error}"
+                    )
+                }
             }
         }
     });

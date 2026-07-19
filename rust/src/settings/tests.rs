@@ -35,6 +35,20 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 }
 
 #[test]
+fn raw_settings_clamp_spend_budget_warning_to_cap() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{
+            "spend_budget_warning_usd": 99.0,
+            "spend_budget_limit_usd": 10.0
+        }"#,
+    )
+    .expect("parse settings");
+
+    assert_eq!(loaded.spend_budget_warning_usd, 10.0);
+    assert_eq!(loaded.spend_budget_limit_usd, 10.0);
+}
+
+#[test]
 fn legacy_default_warning_threshold_migrates_to_85_percent() {
     let loaded: Settings = serde_json::from_str(
         r#"{

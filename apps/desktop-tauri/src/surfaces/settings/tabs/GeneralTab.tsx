@@ -195,6 +195,7 @@ export default function GeneralTab({
                 { value: "daily", label: t("SpendBudgetDaily") },
                 { value: "monthly", label: t("SpendBudgetMonthly") },
               ]}
+              ariaLabel={t("SpendBudgetPeriod")}
               disabled={saving || !settings.showNotifications || !spendBudgetAlertsEnabled}
               onChange={(v) => set({ spendBudgetPeriod: v as "daily" | "monthly" })}
             />
@@ -205,6 +206,7 @@ export default function GeneralTab({
               min={0}
               max={spendBudgetLimitUsd}
               step={1}
+              ariaLabel={t("SpendBudgetWarning")}
               disabled={saving || !settings.showNotifications || !spendBudgetAlertsEnabled}
               onChange={(v) => set({
                 spendBudgetWarningUsd: Math.min(v, spendBudgetLimitUsd),
@@ -216,6 +218,7 @@ export default function GeneralTab({
               value={spendBudgetLimitUsd}
               min={spendBudgetWarningUsd}
               step={1}
+              ariaLabel={t("SpendBudgetCap")}
               disabled={saving || !settings.showNotifications || !spendBudgetAlertsEnabled}
               onChange={(v) => set({
                 spendBudgetLimitUsd: Math.max(v, spendBudgetWarningUsd),

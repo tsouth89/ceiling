@@ -202,5 +202,8 @@ describe("GeneralTab", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "SpendBudgetAlerts" }));
     expect(set).toHaveBeenCalledWith({ spendBudgetAlertsEnabled: true });
+    expect(screen.getByRole("button", { name: "SpendBudgetPeriod" })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: "SpendBudgetWarning" })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: "SpendBudgetCap" })).toBeDisabled();
   });
 });
