@@ -1,6 +1,19 @@
 # Changelog
 
-## [Ceiling] 1.1.0 - 2026-07-18
+## [Ceiling] 1.2.0 - 2026-07-19
+
+### Added
+- Show a concrete "about ~42m left" estimate in Calm mode and on the dashboard, so a running-low window tells you roughly how long you have instead of just flagging it.
+- Break down 30-day spend by project, alongside the existing per-model and per-effort views, using the working directory recorded in each session.
+- Export a provider's 30-day spend to a CSV in your Downloads folder from the charts view, covering period totals and the per-model, per-effort, and per-project rows.
+- Add a cache-only `statusline` command that prints remaining capacity for editor status bars from the last saved snapshot, without waking the app or hitting the network.
+- Show a Cursor activity-by-model card from local request logs, framed as activity share rather than tokens or spend.
+
+### Changed
+- Leave estimated cost blank for models without a public price everywhere spend is shown, including the new project view and the CSV export, so unpriced usage never reads as $0.00.
+
+### Fixed
+- Reset the Codex project attribution when a child or forked session has no working directory of its own, and ignore filesystem roots, so spend is bucketed to the right project.
 
 ### Added
 - Show a total estimated API-value card that aggregates local usage across Codex and Claude, with Today, Yesterday, and 30-day views, an API value or Tokens metric, a provider ring, and a ranked legend.
