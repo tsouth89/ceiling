@@ -9,6 +9,7 @@ import {
   resetCreditsAvailable,
   codexResetCredits,
   calmPresentation,
+  formatShortDuration,
 } from "./capacityPresentation";
 import type {
   PaceSnapshot,
@@ -260,12 +261,20 @@ describe("capacityPresentation", () => {
       expect(result.showExactFallback).toBe(false);
     });
 
-    it("warns only when there is a real finite ETA to run out", () => {
+    it("shows the concrete time left when pace will not last to reset", () => {
       const risky = provider({
         pace: pace({ willLastToReset: false, etaSeconds: 3600 }),
       });
       expect(calmPresentation(risky, constrainingWindow(risky)).pace).toEqual({
-        label: "Running low",
+        label: "~1h left",
+        tone: "watch",
+      });
+
+      const soon = provider({
+        pace: pace({ willLastToReset: false, etaSeconds: 42 * 60 }),
+      });
+      expect(calmPresentation(soon, constrainingWindow(soon)).pace).toEqual({
+        label: "~42m left",
         tone: "watch",
       });
 
@@ -300,6 +309,23 @@ describe("capacityPresentation", () => {
       const reset = calmPresentation(withResetSnap, constrainingWindow(withResetSnap));
       expect(reset.hasReset).toBe(true);
       expect(reset.showExactFallback).toBe(false);
+    });
+  });
+
+  describe("formatShortDuration", () => {
+    it("formats compactly across ranges", () => {
+      expect(formatShortDuration(0)).toBe("under 1m");
+      expect(formatShortDuration(59)).toBe("under 1m");
+      expect(formatShortDuration(60)).toBe("1m");
+      expect(formatShortDuration(42 * 60)).toBe("42m");
+      expect(formatShortDuration(60 * 60)).toBe("1h");
+      expect(formatShortDuration(90 * 60)).toBe("1h 30m");
+      expect(formatShortDuration(25 * 3600)).toBe("1d 1h");
+      expect(formatShortDuration(48 * 3600)).toBe("2d");
+    });
+
+    it("never returns a negative duration", () => {
+      expect(formatShortDuration(-500)).toBe("under 1m");
     });
   });
 });

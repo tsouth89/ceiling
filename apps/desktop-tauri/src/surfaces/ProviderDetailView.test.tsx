@@ -129,6 +129,8 @@ describe("ProviderDetailView", () => {
     expect(screen.getAllByText(/Far ahead of budget/)).toHaveLength(2);
     expect(container.querySelector(".provider-focus__pace-fill")?.getAttribute("data-tone"))
       .toBe("risk");
+    // Concrete depletion ETA when the pace will not last to reset (SOU-274).
+    expect(screen.getByText(/about 1h left before this window runs out/)).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText("542.5M")).toBeInTheDocument());
     expect(screen.getByText("96.0%")).toBeInTheDocument();

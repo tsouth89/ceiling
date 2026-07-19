@@ -6923,6 +6923,15 @@ body:has(.dashboard-shell) #root {
   color: var(--text-secondary);
   font-size: 10px;
 }
+.provider-focus__pace-eta {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.provider-focus__pace-eta[data-tone="risk"] {
+  color: color-mix(in srgb, var(--usage-bar-exhausted) 70%, var(--text-primary));
+}
 .provider-focus__error {
   display: flex;
   flex-direction: column;
