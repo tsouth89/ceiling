@@ -1,14 +1,29 @@
-# Ceiling
+<p align="center">
+  <img src="site/ceiling-taskbar.png" alt="Ceiling's capacity strip above the Windows taskbar, showing Codex, Claude, and Cursor usage with reset times" width="820">
+</p>
 
-**AI usage. One elegant view.** — [ceiling.win](https://ceiling.win)
+<h1 align="center">Ceiling</h1>
+
+<p align="center"><strong>AI usage. One elegant view.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/tsouth89/ceiling/releases/latest"><img src="https://img.shields.io/github/v/release/tsouth89/ceiling?label=release&color=2ea44f" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6?logo=windows&logoColor=white" alt="Windows 10 and 11">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/tsouth89/ceiling?color=blue" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/local--first-yes-6f42c1" alt="Local-first">
+</p>
+
+<p align="center">
+  <a href="https://ceiling.win/download"><strong>Download for Windows</strong></a>
+  &nbsp;·&nbsp; <a href="https://ceiling.win">ceiling.win</a>
+  &nbsp;·&nbsp; <a href="https://github.com/tsouth89/ceiling/releases">all releases</a>
+</p>
+
+---
 
 Ceiling is a focused, local-first Windows companion for the AI subscriptions you actually use. It keeps rolling limits, reset times, and stale/error states visible from the system tray or a lightweight capacity strip above the taskbar.
 
 The goal is not another giant provider dashboard. It is a fast, calm way to answer one question: **how much AI capacity do I have left, and when does it reset?**
-
-<p align="center">
-  <img src="docs/images/ceiling-overview.png" alt="Ceiling's overview showing Codex, Claude, and Cursor usage at a glance" width="500">
-</p>
 
 ## Initial focus
 
@@ -20,23 +35,28 @@ The goal is not another giant provider dashboard. It is a fast, calm way to answ
 
 Additional providers remain available from the underlying foundation while Ceiling is narrowed around reliable support for the core five.
 
+<p align="center">
+  <img src="docs/images/ceiling-overview.png" alt="Ceiling's overview showing Codex, Claude, and Cursor usage at a glance" width="520">
+</p>
+
 ## What Ceiling feels like
 
 - **Taskbar-adjacent capacity strip:** Windows 11 does not support old-style third-party taskbar toolbars, so Ceiling uses a transparent, always-on-top strip that sits just above the taskbar without stealing focus.
 - **Tray at a glance:** a compact flyout with each provider's remaining capacity, reset time, source, and freshness.
 - **Truthful state:** a visible distinction between live, cached, stale, and failed reads. No fake precision when a provider cannot report a limit cleanly.
+- **Usage and reset alerts:** optional toasts when you approach a limit, and when a window resets unexpectedly, is restored, or grants a banked reset.
 - **Local first:** credentials and usage data stay on the machine. Browser cookies, API keys, and login sources remain opt-in.
 - **Windows-native:** Tauri, React, and Rust; fast startup, low idle work, and system accent-aware appearance.
 
 <p align="center">
-  <img src="docs/images/ceiling-tray.png" alt="Ceiling's tray flyout with each provider's remaining capacity and reset time" width="300">
+  <img src="docs/images/ceiling-tray.png" alt="Ceiling's tray flyout with each provider's remaining capacity and reset time" width="320">
 </p>
 
 ## Download
 
 Ceiling runs on Windows 10 and 11.
 
-**[Download for Windows &rarr;](https://ceiling.win/download)** &nbsp;·&nbsp; [ceiling.win](https://ceiling.win) &nbsp;·&nbsp; [all releases](https://github.com/tsouth89/ceiling/releases)
+**[Download for Windows](https://ceiling.win/download)** &nbsp;·&nbsp; [ceiling.win](https://ceiling.win) &nbsp;·&nbsp; [all releases](https://github.com/tsouth89/ceiling/releases)
 
 The installer and portable build are code-signed. Ceiling is local-first: it reads usage from sources on your PC or from each provider's own usage endpoint, and never sends your credentials or usage data to Ceiling-operated servers. See [How Ceiling gets your data](docs/DATA_SOURCES.md) for the per-provider detail.
 
