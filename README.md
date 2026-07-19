@@ -7,9 +7,9 @@
 <p align="center"><strong>AI usage. One elegant view.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/tsouth89/ceiling/releases/latest"><img src="https://img.shields.io/github/v/release/tsouth89/ceiling?label=release&color=2ea44f" alt="Latest release"></a>
+  <a href="https://github.com/tsouth89/ceiling/releases/latest"><img src="https://img.shields.io/badge/release-v1.1.0-2ea44f" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6?logo=windows&logoColor=white" alt="Windows 10 and 11">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/tsouth89/ceiling?color=blue" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/local--first-yes-6f42c1" alt="Local-first">
 </p>
 
