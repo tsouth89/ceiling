@@ -622,6 +622,7 @@ export interface ProviderLocalUsageSummary {
   topModel: string | null;
   modelBreakdown?: LocalModelCost[];
   effortBreakdown?: LocalEffortCost[];
+  projectBreakdown?: LocalProjectCost[];
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
 }
@@ -637,6 +638,14 @@ export interface LocalEffortCost {
   /** Reasoning-effort tier (Codex only): "high" / "xhigh" / "medium" / "unknown". */
   effort: string;
   /** Dollar cost for the tier, or null when its models have no canonical price. */
+  cost: number | null;
+  tokens: number;
+}
+
+export interface LocalProjectCost {
+  /** Project/repo (basename of the session cwd), or "unknown". */
+  project: string;
+  /** Dollar cost for the project, or null when its models have no canonical price. */
   cost: number | null;
   tokens: number;
 }

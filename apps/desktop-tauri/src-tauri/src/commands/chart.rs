@@ -90,6 +90,10 @@ pub struct ProviderLocalUsageSummary {
     /// for providers without an effort tier). Sorted by cost then tokens.
     #[serde(default)]
     pub effort_breakdown: Vec<LocalEffortCost>,
+    /// Per-project/repo spend over the 30-day period, sorted by cost then
+    /// tokens. Priced and unpriced projects are both included.
+    #[serde(default)]
+    pub project_breakdown: Vec<LocalProjectCost>,
     pub estimate_note: String,
     pub token_cost_updated_at_ms: i64,
 }
@@ -196,6 +200,16 @@ pub struct LocalModelCost {
 #[serde(rename_all = "camelCase")]
 pub struct LocalEffortCost {
     pub effort: String,
+    pub cost: Option<f64>,
+    pub tokens: u64,
+}
+
+/// Per-project/repo local spend for a period (basename of the session cwd).
+/// `cost` is `None` when the project's models are unpriced.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProjectCost {
+    pub project: String,
     pub cost: Option<f64>,
     pub tokens: u64,
 }
@@ -751,6 +765,7 @@ fn local_usage_summary_from_report(
         top_model: top_model(&report.thirty_days),
         model_breakdown: model_breakdown(&report.thirty_days),
         effort_breakdown: effort_breakdown(&report.thirty_days),
+        project_breakdown: project_breakdown(&report.thirty_days),
         estimate_note: localized_estimate_note(provider_id, lang),
         token_cost_updated_at_ms: current_unix_ms(),
     })
@@ -837,6 +852,7 @@ fn load_local_usage_summary_with_unknown_models(
             top_model: top_model(&thirty_day),
             model_breakdown: model_breakdown(&thirty_day),
             effort_breakdown: effort_breakdown(&thirty_day),
+            project_breakdown: project_breakdown(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
         }),
@@ -1121,6 +1137,29 @@ fn effort_breakdown(summary: &CostSummary) -> Vec<LocalEffortCost> {
     rows
 }
 
+/// Per-project spend for a period, mirroring `model_breakdown`: every project
+/// that recorded tokens, priced-first, unpriced kept and sorted last.
+fn project_breakdown(summary: &CostSummary) -> Vec<LocalProjectCost> {
+    let mut rows: Vec<LocalProjectCost> = summary
+        .by_project_tokens
+        .iter()
+        .map(|(project, counts)| LocalProjectCost {
+            project: project.clone(),
+            cost: summary.by_project.get(project).copied(),
+            tokens: counts.total(),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.cost
+            .is_some()
+            .cmp(&a.cost.is_some())
+            .then_with(|| b.cost.unwrap_or(0.0).total_cmp(&a.cost.unwrap_or(0.0)))
+            .then(b.tokens.cmp(&a.tokens))
+            .then(a.project.cmp(&b.project))
+    });
+    rows
+}
+
 fn top_model(summary: &CostSummary) -> Option<String> {
     summary
         .by_model_tokens
@@ -1197,11 +1236,11 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalTokenBreakdown,
+        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalProjectCost, LocalTokenBreakdown,
         ProviderLocalUsageSummary, api_value_period, comparison_period_specs,
         cost_fetch_failure_allows_early_retry, effort_breakdown, local_midnight_in_tz,
         local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
-        model_breakdown, token_breakdown, token_cost_cache_is_fresh,
+        model_breakdown, project_breakdown, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
@@ -1259,6 +1298,11 @@ mod tests {
             }],
             effort_breakdown: vec![LocalEffortCost {
                 effort: "high".to_string(),
+                cost: Some(2.0),
+                tokens: 300,
+            }],
+            project_breakdown: vec![LocalProjectCost {
+                project: "ceiling".to_string(),
                 cost: Some(2.0),
                 tokens: 300,
             }],
@@ -1403,6 +1447,49 @@ mod tests {
                 },
                 LocalEffortCost {
                     effort: "unknown".to_string(),
+                    cost: None,
+                    tokens: 1800,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn project_breakdown_orders_priced_first_and_keeps_unpriced() {
+        assert!(project_breakdown(&CostSummary::default()).is_empty());
+
+        let mut summary = CostSummary::default();
+        summary.by_project.insert("ceiling".to_string(), 9.0);
+        summary.by_project.insert("burnwatch".to_string(), 1.0);
+        for (name, input) in [("ceiling", 100), ("burnwatch", 100), ("unknown", 900)] {
+            summary.by_project_tokens.insert(
+                name.to_string(),
+                ModelTokenCounts {
+                    input_tokens: input,
+                    output_tokens: input,
+                    cached_tokens: 0,
+                },
+            );
+        }
+
+        let rows = project_breakdown(&summary);
+
+        assert_eq!(
+            rows,
+            vec![
+                LocalProjectCost {
+                    project: "ceiling".to_string(),
+                    cost: Some(9.0),
+                    tokens: 200,
+                },
+                LocalProjectCost {
+                    project: "burnwatch".to_string(),
+                    cost: Some(1.0),
+                    tokens: 200,
+                },
+                // Unpriced project keeps tokens, sorts last.
+                LocalProjectCost {
+                    project: "unknown".to_string(),
                     cost: None,
                     tokens: 1800,
                 },
