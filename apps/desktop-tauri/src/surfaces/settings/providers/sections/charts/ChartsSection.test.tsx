@@ -181,4 +181,20 @@ describe("ChartsSection local usage summary", () => {
     // Honest framing: activity, not spend.
     expect(card.textContent).toMatch(/activity, not tokens or spend/i);
   });
+
+  it("shows Cursor activity even when chart history fails to load", async () => {
+    tauriMocks.getProviderChartData.mockRejectedValue(new Error("no history"));
+    tauriMocks.getCursorModelActivity.mockResolvedValue([
+      { model: "grok-4.5", contributions: 100, requests: 5 },
+    ]);
+
+    const { getByLabelText, queryByText } = render(
+      <ChartsSection providerId="cursor" accountEmail={null} t={(key) => key} />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
+    expect(card.textContent).toContain("grok-4.5");
+    // The bare "History unavailable" error must not replace the card.
+    expect(queryByText("History unavailable")).toBeNull();
+  });
 });

@@ -364,6 +364,13 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     };
   }, [data, providerId, accountEmail, usageWindowsKey]);
 
+  // Cursor activity is independent of chart history and only belongs to the
+  // Cursor provider. Guard on the current provider so a stale fetch from a
+  // previous selection can't flash in another provider's view.
+  const isCursor = providerId.toLowerCase() === "cursor";
+  const cursorRows = isCursor ? cursorActivity ?? [] : [];
+  const hasCursorActivity = cursorRows.length > 0;
+
   if (loading) {
     return (
       <section className="provider-detail-section provider-detail-charts provider-detail-charts--loading">
@@ -377,6 +384,15 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   }
 
   if (!data || failed) {
+    // Chart history is unavailable, but Cursor's local activity may still be
+    // readable — show it rather than a bare error.
+    if (hasCursorActivity) {
+      return (
+        <section className="provider-detail-section provider-detail-charts">
+          <CursorActivity rows={cursorRows} />
+        </section>
+      );
+    }
     return (
       <section className="provider-detail-section provider-detail-charts charts-data-empty">
         <strong>History unavailable</strong>
@@ -389,7 +405,6 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const hasUsage = data.usageBreakdown.length > 0;
   const hasLimits = data.quotaHistory.length > 0;
   const hasLocalSummary = data.localUsage !== null;
-  const hasCursorActivity = (cursorActivity?.length ?? 0) > 0;
 
   if (!hasCredits && !hasUsage && !hasLimits && !hasLocalSummary && !hasCursorActivity) {
     return (
@@ -448,7 +463,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           </span>
         </div>
       )}
-      {cursorActivity && cursorActivity.length > 0 && <CursorActivity rows={cursorActivity} />}
+      {hasCursorActivity && <CursorActivity rows={cursorRows} />}
       {data.localUsage && (
         <div
           className="usage-periods"
