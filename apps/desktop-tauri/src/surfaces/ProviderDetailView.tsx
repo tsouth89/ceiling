@@ -191,8 +191,11 @@ function PaceSection({ pace }: { pace: PaceSnapshot }) {
         Number.isFinite(pace.etaSeconds) &&
         pace.etaSeconds > 0 && (
           <p className="provider-focus__pace-eta" data-tone={tone}>
-            At this pace, about {formatShortDuration(pace.etaSeconds)} left before this window runs
-            out.
+            At this pace,{" "}
+            {pace.etaSeconds < 60
+              ? "under a minute"
+              : `about ${formatShortDuration(pace.etaSeconds)}`}{" "}
+            left before this window runs out.
           </p>
         )}
     </section>

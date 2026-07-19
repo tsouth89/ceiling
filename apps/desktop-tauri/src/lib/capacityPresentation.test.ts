@@ -278,6 +278,15 @@ describe("capacityPresentation", () => {
         tone: "watch",
       });
 
+      // Sub-minute drops the "~" so it doesn't read "~under 1m left".
+      const imminent = provider({
+        pace: pace({ willLastToReset: false, etaSeconds: 30 }),
+      });
+      expect(calmPresentation(imminent, constrainingWindow(imminent)).pace).toEqual({
+        label: "under 1m left",
+        tone: "watch",
+      });
+
       // No usable ETA: stay silent rather than invent a state.
       const vague = provider({
         pace: pace({ willLastToReset: false, etaSeconds: null }),

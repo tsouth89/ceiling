@@ -265,7 +265,12 @@ function calmPaceState(pace: PaceSnapshot | null): CalmPaceState | null {
     Number.isFinite(pace.etaSeconds) &&
     pace.etaSeconds > 0
   ) {
-    return { label: `~${formatShortDuration(pace.etaSeconds)} left`, tone: "watch" };
+    // Drop the "~" for the sub-minute sentinel so it doesn't read "~under 1m".
+    const label =
+      pace.etaSeconds < 60
+        ? "under 1m left"
+        : `~${formatShortDuration(pace.etaSeconds)} left`;
+    return { label, tone: "watch" };
   }
   return null;
 }
