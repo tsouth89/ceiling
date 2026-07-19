@@ -164,6 +164,10 @@ pub struct Settings {
     #[serde(default = "default_global_shortcut")]
     pub global_shortcut: String,
 
+    /// Global keyboard shortcut to show or hide the native taskbar capacity strip.
+    #[serde(default = "default_taskbar_toggle_shortcut")]
+    pub taskbar_toggle_shortcut: String,
+
     /// Additional Codex home or sessions directories to include in local cost scans.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codex_custom_sessions_dirs: Vec<String>,
@@ -431,6 +435,10 @@ fn default_global_shortcut() -> String {
     "Ctrl+Shift+U".to_string()
 }
 
+fn default_taskbar_toggle_shortcut() -> String {
+    "Ctrl+Shift+H".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -498,6 +506,7 @@ impl Default for Settings {
             provider_metrics: HashMap::new(), // Empty = use Automatic for all
             provider_order: Vec::new(), // Empty = canonical ProviderId::all() order
             global_shortcut: default_global_shortcut(), // Ctrl+Shift+U by default
+            taskbar_toggle_shortcut: default_taskbar_toggle_shortcut(), // Ctrl+Shift+H by default
             codex_custom_sessions_dirs: Vec::new(),
             agent_sessions_enabled: false,
             agent_session_ssh_hosts: Vec::new(),

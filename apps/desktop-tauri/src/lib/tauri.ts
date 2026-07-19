@@ -437,14 +437,10 @@ export function getKiroStatus(): Promise<
   return invoke("get_kiro_status");
 }
 
-// ── Phase 7 — global shortcut capture + notification preview ──────────
+// ── Global shortcut validation ───────────────────────────────────────
 
-export function registerGlobalShortcut(accelerator: string): Promise<void> {
-  return invoke<void>("register_global_shortcut", { accelerator });
-}
-
-export function unregisterGlobalShortcut(): Promise<void> {
-  return invoke<void>("unregister_global_shortcut");
+export function validateGlobalShortcut(accelerator: string): Promise<void> {
+  return invoke<void>("validate_global_shortcut", { accelerator });
 }
 
 export function playNotificationSound(): Promise<void> {

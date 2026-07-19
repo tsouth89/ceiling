@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import {
-  registerGlobalShortcut,
-  unregisterGlobalShortcut,
-} from "../../../lib/tauri";
+import { validateGlobalShortcut } from "../../../lib/tauri";
 import { ShortcutCapture } from "../../../components/ShortcutCapture";
 import { Field, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../../Settings";
@@ -44,26 +41,22 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
   }, [saving, settings.agentSessionSshHosts]);
 
   const commitShortcut = useCallback(
-    async (accelerator: string) => {
+    async (field: "globalShortcut" | "taskbarToggleShortcut", accelerator: string) => {
       setShortcutError(null);
+      if (accelerator === settings[field]) return;
       try {
-        await registerGlobalShortcut(accelerator);
-        set({ globalShortcut: accelerator });
+        await validateGlobalShortcut(accelerator);
+        set({ [field]: accelerator });
       } catch (err: unknown) {
         setShortcutError(err instanceof Error ? err.message : String(err));
       }
     },
-    [set],
+    [set, settings],
   );
 
-  const clearShortcut = useCallback(async () => {
+  const clearShortcut = useCallback((field: "globalShortcut" | "taskbarToggleShortcut") => {
     setShortcutError(null);
-    try {
-      await unregisterGlobalShortcut();
-      set({ globalShortcut: "" });
-    } catch (err: unknown) {
-      setShortcutError(err instanceof Error ? err.message : String(err));
-    }
+    set({ [field]: "" });
   }, [set]);
 
   const commitCodexDirs = useCallback(() => {
@@ -83,8 +76,19 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
             <ShortcutCapture
               value={settings.globalShortcut}
               disabled={saving}
-              onCommit={(accel) => void commitShortcut(accel)}
-              onClear={() => void clearShortcut()}
+              onCommit={(accel) => void commitShortcut("globalShortcut", accel)}
+              onClear={() => clearShortcut("globalShortcut")}
+            />
+          </Field>
+          <Field
+            label={t("TaskbarToggleShortcutFieldLabel")}
+            description={t("TaskbarToggleShortcutHelper")}
+          >
+            <ShortcutCapture
+              value={settings.taskbarToggleShortcut ?? ""}
+              disabled={saving}
+              onCommit={(accel) => void commitShortcut("taskbarToggleShortcut", accel)}
+              onClear={() => clearShortcut("taskbarToggleShortcut")}
             />
           </Field>
         </div>
