@@ -584,6 +584,79 @@ pub async fn get_cursor_model_activity() -> Vec<CursorModelActivityRow> {
     })
 }
 
+/// Quote a CSV field only when it contains a delimiter, quote, or newline.
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// Flat, spreadsheet-friendly CSV of the 30-day spend: period totals plus the
+/// per-model, per-effort, and per-project breakdowns already shown in the UI.
+/// Unpriced rows leave `cost_usd` blank rather than reporting a fabricated $0.
+fn format_cost_csv(summary: &ProviderLocalUsageSummary) -> String {
+    let mut out = String::from("section,name,cost_usd,tokens\n");
+    let mut row = |section: &str, name: &str, cost: Option<f64>, tokens: Option<u64>| {
+        out.push_str(&format!(
+            "{},{},{},{}\n",
+            csv_field(section),
+            csv_field(name),
+            cost.map(|c| format!("{c:.4}")).unwrap_or_default(),
+            tokens.map(|t| t.to_string()).unwrap_or_default(),
+        ));
+    };
+    row("period", "today", summary.today_cost, None);
+    row(
+        "period",
+        "30 days",
+        summary.thirty_day_cost,
+        summary.thirty_day_tokens,
+    );
+    for model in &summary.model_breakdown {
+        row("model", &model.model, model.cost, Some(model.tokens));
+    }
+    for effort in &summary.effort_breakdown {
+        row("effort", &effort.effort, effort.cost, Some(effort.tokens));
+    }
+    for project in &summary.project_breakdown {
+        row(
+            "project",
+            &project.project,
+            project.cost,
+            Some(project.tokens),
+        );
+    }
+    out
+}
+
+/// Write the provider's 30-day spend breakdown to a CSV in the user's Downloads
+/// folder and return the saved path. Local-only; nothing leaves the machine.
+#[tauri::command]
+pub async fn export_cost_csv(app: tauri::AppHandle, provider_id: String) -> Result<String, String> {
+    use tauri::Manager;
+    let download_dir = app
+        .path()
+        .download_dir()
+        .map_err(|_| "Could not locate your Downloads folder.".to_string())?;
+    let today = Local::now().format("%Y-%m-%d").to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let summary = load_provider_local_usage_summary(&provider_id)
+            .ok_or_else(|| "No local usage to export yet.".to_string())?;
+        let csv = format_cost_csv(&summary);
+        let path = download_dir.join(format!("ceiling-{provider_id}-spend-{today}.csv"));
+        fs::write(&path, csv).map_err(|error| format!("Could not write the CSV: {error}"))?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!("CSV export worker failed: {}", error);
+        "The export did not finish.".to_string()
+    })?
+}
+
 #[tauri::command]
 pub async fn get_provider_local_usage_summary(
     provider_id: String,
@@ -1238,9 +1311,10 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalProjectCost, LocalTokenBreakdown,
         ProviderLocalUsageSummary, api_value_period, comparison_period_specs,
-        cost_fetch_failure_allows_early_retry, effort_breakdown, local_midnight_in_tz,
-        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
-        model_breakdown, project_breakdown, token_breakdown, token_cost_cache_is_fresh,
+        cost_fetch_failure_allows_early_retry, effort_breakdown, format_cost_csv,
+        local_midnight_in_tz, local_usage_summary_from_report, local_yesterday_window_utc,
+        localized_estimate_note, model_breakdown, project_breakdown, token_breakdown,
+        token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
@@ -1309,6 +1383,16 @@ mod tests {
             estimate_note: "estimated".to_string(),
             token_cost_updated_at_ms: 1234,
         };
+
+        // CSV export covers the period totals and each breakdown; unpriced rows
+        // (none here) would leave cost_usd blank.
+        let csv = format_cost_csv(&summary);
+        assert!(csv.starts_with("section,name,cost_usd,tokens\n"));
+        assert!(csv.contains("period,today,1.0000,\n"), "csv: {csv}");
+        assert!(csv.contains("period,30 days,2.0000,300\n"), "csv: {csv}");
+        assert!(csv.contains("model,gpt-5,2.0000,300\n"), "csv: {csv}");
+        assert!(csv.contains("effort,high,2.0000,300\n"), "csv: {csv}");
+        assert!(csv.contains("project,ceiling,2.0000,300\n"), "csv: {csv}");
 
         let json = serde_json::to_value(summary).expect("serialize summary");
         assert_eq!(

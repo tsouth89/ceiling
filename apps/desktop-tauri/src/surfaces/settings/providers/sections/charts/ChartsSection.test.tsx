@@ -5,6 +5,7 @@ const tauriMocks = vi.hoisted(() => ({
   getProviderChartData: vi.fn(),
   getSettingsSnapshot: vi.fn(),
   getCursorModelActivity: vi.fn(),
+  exportCostCsv: vi.fn(),
 }));
 
 vi.mock("../../../../../lib/tauri", () => tauriMocks);
@@ -91,6 +92,7 @@ describe("ChartsSection local usage summary", () => {
     tauriMocks.getSettingsSnapshot.mockResolvedValue({ enableAnimations: false });
     tauriMocks.getProviderChartData.mockResolvedValue(enrichedData);
     tauriMocks.getCursorModelActivity.mockResolvedValue([]);
+    tauriMocks.exportCostCsv.mockResolvedValue("C:/Users/me/Downloads/ceiling-claude-spend.csv");
   });
 
   it("shows comparable processed totals and the seven-day token mix", async () => {
@@ -209,5 +211,17 @@ describe("ChartsSection local usage summary", () => {
     expect(card.textContent).toContain("grok-4.5");
     // The bare "History unavailable" error must not replace the card.
     expect(queryByText("History unavailable")).toBeNull();
+  });
+
+  it("exports spend to CSV and shows the saved path", async () => {
+    const { getByText, findByText } = render(
+      <ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />,
+    );
+
+    const button = await waitFor(() => getByText("Export CSV"));
+    button.click();
+
+    expect(tauriMocks.exportCostCsv).toHaveBeenCalledWith("claude");
+    expect(await findByText(/Saved to .*ceiling-claude-spend\.csv/)).toBeTruthy();
   });
 });

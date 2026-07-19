@@ -274,6 +274,11 @@ export function getCursorModelActivity(): Promise<CursorModelActivity[]> {
   return invoke<CursorModelActivity[]>("get_cursor_model_activity");
 }
 
+/** Export the provider's 30-day spend to a CSV in Downloads; resolves to the saved path. */
+export function exportCostCsv(providerId: string): Promise<string> {
+  return invoke<string>("export_cost_csv", { providerId });
+}
+
 // ── Token account bridge ─────────────────────────────────────────────
 
 export function getTokenAccountProviders(): Promise<TokenAccountSupportBridge[]> {
