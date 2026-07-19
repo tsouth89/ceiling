@@ -12,7 +12,11 @@ import { useLocale } from "../hooks/useLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import { getProviderChartData } from "../lib/tauri";
 import { providerSupportsChartData } from "../lib/providerCharts";
-import { allMeasuredWindows, codexResetCredits } from "../lib/capacityPresentation";
+import {
+  allMeasuredWindows,
+  codexResetCredits,
+  formatShortDuration,
+} from "../lib/capacityPresentation";
 
 type DetailWindow = {
   id: string;
@@ -182,6 +186,18 @@ function PaceSection({ pace }: { pace: PaceSnapshot }) {
         <span>Expected {Math.round(expected)}% by now</span>
         <span>Actual {Math.round(actual)}%</span>
       </div>
+      {!pace.willLastToReset &&
+        typeof pace.etaSeconds === "number" &&
+        Number.isFinite(pace.etaSeconds) &&
+        pace.etaSeconds > 0 && (
+          <p className="provider-focus__pace-eta" data-tone={tone}>
+            At this pace,{" "}
+            {pace.etaSeconds < 60
+              ? "under a minute"
+              : `about ${formatShortDuration(pace.etaSeconds)}`}{" "}
+            left before this window runs out.
+          </p>
+        )}
     </section>
   );
 }

@@ -229,22 +229,48 @@ export type CalmPresentation = {
 };
 
 /**
+ * Compact human duration for the pace pill: "under 1m", "42m", "1h 20m",
+ * "2d 3h". Kept short so it fits the float-bar pill.
+ */
+export function formatShortDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return "under 1m";
+  const minutes = Math.round(total / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes > 0 ? `${hours}h ${restMinutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours > 0 ? `${days}d ${restHours}h` : `${days}d`;
+}
+
+/**
  * Trustworthy pace state for Calm mode, or null when there isn't enough signal.
  * Never invents an "on pace" state (SOU-178): it only speaks when the provider
- * actually reports usable pace data.
+ * actually reports usable pace data. When the current pace will NOT last to the
+ * reset, surface the concrete time left ("~42m left") instead of a vague
+ * "Running low", since the number is already computed (SOU-274). "On pace"
+ * already carries the reset-aware meaning: the pace lasts until the window
+ * resets.
  */
 function calmPaceState(pace: PaceSnapshot | null): CalmPaceState | null {
   if (!pace) return null;
   // Data-backed and reassuring: the current pace lasts to the reset.
   if (pace.willLastToReset) return { label: "On pace", tone: "steady" };
   // Only warn when there is a real, finite estimate of running out; otherwise
-  // stay silent rather than fabricate a state.
+  // stay silent rather than fabricate a state. Show the concrete ETA.
   if (
     typeof pace.etaSeconds === "number" &&
     Number.isFinite(pace.etaSeconds) &&
     pace.etaSeconds > 0
   ) {
-    return { label: "Running low", tone: "watch" };
+    // Drop the "~" for the sub-minute sentinel so it doesn't read "~under 1m".
+    const label =
+      pace.etaSeconds < 60
+        ? "under 1m left"
+        : `~${formatShortDuration(pace.etaSeconds)} left`;
+    return { label, tone: "watch" };
   }
   return null;
 }
