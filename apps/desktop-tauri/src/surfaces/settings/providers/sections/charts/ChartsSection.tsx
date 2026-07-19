@@ -251,9 +251,14 @@ function ExportCsvButton({ providerId }: { providerId: string }) {
   );
 }
 
+const PROJECT_COLLAPSED_COUNT = 8;
+
 function ProjectBreakdown({ projects }: { projects: LocalProjectCost[] }) {
+  const [expanded, setExpanded] = useState(false);
   const priced = projects.reduce((sum, project) => sum + (project.cost ?? 0), 0);
   const hasUnpriced = projects.some((project) => project.cost == null);
+  const hasMore = projects.length > PROJECT_COLLAPSED_COUNT;
+  const visible = expanded ? projects : projects.slice(0, PROJECT_COLLAPSED_COUNT);
   return (
     <div className="usage-model-costs" aria-label="Cost by project over 30 days">
       <div className="usage-model-costs__header">
@@ -261,7 +266,7 @@ function ProjectBreakdown({ projects }: { projects: LocalProjectCost[] }) {
         <span className="usage-model-costs__total">{formatUsd(priced)}</span>
       </div>
       <ul className="usage-model-costs__rows">
-        {projects.map((project) => (
+        {visible.map((project) => (
           <li className="usage-model-costs__row" key={project.project}>
             <span className="usage-model-costs__name" title={project.project}>
               {projectLabel(project.project)}
@@ -273,6 +278,16 @@ function ProjectBreakdown({ projects }: { projects: LocalProjectCost[] }) {
           </li>
         ))}
       </ul>
+      {hasMore && (
+        <button
+          type="button"
+          className="usage-model-costs__more"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Show fewer" : `Show all ${projects.length} projects`}
+        </button>
+      )}
       {hasUnpriced && (
         <p className="usage-model-costs__note">
           Not priced · tokens counted, but the models used have no public rate.

@@ -7877,6 +7877,21 @@ body:has(.dashboard-shell) #root {
   font-size: 9.5px;
   line-height: 1.4;
 }
+.usage-model-costs__more {
+  margin: 6px 0 0;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.usage-model-costs__more:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.24));
+}
 .usage-export {
   grid-column: 1 / -1;
   display: flex;
