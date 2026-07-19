@@ -37,43 +37,6 @@ First stable release of Ceiling for Windows.
 - Deliver confirmed reset notifications through the Windows toast pipeline and report Windows notification blocks accurately.
 - Keep the pop-out dashboard, native controls, taskbar placement, chart tooltips, and provider-window presentation stable across supported Windows configurations.
 
-## [Ceiling] 1.0.0-rc.3 - 2026-07-18
-
-### Added
-- Notify when Codex gains banked reset credits after the grant is confirmed by a second fresh reading.
-
-### Changed
-- Warm trusted Cargo and pnpm release caches from `main` so signed tag builds can restore them without caching credentials or signed artifacts.
-
-### Fixed
-- Deliver confirmed unexpected-reset and banked-reset notifications through the Windows toast pipeline, with the success sound playing only after delivery.
-- Report global or per-app Windows notification blocks from the Settings test instead of claiming a notification was sent.
-
-## [Ceiling] 1.0.0-rc.2 - 2026-07-17
-
-### Added
-- Show Codex banked rate-limit resets on every surface, including an explicit "0 available" so the count stays visible even when none are banked.
-- Add a "Send test notification" button in Settings that runs the real Windows toast pipeline and reports whether it was delivered.
-- Add Exact and Calm information modes for the floating bar. Calm leads with a trustworthy pace state and the next reset, with exact percentages one keyboard or click away, and never invents an "on pace" state from insufficient data.
-- Surface a tracked limit window as "unavailable" when it drops out of an otherwise-successful provider response, instead of silently losing it or fabricating a percentage.
-
-## [Ceiling] 1.0.0-rc.1 - 2026-07-17
-
-First release candidate for Ceiling 1.0.
-
-### Added
-- Guided first-run checklist in the empty dashboard for enabling providers, connecting sign-in, and turning on the floating bar.
-- Per-provider "How Ceiling gets this data" panel and a maintained data-sources reference describing each provider's source and precise local-first privacy behavior.
-
-### Changed
-- Ship English only and remove the unused non-English locale files.
-- Rewrite the browser-cookie documentation for Chromium App-Bound Encryption reality.
-
-### Fixed
-- Theme native dropdowns and checkboxes correctly in both dark and light mode.
-- Stop the pop-out dashboard from reopening at its minimum size.
-- Clarify the browser-cookie empty state and remove the last stale CodexBar naming.
-
 ## [Ceiling] 0.43.3 - 2026-07-16
 
 ### Security
