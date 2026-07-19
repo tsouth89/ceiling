@@ -77,9 +77,13 @@ export function ProvidersSidebar({
   const [localOrder, setLocalOrder] = useState<string[]>(() =>
     providers.map((p) => p.id),
   );
+  const incomingOrderKey = providers.map((p) => p.id).join("\u001f");
+  const lastIncomingOrderKeyRef = useRef(incomingOrderKey);
   useEffect(() => {
+    if (lastIncomingOrderKeyRef.current === incomingOrderKey) return;
+    lastIncomingOrderKeyRef.current = incomingOrderKey;
     setLocalOrder(providers.map((p) => p.id));
-  }, [providers]);
+  }, [incomingOrderKey, providers]);
 
   const byId = new Map(providers.map((p) => [p.id, p]));
   const ordered = localOrder
