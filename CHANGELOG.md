@@ -1,5 +1,10 @@
 # Changelog
 
+## [Ceiling] 1.2.1 - 2026-07-19
+
+### Fixed
+- Collapse the "Cost by project" list to the top 8 projects behind a "Show all" toggle, so a long project list no longer pushes the charts far below the fold.
+
 ## [Ceiling] 1.2.0 - 2026-07-19
 
 ### Added
