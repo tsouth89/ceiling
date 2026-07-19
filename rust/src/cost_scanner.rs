@@ -46,6 +46,11 @@ pub struct CostSummary {
     pub by_effort: HashMap<String, f64>,
     /// Codex token split by reasoning-effort tier, matching `by_effort`.
     pub by_effort_tokens: HashMap<String, ModelTokenCounts>,
+    /// Cost split by project/repo (basename of the session `cwd`); keyed
+    /// "unknown" when the log has no usable working directory.
+    pub by_project: HashMap<String, f64>,
+    /// Token split by project/repo, matching `by_project`.
+    pub by_project_tokens: HashMap<String, ModelTokenCounts>,
     /// Model IDs that were priced with fallback rates because no canonical rate is available.
     pub unknown_models: HashSet<String>,
     /// Period start date
@@ -111,6 +116,18 @@ fn mark_unseen_rollout(path: &Path, seen: &mut HashSet<String>) -> bool {
         Some(name) => seen.insert(name.to_string()),
         None => true,
     }
+}
+
+/// Friendly project name from a session working directory: the last path
+/// segment, e.g. `C:\a\b\my-repo` or `\\wsl.localhost\d\home\me\my-repo` ->
+/// `my-repo`. Returns `None` for a blank/rootless path so callers can bucket it
+/// as "unknown" rather than inventing a project.
+pub(crate) fn project_from_cwd(cwd: &str) -> Option<String> {
+    let trimmed = cwd.trim().trim_end_matches(['/', '\\']);
+    trimmed
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .map(str::to_string)
 }
 
 /// Cheap date gate for the flat archived dir: files are `rollout-YYYY-MM-DD…`.
@@ -242,6 +259,8 @@ struct ClaudeEvent {
     timestamp: Option<String>,
     #[serde(rename = "requestId", alias = "request_id")]
     request_id: Option<String>,
+    /// Session working directory, used for per-project cost.
+    cwd: Option<String>,
     message: Option<ClaudeMessage>,
 }
 
@@ -292,6 +311,8 @@ struct ClaudeUsageRecord {
     model: String,
     timestamp: Option<DateTime<Utc>>,
     dedup_key: Option<String>,
+    /// Project/repo (basename of the line's cwd), for per-project cost.
+    project: Option<String>,
     input: u64,
     output: u64,
     cache_create: u64,
@@ -751,6 +772,7 @@ fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageReco
         model: model.to_string(),
         timestamp,
         dedup_key: claude_usage_dedup_key(message.id.as_deref(), event.request_id.as_deref()),
+        project: event.cwd.as_deref().and_then(project_from_cwd),
         input,
         output,
         cache_create,
@@ -809,6 +831,16 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
     model_tokens.input_tokens += record.input;
     model_tokens.output_tokens += record.output;
     model_tokens.cached_tokens += record.cache_create + record.cache_read;
+
+    let project_bucket = crate::codex_costs::project_bucket(record.project.as_deref());
+    *summary
+        .by_project
+        .entry(project_bucket.clone())
+        .or_insert(0.0) += record.cost;
+    let project_tokens = summary.by_project_tokens.entry(project_bucket).or_default();
+    project_tokens.input_tokens += record.input;
+    project_tokens.output_tokens += record.output;
+    project_tokens.cached_tokens += record.cache_create + record.cache_read;
 }
 
 /// Add one usage record to the per-day cost buckets, keyed by the record's
@@ -926,6 +958,15 @@ fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
     }
     for (effort, tokens) in &source.by_effort_tokens {
         let entry = target.by_effort_tokens.entry(effort.clone()).or_default();
+        entry.input_tokens += tokens.input_tokens;
+        entry.output_tokens += tokens.output_tokens;
+        entry.cached_tokens += tokens.cached_tokens;
+    }
+    for (project, cost) in &source.by_project {
+        *target.by_project.entry(project.clone()).or_insert(0.0) += cost;
+    }
+    for (project, tokens) in &source.by_project_tokens {
+        let entry = target.by_project_tokens.entry(project.clone()).or_default();
         entry.input_tokens += tokens.input_tokens;
         entry.output_tokens += tokens.output_tokens;
         entry.cached_tokens += tokens.cached_tokens;
@@ -1256,6 +1297,24 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn project_from_cwd_extracts_basename() {
+        assert_eq!(
+            project_from_cwd(r"C:\projects\personal\cubby-clipboard").as_deref(),
+            Some("cubby-clipboard")
+        );
+        assert_eq!(
+            project_from_cwd(r"\\wsl.localhost\ubuntu-24.04\home\me\burnwatch-app").as_deref(),
+            Some("burnwatch-app")
+        );
+        assert_eq!(
+            project_from_cwd("/home/me/projects/ceiling/").as_deref(),
+            Some("ceiling")
+        );
+        assert_eq!(project_from_cwd("   ").as_deref(), None);
+        assert_eq!(project_from_cwd("").as_deref(), None);
+    }
 
     #[test]
     fn archived_rollout_day_in_range_gates_by_filename_date() {

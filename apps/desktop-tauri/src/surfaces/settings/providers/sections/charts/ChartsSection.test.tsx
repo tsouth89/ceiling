@@ -68,6 +68,11 @@ const enrichedData = {
       { effort: "xhigh", cost: 5_700, tokens: 7_500_000_000 },
       { effort: "unknown", cost: null, tokens: 50_000_000 },
     ],
+    projectBreakdown: [
+      { project: "ceiling", cost: 14_000, tokens: 18_000_000_000 },
+      { project: "burnwatch", cost: 3_700, tokens: 5_000_000_000 },
+      { project: "unknown", cost: null, tokens: 50_000_000 },
+    ],
     estimateNote: "API-equivalent estimate from local logs; not subscription spend",
     tokenCostUpdatedAtMs: 1,
     sevenDayTokenBreakdown: {
@@ -130,6 +135,14 @@ describe("ChartsSection local usage summary", () => {
     expect(efforts.textContent).toContain("$5,700.00");
     expect(efforts.textContent).toContain("Unspecified");
     expect(efforts.textContent).toContain("$17,700.00");
+
+    const projects = getByLabelText("Cost by project over 30 days");
+    expect(projects.textContent).toContain("ceiling");
+    expect(projects.textContent).toContain("$14,000.00");
+    expect(projects.textContent).toContain("burnwatch");
+    expect(projects.textContent).toContain("Unknown project");
+    expect(projects.textContent).toContain("Not priced");
+    expect(projects.textContent).toContain("$17,700.00");
   });
 
   it("keeps quota history visible while local history loads, then enriches promptly", async () => {

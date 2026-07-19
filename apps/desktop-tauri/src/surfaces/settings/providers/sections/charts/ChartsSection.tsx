@@ -12,6 +12,7 @@ import type {
   CursorModelActivity,
   LocalEffortCost,
   LocalModelCost,
+  LocalProjectCost,
   LocalTokenBreakdown,
   ProviderChartData,
   ProviderUsageSnapshot,
@@ -204,6 +205,41 @@ function EffortBreakdown({ efforts }: { efforts: LocalEffortCost[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function projectLabel(project: string): string {
+  return project === "unknown" ? "Unknown project" : project;
+}
+
+function ProjectBreakdown({ projects }: { projects: LocalProjectCost[] }) {
+  const priced = projects.reduce((sum, project) => sum + (project.cost ?? 0), 0);
+  const hasUnpriced = projects.some((project) => project.cost == null);
+  return (
+    <div className="usage-model-costs" aria-label="Cost by project over 30 days">
+      <div className="usage-model-costs__header">
+        <span className="usage-model-costs__title">Cost by project · 30 days</span>
+        <span className="usage-model-costs__total">{formatUsd(priced)}</span>
+      </div>
+      <ul className="usage-model-costs__rows">
+        {projects.map((project) => (
+          <li className="usage-model-costs__row" key={project.project}>
+            <span className="usage-model-costs__name" title={project.project}>
+              {projectLabel(project.project)}
+            </span>
+            <span className="usage-model-costs__tokens">{formatTokens(project.tokens)}</span>
+            <span className="usage-model-costs__cost">
+              {project.cost == null ? "Not priced" : formatUsd(project.cost)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {hasUnpriced && (
+        <p className="usage-model-costs__note">
+          Not priced · tokens counted, but the models used have no public rate.
+        </p>
+      )}
     </div>
   );
 }
@@ -496,6 +532,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           )}
           {data.localUsage.effortBreakdown && data.localUsage.effortBreakdown.length > 0 && (
             <EffortBreakdown efforts={data.localUsage.effortBreakdown} />
+          )}
+          {data.localUsage.projectBreakdown && data.localUsage.projectBreakdown.length > 0 && (
+            <ProjectBreakdown projects={data.localUsage.projectBreakdown} />
           )}
         </div>
       )}

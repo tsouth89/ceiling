@@ -39,9 +39,13 @@ pub(crate) fn add_codex_records_to_summary(
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-        if let Some(cost) =
-            add_codex_tokens_to_summary(summary, &record.model, record.effort.as_deref(), tokens)
-        {
+        if let Some(cost) = add_codex_tokens_to_summary(
+            summary,
+            &record.model,
+            record.effort.as_deref(),
+            record.project.as_deref(),
+            tokens,
+        ) {
             total_cost += cost;
             has_tokens = true;
         }
@@ -60,7 +64,13 @@ pub(crate) fn add_codex_record_to_summary(
     record: &CodexUsageRecord,
 ) -> Option<f64> {
     let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-    add_codex_tokens_to_summary(summary, &record.model, record.effort.as_deref(), tokens)
+    add_codex_tokens_to_summary(
+        summary,
+        &record.model,
+        record.effort.as_deref(),
+        record.project.as_deref(),
+        tokens,
+    )
 }
 
 pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
@@ -117,6 +127,7 @@ fn add_codex_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
     effort: Option<&str>,
+    project: Option<&str>,
     tokens: CodexTokenCounts,
 ) -> Option<f64> {
     if tokens.is_empty() {
@@ -129,6 +140,7 @@ fn add_codex_tokens_to_summary(
     summary.cache_read_tokens += tokens.cached;
     summary.output_tokens += tokens.output;
     let effort_bucket = codex_effort_bucket(effort);
+    let project_bucket = project_bucket(project);
     add_tokens(
         summary
             .by_model_tokens
@@ -140,6 +152,13 @@ fn add_codex_tokens_to_summary(
         summary
             .by_effort_tokens
             .entry(effort_bucket.to_string())
+            .or_default(),
+        tokens,
+    );
+    add_tokens(
+        summary
+            .by_project_tokens
+            .entry(project_bucket.clone())
             .or_default(),
         tokens,
     );
@@ -157,6 +176,7 @@ fn add_codex_tokens_to_summary(
         .by_effort
         .entry(effort_bucket.to_string())
         .or_insert(0.0) += cost;
+    *summary.by_project.entry(project_bucket).or_insert(0.0) += cost;
     Some(cost)
 }
 
@@ -194,6 +214,15 @@ fn codex_effort_bucket(effort: Option<&str>) -> String {
     }
 }
 
+/// Map a record's project (basename of the session cwd) to a stable bucket key.
+/// Usage with no working directory is bucketed as "unknown", never guessed.
+pub(crate) fn project_bucket(project: Option<&str>) -> String {
+    match project.map(str::trim).filter(|project| !project.is_empty()) {
+        Some(project) => project.to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +239,7 @@ mod tests {
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
+                project: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -220,6 +250,7 @@ mod tests {
                 timestamp: None,
                 model: "gpt-4o".to_string(),
                 effort: Some("medium".to_string()),
+                project: None,
                 input: 1_000_000,
                 cached: 0,
                 output: 1_000_000,
@@ -255,6 +286,7 @@ mod tests {
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
+                project: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -264,6 +296,7 @@ mod tests {
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
+                project: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -273,6 +306,7 @@ mod tests {
                 timestamp: None,
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
+                project: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -298,6 +332,7 @@ mod tests {
             timestamp: None,
             model: "gpt-mystery".to_string(),
             effort: None,
+            project: None,
             input: 1_000_000,
             cached: 0,
             output: 1_000_000,
@@ -324,6 +359,39 @@ mod tests {
     }
 
     #[test]
+    fn summary_splits_cost_and_tokens_by_project() {
+        let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let record = |project: Option<&str>| CodexUsageRecord {
+            day_key: "2026-05-31".to_string(),
+            timestamp: None,
+            model: "gpt-5.6-sol".to_string(),
+            effort: None,
+            project: project.map(str::to_string),
+            input: 200_000,
+            cached: 0,
+            output: 0,
+        };
+        let records = vec![
+            record(Some("ceiling")),
+            record(Some("burnwatch")),
+            record(None),
+        ];
+        let mut summary = CostSummary::default();
+
+        add_codex_records_to_summary(&mut summary, &records, &range);
+
+        assert!(summary.by_project.contains_key("ceiling"));
+        assert!(summary.by_project.contains_key("burnwatch"));
+        // A record with no cwd buckets as "unknown", never guessed.
+        assert!(summary.by_project.contains_key("unknown"));
+        assert_eq!(
+            summary.by_project_tokens.get("ceiling").map(|t| t.total()),
+            Some(200_000)
+        );
+    }
+
+    #[test]
     fn unpriced_usage_still_records_effort_tokens() {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
@@ -332,6 +400,7 @@ mod tests {
             timestamp: None,
             model: "gpt-mystery".to_string(),
             effort: None,
+            project: None,
             input: 1_000_000,
             cached: 0,
             output: 0,

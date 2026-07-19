@@ -73,6 +73,9 @@ pub struct CodexUsageRecord {
     /// `turn_context`, e.g. "medium"/"high"/"xhigh"). `None` when the log never
     /// declared one.
     pub effort: Option<String>,
+    /// Project/repo the session ran in (basename of the `session_meta` cwd).
+    /// `None` when the log never declared a working directory.
+    pub project: Option<String>,
     pub input: i32,
     pub cached: i32,
     pub output: i32,
@@ -135,6 +138,9 @@ struct CodexParserState {
     /// Reasoning effort from the most recent `turn_context`, attached to each
     /// token delta so cost can be split by effort tier.
     current_effort: Option<String>,
+    /// Project/repo from the session's `session_meta` cwd, attached to each
+    /// token delta so cost can be split by project.
+    current_project: Option<String>,
     previous_totals: Option<CodexTotals>,
     records: Vec<CodexUsageRecord>,
     /// `Some` while suppressing a child session's replayed parent history.
@@ -217,6 +223,7 @@ impl CodexParserState {
         Self {
             current_model: initial_model,
             current_effort: None,
+            current_project: None,
             previous_totals: initial_totals,
             records: Vec::new(),
             replay_gate: None,
@@ -236,6 +243,13 @@ impl CodexParserState {
         let Ok(obj) = serde_json::from_str::<Value>(line) else {
             return;
         };
+
+        // The session working directory (for per-project cost) rides on
+        // session_meta. Capture it for every session_meta, including a child's,
+        // before the gate logic returns early below.
+        if obj.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+            self.update_current_project(&obj);
+        }
 
         // Replay-gate transitions must run regardless of the day range, since
         // they change how later token_count lines are counted.
@@ -315,6 +329,19 @@ impl CodexParserState {
             .and_then(|v| v.as_str())
             .filter(|effort| !effort.trim().is_empty())
             .map(|effort| effort.to_string());
+    }
+
+    /// Capture the project/repo from a `session_meta` cwd (top-level or under
+    /// `payload`). Left unchanged when the line has no working directory.
+    fn update_current_project(&mut self, obj: &Value) {
+        if let Some(project) = obj
+            .get("cwd")
+            .or_else(|| obj.get("payload").and_then(|payload| payload.get("cwd")))
+            .and_then(|v| v.as_str())
+            .and_then(crate::cost_scanner::project_from_cwd)
+        {
+            self.current_project = Some(project);
+        }
     }
 
     fn record_token_count(&mut self, obj: &Value, range: &CostUsageDayRange) {
@@ -414,6 +441,7 @@ impl CodexParserState {
             timestamp,
             model: CostUsagePricing::normalize_codex_model(model),
             effort: self.current_effort.clone(),
+            project: self.current_project.clone(),
             input,
             cached: cached.min(input),
             output,
