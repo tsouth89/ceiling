@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  exportCostCsv,
   getCursorModelActivity,
   getProviderChartData,
   getSettingsSnapshot,
@@ -211,6 +212,43 @@ function EffortBreakdown({ efforts }: { efforts: LocalEffortCost[] }) {
 
 function projectLabel(project: string): string {
   return project === "unknown" ? "Unknown project" : project;
+}
+
+function ExportCsvButton({ providerId }: { providerId: string }) {
+  const [status, setStatus] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const onExport = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const path = await exportCostCsv(providerId);
+      setStatus({ tone: "ok", text: `Saved to ${path}` });
+    } catch (error) {
+      setStatus({
+        tone: "err",
+        text: typeof error === "string" ? error : "Export failed.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="usage-export">
+      <button
+        type="button"
+        className="usage-export__btn"
+        onClick={onExport}
+        disabled={busy}
+      >
+        {busy ? "Exporting…" : "Export CSV"}
+      </button>
+      {status && (
+        <span className={`usage-export__status usage-export__status--${status.tone}`}>
+          {status.text}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function ProjectBreakdown({ projects }: { projects: LocalProjectCost[] }) {
@@ -536,6 +574,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           {data.localUsage.projectBreakdown && data.localUsage.projectBreakdown.length > 0 && (
             <ProjectBreakdown projects={data.localUsage.projectBreakdown} />
           )}
+          <ExportCsvButton providerId={providerId} />
         </div>
       )}
       {available.length > 1 && (

@@ -54,6 +54,7 @@ commands.allow = [
   "get_provider_local_usage_summary",
   "get_local_api_value_totals",
   "get_cursor_model_activity",
+  "export_cost_csv",
   "reorder_providers",
   "set_provider_cookie_source",
   "get_provider_cookie_source",

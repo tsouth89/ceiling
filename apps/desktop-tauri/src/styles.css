@@ -7877,6 +7877,40 @@ body:has(.dashboard-shell) #root {
   font-size: 9.5px;
   line-height: 1.4;
 }
+.usage-export {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.usage-export__btn {
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 80%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.usage-export__btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+.usage-export__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.usage-export__status {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-export__status--err {
+  color: color-mix(in srgb, var(--usage-bar-exhausted) 70%, var(--text-primary));
+}
 .cursor-activity {
   padding: 9px 10px;
   border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
