@@ -6,6 +6,7 @@ import {
   getSettingsSnapshot,
 } from "../../../../../lib/tauri";
 import {
+  providerHasUnavailableResetBoundary,
   providerLocalUsageWindows,
   providerSupportsChartData,
 } from "../../../../../lib/providerCharts";
@@ -41,13 +42,29 @@ type TabKey = "limits" | "credits" | "usage";
 // of truth and maintains its own longer-lived disk cache.
 const chartDataCache = new Map<string, ProviderChartData>();
 
-function chartDataCacheKey(providerId: string, accountEmail: string | null, usageWindowsKey = ""): string {
-  return `${providerId.toLowerCase()}:${accountEmail?.trim().toLowerCase() ?? ""}:${usageWindowsKey}`;
+function chartDataCacheKey(
+  providerId: string,
+  accountEmail: string | null,
+  sourceLabel: string | undefined,
+  usageWindowsKey = "",
+): string {
+  return `${providerId.toLowerCase()}:${accountEmail?.trim().toLowerCase() ?? ""}:${sourceLabel?.trim().toLowerCase() ?? ""}:${usageWindowsKey}`;
 }
 
 function formatWindowStart(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "current reset period";
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  return new Intl.DateTimeFormat(undefined, sameDay
+    ? { hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+  ).format(date);
+}
+
+function formatWindowReset(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "at the provider-reported boundary";
   const today = new Date();
   const sameDay = date.toDateString() === today.toDateString();
   return new Intl.DateTimeFormat(undefined, sameDay
@@ -315,13 +332,15 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const [failed, setFailed] = useState(false);
   const [cursorActivity, setCursorActivity] = useState<CursorModelActivity[] | null>(null);
   const usageWindows = providerLocalUsageWindows(providerSnapshot);
+  const sourceLabel = providerSnapshot?.sourceLabel;
+  const resetBoundaryUnavailable = providerHasUnavailableResetBoundary(providerSnapshot);
   const usageWindowsKey = usageWindows
     .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
     .join("|");
 
   useEffect(() => {
     let cancelled = false;
-    const cacheKey = chartDataCacheKey(providerId, accountEmail, usageWindowsKey);
+    const cacheKey = chartDataCacheKey(providerId, accountEmail, sourceLabel, usageWindowsKey);
     const cached = chartDataCache.get(cacheKey) ?? null;
     setData(cached);
     setActive(null);
@@ -338,7 +357,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         cancelled = true;
       };
     }
-    getProviderChartData(providerId, accountEmail ?? undefined, usageWindows)
+    getProviderChartData(providerId, accountEmail ?? undefined, usageWindows, sourceLabel)
       .then((d) => {
         if (!cancelled) {
           chartDataCache.set(cacheKey, d);
@@ -362,7 +381,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     return () => {
       cancelled = true;
     };
-  }, [providerId, accountEmail, usageWindowsKey]);
+  }, [providerId, accountEmail, sourceLabel, usageWindowsKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -423,10 +442,11 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           providerId,
           accountEmail ?? undefined,
           usageWindows,
+          sourceLabel,
         );
         if (cancelled) return;
         if (next.localUsage) {
-          chartDataCache.set(chartDataCacheKey(providerId, accountEmail, usageWindowsKey), next);
+          chartDataCache.set(chartDataCacheKey(providerId, accountEmail, sourceLabel, usageWindowsKey), next);
           setData(next);
           setEnriching(false);
           return;
@@ -451,7 +471,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [data, providerId, accountEmail, usageWindowsKey]);
+  }, [data, providerId, accountEmail, sourceLabel, usageWindowsKey]);
 
   // Cursor activity is independent of chart history and only belongs to the
   // Cursor provider. Guard on the current provider so a stale fetch from a
@@ -523,7 +543,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         ...(data.localUsage.currentWindows ?? []).map((window) => ({
           label: window.label,
           tokens: window.tokens,
-          detail: `Since ${formatWindowStart(window.startsAt)}`,
+          detail: `Usage since reset at ${formatWindowStart(window.startsAt)} · resets ${formatWindowReset(window.endsAt)}`,
           current: true,
         })),
         {
@@ -569,6 +589,11 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
               <small>{period.detail}</small>
             </div>
           ))}
+          {resetBoundaryUnavailable && (
+            <div className="usage-periods__note" role="status">
+              Reset boundary unavailable. Ceiling will not substitute a rolling period.
+            </div>
+          )}
           {data.localUsage.sevenDayTokenBreakdown && (
             <TokenMix breakdown={data.localUsage.sevenDayTokenBreakdown} />
           )}

@@ -11,6 +11,7 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("../../../../../lib/tauri", () => tauriMocks);
 
 import { ChartsSection } from "./ChartsSection";
+import type { ProviderUsageSnapshot } from "../../../../../types/bridge";
 
 const enrichedData = {
   providerId: "claude",
@@ -29,7 +30,7 @@ const enrichedData = {
     currentWindows: [
       {
         id: "primary",
-        label: "Current 5h window",
+        label: "5-hour window",
         startsAt: new Date().toISOString(),
         endsAt: new Date(Date.now() + 3_600_000).toISOString(),
         tokens: 18_400_000,
@@ -43,7 +44,7 @@ const enrichedData = {
       },
       {
         id: "secondary",
-        label: "Current weekly window",
+        label: "Weekly window",
         startsAt: new Date(Date.now() - 4 * 24 * 3_600_000).toISOString(),
         endsAt: new Date(Date.now() + 3 * 24 * 3_600_000).toISOString(),
         tokens: 843_400_000,
@@ -102,8 +103,8 @@ describe("ChartsSection local usage summary", () => {
 
     await waitFor(() => expect(getByText("4.9B")).toBeTruthy());
     expect(getByText("23.6B")).toBeTruthy();
-    expect(getByText("Current 5h window")).toBeTruthy();
-    expect(getByText("Current weekly window")).toBeTruthy();
+    expect(getByText("5-hour window")).toBeTruthy();
+    expect(getByText("Weekly window")).toBeTruthy();
     expect(getByText("18.4M")).toBeTruthy();
     expect(() => getByText("Last session")).toThrow();
     expect(getByText("99.7% cache traffic")).toBeTruthy();
@@ -168,6 +169,58 @@ describe("ChartsSection local usage summary", () => {
     await waitFor(() => expect(getByRole("status").textContent).toContain("Reading local token history"));
     await waitFor(() => expect(getByText("4.9B")).toBeTruthy(), { timeout: 2_500 });
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not substitute a rolling period when the provider reset is unavailable", async () => {
+    const providerSnapshot: ProviderUsageSnapshot = {
+      providerId: "claude",
+      displayName: "Claude",
+      primary: {
+        usedPercent: 20,
+        remainingPercent: 80,
+        windowMinutes: 300,
+        resetsAt: null,
+        resetDescription: null,
+        isExhausted: false,
+        reservePercent: null,
+        reserveDescription: null,
+        reserveWillLastToReset: false,
+        reserveEtaSeconds: null,
+      },
+      primaryLabel: "Session",
+      secondary: null,
+      modelSpecific: null,
+      tertiary: null,
+      extraRateWindows: [],
+      cost: null,
+      planName: null,
+      accountEmail: null,
+      sourceLabel: "Claude CLI",
+      updatedAt: "2026-07-19T12:00:00.000Z",
+      error: null,
+      pace: null,
+      accountOrganization: null,
+      trayStatusLabel: null,
+    };
+
+    const { getByText } = render(
+      <ChartsSection
+        providerId="claude"
+        accountEmail={null}
+        providerSnapshot={providerSnapshot}
+        t={(key) => key}
+      />,
+    );
+
+    expect(
+      await waitFor(() => getByText("Reset boundary unavailable. Ceiling will not substitute a rolling period.")),
+    ).toBeTruthy();
+    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith(
+      "claude",
+      undefined,
+      [],
+      "Claude CLI",
+    );
   });
 
   it("shows a Cursor activity-by-model card with shares and Auto relabel", async () => {

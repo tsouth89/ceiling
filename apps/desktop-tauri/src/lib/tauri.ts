@@ -252,11 +252,13 @@ export function getProviderChartData(
   providerId: string,
   accountEmail?: string,
   usageWindows?: import("../types/bridge").LocalUsageWindowRequest[],
+  sourceLabel?: string,
 ): Promise<ProviderChartData> {
   return invoke<ProviderChartData>("get_provider_chart_data", {
     providerId,
     accountEmail,
     usageWindows,
+    sourceLabel,
   });
 }
 
