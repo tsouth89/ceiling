@@ -213,6 +213,37 @@ describe("ChartsSection local usage summary", () => {
     expect(queryByText("History unavailable")).toBeNull();
   });
 
+  it("collapses a long project list behind a show-more toggle", async () => {
+    const manyProjects = Array.from({ length: 12 }, (_, index) => ({
+      project: `project-${index}`,
+      cost: 1000 - index * 10,
+      tokens: 1_000_000,
+    }));
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      ...enrichedData,
+      localUsage: { ...enrichedData.localUsage, projectBreakdown: manyProjects },
+    });
+
+    const { getByLabelText, getByRole } = render(
+      <ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cost by project over 30 days"));
+    // Collapsed: only the first 8 rows are shown.
+    expect(card.querySelectorAll(".usage-model-costs__row")).toHaveLength(8);
+    expect(card.textContent).toContain("project-0");
+    expect(card.textContent).not.toContain("project-8");
+
+    const toggle = getByRole("button", { name: "Show all 12 projects" });
+    toggle.click();
+
+    await waitFor(() =>
+      expect(card.querySelectorAll(".usage-model-costs__row")).toHaveLength(12),
+    );
+    expect(card.textContent).toContain("project-11");
+    expect(getByRole("button", { name: "Show fewer" })).toBeTruthy();
+  });
+
   it("exports spend to CSV and shows the saved path", async () => {
     const { getByText, findByText } = render(
       <ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />,
