@@ -124,10 +124,19 @@ fn mark_unseen_rollout(path: &Path, seen: &mut HashSet<String>) -> bool {
 /// as "unknown" rather than inventing a project.
 pub(crate) fn project_from_cwd(cwd: &str) -> Option<String> {
     let trimmed = cwd.trim().trim_end_matches(['/', '\\']);
-    trimmed
-        .rsplit(['/', '\\'])
-        .find(|segment| !segment.is_empty())
-        .map(str::to_string)
+    let segment = trimmed.rsplit(['/', '\\']).find(|s| !s.is_empty())?;
+    // A bare filesystem root carries no project name: a drive letter ("C:") or
+    // a path that was only separators. Treat those as unknown.
+    if is_drive_root(segment) {
+        return None;
+    }
+    Some(segment.to_string())
+}
+
+/// True for a bare Windows drive root segment like `C:` or `d:`.
+fn is_drive_root(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// Cheap date gate for the flat archived dir: files are `rollout-YYYY-MM-DD…`.
@@ -1314,6 +1323,10 @@ mod tests {
         );
         assert_eq!(project_from_cwd("   ").as_deref(), None);
         assert_eq!(project_from_cwd("").as_deref(), None);
+        // Filesystem roots carry no project name.
+        assert_eq!(project_from_cwd(r"C:\").as_deref(), None);
+        assert_eq!(project_from_cwd("C:").as_deref(), None);
+        assert_eq!(project_from_cwd("/").as_deref(), None);
     }
 
     #[test]

@@ -332,16 +332,15 @@ impl CodexParserState {
     }
 
     /// Capture the project/repo from a `session_meta` cwd (top-level or under
-    /// `payload`). Left unchanged when the line has no working directory.
+    /// `payload`). Reset for every session_meta so a child/fork session with no
+    /// usable cwd becomes "unknown" rather than inheriting the previous
+    /// session's project.
     fn update_current_project(&mut self, obj: &Value) {
-        if let Some(project) = obj
+        self.current_project = obj
             .get("cwd")
             .or_else(|| obj.get("payload").and_then(|payload| payload.get("cwd")))
             .and_then(|v| v.as_str())
-            .and_then(crate::cost_scanner::project_from_cwd)
-        {
-            self.current_project = Some(project);
-        }
+            .and_then(crate::cost_scanner::project_from_cwd);
     }
 
     fn record_token_count(&mut self, obj: &Value, range: &CostUsageDayRange) {
@@ -1082,6 +1081,25 @@ mod tests {
             &serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"  "}}),
         );
         assert_eq!(parser.current_effort, None);
+    }
+
+    #[test]
+    fn session_meta_project_resets_when_cwd_is_absent() {
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        parser.update_current_project(
+            &serde_json::json!({"type":"session_meta","payload":{"cwd":"C:\\projects\\ceiling"}}),
+        );
+        assert_eq!(parser.current_project.as_deref(), Some("ceiling"));
+        // A later session (fork/child) with no cwd must not inherit "ceiling".
+        parser.update_current_project(
+            &serde_json::json!({"type":"session_meta","payload":{"originator":"x"}}),
+        );
+        assert_eq!(parser.current_project, None);
+        // A filesystem root carries no project name.
+        parser.update_current_project(
+            &serde_json::json!({"type":"session_meta","payload":{"cwd":"C:\\"}}),
+        );
+        assert_eq!(parser.current_project, None);
     }
 
     #[test]
