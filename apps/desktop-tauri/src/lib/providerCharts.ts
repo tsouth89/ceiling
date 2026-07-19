@@ -14,10 +14,18 @@ export function providerSupportsChartData(providerId: string): boolean {
 function currentWindowLabel(label: string): string {
   const normalized = label.toLowerCase();
   if (normalized.includes("5h") || normalized.includes("5-hour")) {
-    return "Current 5h window";
+    return "5-hour window";
   }
-  if (normalized.includes("week")) return "Current weekly window";
-  return `Current ${label.toLowerCase()} window`;
+  if (normalized.includes("week")) return "Weekly window";
+  return `${label.trim() || "Provider"} window`;
+}
+
+function hasUnavailableResetBoundary(window: RateWindowSnapshot | null | undefined): boolean {
+  return window != null
+    && (!window.resetsAt
+      || !Number.isFinite(Date.parse(window.resetsAt))
+      || !window.windowMinutes
+      || window.windowMinutes <= 0);
 }
 
 function usageWindowRequest(
@@ -65,4 +73,15 @@ export function providerLocalUsageWindows(
       provider.secondary,
     ),
   ].filter((window): window is LocalUsageWindowRequest => window !== null);
+}
+
+/** Whether an active Codex/Claude limit cannot be tied to a provider reset boundary. */
+export function providerHasUnavailableResetBoundary(
+  provider: ProviderUsageSnapshot | null | undefined,
+): boolean {
+  if (!provider || !["codex", "claude"].includes(provider.providerId.toLowerCase())) {
+    return false;
+  }
+  return hasUnavailableResetBoundary(provider.primary)
+    || hasUnavailableResetBoundary(provider.secondary);
 }

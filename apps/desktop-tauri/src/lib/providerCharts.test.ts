@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { providerLocalUsageWindows, providerSupportsChartData } from "./providerCharts";
+import {
+  providerHasUnavailableResetBoundary,
+  providerLocalUsageWindows,
+  providerSupportsChartData,
+} from "./providerCharts";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 
 describe("providerSupportsChartData", () => {
@@ -60,5 +64,20 @@ describe("providerLocalUsageWindows", () => {
       startsAt: "2026-07-15T16:20:00.000Z",
       endsAt: "2026-07-15T21:20:00.000Z",
     });
+  });
+
+  it("reports an unavailable boundary instead of creating a rolling window", () => {
+    const snapshot = provider("2026-07-15T21:20:00.000Z");
+    snapshot.primary = { ...snapshot.primary, resetsAt: null };
+
+    expect(providerLocalUsageWindows(snapshot)).toEqual([]);
+    expect(providerHasUnavailableResetBoundary(snapshot)).toBe(true);
+  });
+
+  it("reports a malformed reset timestamp as an unavailable boundary", () => {
+    const snapshot = provider("not-a-timestamp");
+
+    expect(providerLocalUsageWindows(snapshot)).toEqual([]);
+    expect(providerHasUnavailableResetBoundary(snapshot)).toBe(true);
   });
 });
