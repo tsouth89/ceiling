@@ -8,6 +8,7 @@ pub mod browser;
 pub mod cli;
 pub mod core;
 pub mod cost_scanner;
+pub mod cursor_activity;
 pub mod host;
 pub mod locale;
 pub mod logging;

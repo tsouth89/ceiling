@@ -661,6 +661,15 @@ export interface LocalApiValueProvider {
   thirtyDays: LocalApiValuePeriod;
 }
 
+export interface CursorModelActivity {
+  /** Model id from Cursor's tracking (e.g. "grok-4.5", "default" for Auto). */
+  model: string;
+  /** Tracked AI code blocks attributed to this model. */
+  contributions: number;
+  /** Distinct Cursor requests that produced them. */
+  requests: number;
+}
+
 export interface LocalUsageWindowRequest {
   id: string;
   label: string;

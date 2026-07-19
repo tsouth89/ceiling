@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
-import { getProviderChartData, getSettingsSnapshot } from "../../../../../lib/tauri";
+import {
+  getCursorModelActivity,
+  getProviderChartData,
+  getSettingsSnapshot,
+} from "../../../../../lib/tauri";
 import {
   providerLocalUsageWindows,
   providerSupportsChartData,
 } from "../../../../../lib/providerCharts";
 import type {
+  CursorModelActivity,
   LocalEffortCost,
   LocalModelCost,
   LocalTokenBreakdown,
@@ -138,6 +143,48 @@ function effortLabel(effort: string): string {
   return EFFORT_LABELS[effort] ?? effort;
 }
 
+function cursorModelLabel(model: string): string {
+  // Cursor records automatic model selection as "default".
+  return model === "default" ? "Auto" : model;
+}
+
+function CursorActivity({ rows }: { rows: CursorModelActivity[] }) {
+  const total = rows.reduce((sum, row) => sum + row.contributions, 0);
+  return (
+    <div className="cursor-activity" aria-label="Cursor activity by model over 30 days">
+      <div className="cursor-activity__header">
+        <span className="cursor-activity__title">Cursor activity by model · 30 days</span>
+        <span className="cursor-activity__total">{formatTokens(total)} edits</span>
+      </div>
+      <ul className="cursor-activity__rows">
+        {rows.map((row) => {
+          const share = total > 0 ? (row.contributions / total) * 100 : 0;
+          return (
+            <li className="cursor-activity__row" key={row.model}>
+              <div className="cursor-activity__row-top">
+                <span className="cursor-activity__name" title={row.model}>
+                  {cursorModelLabel(row.model)}
+                </span>
+                <span className="cursor-activity__share">{Math.round(share)}%</span>
+              </div>
+              <div className="cursor-activity__track" aria-hidden="true">
+                <span style={{ width: `${share}%` }} />
+              </div>
+              <div className="cursor-activity__detail">
+                {formatTokens(row.contributions)} edits · {formatTokens(row.requests)} requests
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="cursor-activity__note">
+        AI code tracked by Cursor Composer, grouped by model. This is activity, not tokens or
+        spend (Cursor does not log either locally).
+      </p>
+    </div>
+  );
+}
+
 function EffortBreakdown({ efforts }: { efforts: LocalEffortCost[] }) {
   const priced = efforts.reduce((sum, tier) => sum + (tier.cost ?? 0), 0);
   return (
@@ -177,6 +224,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [cursorActivity, setCursorActivity] = useState<CursorModelActivity[] | null>(null);
   const usageWindows = providerLocalUsageWindows(providerSnapshot);
   const usageWindowsKey = usageWindows
     .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
@@ -237,6 +285,26 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
       })
       .catch(() => {
         // Keep defaults on failure.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (providerId.toLowerCase() !== "cursor") {
+      setCursorActivity(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    getCursorModelActivity()
+      .then((rows) => {
+        if (!cancelled) setCursorActivity(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setCursorActivity([]);
       });
     return () => {
       cancelled = true;
@@ -321,8 +389,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const hasUsage = data.usageBreakdown.length > 0;
   const hasLimits = data.quotaHistory.length > 0;
   const hasLocalSummary = data.localUsage !== null;
+  const hasCursorActivity = (cursorActivity?.length ?? 0) > 0;
 
-  if (!hasCredits && !hasUsage && !hasLimits && !hasLocalSummary) {
+  if (!hasCredits && !hasUsage && !hasLimits && !hasLocalSummary && !hasCursorActivity) {
     return (
       <section className="provider-detail-section provider-detail-charts charts-data-empty">
         <strong>History starts here</strong>
@@ -379,6 +448,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           </span>
         </div>
       )}
+      {cursorActivity && cursorActivity.length > 0 && <CursorActivity rows={cursorActivity} />}
       {data.localUsage && (
         <div
           className="usage-periods"
