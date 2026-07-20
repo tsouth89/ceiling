@@ -18,6 +18,11 @@ export default {
       return captureEvent(request, env, ctx);
     }
 
+    if (url.pathname === "/api/stars") {
+      if (request.method !== "GET") return methodNotAllowed();
+      return starCountResponse(env, ctx);
+    }
+
     if (url.pathname === "/admin/session" && request.method === "POST") {
       return createSession(request, env);
     }
@@ -82,6 +87,42 @@ async function latestAssetUrl(pattern, env, ctx) {
   const asset = (data.assets || []).find((a) => pattern.test(a.name));
   if (!asset) throw new Error("no matching asset");
   return asset.browser_download_url;
+}
+
+// Public star count for the "Star on GitHub" button. Edge-cached so the button
+// stays fast and never hammers the GitHub API; a fetch failure returns a null
+// count (uncached) so the client simply hides the badge and shows the plain button.
+async function starCountResponse(env, ctx) {
+  const cache = caches.default;
+  const cacheKey = new Request("https://ceiling.internal/star-count-v1");
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  let stars = null;
+  try {
+    const headers = { "User-Agent": "ceiling-site", Accept: "application/vnd.github+json" };
+    if (env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+    const res = await fetch(`https://api.github.com/repos/${REPO}`, {
+      headers,
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const parsed = numberValue(data.stargazers_count);
+      if (Number.isFinite(parsed)) stars = parsed;
+    }
+  } catch {
+    stars = null;
+  }
+
+  const response = new Response(JSON.stringify({ stars }), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": stars === null ? "no-store" : `public, max-age=${CACHE_SECONDS}`,
+    },
+  });
+  if (stars !== null) ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 }
 
 async function captureEvent(request, env, ctx) {
