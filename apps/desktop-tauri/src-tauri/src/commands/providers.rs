@@ -188,6 +188,7 @@ async fn do_refresh_providers_with_policy(
 
     let error_count = finish_provider_refresh(&state)?;
     update_tray_and_notifications(app, &state, &inputs.settings, &inputs.token_accounts)?;
+    persist_widget_snapshot_from_cache(&state, &inputs.enabled_ids);
     if let Ok(mut guard) = state.lock() {
         guard.notification_manager.arm_after_startup_baseline();
     }
@@ -498,6 +499,81 @@ fn finish_provider_refresh(state: &tauri::State<'_, Mutex<AppState>>) -> Result<
         .iter()
         .filter(|s| s.error.is_some())
         .count())
+}
+
+/// Persist the in-memory provider cache as `widget-snapshot.json` so
+/// `codexbar statusline` / `codexbar mcp` can read quota without networking.
+fn persist_widget_snapshot_from_cache(
+    state: &tauri::State<'_, Mutex<AppState>>,
+    enabled_ids: &[ProviderId],
+) {
+    let cached = match state.lock() {
+        Ok(guard) => guard.provider_cache.clone(),
+        Err(error) => {
+            tracing::warn!("failed to lock app state for widget snapshot: {error}");
+            return;
+        }
+    };
+
+    let entries: Vec<_> = cached
+        .iter()
+        .filter(|snap| snap.error.is_none())
+        .filter_map(widget_entry_from_usage_snapshot)
+        .collect();
+    if entries.is_empty() {
+        return;
+    }
+
+    let snapshot = codexbar::core::WidgetSnapshot::new(entries, chrono::Utc::now())
+        .with_enabled_providers(enabled_ids.to_vec());
+    if let Err(error) = codexbar::core::WidgetSnapshotStore::save(&snapshot) {
+        tracing::warn!("failed to save widget snapshot for MCP/statusline: {error}");
+    }
+}
+
+fn widget_entry_from_usage_snapshot(
+    snap: &ProviderUsageSnapshot,
+) -> Option<codexbar::core::WidgetProviderEntry> {
+    let provider = ProviderId::from_cli_name(&snap.provider_id)?;
+    let updated_at = chrono::DateTime::parse_from_rfc3339(&snap.updated_at)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now);
+
+    let mut entry = codexbar::core::WidgetProviderEntry::new(provider, updated_at)
+        .with_primary(rate_window_from_snapshot(&snap.primary));
+    if let Some(secondary) = snap.secondary.as_ref() {
+        entry = entry.with_secondary(rate_window_from_snapshot(secondary));
+    }
+    if let Some(tertiary) = snap.tertiary.as_ref() {
+        entry = entry.with_tertiary(rate_window_from_snapshot(tertiary));
+    }
+    if let Some(email) = snap.account_email.clone() {
+        entry = entry.with_account_email(email);
+    }
+    if let Some(plan) = snap.plan_name.clone() {
+        entry = entry.with_login_method(plan);
+    }
+    if let Some(cost) = snap.cost.as_ref()
+        && let Some(remaining) = cost.remaining
+    {
+        entry = entry.with_credits_remaining(remaining);
+    }
+    Some(entry)
+}
+
+fn rate_window_from_snapshot(window: &RateWindowSnapshot) -> RateWindow {
+    let resets_at = window.resets_at.as_deref().and_then(|raw| {
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
+    RateWindow::with_details(
+        window.used_percent,
+        window.window_minutes,
+        resets_at,
+        window.reset_description.clone(),
+    )
 }
 
 fn update_tray_and_notifications(

@@ -13,6 +13,7 @@ pub mod autostart;
 pub mod config;
 pub mod cost;
 pub mod diagnose;
+pub mod mcp;
 pub mod serve;
 pub mod sessions;
 pub mod statusline;
@@ -127,6 +128,9 @@ pub enum Commands {
 
     /// Print one compact usage line for an editor status bar (cache-only)
     Statusline(statusline::StatuslineArgs),
+
+    /// Expose usage and spend over MCP stdio (local-first, no network)
+    Mcp(mcp::McpArgs),
 
     /// Manage auto-start on Windows boot
     Autostart(autostart::AutostartArgs),
