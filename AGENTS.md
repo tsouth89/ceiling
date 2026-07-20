@@ -82,3 +82,8 @@
 - Cookie import UX uses explicit browser selection in Preferences. Do not assume Chrome-only in general UI flows.
 - Be conservative with secret handling (manual cookies, API keys, token accounts); use existing redaction/storage helpers.
 - Prefer Windows-native validation for tray/DPAPI/browser-cookie behavior; WSL/Linux can be insufficient for those paths.
+
+## Worktrees
+- Create task worktrees under `../.worktrees/<task-name>`, never beside the repo in the projects root. Sibling worktrees (`ceiling-<task>`) bury the real projects in a long directory listing.
+- Remove with `git worktree remove ../.worktrees/<task>` then `git worktree prune`. On Windows this deletes the files but leaves the empty directory tree, so follow with `rm -rf ../.worktrees/<task>`. Skipping that is what accumulates empty skeleton directories.
+- This repo squash-merges every PR, so a branch's commits never become ancestors of `main`. Do not use `git merge-base --is-ancestor` or `git log main..branch` to decide whether work has landed; both report merged work as unmerged. Check the merged PR instead: `gh pr list --state merged --limit 40 --json number,headRefName,title`.
