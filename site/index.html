@@ -196,6 +196,21 @@
       .button--quiet { border-color: transparent; background: transparent; color: #b2bec7; }
       .button--quiet:hover { border-color: transparent; background: transparent; color: var(--text); }
 
+      .star-mark { color: #f5c451; flex: none; }
+
+      .star-count {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.09);
+        font-size: 12px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+      }
+      .star-count[hidden] { display: none; }
+
       .windows-mark {
         width: 15px;
         height: 15px;
@@ -469,6 +484,11 @@
               <span class="windows-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
               Download for Windows
             </a>
+            <a class="button button--star" href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked" data-asset="star-hero">
+              <svg class="star-mark" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l2.9 6.06 6.66.86-4.9 4.54 1.26 6.58L12 17.9l-5.92 3.15 1.26-6.58-4.9-4.54 6.66-.86z"/></svg>
+              Star on GitHub
+              <span class="star-count" data-star-count hidden></span>
+            </a>
             <a class="button button--quiet" href="#how-it-works">See how it works</a>
           </div>
           <a class="release" href="https://github.com/tsouth89/ceiling/releases/latest">Free and open source · Windows 10 / 11 · Signed builds</a>
@@ -611,6 +631,20 @@
         };
 
         send("$pageview");
+
+        const formatStars = (n) => (n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n));
+        fetch("/api/stars")
+          .then((response) => (response.ok ? response.json() : null))
+          .then((data) => {
+            const stars = data && Number(data.stars);
+            if (!Number.isFinite(stars)) return;
+            document.querySelectorAll("[data-star-count]").forEach((el) => {
+              el.textContent = formatStars(stars);
+              el.hidden = false;
+            });
+          })
+          .catch(() => {});
+
         document.addEventListener("click", (event) => {
           const link = event.target.closest("[data-analytics]");
           if (!link) return;

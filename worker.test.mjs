@@ -116,6 +116,38 @@ test("admin routes reject cross-origin login and direct private assets", async (
   assert.equal(privateAsset.status, 404);
 });
 
+test("star count endpoint returns a number and degrades to null on failure", async () => {
+  const store = new Map();
+  const originalCaches = globalThis.caches;
+  const originalFetch = globalThis.fetch;
+  globalThis.caches = {
+    default: {
+      match: async (request) => store.get(request.url),
+      put: async (request, response) => { store.set(request.url, response); },
+    },
+  };
+  const ctx = { waitUntil(promise) { return promise; } };
+
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ stargazers_count: 42 }), { status: 200 });
+    const ok = await worker.fetch(new Request("https://ceiling.win/api/stars"), {}, ctx);
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { stars: 42 });
+
+    store.clear();
+    globalThis.fetch = async () => { throw new Error("network down"); };
+    const degraded = await worker.fetch(new Request("https://ceiling.win/api/stars"), {}, ctx);
+    assert.deepEqual(await degraded.json(), { stars: null });
+    assert.equal(degraded.headers.get("Cache-Control"), "no-store");
+
+    const rejected = await worker.fetch(new Request("https://ceiling.win/api/stars", { method: "POST" }), {}, ctx);
+    assert.equal(rejected.status, 405);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+  }
+});
+
 test("event capture is a no-op when analytics is not configured", async () => {
   const response = await worker.fetch(new Request("https://ceiling.win/api/events", {
     method: "POST",
