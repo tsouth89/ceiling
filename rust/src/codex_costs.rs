@@ -115,6 +115,9 @@ fn add_tokens(summary: &mut ModelTokenCounts, tokens: CodexTokenCounts) {
     summary.input_tokens += tokens.input;
     summary.output_tokens += tokens.output;
     summary.cached_tokens += tokens.cached;
+    // Codex reports cache hits as `cached` input tokens (reads, not writes).
+    summary.cache_read_tokens += tokens.cached;
+    summary.calls += 1;
 }
 
 /// Add one Codex token delta to the summary.

@@ -645,6 +645,13 @@ export interface LocalModelCost {
   /** Dollar cost for the period, or null when the model has no canonical price. */
   cost: number | null;
   tokens: number;
+  /** Cache-read share of processed tokens (0–100), when any tokens exist. */
+  cacheReadPercent?: number | null;
+  /** Estimated USD per usage record, when cost and calls are both present. */
+  costPerCall?: number | null;
+  /** Output tokens per usage record, when calls > 0. */
+  outputTokensPerCall?: number | null;
+  calls?: number;
 }
 
 export interface LocalEffortCost {
@@ -681,6 +688,8 @@ export interface LocalApiValueProvider {
   today: LocalApiValuePeriod;
   yesterday: LocalApiValuePeriod;
   thirtyDays: LocalApiValuePeriod;
+  /** Calendar days [today-60, today-30) for 30d dollar period-over-period. */
+  priorThirtyDays: LocalApiValuePeriod;
 }
 
 export interface CursorModelActivity {

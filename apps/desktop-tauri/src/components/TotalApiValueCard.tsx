@@ -4,6 +4,7 @@ import type { LocalApiValueProvider } from "../types/bridge";
 import { getProviderIcon } from "./providers/providerIcons";
 import {
   buildApiValueCard,
+  formatPeriodChange,
   ringSegments,
   type ApiValueMetric,
   type ApiValuePeriodKey,
@@ -96,6 +97,10 @@ export function TotalApiValueCard() {
   // Compare the raw ratio so 99.6% (rounds to 100) still shows the coverage
   // note when any tokens are unpriced.
   const showCoverage = model.coverage != null && model.coverage < 1;
+  const periodChangeLabel =
+    model.periodChange && metric === "apiValue"
+      ? formatPeriodChange(model.periodChange)
+      : null;
 
   const ariaSummary = model.isEmpty
     ? `No local ${metricLabel} data for ${periodLabel}.`
@@ -181,6 +186,9 @@ export function TotalApiValueCard() {
             <div className="api-value-card__ring-center">
               <strong>{formatValue(model.total)}</strong>
               <small>{periodLabel}</small>
+              {periodChangeLabel && (
+                <small className="api-value-card__period-change">{periodChangeLabel}</small>
+              )}
             </div>
           </div>
 

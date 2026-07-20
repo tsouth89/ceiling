@@ -88,12 +88,33 @@ pub struct CurrentUsageWindow {
 pub struct ModelTokenCounts {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Cache read + write combined (legacy aggregate).
     pub cached_tokens: u64,
+    /// Cache-read tokens alone (for cache-hit rate).
+    pub cache_read_tokens: u64,
+    /// Cache-write / creation tokens alone.
+    pub cache_write_tokens: u64,
+    /// Number of usage records attributed to this model (for per-call averages).
+    pub calls: u64,
 }
 
 impl ModelTokenCounts {
     pub fn total(&self) -> u64 {
         self.input_tokens + self.output_tokens
+    }
+
+    /// Input + output + cache read + cache write (denominator for cache %).
+    pub fn processed(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+
+    pub fn merge_from(&mut self, other: &Self) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cached_tokens += other.cached_tokens;
+        self.cache_read_tokens += other.cache_read_tokens;
+        self.cache_write_tokens += other.cache_write_tokens;
+        self.calls += other.calls;
     }
 }
 
@@ -840,6 +861,9 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
     model_tokens.input_tokens += record.input;
     model_tokens.output_tokens += record.output;
     model_tokens.cached_tokens += record.cache_create + record.cache_read;
+    model_tokens.cache_read_tokens += record.cache_read;
+    model_tokens.cache_write_tokens += record.cache_create;
+    model_tokens.calls += 1;
 
     let project_bucket = crate::codex_costs::project_bucket(record.project.as_deref());
     *summary
@@ -850,6 +874,9 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
     project_tokens.input_tokens += record.input;
     project_tokens.output_tokens += record.output;
     project_tokens.cached_tokens += record.cache_create + record.cache_read;
+    project_tokens.cache_read_tokens += record.cache_read;
+    project_tokens.cache_write_tokens += record.cache_create;
+    project_tokens.calls += 1;
 }
 
 /// Add one usage record to the per-day cost buckets, keyed by the record's
@@ -957,28 +984,31 @@ fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
         *target.by_model.entry(model.clone()).or_insert(0.0) += cost;
     }
     for (model, tokens) in &source.by_model_tokens {
-        let entry = target.by_model_tokens.entry(model.clone()).or_default();
-        entry.input_tokens += tokens.input_tokens;
-        entry.output_tokens += tokens.output_tokens;
-        entry.cached_tokens += tokens.cached_tokens;
+        target
+            .by_model_tokens
+            .entry(model.clone())
+            .or_default()
+            .merge_from(tokens);
     }
     for (effort, cost) in &source.by_effort {
         *target.by_effort.entry(effort.clone()).or_insert(0.0) += cost;
     }
     for (effort, tokens) in &source.by_effort_tokens {
-        let entry = target.by_effort_tokens.entry(effort.clone()).or_default();
-        entry.input_tokens += tokens.input_tokens;
-        entry.output_tokens += tokens.output_tokens;
-        entry.cached_tokens += tokens.cached_tokens;
+        target
+            .by_effort_tokens
+            .entry(effort.clone())
+            .or_default()
+            .merge_from(tokens);
     }
     for (project, cost) in &source.by_project {
         *target.by_project.entry(project.clone()).or_insert(0.0) += cost;
     }
     for (project, tokens) in &source.by_project_tokens {
-        let entry = target.by_project_tokens.entry(project.clone()).or_default();
-        entry.input_tokens += tokens.input_tokens;
-        entry.output_tokens += tokens.output_tokens;
-        entry.cached_tokens += tokens.cached_tokens;
+        target
+            .by_project_tokens
+            .entry(project.clone())
+            .or_default()
+            .merge_from(tokens);
     }
     target
         .unknown_models

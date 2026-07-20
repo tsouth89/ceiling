@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LocalApiValuePeriod, LocalApiValueProvider } from "../types/bridge";
-import { buildApiValueCard, ringSegments } from "./apiValueCard";
+import { buildApiValueCard, formatPeriodChange, ringSegments } from "./apiValueCard";
 
 function period(over: Partial<LocalApiValuePeriod>): LocalApiValuePeriod {
   return {
@@ -17,13 +17,16 @@ const empty = period({});
 
 function provider(
   providerId: string,
-  periods: Partial<Record<"today" | "yesterday" | "thirtyDays", LocalApiValuePeriod>>,
+  periods: Partial<
+    Record<"today" | "yesterday" | "thirtyDays" | "priorThirtyDays", LocalApiValuePeriod>
+  >,
 ): LocalApiValueProvider {
   return {
     providerId,
     today: periods.today ?? empty,
     yesterday: periods.yesterday ?? empty,
     thirtyDays: periods.thirtyDays ?? empty,
+    priorThirtyDays: periods.priorThirtyDays ?? empty,
   };
 }
 
@@ -139,6 +142,80 @@ describe("buildApiValueCard", () => {
     expect(model.total).toBe(1000);
     expect(model.coverage).toBe(0);
     expect(model.unpricedProviderIds).toEqual(["codex"]);
+  });
+
+  it("reports dollar period-over-period for today vs yesterday", () => {
+    const model = buildApiValueCard(
+      [
+        provider("codex", {
+          today: period({
+            apiValueUsd: 12,
+            tokens: 1000,
+            pricedTokens: 1000,
+            totalTokens: 1000,
+            hasData: true,
+          }),
+          yesterday: period({
+            apiValueUsd: 10,
+            tokens: 800,
+            pricedTokens: 800,
+            totalTokens: 800,
+            hasData: true,
+          }),
+        }),
+      ],
+      "today",
+      "apiValue",
+    );
+    expect(model.periodChange).toEqual({
+      versusLabel: "vs yesterday",
+      hasPrior: true,
+      percent: 20,
+    });
+  });
+
+  it("reports 30d vs prior 30d dollar change", () => {
+    const model = buildApiValueCard(
+      [
+        provider("codex", {
+          thirtyDays: period({
+            apiValueUsd: 118,
+            tokens: 1,
+            pricedTokens: 1,
+            totalTokens: 1,
+            hasData: true,
+          }),
+          priorThirtyDays: period({
+            apiValueUsd: 100,
+            tokens: 1,
+            pricedTokens: 1,
+            totalTokens: 1,
+            hasData: true,
+          }),
+        }),
+      ],
+      "thirtyDays",
+      "apiValue",
+    );
+    expect(model.periodChange?.versusLabel).toBe("vs prior 30d");
+    expect(model.periodChange?.percent).toBeCloseTo(18);
+  });
+});
+
+describe("formatPeriodChange", () => {
+  it("formats signed percent labels", () => {
+    expect(
+      formatPeriodChange({ versusLabel: "vs prior 30d", hasPrior: true, percent: 18.4 }),
+    ).toBe("+18% vs prior 30d");
+    expect(
+      formatPeriodChange({ versusLabel: "vs yesterday", hasPrior: true, percent: -5 }),
+    ).toBe("-5% vs yesterday");
+    expect(
+      formatPeriodChange({ versusLabel: "vs yesterday", hasPrior: true, percent: null }),
+    ).toBe("New activity vs yesterday");
+    expect(
+      formatPeriodChange({ versusLabel: "vs yesterday", hasPrior: false, percent: null }),
+    ).toBeNull();
   });
 });
 

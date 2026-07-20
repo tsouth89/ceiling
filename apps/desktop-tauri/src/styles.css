@@ -7845,6 +7845,11 @@ body:has(.dashboard-shell) #root {
   list-style: none;
 }
 .usage-model-costs__row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.usage-model-costs__main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
@@ -7870,6 +7875,14 @@ body:has(.dashboard-shell) #root {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+}
+.usage-model-costs__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
 }
 .usage-model-costs__note {
   margin: 7px 0 0;
@@ -8090,6 +8103,12 @@ body:has(.dashboard-shell) #root {
   margin-top: 1px;
   color: var(--text-secondary);
   font-size: 10px;
+}
+.api-value-card__period-change {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .api-value-card__legend {
   flex: 1 1 160px;

@@ -150,6 +150,13 @@ pub struct LocalModelCost {
     pub model: String,
     pub cost: Option<f64>,
     pub tokens: u64,
+    /// Cache-read share of processed tokens (0–100), when any tokens exist.
+    pub cache_read_percent: Option<f64>,
+    /// Estimated USD per usage record, when cost and calls are both present.
+    pub cost_per_call: Option<f64>,
+    /// Output tokens per usage record, when calls > 0.
+    pub output_tokens_per_call: Option<f64>,
+    pub calls: u64,
 }
 
 /// Per-reasoning-effort local spend for a period (Codex only: "high"/"xhigh"/
@@ -191,7 +198,7 @@ pub struct LocalApiValuePeriod {
     pub has_data: bool,
 }
 
-/// One provider's local usage across the card's three periods.
+/// One provider's local usage across the card's periods.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalApiValueProvider {
@@ -199,6 +206,8 @@ pub struct LocalApiValueProvider {
     pub today: LocalApiValuePeriod,
     pub yesterday: LocalApiValuePeriod,
     pub thirty_days: LocalApiValuePeriod,
+    /// Calendar days [today-60, today-30) for dollar period-over-period on 30d.
+    pub prior_thirty_days: LocalApiValuePeriod,
 }
 
 /// Full chart data bundle for one provider.
@@ -558,31 +567,61 @@ pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, 
 }
 
 fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvider> {
-    let (start, end) = local_yesterday_window_utc(now);
+    let today = now.date_naive();
+    let (yesterday_start, yesterday_end) = local_yesterday_window_utc(now);
+    // Exact [start, end) windows so thirty-day and prior-thirty stay adjacent
+    // even when the scan covers 60 days for the prior window.
+    let thirty_start = local_midnight_utc(today - chrono::Duration::days(30));
+    let thirty_end = local_midnight_utc(today + chrono::Duration::days(1));
+    let prior_start = local_midnight_utc(today - chrono::Duration::days(60));
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
-            let windows = vec![CurrentUsageWindow {
-                id: "yesterday".to_string(),
-                starts_at: start,
-                ends_at: end,
-            }];
-            let report = get_cost_usage_report_with_windows(provider_id, 30, &windows)?;
+            let windows = vec![
+                CurrentUsageWindow {
+                    id: "yesterday".to_string(),
+                    starts_at: yesterday_start,
+                    ends_at: yesterday_end,
+                },
+                CurrentUsageWindow {
+                    id: "thirty".to_string(),
+                    starts_at: thirty_start,
+                    ends_at: thirty_end,
+                },
+                CurrentUsageWindow {
+                    id: "prior_thirty".to_string(),
+                    starts_at: prior_start,
+                    ends_at: thirty_start,
+                },
+            ];
+            let report = get_cost_usage_report_with_windows(provider_id, 60, &windows)?;
             let yesterday = report
                 .current_windows
                 .get("yesterday")
+                .cloned()
+                .unwrap_or_default();
+            let thirty_days = report
+                .current_windows
+                .get("thirty")
+                .cloned()
+                .unwrap_or_default();
+            let prior_thirty_days = report
+                .current_windows
+                .get("prior_thirty")
                 .cloned()
                 .unwrap_or_default();
             let provider = LocalApiValueProvider {
                 provider_id: provider_id.to_string(),
                 today: api_value_period(provider_id, &report.today),
                 yesterday: api_value_period(provider_id, &yesterday),
-                thirty_days: api_value_period(provider_id, &report.thirty_days),
+                thirty_days: api_value_period(provider_id, &thirty_days),
+                prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
             };
             // Omit providers with no source data in any period.
             (provider.today.has_data
                 || provider.yesterday.has_data
-                || provider.thirty_days.has_data)
+                || provider.thirty_days.has_data
+                || provider.prior_thirty_days.has_data)
                 .then_some(provider)
         })
         .collect()
@@ -1170,10 +1209,26 @@ fn model_breakdown(summary: &CostSummary) -> Vec<LocalModelCost> {
     let mut rows: Vec<LocalModelCost> = summary
         .by_model_tokens
         .iter()
-        .map(|(model, counts)| LocalModelCost {
-            model: model.clone(),
-            cost: summary.by_model.get(model).copied(),
-            tokens: counts.total(),
+        .map(|(model, counts)| {
+            let cost = summary.by_model.get(model).copied();
+            let processed = counts.processed();
+            let cache_read_percent = (processed > 0)
+                .then_some((counts.cache_read_tokens as f64 / processed as f64) * 100.0);
+            let cost_per_call = match (cost, counts.calls) {
+                (Some(usd), calls) if calls > 0 => Some(usd / calls as f64),
+                _ => None,
+            };
+            let output_tokens_per_call =
+                (counts.calls > 0).then_some(counts.output_tokens as f64 / counts.calls as f64);
+            LocalModelCost {
+                model: model.clone(),
+                cost,
+                tokens: counts.total(),
+                cache_read_percent,
+                cost_per_call,
+                output_tokens_per_call,
+                calls: counts.calls,
+            }
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -1371,6 +1426,10 @@ mod tests {
                 model: "gpt-5".to_string(),
                 cost: Some(2.0),
                 tokens: 300,
+                cache_read_percent: None,
+                cost_per_call: None,
+                output_tokens_per_call: None,
+                calls: 0,
             }],
             effort_breakdown: vec![LocalEffortCost {
                 effort: "high".to_string(),
@@ -1423,7 +1482,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 1,
                 output_tokens: 1,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         summary.by_model_tokens.insert(
@@ -1431,7 +1490,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 100,
                 output_tokens: 100,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         summary.by_model_tokens.insert(
@@ -1439,7 +1498,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 10,
                 output_tokens: 10,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         summary.by_model_tokens.insert(
@@ -1447,7 +1506,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 500,
                 output_tokens: 500,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
 
@@ -1460,23 +1519,39 @@ mod tests {
                     model: "pricey".to_string(),
                     cost: Some(9.0),
                     tokens: 20,
+                    cache_read_percent: Some(0.0),
+                    cost_per_call: None,
+                    output_tokens_per_call: None,
+                    calls: 0,
                 },
                 LocalModelCost {
                     model: "cheap".to_string(),
                     cost: Some(1.0),
                     tokens: 200,
+                    cache_read_percent: Some(0.0),
+                    cost_per_call: None,
+                    output_tokens_per_call: None,
+                    calls: 0,
                 },
                 // Priced $0.00 still leads the unpriced model despite fewer tokens.
                 LocalModelCost {
                     model: "free".to_string(),
                     cost: Some(0.0),
                     tokens: 2,
+                    cache_read_percent: Some(0.0),
+                    cost_per_call: None,
+                    output_tokens_per_call: None,
+                    calls: 0,
                 },
                 // Unpriced model keeps its tokens but sorts last with no dollars.
                 LocalModelCost {
                     model: "unpriced".to_string(),
                     cost: None,
                     tokens: 1000,
+                    cache_read_percent: Some(0.0),
+                    cost_per_call: None,
+                    output_tokens_per_call: None,
+                    calls: 0,
                 },
             ]
         );
@@ -1495,7 +1570,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 50,
                 output_tokens: 50,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         summary.by_effort_tokens.insert(
@@ -1503,7 +1578,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 200,
                 output_tokens: 200,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         // Unknown-effort usage with no price sorts last.
@@ -1512,7 +1587,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 900,
                 output_tokens: 900,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
 
@@ -1553,7 +1628,7 @@ mod tests {
                 ModelTokenCounts {
                     input_tokens: input,
                     output_tokens: input,
-                    cached_tokens: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -1599,7 +1674,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 300,
                 output_tokens: 100,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         summary.by_model_tokens.insert(
@@ -1607,7 +1682,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 100,
                 output_tokens: 0,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
         summary.unknown_models.insert("gpt-mystery".to_string());
@@ -1645,7 +1720,7 @@ mod tests {
             ModelTokenCounts {
                 input_tokens: 200,
                 output_tokens: 50,
-                cached_tokens: 0,
+                ..Default::default()
             },
         );
 

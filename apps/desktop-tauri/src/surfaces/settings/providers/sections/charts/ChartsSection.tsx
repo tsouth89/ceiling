@@ -131,13 +131,26 @@ function ModelBreakdown({ models }: { models: LocalModelCost[] }) {
       <ul className="usage-model-costs__rows">
         {models.map((model) => (
           <li className="usage-model-costs__row" key={model.model}>
-            <span className="usage-model-costs__name" title={model.model}>
-              {model.model}
-            </span>
-            <span className="usage-model-costs__tokens">{formatTokens(model.tokens)}</span>
-            <span className="usage-model-costs__cost">
-              {model.cost == null ? "Not priced" : formatUsd(model.cost)}
-            </span>
+            <div className="usage-model-costs__main">
+              <span className="usage-model-costs__name" title={model.model}>
+                {model.model}
+              </span>
+              <span className="usage-model-costs__tokens">{formatTokens(model.tokens)}</span>
+              <span className="usage-model-costs__cost">
+                {model.cost == null ? "Not priced" : formatUsd(model.cost)}
+              </span>
+            </div>
+            <div className="usage-model-costs__metrics">
+              {model.cacheReadPercent != null && (
+                <span>{model.cacheReadPercent.toFixed(0)}% cache read</span>
+              )}
+              {model.costPerCall != null && (
+                <span>{formatUsd(model.costPerCall)}/call</span>
+              )}
+              {model.outputTokensPerCall != null && (
+                <span>{formatTokens(Math.round(model.outputTokensPerCall))} out/call</span>
+              )}
+            </div>
           </li>
         ))}
       </ul>

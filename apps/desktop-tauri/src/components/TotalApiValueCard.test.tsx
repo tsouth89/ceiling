@@ -26,12 +26,14 @@ const twoProviders = [
     today: period({ apiValueUsd: 90, tokens: 9000, pricedTokens: 8000, totalTokens: 9000, hasData: true }),
     yesterday: period({}),
     thirtyDays: period({ apiValueUsd: 300, tokens: 30000, pricedTokens: 30000, totalTokens: 30000, hasData: true }),
+    priorThirtyDays: period({}),
   },
   {
     providerId: "claude",
     today: period({ apiValueUsd: 30, tokens: 3000, pricedTokens: 3000, totalTokens: 3000, hasData: true }),
     yesterday: period({}),
     thirtyDays: period({ apiValueUsd: 100, tokens: 10000, pricedTokens: 10000, totalTokens: 10000, hasData: true }),
+    priorThirtyDays: period({}),
   },
 ];
 
@@ -65,6 +67,7 @@ describe("TotalApiValueCard", () => {
         today: period({ apiValueUsd: 5, tokens: 500, pricedTokens: 500, totalTokens: 500, hasData: true }),
         yesterday: period({}),
         thirtyDays: period({ apiValueUsd: 5, tokens: 500, pricedTokens: 500, totalTokens: 500, hasData: true }),
+        priorThirtyDays: period({}),
       },
     ]);
     const { getByText, getAllByText, findByText } = render(<TotalApiValueCard />);
