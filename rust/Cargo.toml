@@ -84,6 +84,7 @@ dirs = "6"
 open = "5"
 fluent-templates = "0.13"
 unic-langid = "0.9"
+rmcp = { version = "2.2.0", features = ["server", "transport-io"] }
 
 # Windows-only
 [target.'cfg(windows)'.dependencies]

@@ -22,6 +22,16 @@ export interface ApiValueRingSegment {
   offset: number;
 }
 
+/** Dollar (or token) change vs the comparable prior window. */
+export interface ApiValuePeriodChange {
+  /** Percent change vs prior; null when prior had no data. */
+  percent: number | null;
+  /** Short label, e.g. "vs yesterday" or "vs prior 30d". */
+  versusLabel: string;
+  /** True when prior window had data so a % is meaningful. */
+  hasPrior: boolean;
+}
+
 export interface ApiValueCardModel {
   /** Providers with data this period, sorted by value desc, with shares. */
   slices: ApiValueSlice[];
@@ -37,6 +47,8 @@ export interface ApiValueCardModel {
   unpricedProviderIds: string[];
   /** True when no provider had any data this period ("No data" state). */
   isEmpty: boolean;
+  /** Period-over-period delta for the selected metric (apiValue or tokens). */
+  periodChange: ApiValuePeriodChange | null;
 }
 
 function periodOf(
@@ -48,8 +60,38 @@ function periodOf(
   return provider.thirtyDays;
 }
 
+function priorPeriodOf(
+  provider: LocalApiValueProvider,
+  key: ApiValuePeriodKey,
+): { period: LocalApiValuePeriod; versusLabel: string } | null {
+  if (key === "today") {
+    return { period: provider.yesterday, versusLabel: "vs yesterday" };
+  }
+  if (key === "thirtyDays") {
+    return { period: provider.priorThirtyDays, versusLabel: "vs prior 30d" };
+  }
+  // Yesterday has no stable prior on this card.
+  return null;
+}
+
 function metricValue(period: LocalApiValuePeriod, metric: ApiValueMetric): number {
   return metric === "apiValue" ? period.apiValueUsd : period.tokens;
+}
+
+function sumMetric(
+  providers: LocalApiValueProvider[],
+  pick: (provider: LocalApiValueProvider) => LocalApiValuePeriod,
+  metric: ApiValueMetric,
+): { total: number; hasData: boolean } {
+  let total = 0;
+  let hasData = false;
+  for (const provider of providers) {
+    const period = pick(provider);
+    if (!period.hasData) continue;
+    hasData = true;
+    total += metricValue(period, metric);
+  }
+  return { total, hasData };
 }
 
 /**
@@ -82,6 +124,35 @@ export function buildApiValueCard(
     .filter(({ period }) => period.totalTokens > period.pricedTokens)
     .map(({ provider }) => provider.providerId);
 
+  const priorMeta = rows.length > 0 ? priorPeriodOf(providers[0], periodKey) : null;
+  let periodChange: ApiValuePeriodChange | null = null;
+  if (priorMeta) {
+    const priorSum = sumMetric(
+      providers,
+      (provider) => priorPeriodOf(provider, periodKey)!.period,
+      metric,
+    );
+    if (!priorSum.hasData) {
+      periodChange = {
+        versusLabel: priorMeta.versusLabel,
+        hasPrior: false,
+        percent: null,
+      };
+    } else if (priorSum.total <= 0) {
+      periodChange = {
+        versusLabel: priorMeta.versusLabel,
+        hasPrior: true,
+        percent: total > 0 ? null : 0,
+      };
+    } else {
+      periodChange = {
+        versusLabel: priorMeta.versusLabel,
+        hasPrior: true,
+        percent: ((total - priorSum.total) / priorSum.total) * 100,
+      };
+    }
+  }
+
   return {
     slices,
     total,
@@ -90,6 +161,7 @@ export function buildApiValueCard(
     coverage: totalTokens > 0 ? pricedTokens / totalTokens : null,
     unpricedProviderIds,
     isEmpty: rows.length === 0,
+    periodChange: rows.length === 0 ? null : periodChange,
   };
 }
 
@@ -112,4 +184,13 @@ export function ringSegments(
     cumulative += slice.share;
     return segment;
   });
+}
+
+/** Format a period-change for the donut center caption. */
+export function formatPeriodChange(change: ApiValuePeriodChange): string | null {
+  if (!change.hasPrior) return null;
+  if (change.percent == null) return `New activity ${change.versusLabel}`;
+  const rounded = Math.round(change.percent);
+  const sign = rounded > 0 ? "+" : "";
+  return `${sign}${rounded}% ${change.versusLabel}`;
 }
