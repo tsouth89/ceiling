@@ -554,10 +554,14 @@ fn widget_entry_from_usage_snapshot(
     if let Some(plan) = snap.plan_name.clone() {
         entry = entry.with_login_method(plan);
     }
-    if let Some(cost) = snap.cost.as_ref()
-        && let Some(remaining) = cost.remaining
-    {
-        entry = entry.with_credits_remaining(remaining);
+    if let Some(cost) = snap.cost.as_ref() {
+        if let Some(remaining) = cost.remaining {
+            entry = entry.with_credits_remaining(remaining);
+        }
+        // Statusline / MCP read session_cost_usd from token_usage; provider
+        // CostSnapshot.used is the billed/period dollar figure we have.
+        entry = entry
+            .with_token_usage(codexbar::core::TokenUsageSummary::new().with_session(cost.used, 0));
     }
     Some(entry)
 }

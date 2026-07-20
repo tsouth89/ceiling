@@ -280,6 +280,15 @@ fn summary_json(summary: &CostSummary) -> serde_json::Value {
 }
 
 fn status_payload(snapshot: Option<&WidgetSnapshot>, provider: Option<&str>) -> serde_json::Value {
+    if let Some(name) = provider
+        && ProviderId::from_cli_name(name).is_none()
+    {
+        return json!({
+            "ok": false,
+            "error": format!("Unknown provider '{name}'"),
+        });
+    }
+
     let chosen = choose_status_provider(snapshot, provider);
     let usage = match (&chosen, snapshot) {
         (Some(id), Some(snap)) => snap.entry_for(*id).map(entry_usage_json),
@@ -389,6 +398,19 @@ mod tests {
     fn spend_rejects_unsupported_provider() {
         let payload = spend_payload(Some("cursor"));
         assert_eq!(payload["ok"], false);
+    }
+
+    #[test]
+    fn status_rejects_unknown_provider() {
+        let payload = status_payload(Some(&sample_snapshot()), Some("not-a-provider"));
+        assert_eq!(payload["ok"], false);
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Unknown provider"),
+            "payload: {payload}"
+        );
     }
 
     #[test]

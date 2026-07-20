@@ -570,10 +570,11 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
     let today = now.date_naive();
     let (yesterday_start, yesterday_end) = local_yesterday_window_utc(now);
     // Exact [start, end) windows so thirty-day and prior-thirty stay adjacent
-    // even when the scan covers 60 days for the prior window.
-    let thirty_start = local_midnight_utc(today - chrono::Duration::days(30));
+    // and each spans exactly 30 calendar days (including today for "thirty").
+    // [today-29, tomorrow) = today-29 … today; [today-59, today-29) = prior 30.
+    let thirty_start = local_midnight_utc(today - chrono::Duration::days(29));
     let thirty_end = local_midnight_utc(today + chrono::Duration::days(1));
-    let prior_start = local_midnight_utc(today - chrono::Duration::days(60));
+    let prior_start = local_midnight_utc(today - chrono::Duration::days(59));
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {

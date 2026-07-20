@@ -118,6 +118,51 @@ impl ModelTokenCounts {
     }
 }
 
+#[cfg(test)]
+mod model_token_counts_tests {
+    use super::ModelTokenCounts;
+
+    #[test]
+    fn processed_sums_input_output_and_cache_buckets_not_legacy_cached() {
+        let counts = ModelTokenCounts {
+            input_tokens: 10,
+            output_tokens: 20,
+            cached_tokens: 999, // legacy aggregate; must not double-count
+            cache_read_tokens: 3,
+            cache_write_tokens: 4,
+            calls: 2,
+        };
+        assert_eq!(counts.processed(), 37);
+        assert_eq!(counts.total(), 30);
+    }
+
+    #[test]
+    fn merge_from_accumulates_all_buckets_and_calls() {
+        let mut left = ModelTokenCounts {
+            input_tokens: 1,
+            output_tokens: 2,
+            cached_tokens: 3,
+            cache_read_tokens: 4,
+            cache_write_tokens: 5,
+            calls: 6,
+        };
+        left.merge_from(&ModelTokenCounts {
+            input_tokens: 10,
+            output_tokens: 20,
+            cached_tokens: 30,
+            cache_read_tokens: 40,
+            cache_write_tokens: 50,
+            calls: 60,
+        });
+        assert_eq!(left.input_tokens, 11);
+        assert_eq!(left.output_tokens, 22);
+        assert_eq!(left.cached_tokens, 33);
+        assert_eq!(left.cache_read_tokens, 44);
+        assert_eq!(left.cache_write_tokens, 55);
+        assert_eq!(left.calls, 66);
+    }
+}
+
 impl CostSummary {
     pub fn format_total(&self) -> String {
         format!("${:.2}", self.total_cost_usd)
