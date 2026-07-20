@@ -632,12 +632,16 @@
 
         send("$pageview");
 
+        // Hide the count below a credibility floor: a visible low number reads as
+        // anti-social-proof, while a growing counter builds momentum once it's past
+        // a threshold worth showing. Below this the button is a plain silent CTA.
+        const minStarsToShow = 50;
         const formatStars = (n) => (n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n));
         fetch("/api/stars")
           .then((response) => (response.ok ? response.json() : null))
           .then((data) => {
             const stars = data && Number(data.stars);
-            if (!Number.isFinite(stars)) return;
+            if (!Number.isFinite(stars) || stars < minStarsToShow) return;
             document.querySelectorAll("[data-star-count]").forEach((el) => {
               el.textContent = formatStars(stars);
               el.hidden = false;
