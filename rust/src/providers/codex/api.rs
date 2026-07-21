@@ -5,6 +5,7 @@
 use crate::core::{CostSnapshot, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -14,12 +15,18 @@ const USAGE_PATH: &str = "/wham/usage";
 const RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
 
-static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceLock::new();
+/// Keyed by auth file path: with more than one Codex account configured, a
+/// single shared slot would be evicted on every alternating fetch and each
+/// account would re-read from disk instead of ever hitting the cache.
+static CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedCodexCredentials>>> =
+    OnceLock::new();
 
 /// Codex API client
 pub struct CodexApi {
     client: reqwest::Client,
-    home_dir: PathBuf,
+    /// Explicit `CODEX_HOME` for a Ceiling-managed account. When `None` the
+    /// client resolves the home the CLI itself would use.
+    codex_home: Option<PathBuf>,
 }
 
 impl CodexApi {
@@ -40,8 +47,30 @@ impl CodexApi {
 
         Self {
             client,
-            home_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            codex_home: None,
         }
+    }
+
+    /// Build a client pinned to a specific `CODEX_HOME`, for tracking one of
+    /// several configured Codex accounts.
+    pub fn with_codex_home(codex_home: PathBuf) -> Self {
+        Self {
+            codex_home: Some(codex_home),
+            ..Self::new()
+        }
+    }
+
+    /// The `CODEX_HOME` this client reads from.
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home
+            .clone()
+            .unwrap_or_else(crate::core::ambient_codex_home)
+    }
+
+    /// Identity claims for this client's home, for labeling and for keying usage
+    /// by account. Never includes token material.
+    pub fn identity(&self) -> Option<crate::core::CodexIdentity> {
+        crate::core::read_identity(&self.codex_home())
     }
 
     /// Fetch usage information from Codex API
@@ -190,8 +219,8 @@ impl CodexApi {
         })
     }
 
-    fn credential_cache() -> &'static Mutex<Option<CachedCodexCredentials>> {
-        CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None))
+    fn credential_cache() -> &'static Mutex<HashMap<PathBuf, CachedCodexCredentials>> {
+        CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     fn cached_credentials(
@@ -199,11 +228,8 @@ impl CodexApi {
         modified: Option<SystemTime>,
     ) -> Option<CodexCredentials> {
         let guard = Self::credential_cache().lock().ok()?;
-        let cached = guard.as_ref()?;
-        if cached.path == path
-            && cached.modified == modified
-            && cached.loaded_at.elapsed() <= CREDENTIAL_CACHE_TTL
-        {
+        let cached = guard.get(path)?;
+        if cached.modified == modified && cached.loaded_at.elapsed() <= CREDENTIAL_CACHE_TTL {
             return Some(cached.credentials.clone());
         }
         None
@@ -215,39 +241,28 @@ impl CodexApi {
         credentials: CodexCredentials,
     ) {
         if let Ok(mut guard) = Self::credential_cache().lock() {
-            *guard = Some(CachedCodexCredentials {
+            // Drop entries that can no longer be served, so a long-lived process
+            // that cycles through homes does not grow this map without bound.
+            guard.retain(|_, entry| entry.loaded_at.elapsed() <= CREDENTIAL_CACHE_TTL);
+            guard.insert(
                 path,
-                modified,
-                loaded_at: Instant::now(),
-                credentials,
-            });
+                CachedCodexCredentials {
+                    modified,
+                    loaded_at: Instant::now(),
+                    credentials,
+                },
+            );
         }
     }
 
     fn get_auth_path(&self) -> PathBuf {
-        // Check CODEX_HOME env var
-        if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let trimmed = codex_home.trim();
-            if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("auth.json");
-            }
-        }
-
-        self.home_dir.join(".codex").join("auth.json")
+        self.codex_home().join("auth.json")
     }
 
     fn resolve_base_url(&self) -> String {
-        // Check CODEX_HOME for config.toml
-        let config_path = if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let trimmed = codex_home.trim();
-            if !trimmed.is_empty() {
-                PathBuf::from(trimmed).join("config.toml")
-            } else {
-                self.home_dir.join(".codex").join("config.toml")
-            }
-        } else {
-            self.home_dir.join(".codex").join("config.toml")
-        };
+        // Each home carries its own config.toml, so a per-account base URL
+        // override follows the account rather than leaking across them.
+        let config_path = self.codex_home().join("config.toml");
 
         if let Ok(content) = std::fs::read_to_string(&config_path)
             && let Some(base_url) = parse_chatgpt_base_url(&content)
@@ -602,7 +617,6 @@ struct CodexCredentials {
 }
 
 struct CachedCodexCredentials {
-    path: PathBuf,
     modified: Option<SystemTime>,
     loaded_at: Instant,
     credentials: CodexCredentials,
