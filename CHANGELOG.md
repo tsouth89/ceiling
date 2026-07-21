@@ -1,5 +1,18 @@
 # Changelog
 
+## [Ceiling] 1.3.0 - 2026-07-21
+
+### Added
+- Show estimated API-value dollars beside the token count for each provider's current 5-hour and weekly reset window, so you can see what you have spent since your last reset. Models without a public price stay excluded rather than reading as $0.00.
+
+### Changed
+- Label the Compare cards as rolling windows and state plainly that they put both providers on one shared clock, rather than each provider's own reset boundary. Reset-aligned figures live in each provider's chart drill-in.
+- Surface the window that is actually constraining you in the floating bar and the overview tiles. An exhausted window now wins over one that merely reads higher, and an exact tie goes to whichever resets first.
+
+### Fixed
+- Stop a freshly reset Claude window from briefly reading as 100% full. Anthropic reports usage as either a fraction or a percentage, and a lone `1` (meaning 1% used) was being read as 100%, which also fired a false "limit reached" notification. The unit is now settled once per response instead of guessed per value.
+- Announce a reset within seconds instead of up to five minutes. Ceiling now refreshes as soon as a known reset boundary passes, rather than waiting for the next scheduled poll, and no longer depends on a background window timer that Windows suspends.
+
 ## [Ceiling] 1.2.1 - 2026-07-19
 
 ### Fixed
