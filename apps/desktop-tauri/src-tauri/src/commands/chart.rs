@@ -1006,7 +1006,7 @@ fn local_usage_summary_from_report(
         comparison_periods,
         latest_tokens: non_zero_u64(last_session_tokens),
         top_model: top_model(&report.thirty_days),
-        model_breakdown: model_breakdown(&report.thirty_days),
+        model_breakdown: model_breakdown(provider_id, &report.thirty_days),
         effort_breakdown: effort_breakdown(&report.thirty_days),
         project_breakdown: project_breakdown(&report.thirty_days),
         estimate_note: localized_estimate_note(provider_id, lang),
@@ -1093,7 +1093,7 @@ fn load_local_usage_summary_with_unknown_models(
             comparison_periods: Vec::new(),
             latest_tokens: non_zero_u64(latest_tokens),
             top_model: top_model(&thirty_day),
-            model_breakdown: model_breakdown(&thirty_day),
+            model_breakdown: model_breakdown(provider_id, &thirty_day),
             effort_breakdown: effort_breakdown(&thirty_day),
             project_breakdown: project_breakdown(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
@@ -1297,27 +1297,13 @@ fn scan_local_cost(
 }
 
 fn token_breakdown(provider_id: &str, summary: &CostSummary) -> LocalTokenBreakdown {
-    let is_codex = provider_id.eq_ignore_ascii_case("codex");
-    let cache_read_tokens =
-        summary
-            .cache_read_tokens
-            .max(if is_codex { summary.cached_tokens } else { 0 });
-    let cache_write_tokens = summary.cache_write_tokens;
-    let fresh_input_tokens = if is_codex {
-        summary.input_tokens.saturating_sub(cache_read_tokens)
-    } else {
-        summary.input_tokens
-    };
-    let processed_tokens = fresh_input_tokens
-        .saturating_add(summary.output_tokens)
-        .saturating_add(cache_read_tokens)
-        .saturating_add(cache_write_tokens);
+    let normalized = summary.normalized_tokens(provider_id);
     LocalTokenBreakdown {
-        processed_tokens,
-        fresh_input_tokens,
-        output_tokens: summary.output_tokens,
-        cache_read_tokens,
-        cache_write_tokens,
+        processed_tokens: normalized.processed(),
+        fresh_input_tokens: normalized.fresh_input_tokens,
+        output_tokens: normalized.output_tokens,
+        cache_read_tokens: normalized.cache_read_tokens,
+        cache_write_tokens: normalized.cache_write_tokens,
     }
 }
 
@@ -1333,15 +1319,15 @@ fn non_zero_u64(value: u64) -> Option<u64> {
 /// dollar cost when the model is priced (`None` otherwise). Sorted by cost
 /// descending, then tokens descending, so the priciest models lead and
 /// unpriced models fall to the end.
-fn model_breakdown(summary: &CostSummary) -> Vec<LocalModelCost> {
+fn model_breakdown(provider_id: &str, summary: &CostSummary) -> Vec<LocalModelCost> {
     let mut rows: Vec<LocalModelCost> = summary
         .by_model_tokens
         .iter()
         .map(|(model, counts)| {
             let cost = summary.by_model.get(model).copied();
-            let processed = counts.processed();
-            let cache_read_percent = (processed > 0)
-                .then_some((counts.cache_read_tokens as f64 / processed as f64) * 100.0);
+            // Provider-normalized, so Codex's cached input is not counted in
+            // both the input and cache buckets of the same ratio.
+            let cache_read_percent = counts.normalized(provider_id).cache_read_percent();
             let cost_per_call = match (cost, counts.calls) {
                 (Some(usd), calls) if calls > 0 => Some(usd / calls as f64),
                 _ => None,
@@ -1597,6 +1583,57 @@ mod tests {
         );
     }
 
+    /// SOU-295: Codex reports cached input inside `input_tokens`. Adding the
+    /// cache bucket on top counted those tokens twice, so a 97%-cached model
+    /// rendered as 49% (`97 / (100 + 97)`).
+    #[test]
+    fn codex_cache_percent_does_not_double_count_cached_input() {
+        let mut summary = CostSummary::default();
+        summary.by_model_tokens.insert(
+            "gpt-5.6-sol".to_string(),
+            ModelTokenCounts {
+                // 338.2M input, of which 329.0M was served from cache.
+                input_tokens: 338_200_000,
+                output_tokens: 1_000_000,
+                cached_tokens: 329_000_000,
+                cache_read_tokens: 329_000_000,
+                ..Default::default()
+            },
+        );
+
+        let percent = model_breakdown("codex", &summary)[0]
+            .cache_read_percent
+            .expect("cache percent");
+
+        assert!(
+            (96.0..=98.0).contains(&percent),
+            "expected ~97% cache read, got {percent:.1}% (49% means cached input was counted twice)"
+        );
+    }
+
+    /// Claude reports cache reads outside its input count, so the same figures
+    /// must not have anything subtracted from them.
+    #[test]
+    fn claude_cache_percent_leaves_input_untouched() {
+        let mut summary = CostSummary::default();
+        summary.by_model_tokens.insert(
+            "claude-sonnet".to_string(),
+            ModelTokenCounts {
+                input_tokens: 10_000,
+                output_tokens: 0,
+                cache_read_tokens: 90_000,
+                ..Default::default()
+            },
+        );
+
+        let percent = model_breakdown("claude", &summary)[0]
+            .cache_read_percent
+            .expect("cache percent");
+
+        // 90k of 100k processed, with no Codex-style correction applied.
+        assert!((percent - 90.0).abs() < 0.001, "got {percent}");
+    }
+
     #[test]
     fn model_breakdown_orders_priced_first_and_keeps_unpriced() {
         let mut summary = CostSummary::default();
@@ -1639,7 +1676,7 @@ mod tests {
             },
         );
 
-        let rows = model_breakdown(&summary);
+        let rows = model_breakdown("codex", &summary);
 
         assert_eq!(
             rows,
