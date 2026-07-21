@@ -34,6 +34,7 @@ const enrichedData = {
         startsAt: new Date().toISOString(),
         endsAt: new Date(Date.now() + 3_600_000).toISOString(),
         tokens: 18_400_000,
+        cost: 12.4,
         tokenBreakdown: {
           processedTokens: 18_400_000,
           freshInputTokens: 100_000,
@@ -48,6 +49,7 @@ const enrichedData = {
         startsAt: new Date(Date.now() - 4 * 24 * 3_600_000).toISOString(),
         endsAt: new Date(Date.now() + 3 * 24 * 3_600_000).toISOString(),
         tokens: 843_400_000,
+        cost: 842.5,
         tokenBreakdown: {
           processedTokens: 843_400_000,
           freshInputTokens: 1_000_000,
@@ -105,10 +107,11 @@ describe("ChartsSection local usage summary", () => {
     expect(getByText("23.6B")).toBeTruthy();
     expect(getByText("5-hour window")).toBeTruthy();
     expect(getByText("Weekly window")).toBeTruthy();
-    expect(getByText("18.4M")).toBeTruthy();
+    expect(getByText("18.4M · $12.40")).toBeTruthy();
+    expect(getByText("843.4M · $842.50")).toBeTruthy();
     expect(() => getByText("Last session")).toThrow();
     expect(getByText("99.7% cache traffic")).toBeTruthy();
-    expect(getAllByText("processed tokens")).toHaveLength(2);
+    expect(getAllByText(/processed tokens · calendar window/)).toHaveLength(2);
     expect(() => getByText("$3,427.91")).toThrow();
     expect(getByLabelText("Local usage summary").getAttribute("data-card-count")).toBe("4");
 

@@ -65,7 +65,7 @@ function ComparisonCard({ periodId, label, providers, data }: {
   return (
     <section className="provider-comparison-card">
       <header className="provider-comparison-card__header">
-        <div><strong>{label}</strong><span>Same rolling window</span></div>
+        <div><strong>{label}</strong><span>Identical rolling window for both</span></div>
         <span className="provider-comparison-card__summary">
           {comparisonSummary(complete[0].provider.displayName, complete[0].period.currentTokens, complete[1].provider.displayName, complete[1].period.currentTokens)}
         </span>
@@ -178,12 +178,18 @@ export default function ProviderComparison({ providers }: {
   return (
     <div className="provider-comparison">
       <div className="provider-comparison__intro">
-        <div><strong>Codex and Claude, on the same clock</strong><span>Processed tokens from local logs across every agent.</span></div>
+        <div>
+          <strong>Codex and Claude, on the same clock</strong>
+          <span>Rolling windows ending now so both providers are comparable. Reset-aligned dollars live in each provider's chart drill-in.</span>
+        </div>
         <span className="provider-comparison__source">Local logs</span>
       </div>
-      <ComparisonCard periodId="five-hours" label="Last 5 hours" providers={providers} data={data} />
-      <ComparisonCard periodId="seven-days" label="Last 7 days" providers={providers} data={data} />
-      <p className="provider-comparison__note">Processed tokens include fresh input, output, cache reads, and cache writes. They measure activity, not subscription allowance.</p>
+      <ComparisonCard periodId="five-hours" label="Last 5 hours (rolling)" providers={providers} data={data} />
+      <ComparisonCard periodId="seven-days" label="Last 7 days (rolling)" providers={providers} data={data} />
+      <p className="provider-comparison__note">
+        These cards use identical rolling clocks, not each provider's reset boundary.
+        Processed tokens include fresh input, output, cache reads, and cache writes. They measure activity, not subscription allowance.
+      </p>
     </div>
   );
 }

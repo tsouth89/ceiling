@@ -557,19 +557,22 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         ...(data.localUsage.currentWindows ?? []).map((window) => ({
           label: window.label,
           tokens: window.tokens,
+          cost: window.cost ?? null,
           detail: `Usage since reset at ${formatWindowStart(window.startsAt)} · resets ${formatWindowReset(window.endsAt)}`,
           current: true,
         })),
         {
           label: "Last 7 days",
           tokens: data.localUsage.sevenDayTokens,
-          detail: "processed tokens",
+          cost: null as number | null,
+          detail: "processed tokens · calendar window",
           current: false,
         },
         {
           label: "Last 30 days",
           tokens: data.localUsage.thirtyDayTokens,
-          detail: "processed tokens",
+          cost: null as number | null,
+          detail: "processed tokens · calendar window",
           current: false,
         },
       ]
@@ -599,7 +602,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
               key={period.label}
             >
               <span>{period.label}</span>
-              <strong>{formatTokens(period.tokens)}</strong>
+              <strong>
+                {formatTokens(period.tokens)}
+                {period.cost != null ? ` · ${formatUsd(period.cost)}` : ""}
+              </strong>
               <small>{period.detail}</small>
             </div>
           ))}

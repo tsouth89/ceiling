@@ -711,6 +711,8 @@ export interface LocalUsageWindowRequest {
 export interface LocalUsageWindowSummary extends LocalUsageWindowRequest {
   tokens: number;
   tokenBreakdown: LocalTokenBreakdown;
+  /** Estimated API-value USD for this reset window from priced models only. */
+  cost?: number | null;
 }
 
 export interface LocalUsageComparisonPeriod {
