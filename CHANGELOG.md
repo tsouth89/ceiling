@@ -1,5 +1,10 @@
 # Changelog
 
+## [Ceiling] 1.3.2 - 2026-07-21
+
+### Fixed
+- Stop the Today / Yesterday / 30 days buttons on the Charts page from jumping between rows. Selecting a period without a change to report made the card shorter, which removed the page scrollbar, widened the content, and reflowed the header above it. The card now keeps one height across every period and metric, and the heading wraps its own text long before the buttons move.
+
 ## [Ceiling] 1.3.1 - 2026-07-21
 
 Supersedes 1.3.0, which was withdrawn before general release.

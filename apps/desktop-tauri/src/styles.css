@@ -8044,6 +8044,13 @@ body:has(.dashboard-shell) #root {
   gap: 10px;
   margin-bottom: 12px;
 }
+/* Let the heading column shrink and wrap its own text before the switchers
+   drop onto a second row. Without this the header flipped layout whenever the
+   page gained or lost its scrollbar, which is only ~15px of width. */
+.api-value-card__header > :first-child {
+  flex: 1 1 180px;
+  min-width: 0;
+}
 .api-value-card__title {
   margin: 0;
   color: var(--text-primary);
@@ -8060,6 +8067,7 @@ body:has(.dashboard-shell) #root {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  flex: 0 0 auto;
 }
 .api-value-card__switch {
   display: inline-flex;
@@ -8126,9 +8134,14 @@ body:has(.dashboard-shell) #root {
   align-items: center;
   gap: 7px;
 }
+/* Always occupies its line, even with nothing to say. A period that had no
+   change label used to shorten the whole card, which toggled the page
+   scrollbar and reflowed the header above it. */
 .api-value-card__period-change {
+  min-height: 14px;
   color: var(--text-secondary);
   font-size: 10.5px;
+  line-height: 14px;
   font-variant-numeric: tabular-nums;
 }
 /* Capped rather than stretched: a full-width row flung the share and value to
