@@ -31,7 +31,40 @@ const STALE_AFTER_MS = 10 * 60 * 1000;
 /** Companion lanes appear on overview when used reaches this share. */
 export const GLANCE_COMPANION_HOT_PERCENT = 70;
 
-/** Pick the measured window with the highest used percent (constraining). */
+/** A window you have already hit stops work no matter what the others read. */
+function isBlocking(window: RateWindowSnapshot): boolean {
+  return window.isExhausted || window.usedPercent >= 100;
+}
+
+/** Reset instant in ms; windows without a usable reset sort last. */
+function resetAtMs(window: RateWindowSnapshot): number {
+  const parsed = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Whether `candidate` is a more relevant thing to surface than `best`.
+ *
+ * Blended priority, in order:
+ *  1. Blocking windows first, because an exhausted lane is what actually stops
+ *     you even when another lane reads higher pressure.
+ *  2. Then the highest used percent, i.e. closest to its ceiling.
+ *  3. Then the soonest reset, so a tie resolves toward the one that bites first.
+ */
+function outranks(
+  candidate: ConstrainingWindow,
+  best: ConstrainingWindow,
+): boolean {
+  const candidateBlocking = isBlocking(candidate.window);
+  const bestBlocking = isBlocking(best.window);
+  if (candidateBlocking !== bestBlocking) return candidateBlocking;
+  if (candidate.window.usedPercent !== best.window.usedPercent) {
+    return candidate.window.usedPercent > best.window.usedPercent;
+  }
+  return resetAtMs(candidate.window) < resetAtMs(best.window);
+}
+
+/** Pick the window actually constraining this provider (see `outranks`). */
 export function constrainingWindow(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow {
@@ -42,7 +75,7 @@ export function constrainingWindow(
   };
 
   for (const candidate of nonPrimaryWindows(provider)) {
-    if (candidate.window.usedPercent > best.window.usedPercent) {
+    if (outranks(candidate, best)) {
       best = candidate;
     }
   }
