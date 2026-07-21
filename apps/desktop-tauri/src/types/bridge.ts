@@ -635,6 +635,8 @@ export interface ProviderLocalUsageSummary {
   topModel: string | null;
   modelBreakdown?: LocalModelCost[];
   effortBreakdown?: LocalEffortCost[];
+  /** Plans seen in local logs. More than one means the total spans accounts. */
+  planBreakdown?: LocalPlanUsage[];
   projectBreakdown?: LocalProjectCost[];
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
@@ -652,6 +654,12 @@ export interface LocalModelCost {
   /** Output tokens per usage record, when calls > 0. */
   outputTokensPerCall?: number | null;
   calls?: number;
+}
+
+/** Locally observed activity attributed to one subscription plan. */
+export interface LocalPlanUsage {
+  plan: string;
+  tokens: number;
 }
 
 export interface LocalEffortCost {

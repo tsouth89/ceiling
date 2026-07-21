@@ -14,6 +14,7 @@ import type {
   CursorModelActivity,
   LocalEffortCost,
   LocalModelCost,
+  LocalPlanUsage,
   LocalProjectCost,
   LocalTokenBreakdown,
   ProviderChartData,
@@ -117,6 +118,32 @@ function formatUsd(value: number): string {
     style: "currency",
     currency: "USD",
   }).format(value);
+}
+
+/**
+ * Disclose when local activity spans more than one subscription plan.
+ *
+ * Local logs carry no account identity for any provider, so a machine's totals
+ * can cover several accounts with no way to separate them. The plan is the only
+ * proxy Codex emits, and it is imperfect in both directions: two accounts on one
+ * plan look identical, and one account changing plans looks like two. So this
+ * states what was observed and does not filter anything out.
+ */
+function MultiPlanNotice({ plans }: { plans?: LocalPlanUsage[] | null }) {
+  if (!plans || plans.length < 2) return null;
+  const total = plans.reduce((sum, plan) => sum + plan.tokens, 0);
+  if (total <= 0) return null;
+  const share = (tokens: number) => Math.round((tokens / total) * 100);
+  return (
+    <p className="usage-periods__note usage-periods__note--warn" role="note">
+      <span>
+        These totals cover <strong>{plans.length} plans</strong> seen on this
+        machine ({plans.map((p) => `${p.plan} ${share(p.tokens)}%`).join(", ")}),
+        not just the signed-in account. Local logs do not record which account
+        produced them.
+      </span>
+    </p>
+  );
 }
 
 function ModelBreakdown({ models }: { models: LocalModelCost[] }) {
@@ -631,6 +658,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
             )}
             <span>Processed includes fresh input, output, cache reads, and cache writes.</span>
           </div>
+          {/* Local logs carry no account identity, so these totals cover every
+              account that has used this machine. Disclose that rather than let
+              the figures read as belonging to the signed-in account. */}
+          <MultiPlanNotice plans={data.localUsage.planBreakdown} />
           {data.localUsage.modelBreakdown && data.localUsage.modelBreakdown.length > 0 && (
             <ModelBreakdown models={data.localUsage.modelBreakdown} />
           )}

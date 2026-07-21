@@ -46,6 +46,11 @@ pub struct CostSummary {
     pub by_effort: HashMap<String, f64>,
     /// Codex token split by reasoning-effort tier, matching `by_effort`.
     pub by_effort_tokens: HashMap<String, ModelTokenCounts>,
+    /// Token split by the subscription plan in force when each delta was
+    /// billed, keyed "unattributed" when the log never declared one. Local
+    /// logs carry no account identity, so this is the only signal that a
+    /// machine's activity spans more than one account.
+    pub by_plan_tokens: HashMap<String, ModelTokenCounts>,
     /// Cost split by project/repo (basename of the session `cwd`); keyed
     /// "unknown" when the log has no usable working directory.
     pub by_project: HashMap<String, f64>,
@@ -1159,6 +1164,13 @@ fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
     }
     for (effort, cost) in &source.by_effort {
         *target.by_effort.entry(effort.clone()).or_insert(0.0) += cost;
+    }
+    for (plan, tokens) in &source.by_plan_tokens {
+        target
+            .by_plan_tokens
+            .entry(plan.clone())
+            .or_default()
+            .merge_from(tokens);
     }
     for (effort, tokens) in &source.by_effort_tokens {
         target

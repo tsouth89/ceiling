@@ -244,6 +244,7 @@ mod tests {
                 top_model: Some("gpt-5".to_string()),
                 model_breakdown: Vec::new(),
                 effort_breakdown: Vec::new(),
+                plan_breakdown: Vec::new(),
                 project_breakdown: Vec::new(),
                 estimate_note: "cached".to_string(),
                 token_cost_updated_at_ms: 1234,

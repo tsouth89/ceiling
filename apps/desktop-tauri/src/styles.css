@@ -7765,6 +7765,15 @@ body:has(.dashboard-shell) #root {
   font-size: 10.5px;
   flex-wrap: wrap;
 }
+/* A caveat, not decoration: the totals beside it are not account-scoped. */
+.usage-periods__note--warn {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--usage-bar-high) 28%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--usage-bar-high) 7%, transparent);
+  line-height: 1.45;
+}
 .usage-periods__note strong {
   color: var(--text-primary);
   font-weight: 600;

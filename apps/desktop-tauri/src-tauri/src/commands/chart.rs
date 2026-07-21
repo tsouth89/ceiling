@@ -90,6 +90,10 @@ pub struct ProviderLocalUsageSummary {
     /// for providers without an effort tier). Sorted by cost then tokens.
     #[serde(default)]
     pub effort_breakdown: Vec<LocalEffortCost>,
+    /// Plans observed in local logs for the 30-day period, largest first.
+    /// More than one entry means the total spans multiple accounts.
+    #[serde(default)]
+    pub plan_breakdown: Vec<LocalPlanUsage>,
     /// Per-project/repo spend over the 30-day period, sorted by cost then
     /// tokens. Priced and unpriced projects are both included.
     #[serde(default)]
@@ -223,6 +227,21 @@ pub struct LocalModelCost {
 pub struct LocalEffortCost {
     pub effort: String,
     pub cost: Option<f64>,
+    pub tokens: u64,
+}
+
+/// Locally observed activity attributed to one subscription plan.
+///
+/// Local logs carry no account identity, so a machine's activity can span
+/// several accounts with no way to tell them apart. The plan is the only proxy
+/// Codex emits, and it is imperfect: two accounts on the same plan look
+/// identical, and one account changing plans looks like two. It exists so the
+/// UI can disclose that a total is not account-scoped, never to silently
+/// filter one out.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPlanUsage {
+    pub plan: String,
     pub tokens: u64,
 }
 
@@ -1008,6 +1027,7 @@ fn local_usage_summary_from_report(
         top_model: top_model(&report.thirty_days),
         model_breakdown: model_breakdown(provider_id, &report.thirty_days),
         effort_breakdown: effort_breakdown(&report.thirty_days),
+        plan_breakdown: plan_breakdown(provider_id, &report.thirty_days),
         project_breakdown: project_breakdown(&report.thirty_days),
         estimate_note: localized_estimate_note(provider_id, lang),
         token_cost_updated_at_ms: current_unix_ms(),
@@ -1095,6 +1115,7 @@ fn load_local_usage_summary_with_unknown_models(
             top_model: top_model(&thirty_day),
             model_breakdown: model_breakdown(provider_id, &thirty_day),
             effort_breakdown: effort_breakdown(&thirty_day),
+            plan_breakdown: plan_breakdown(provider_id, &thirty_day),
             project_breakdown: project_breakdown(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
@@ -1361,6 +1382,23 @@ fn model_breakdown(provider_id: &str, summary: &CostSummary) -> Vec<LocalModelCo
 /// Per-reasoning-effort spend for a period, mirroring `model_breakdown`.
 /// Codex populates `by_effort` / `by_effort_tokens`; other providers leave
 /// them empty, so this returns an empty vec for them.
+/// Plans seen in local logs, largest first. Empty when the provider emits no
+/// plan signal at all (Claude), so the UI shows nothing rather than a
+/// misleading single-plan claim.
+fn plan_breakdown(provider_id: &str, summary: &CostSummary) -> Vec<LocalPlanUsage> {
+    let mut rows: Vec<LocalPlanUsage> = summary
+        .by_plan_tokens
+        .iter()
+        .map(|(plan, counts)| LocalPlanUsage {
+            plan: plan.clone(),
+            tokens: counts.normalized(provider_id).processed(),
+        })
+        .filter(|row| row.tokens > 0)
+        .collect();
+    rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.plan.cmp(&b.plan)));
+    rows
+}
+
 fn effort_breakdown(summary: &CostSummary) -> Vec<LocalEffortCost> {
     let mut rows: Vec<LocalEffortCost> = summary
         .by_effort_tokens
@@ -1481,8 +1519,8 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalProjectCost, LocalTokenBreakdown,
-        LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
+        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
+        LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
         comparison_period_specs, cost_fetch_failure_allows_early_retry, effort_breakdown,
         format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown, project_breakdown,
@@ -1549,6 +1587,10 @@ mod tests {
             effort_breakdown: vec![LocalEffortCost {
                 effort: "high".to_string(),
                 cost: Some(2.0),
+                tokens: 300,
+            }],
+            plan_breakdown: vec![LocalPlanUsage {
+                plan: "prolite".to_string(),
                 tokens: 300,
             }],
             project_breakdown: vec![LocalProjectCost {
