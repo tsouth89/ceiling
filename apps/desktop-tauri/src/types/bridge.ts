@@ -690,6 +690,16 @@ export interface LocalApiValueProvider {
   thirtyDays: LocalApiValuePeriod;
   /** Calendar days [today-60, today-30) for 30d dollar period-over-period. */
   priorThirtyDays: LocalApiValuePeriod;
+  /** Last seven local calendar days, oldest first, today last. */
+  lastSevenDays?: LocalApiValueDay[];
+}
+
+/** One local calendar day of estimated API value, for the card's trend. */
+export interface LocalApiValueDay {
+  /** Local calendar date as `YYYY-MM-DD`. */
+  date: string;
+  apiValueUsd: number;
+  tokens: number;
 }
 
 export interface CursorModelActivity {

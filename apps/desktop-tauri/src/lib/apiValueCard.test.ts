@@ -109,6 +109,26 @@ describe("buildApiValueCard", () => {
     expect(model.slices).toHaveLength(0);
   });
 
+  it("keeps an idle provider in the legend once another has data", () => {
+    const model = buildApiValueCard(
+      [
+        provider("codex", { today: empty }),
+        provider("claude", {
+          today: period({ apiValueUsd: 31.88, tokens: 900, pricedTokens: 900, totalTokens: 900, hasData: true }),
+        }),
+      ],
+      "today",
+      "apiValue",
+    );
+
+    expect(model.isEmpty).toBe(false);
+    expect(model.slices.map((slice) => slice.providerId)).toEqual(["claude", "codex"]);
+    // The idle row carries a real zero, and the active one still owns the ring.
+    expect(model.slices[1]).toMatchObject({ providerId: "codex", value: 0, share: 0 });
+    expect(model.slices[0].share).toBe(1);
+    expect(model.total).toBeCloseTo(31.88);
+  });
+
   it("reports partial pricing coverage and the affected providers", () => {
     const model = buildApiValueCard(
       [

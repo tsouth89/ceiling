@@ -110,13 +110,27 @@ export function buildApiValueCard(
     .filter(({ period }) => period.hasData);
 
   const total = rows.reduce((sum, { period }) => sum + metricValue(period, metric), 0);
-  const slices: ApiValueSlice[] = rows
-    .map(({ provider, period }) => ({
-      providerId: provider.providerId,
-      value: metricValue(period, metric),
-    }))
-    .sort((a, b) => b.value - a.value || a.providerId.localeCompare(b.providerId))
-    .map((slice) => ({ ...slice, share: total > 0 ? slice.value / total : 0 }));
+  // Once any provider has data, keep the idle ones in the legend: a lone 100%
+  // row reads as a rendering gap, while "Codex 0%" reads as information. When
+  // nothing has data the card shows its empty state, so the legend stays empty.
+  const slices: ApiValueSlice[] =
+    rows.length === 0
+      ? []
+      : providers
+          .map((provider) => {
+            const period = periodOf(provider, periodKey);
+            return {
+              providerId: provider.providerId,
+              value: period.hasData ? metricValue(period, metric) : 0,
+            };
+          })
+          .sort(
+            (a, b) => b.value - a.value || a.providerId.localeCompare(b.providerId),
+          )
+          .map((slice) => ({
+            ...slice,
+            share: total > 0 ? slice.value / total : 0,
+          }));
 
   const pricedTokens = rows.reduce((sum, { period }) => sum + period.pricedTokens, 0);
   const totalTokens = rows.reduce((sum, { period }) => sum + period.totalTokens, 0);

@@ -5,7 +5,7 @@
 //! the Codex / OpenAI dashboard cache and require an `account_email` to scope
 //! reads to the right cached bundle.
 
-use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow,
@@ -24,9 +24,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-// Version 5 aligns the provider summary's seven-day total with the exact
-// rolling 168-hour window used by Compare. Older entries used calendar days.
-const CHART_CACHE_VERSION: u8 = 5;
+// Version 6 restores the rolling comparison periods Compare needs; entries
+// cached at version 5 hold an empty list that would leave the tab stuck.
+const CHART_CACHE_VERSION: u8 = 6;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +133,59 @@ pub struct LocalUsageComparisonPeriod {
     pub previous_breakdown: LocalTokenBreakdown,
 }
 
+#[derive(Debug, Clone)]
+struct ComparisonPeriodSpec {
+    id: &'static str,
+    label: &'static str,
+    current_window_id: String,
+    previous_window_id: String,
+}
+
+/// Shared rolling windows for Compare, plus the preceding window of the same
+/// length so each period can report a change against its own recent past.
+///
+/// These deliberately ignore provider reset boundaries: Codex and Claude reset
+/// on different clocks, so an identical window ending now is the only span that
+/// compares the two fairly. The end is snapped to the minute because a raw
+/// `now` would move every call and defeat the chart cache.
+fn comparison_period_specs(
+    now: DateTime<Utc>,
+) -> (Vec<ComparisonPeriodSpec>, Vec<CurrentUsageWindow>) {
+    let now = now
+        .with_second(0)
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(now);
+    let periods = [
+        ("five-hours", "Last 5 hours", chrono::Duration::hours(5)),
+        ("seven-days", "Last 7 days", chrono::Duration::days(7)),
+    ];
+    let mut specs = Vec::with_capacity(periods.len());
+    let mut windows = Vec::with_capacity(periods.len() * 2);
+    for (id, label, duration) in periods {
+        let current_window_id = format!("compare-{id}-current");
+        let previous_window_id = format!("compare-{id}-previous");
+        let current_start = now - duration;
+        let previous_start = current_start - duration;
+        windows.push(CurrentUsageWindow {
+            id: current_window_id.clone(),
+            starts_at: current_start,
+            ends_at: now,
+        });
+        windows.push(CurrentUsageWindow {
+            id: previous_window_id.clone(),
+            starts_at: previous_start,
+            ends_at: current_start,
+        });
+        specs.push(ComparisonPeriodSpec {
+            id,
+            label,
+            current_window_id,
+            previous_window_id,
+        });
+    }
+    (specs, windows)
+}
+
 /// Provider-normalized token categories. Codex reports cached input as a
 /// subset of input, while Claude reports cache reads and writes separately;
 /// this shape makes the frontend comparison consistent.
@@ -212,6 +265,19 @@ pub struct LocalApiValueProvider {
     pub thirty_days: LocalApiValuePeriod,
     /// Calendar days [today-60, today-30) for dollar period-over-period on 30d.
     pub prior_thirty_days: LocalApiValuePeriod,
+    /// Last seven local calendar days, oldest first, today last.
+    #[serde(default)]
+    pub last_seven_days: Vec<LocalApiValueDay>,
+}
+
+/// One local calendar day of estimated API value, for the card's trend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalApiValueDay {
+    /// Local calendar date as `YYYY-MM-DD`.
+    pub date: String,
+    pub api_value_usd: f64,
+    pub tokens: u64,
 }
 
 /// Full chart data bundle for one provider.
@@ -582,7 +648,7 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
-            let windows = vec![
+            let mut windows = vec![
                 CurrentUsageWindow {
                     id: "yesterday".to_string(),
                     starts_at: yesterday_start,
@@ -599,6 +665,15 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                     ends_at: thirty_start,
                 },
             ];
+            // One window per local calendar day for the seven-day trend.
+            for offset in 0..7i64 {
+                let date = today - chrono::Duration::days(offset);
+                windows.push(CurrentUsageWindow {
+                    id: format!("day-{offset}"),
+                    starts_at: local_midnight_utc(date),
+                    ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
+                });
+            }
             let report = get_cost_usage_report_with_windows(provider_id, 60, &windows)?;
             let yesterday = report
                 .current_windows
@@ -615,12 +690,31 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                 .get("prior_thirty")
                 .cloned()
                 .unwrap_or_default();
+            // Oldest first so the trend reads left to right, ending today.
+            let last_seven_days = (0..7i64)
+                .rev()
+                .map(|offset| {
+                    let date = today - chrono::Duration::days(offset);
+                    let summary = report
+                        .current_windows
+                        .get(&format!("day-{offset}"))
+                        .cloned()
+                        .unwrap_or_default();
+                    let period = api_value_period(provider_id, &summary);
+                    LocalApiValueDay {
+                        date: date.format("%Y-%m-%d").to_string(),
+                        api_value_usd: period.api_value_usd,
+                        tokens: period.tokens,
+                    }
+                })
+                .collect();
             let provider = LocalApiValueProvider {
                 provider_id: provider_id.to_string(),
                 today: api_value_period(provider_id, &report.today),
                 yesterday: api_value_period(provider_id, &yesterday),
                 thirty_days: api_value_period(provider_id, &thirty_days),
                 prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
+                last_seven_days,
             };
             // Omit providers with no source data in any period.
             (provider.today.has_data
@@ -762,7 +856,7 @@ fn build_provider_chart_data_with_cancel(
     usage_window_requests: Vec<LocalUsageWindowRequest>,
     cancel: Option<Arc<AtomicBool>>,
 ) -> ProviderChartData {
-    let usage_windows = usage_window_requests
+    let mut usage_windows = usage_window_requests
         .iter()
         .filter_map(|window| {
             let starts_at = DateTime::parse_from_rfc3339(&window.starts_at)
@@ -778,6 +872,11 @@ fn build_provider_chart_data_with_cancel(
             })
         })
         .collect::<Vec<_>>();
+    // Compare reads shared rolling windows, which are independent of each
+    // provider's own reset boundaries. They are scanned alongside the
+    // reset-aligned windows so one pass over the logs serves both.
+    let (comparison_specs, comparison_windows) = comparison_period_specs(Utc::now());
+    usage_windows.extend(comparison_windows);
     let report = get_cost_usage_report_with_windows(&provider_id, 30, &usage_windows);
     let cost_history: Vec<DailyCostPoint> = report
         .as_ref()
@@ -804,7 +903,12 @@ fn build_provider_chart_data_with_cancel(
         report
             .as_ref()
             .and_then(|report| {
-                local_usage_summary_from_report(&provider_id, report, &usage_window_requests)
+                local_usage_summary_from_report(
+                    &provider_id,
+                    report,
+                    &usage_window_requests,
+                    &comparison_specs,
+                )
             })
             .or_else(|| load_local_usage_summary_cached(&provider_id, cancel.as_deref()))
     };
@@ -826,6 +930,7 @@ fn local_usage_summary_from_report(
     provider_id: &str,
     report: &CostUsageReport,
     usage_window_requests: &[LocalUsageWindowRequest],
+    comparison_specs: &[ComparisonPeriodSpec],
 ) -> Option<ProviderLocalUsageSummary> {
     let thirty_day_breakdown = token_breakdown(provider_id, &report.thirty_days);
     // Calendar summaries stay calendar summaries. Provider reset windows are
@@ -866,6 +971,23 @@ fn local_usage_summary_from_report(
             })
         })
         .collect();
+    let comparison_periods = comparison_specs
+        .iter()
+        .filter_map(|period| {
+            let current = report.current_windows.get(&period.current_window_id)?;
+            let previous = report.current_windows.get(&period.previous_window_id)?;
+            let current_breakdown = token_breakdown(provider_id, current);
+            let previous_breakdown = token_breakdown(provider_id, previous);
+            Some(LocalUsageComparisonPeriod {
+                id: period.id.to_string(),
+                label: period.label.to_string(),
+                current_tokens: current_breakdown.processed_tokens,
+                current_breakdown,
+                previous_tokens: previous_breakdown.processed_tokens,
+                previous_breakdown,
+            })
+        })
+        .collect();
     Some(ProviderLocalUsageSummary {
         today_cost: non_zero_f64(report.today.total_cost_usd),
         last_session_cost: report
@@ -881,7 +1003,7 @@ fn local_usage_summary_from_report(
         thirty_day_tokens: non_zero_u64(thirty_day_tokens),
         thirty_day_token_breakdown: Some(thirty_day_breakdown),
         current_windows,
-        comparison_periods: Vec::new(),
+        comparison_periods,
         latest_tokens: non_zero_u64(last_session_tokens),
         top_model: top_model(&report.thirty_days),
         model_breakdown: model_breakdown(&report.thirty_days),
@@ -1375,13 +1497,13 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalProjectCost, LocalTokenBreakdown,
         LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
-        cost_fetch_failure_allows_early_retry, effort_breakdown, format_cost_csv,
-        local_midnight_in_tz, local_usage_summary_from_report, local_yesterday_window_utc,
-        localized_estimate_note, model_breakdown, project_breakdown, spend_budget_period_details,
-        token_breakdown, token_cost_cache_is_fresh,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry, effort_breakdown,
+        format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        local_yesterday_window_utc, localized_estimate_note, model_breakdown, project_breakdown,
+        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
-    use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
+    use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
     use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
     use codexbar::settings::Language;
     use std::time::{Duration, Instant};
@@ -1810,8 +1932,10 @@ mod tests {
         }
     }
 
+    /// The seven-day headline stays a calendar total even though Compare reads
+    /// a rolling window; the two are deliberately different periods.
     #[test]
-    fn seven_day_summary_stays_a_calendar_period_without_rolling_comparison() {
+    fn seven_day_summary_stays_a_calendar_period() {
         let report = CostUsageReport {
             seven_days: CostSummary {
                 cache_read_tokens: 4_500_000_000,
@@ -1824,11 +1948,76 @@ mod tests {
             ..CostUsageReport::default()
         };
 
-        let summary =
-            local_usage_summary_from_report("claude", &report, &[]).expect("local usage summary");
+        let summary = local_usage_summary_from_report("claude", &report, &[], &[])
+            .expect("local usage summary");
 
         assert_eq!(summary.seven_day_tokens, Some(4_500_000_000));
-        assert!(summary.comparison_periods.is_empty());
+    }
+
+    /// Compare cannot render without these periods, so an empty list is a
+    /// broken tab rather than a harmless default.
+    #[test]
+    fn rolling_comparison_periods_are_produced_for_compare() {
+        let (specs, windows) = comparison_period_specs(Utc::now());
+        assert_eq!(specs.len(), 2, "Compare renders a 5-hour and a 7-day card");
+        assert_eq!(
+            windows.len(),
+            4,
+            "each period needs a current and a prior window"
+        );
+
+        let mut current_windows = std::collections::HashMap::new();
+        for (index, window) in windows.iter().enumerate() {
+            current_windows.insert(
+                window.id.clone(),
+                CostSummary {
+                    output_tokens: 1_000 * (index as u64 + 1),
+                    sessions_count: 1,
+                    ..CostSummary::default()
+                },
+            );
+        }
+        let report = CostUsageReport {
+            thirty_days: CostSummary {
+                sessions_count: 1,
+                ..CostSummary::default()
+            },
+            current_windows,
+            ..CostUsageReport::default()
+        };
+
+        let summary = local_usage_summary_from_report("claude", &report, &[], &specs)
+            .expect("local usage summary");
+
+        let ids: Vec<&str> = summary
+            .comparison_periods
+            .iter()
+            .map(|period| period.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["five-hours", "seven-days"]);
+        assert!(
+            summary
+                .comparison_periods
+                .iter()
+                .all(|period| period.current_tokens > 0 && period.previous_tokens > 0),
+            "both the current and prior window must carry totals"
+        );
+    }
+
+    /// A raw `now` would move the window every call and defeat the chart cache.
+    #[test]
+    fn rolling_windows_snap_to_the_minute_so_the_cache_can_hold() {
+        let base = Utc::now()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
+        let (_, first) = comparison_period_specs(base + chrono::Duration::seconds(7));
+        let (_, second) = comparison_period_specs(base + chrono::Duration::seconds(51));
+
+        let ends: Vec<_> = first.iter().map(|window| window.ends_at).collect();
+        let later: Vec<_> = second.iter().map(|window| window.ends_at).collect();
+        assert_eq!(ends, later, "same minute must yield identical windows");
     }
 
     #[test]
@@ -1878,7 +2067,7 @@ mod tests {
             },
         ];
 
-        let summary = local_usage_summary_from_report("claude", &report, &requests)
+        let summary = local_usage_summary_from_report("claude", &report, &requests, &[])
             .expect("local usage summary");
 
         assert_eq!(summary.current_windows.len(), 2);
