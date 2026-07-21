@@ -239,6 +239,10 @@ enum CodexFastEvent<'a> {
 }
 
 impl CodexParserState {
+    /// Note for anyone enabling incremental (non-zero offset) parsing here:
+    /// the plan would need seeding alongside the model and totals, or a resumed
+    /// parse would attribute its first records to `unattributed` until the next
+    /// line that restates `rate_limits`. Every caller passes offset 0 today.
     fn new(initial_model: Option<String>, initial_totals: Option<CodexTotals>) -> Self {
         Self {
             current_model: initial_model,
@@ -377,13 +381,11 @@ impl CodexParserState {
         if self.replay_gate.is_some() {
             return;
         }
-        if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
-            return;
-        }
-        let Some(day_key) = codex_line_day_key(obj, range) else {
-            return;
-        };
-
+        // Learn the plan before the zero-delta and range exits below. A
+        // token_count can announce a new plan while billing nothing, and
+        // returning first would attribute the next billed record to the
+        // previous plan. Kept after the replay gate so a child's replayed
+        // parent history cannot install a stale plan.
         if let Some(plan) = payload
             .get("rate_limits")
             .and_then(|limits| limits.get("plan_type"))
@@ -392,6 +394,13 @@ impl CodexParserState {
         {
             self.current_plan = Some(plan.to_string());
         }
+        if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
+            return;
+        }
+        let Some(day_key) = codex_line_day_key(obj, range) else {
+            return;
+        };
+
         let info = payload.get("info");
         let model = self.token_model(info, payload, obj);
         let timestamp = obj
@@ -424,9 +433,7 @@ impl CodexParserState {
         if self.replay_gate.is_some() {
             return;
         }
-        if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
-            return;
-        }
+        // See the slow path: a zero-delta line can still announce the plan.
         if let Some(plan) = payload
             .rate_limits
             .as_ref()
@@ -434,6 +441,9 @@ impl CodexParserState {
             .filter(|plan| !plan.trim().is_empty())
         {
             self.current_plan = Some(plan.to_string());
+        }
+        if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
+            return;
         }
         let Some(day_key) = codex_timestamp_day_key(timestamp) else {
             return;
@@ -1186,6 +1196,49 @@ mod tests {
         assert_eq!(record.day_key, "2026-05-31");
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (45, 12, 8));
+    }
+
+    /// SOU-297: a `token_count` can announce a new plan while billing nothing.
+    /// If the plan is only read after the zero-delta exit, the next billed
+    /// record inherits the previous plan and the switch is invisible.
+    #[test]
+    fn zero_delta_plan_switch_still_attributes_the_next_billed_record() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        // `total_token_usage` is cumulative, so an unchanged total is a line
+        // that reports state without billing anything. That is how a plan
+        // switch can be announced with no usage attached.
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:00.000Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"plan_type":"plus"}},"info":{{"total_token_usage":{{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}}}}}"#
+        )
+        .unwrap();
+        // Announces the switch; totals unchanged, so it bills nothing.
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"plan_type":"team"}},"info":{{"total_token_usage":{{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}}}}}"#
+        )
+        .unwrap();
+        // Bills again, carrying no rate_limits of its own.
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":250,"cached_input_tokens":0,"output_tokens":30}}}}}}}}"#
+        )
+        .unwrap();
+
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let parsed =
+            JsonlScanner::parse_codex_file(file.path(), &range, 0, None, None).expect("parse");
+
+        assert_eq!(parsed.records.len(), 2, "the zero-delta line bills nothing");
+        assert_eq!(parsed.records[0].plan.as_deref(), Some("plus"));
+        assert_eq!(
+            parsed.records[1].plan.as_deref(),
+            Some("team"),
+            "the plan announced by the zero-delta line must carry forward"
+        );
     }
 
     #[test]

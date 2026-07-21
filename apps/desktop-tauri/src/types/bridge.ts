@@ -635,7 +635,8 @@ export interface ProviderLocalUsageSummary {
   topModel: string | null;
   modelBreakdown?: LocalModelCost[];
   effortBreakdown?: LocalEffortCost[];
-  /** Plans seen in local logs. More than one means the total spans accounts. */
+  /** Plans seen in local logs. More than one means the total is not
+   *  account-scoped; it spans several plans, not necessarily several accounts. */
   planBreakdown?: LocalPlanUsage[];
   projectBreakdown?: LocalProjectCost[];
   estimateNote: string;

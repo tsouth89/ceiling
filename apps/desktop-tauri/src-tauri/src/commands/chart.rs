@@ -91,7 +91,8 @@ pub struct ProviderLocalUsageSummary {
     #[serde(default)]
     pub effort_breakdown: Vec<LocalEffortCost>,
     /// Plans observed in local logs for the 30-day period, largest first.
-    /// More than one entry means the total spans multiple accounts.
+    /// More than one entry means the total is not account-scoped; it spans
+    /// several plans, which may or may not be several accounts.
     #[serde(default)]
     pub plan_breakdown: Vec<LocalPlanUsage>,
     /// Per-project/repo spend over the 30-day period, sorted by cost then
@@ -237,7 +238,7 @@ pub struct LocalEffortCost {
 /// Codex emits, and it is imperfect: two accounts on the same plan look
 /// identical, and one account changing plans looks like two. It exists so the
 /// UI can disclose that a total is not account-scoped, never to silently
-/// filter one out.
+/// filter one out and never to assert how many accounts produced it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalPlanUsage {

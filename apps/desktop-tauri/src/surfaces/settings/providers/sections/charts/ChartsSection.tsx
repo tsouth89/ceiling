@@ -120,27 +120,41 @@ function formatUsd(value: number): string {
   }).format(value);
 }
 
+/** Backend bucket for records whose rollout never declared a plan. */
+const UNATTRIBUTED_PLAN = "unattributed";
+
 /**
- * Disclose when local activity spans more than one subscription plan.
+ * Disclose that these totals are not account-scoped.
  *
- * Local logs carry no account identity for any provider, so a machine's totals
- * can cover several accounts with no way to separate them. The plan is the only
- * proxy Codex emits, and it is imperfect in both directions: two accounts on one
- * plan look identical, and one account changing plans looks like two. So this
- * states what was observed and does not filter anything out.
+ * Local logs record the plan but never the account, for any provider. So more
+ * than one plan proves the totals cover more than one plan - NOT that they came
+ * from someone else's account. One account changing plans looks exactly the
+ * same. The copy therefore states the limitation and what was observed, and
+ * stops short of naming accounts.
+ *
+ * `unattributed` is a bucket, not a plan, so it can never trigger this on its
+ * own: one plan plus some unlabeled records is still one plan.
  */
 function MultiPlanNotice({ plans }: { plans?: LocalPlanUsage[] | null }) {
-  if (!plans || plans.length < 2) return null;
+  if (!plans || plans.length === 0) return null;
+  const named = plans.filter((plan) => plan.plan !== UNATTRIBUTED_PLAN);
+  if (named.length < 2) return null;
+
   const total = plans.reduce((sum, plan) => sum + plan.tokens, 0);
   if (total <= 0) return null;
-  const share = (tokens: number) => Math.round((tokens / total) * 100);
+  const share = (tokens: number) => {
+    const percent = (tokens / total) * 100;
+    return percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+  };
+  const unlabeled = plans.find((plan) => plan.plan === UNATTRIBUTED_PLAN);
+
   return (
     <p className="usage-periods__note usage-periods__note--warn" role="note">
       <span>
-        These totals cover <strong>{plans.length} plans</strong> seen on this
-        machine ({plans.map((p) => `${p.plan} ${share(p.tokens)}%`).join(", ")}),
-        not just the signed-in account. Local logs do not record which account
-        produced them.
+        These totals are <strong>not account-scoped</strong>. Local logs record
+        the plan but not the account, and this machine shows{" "}
+        {named.length} plans ({named.map((p) => `${p.plan} ${share(p.tokens)}`).join(", ")}
+        {unlabeled ? `, unlabeled ${share(unlabeled.tokens)}` : ""}).
       </span>
     </p>
   );
