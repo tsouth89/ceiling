@@ -88,7 +88,12 @@ fn snapshot_reset_times(snapshot: &ProviderUsageSnapshot) -> Vec<DateTime<Utc>> 
     ]
     .into_iter()
     .flatten()
-    .chain(snapshot.extra_rate_windows.iter().map(|extra| &extra.window))
+    .chain(
+        snapshot
+            .extra_rate_windows
+            .iter()
+            .map(|extra| &extra.window),
+    )
     .filter_map(|window| window.resets_at.as_deref())
     .filter_map(parse_reset_time)
     .collect()
