@@ -5,6 +5,7 @@ use reqwest::{Client, header};
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use super::UtilizationScale;
 use crate::browser::cookies::{get_cookie_header, get_cookie_header_from_browser};
 use crate::browser::detection::{BrowserProfile, BrowserType, DetectedBrowser};
 use crate::core::{
@@ -428,22 +429,25 @@ impl ClaudeWebApiFetcher {
         // Step 4: Fetch account info - optional
         let account = self.get_account_info(&headers).await.ok();
 
-        // Build the result
+        // Build the result. Anthropic mixes fractions and percentages between
+        // payloads, so settle the unit once from the whole response first.
+        let scale = usage.utilization_scale();
+
         let primary = usage
             .five_hour
             .as_ref()
-            .map(|w| self.to_rate_window(w, Some(300))) // 5 hours = 300 minutes
+            .map(|w| self.to_rate_window(w, Some(300), scale)) // 5 hours = 300 minutes
             .unwrap_or_else(|| RateWindow::new(0.0));
 
         let secondary = usage
             .seven_day
             .as_ref()
-            .map(|w| self.to_rate_window(w, Some(10080))); // 7 days = 10080 minutes
+            .map(|w| self.to_rate_window(w, Some(10080), scale)); // 7 days = 10080 minutes
 
         let model_specific = usage
             .seven_day_opus
             .as_ref()
-            .map(|w| self.to_rate_window(w, Some(10080)));
+            .map(|w| self.to_rate_window(w, Some(10080), scale));
 
         let mut snapshot = UsageSnapshot::new(primary);
 
@@ -462,7 +466,7 @@ impl ClaudeWebApiFetcher {
                 usage
                     .seven_day_oauth_apps
                     .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080))),
+                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
             ),
             (
                 "claude-routines",
@@ -470,7 +474,7 @@ impl ClaudeWebApiFetcher {
                 usage
                     .seven_day_routines
                     .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080))),
+                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
             ),
             (
                 "claude-design",
@@ -478,7 +482,7 @@ impl ClaudeWebApiFetcher {
                 usage
                     .seven_day_design
                     .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080))),
+                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
             ),
             (
                 "claude-weekly-promo",
@@ -486,7 +490,7 @@ impl ClaudeWebApiFetcher {
                 usage
                     .seven_day_promotional
                     .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080))),
+                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
             ),
         ] {
             if let Some(window) = window {
@@ -722,8 +726,13 @@ impl ClaudeWebApiFetcher {
     }
 
     /// Convert a usage window to a RateWindow
-    fn to_rate_window(&self, window: &UsageWindow, window_minutes: Option<u32>) -> RateWindow {
-        let used_percent = normalize_utilization(window.utilization.unwrap_or(0.0));
+    fn to_rate_window(
+        &self,
+        window: &UsageWindow,
+        window_minutes: Option<u32>,
+        scale: UtilizationScale,
+    ) -> RateWindow {
+        let used_percent = scale.to_percent(window.utilization.unwrap_or(0.0));
 
         let resets_at = window
             .resets_at
@@ -764,11 +773,24 @@ impl Default for ClaudeWebApiFetcher {
     }
 }
 
-fn normalize_utilization(utilization: f64) -> f64 {
-    if utilization > 0.0 && utilization <= 1.0 {
-        utilization * 100.0
-    } else {
-        utilization
+impl UsageResponse {
+    /// Decide the utilization unit from every window this response carries.
+    fn utilization_scale(&self) -> UtilizationScale {
+        UtilizationScale::detect(
+            [
+                self.five_hour.as_ref(),
+                self.seven_day.as_ref(),
+                self.seven_day_opus.as_ref(),
+                self.seven_day_sonnet.as_ref(),
+                self.seven_day_oauth_apps.as_ref(),
+                self.seven_day_design.as_ref(),
+                self.seven_day_promotional.as_ref(),
+                self.seven_day_routines.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|window| window.utilization),
+        )
     }
 }
 
@@ -790,8 +812,8 @@ fn cookie_value(cookie_header: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountResponse, ClaudeWebApiFetcher, UsageWindow, claude_desktop_data_dirs_from,
-        cookie_value,
+        AccountResponse, ClaudeWebApiFetcher, UsageWindow, UtilizationScale,
+        claude_desktop_data_dirs_from, cookie_value,
     };
     use reqwest::header;
     use std::path::PathBuf;
@@ -809,7 +831,11 @@ mod tests {
             resets_at: None,
         };
 
-        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(
+            &window,
+            Some(300),
+            UtilizationScale::Fraction,
+        );
 
         assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
     }
@@ -821,7 +847,11 @@ mod tests {
             resets_at: None,
         };
 
-        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(
+            &window,
+            Some(300),
+            UtilizationScale::Percent,
+        );
 
         assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
     }
@@ -976,17 +1006,17 @@ mod tests {
         let design = usage
             .seven_day_design
             .as_ref()
-            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .map(|w| fetcher.to_rate_window(w, Some(10080), usage.utilization_scale()))
             .expect("design window");
         let promo = usage
             .seven_day_promotional
             .as_ref()
-            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .map(|w| fetcher.to_rate_window(w, Some(10080), usage.utilization_scale()))
             .expect("promotional omelette window");
         let routines = usage
             .seven_day_routines
             .as_ref()
-            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .map(|w| fetcher.to_rate_window(w, Some(10080), usage.utilization_scale()))
             .expect("routines window");
 
         assert!((design.used_percent - 31.0).abs() < f64::EPSILON);
@@ -1032,12 +1062,12 @@ mod tests {
         let design = usage
             .seven_day_design
             .as_ref()
-            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .map(|w| fetcher.to_rate_window(w, Some(10080), usage.utilization_scale()))
             .expect("design window");
         let routines = usage
             .seven_day_routines
             .as_ref()
-            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .map(|w| fetcher.to_rate_window(w, Some(10080), usage.utilization_scale()))
             .expect("routines window");
 
         assert!((design.used_percent - 31.0).abs() < f64::EPSILON);
@@ -1064,7 +1094,7 @@ mod tests {
         let oauth_apps = usage
             .seven_day_oauth_apps
             .as_ref()
-            .map(|w| fetcher.to_rate_window(w, Some(10080)))
+            .map(|w| fetcher.to_rate_window(w, Some(10080), usage.utilization_scale()))
             .expect("oauth apps window");
         let extra = usage.extra_usage.expect("extra usage");
 
