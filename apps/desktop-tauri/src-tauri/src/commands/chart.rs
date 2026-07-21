@@ -116,6 +116,10 @@ pub struct LocalUsageWindowSummary {
     pub ends_at: String,
     pub tokens: u64,
     pub token_breakdown: LocalTokenBreakdown,
+    /// Estimated API-value dollars from priced models in this reset window.
+    /// `None` when there is no priced activity (unpriced models stay excluded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -858,6 +862,7 @@ fn local_usage_summary_from_report(
                 ends_at: window.ends_at.clone(),
                 tokens: token_breakdown.processed_tokens,
                 token_breakdown,
+                cost: non_zero_f64(summary.total_cost_usd),
             })
         })
         .collect();
@@ -1369,10 +1374,11 @@ fn load_openai_dashboard_chart_data(
 mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalProjectCost, LocalTokenBreakdown,
-        ProviderLocalUsageSummary, api_value_period, cost_fetch_failure_allows_early_retry,
-        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
-        local_yesterday_window_utc, localized_estimate_note, model_breakdown, project_breakdown,
-        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
+        cost_fetch_failure_allows_early_retry, effort_breakdown, format_cost_csv,
+        local_midnight_in_tz, local_usage_summary_from_report, local_yesterday_window_utc,
+        localized_estimate_note, model_breakdown, project_breakdown, spend_budget_period_details,
+        token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
@@ -1823,6 +1829,63 @@ mod tests {
 
         assert_eq!(summary.seven_day_tokens, Some(4_500_000_000));
         assert!(summary.comparison_periods.is_empty());
+    }
+
+    #[test]
+    fn reset_aligned_windows_include_priced_cost_from_report() {
+        let mut current_windows = std::collections::HashMap::new();
+        current_windows.insert(
+            "primary".to_string(),
+            CostSummary {
+                input_tokens: 1_000,
+                output_tokens: 500,
+                total_cost_usd: 12.4,
+                sessions_count: 1,
+                ..CostSummary::default()
+            },
+        );
+        current_windows.insert(
+            "secondary".to_string(),
+            CostSummary {
+                input_tokens: 10_000,
+                output_tokens: 2_000,
+                total_cost_usd: 0.0,
+                sessions_count: 1,
+                ..CostSummary::default()
+            },
+        );
+        let report = CostUsageReport {
+            thirty_days: CostSummary {
+                sessions_count: 1,
+                total_cost_usd: 12.4,
+                ..CostSummary::default()
+            },
+            current_windows,
+            ..CostUsageReport::default()
+        };
+        let requests = vec![
+            LocalUsageWindowRequest {
+                id: "primary".into(),
+                label: "5-hour window".into(),
+                starts_at: "2026-07-20T00:00:00Z".into(),
+                ends_at: "2026-07-20T05:00:00Z".into(),
+            },
+            LocalUsageWindowRequest {
+                id: "secondary".into(),
+                label: "Weekly window".into(),
+                starts_at: "2026-07-14T00:00:00Z".into(),
+                ends_at: "2026-07-21T00:00:00Z".into(),
+            },
+        ];
+
+        let summary = local_usage_summary_from_report("claude", &report, &requests)
+            .expect("local usage summary");
+
+        assert_eq!(summary.current_windows.len(), 2);
+        assert_eq!(summary.current_windows[0].id, "primary");
+        assert_eq!(summary.current_windows[0].cost, Some(12.4));
+        assert_eq!(summary.current_windows[1].id, "secondary");
+        assert_eq!(summary.current_windows[1].cost, None);
     }
 
     #[test]

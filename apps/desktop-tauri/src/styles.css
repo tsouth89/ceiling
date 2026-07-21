@@ -7737,8 +7737,10 @@ body:has(.dashboard-shell) #root {
   margin: 4px 0 1px;
   color: var(--text-primary);
   font-size: 17px;
-  line-height: 1.1;
+  line-height: 1.15;
   font-variant-numeric: tabular-nums;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .usage-periods__note {
   grid-column: 1 / -1;
