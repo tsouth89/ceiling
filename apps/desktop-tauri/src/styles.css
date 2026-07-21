@@ -7730,17 +7730,30 @@ body:has(.dashboard-shell) #root {
   display: block;
   color: var(--text-secondary);
   font-size: 10.5px;
-  white-space: nowrap;
+}
+/* Reset stamps are long. Let them wrap inside the card instead of running
+   across the neighbouring ones. */
+.usage-period > small {
+  margin-top: 7px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
 }
 .usage-period > strong {
   display: block;
-  margin: 4px 0 1px;
+  margin: 5px 0 0;
   color: var(--text-primary);
   font-size: 17px;
-  line-height: 1.15;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  white-space: normal;
-  overflow-wrap: anywhere;
+}
+/* Dollars sit on their own line so the value never breaks mid-string. */
+.usage-period > .usage-period__money {
+  margin-top: 2px;
+  color: var(--ceiling-cyan);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 .usage-periods__note {
   grid-column: 1 / -1;
@@ -8106,20 +8119,83 @@ body:has(.dashboard-shell) #root {
   color: var(--text-secondary);
   font-size: 10px;
 }
+.api-value-card__ring-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
 .api-value-card__period-change {
-  margin-top: 2px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 10.5px;
   font-variant-numeric: tabular-nums;
 }
+/* Capped rather than stretched: a full-width row flung the share and value to
+   the far edge and left the card looking empty. */
 .api-value-card__legend {
-  flex: 1 1 160px;
-  min-width: 150px;
+  flex: 0 0 auto;
+  width: 186px;
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
   gap: 6px;
+  align-content: center;
+}
+.api-value-card__trend {
+  flex: 1 1 190px;
+  min-width: 170px;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 16px;
+  border-left: 1px solid var(--ceiling-glass-border);
+}
+.api-value-card__trend-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.api-value-card__trend-head span {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+.api-value-card__trend-head strong {
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.api-value-card__trend-bars {
+  margin-top: 9px;
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 52px;
+}
+.api-value-card__trend-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--ceiling-cyan) 45%, transparent);
+}
+.api-value-card__trend-bar[data-today="true"] {
+  background: var(--ceiling-cyan);
+}
+.api-value-card__trend-days {
+  margin-top: 5px;
+  display: flex;
+  gap: 5px;
+}
+.api-value-card__trend-days span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 9px;
 }
 .api-value-card__legend-row {
   display: grid;

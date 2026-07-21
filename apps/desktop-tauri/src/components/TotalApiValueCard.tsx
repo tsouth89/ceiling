@@ -41,6 +41,41 @@ function providerColor(providerId: string): string {
   return getProviderIcon(providerId).brandColor;
 }
 
+type TrendDay = {
+  date: string;
+  label: string;
+  value: number;
+  height: number;
+};
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Sum each provider's seven-day series into one per-day trend. */
+function buildTrend(providers: LocalApiValueProvider[]): TrendDay[] {
+  const totals = new Map<string, number>();
+  for (const provider of providers) {
+    for (const day of provider.lastSevenDays ?? []) {
+      totals.set(day.date, (totals.get(day.date) ?? 0) + day.apiValueUsd);
+    }
+  }
+  const dates = [...totals.keys()].sort();
+  if (dates.length === 0) return [];
+  const peak = Math.max(...dates.map((date) => totals.get(date) ?? 0));
+  return dates.map((date) => {
+    const value = totals.get(date) ?? 0;
+    // Parse as local noon so a date-only string cannot slip a day via UTC.
+    const parsed = new Date(`${date}T12:00:00`);
+    return {
+      date,
+      label: Number.isNaN(parsed.getTime())
+        ? date.slice(5)
+        : WEEKDAYS[parsed.getDay()],
+      value,
+      height: peak > 0 ? Math.max(3, (value / peak) * 100) : 3,
+    };
+  });
+}
+
 /**
  * Aggregate "estimated API value" across providers, from local logs.
  *
@@ -102,6 +137,10 @@ export function TotalApiValueCard() {
       ? formatPeriodChange(model.periodChange)
       : null;
 
+  // Seven-day trend, summed across providers per day. Heights are relative to
+  // the busiest day so a quiet day still renders a visible sliver.
+  const trend = buildTrend(providers ?? []);
+
   const ariaSummary = model.isEmpty
     ? `No local ${metricLabel} data for ${periodLabel}.`
     : `${metricLabel} for ${periodLabel}: ${formatValue(model.total)} across ${model.slices
@@ -155,6 +194,7 @@ export function TotalApiValueCard() {
         </p>
       ) : (
         <div className="api-value-card__body">
+          <div className="api-value-card__ring-wrap">
           <div className="api-value-card__ring" role="img" aria-label={ariaSummary}>
             <svg viewBox="0 0 120 120" className="api-value-card__ring-svg">
               <circle
@@ -186,10 +226,13 @@ export function TotalApiValueCard() {
             <div className="api-value-card__ring-center">
               <strong>{formatValue(model.total)}</strong>
               <small>{periodLabel}</small>
-              {periodChangeLabel && (
-                <small className="api-value-card__period-change">{periodChangeLabel}</small>
-              )}
             </div>
+          </div>
+          {/* Below the ring, not inside it: the change label collided with the
+              stroke once the total needed the full centre. */}
+          {periodChangeLabel && (
+            <span className="api-value-card__period-change">{periodChangeLabel}</span>
+          )}
           </div>
 
           <ul className="api-value-card__legend">
@@ -210,6 +253,31 @@ export function TotalApiValueCard() {
               </li>
             ))}
           </ul>
+
+          {trend.length > 0 && (
+            <div className="api-value-card__trend">
+              <div className="api-value-card__trend-head">
+                <span>Last 7 days</span>
+                <strong>{formatUsd(trend.reduce((sum, day) => sum + day.value, 0))}</strong>
+              </div>
+              <div className="api-value-card__trend-bars">
+                {trend.map((day, index) => (
+                  <span
+                    key={day.date}
+                    className="api-value-card__trend-bar"
+                    data-today={index === trend.length - 1}
+                    style={{ height: `${day.height}%` }}
+                    title={`${day.label}: ${formatUsd(day.value)}`}
+                  />
+                ))}
+              </div>
+              <div className="api-value-card__trend-days">
+                {trend.map((day) => (
+                  <span key={day.date}>{day.label}</span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

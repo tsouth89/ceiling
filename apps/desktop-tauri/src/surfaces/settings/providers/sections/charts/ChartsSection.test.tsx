@@ -107,12 +107,20 @@ describe("ChartsSection local usage summary", () => {
     expect(getByText("23.6B")).toBeTruthy();
     expect(getByText("5-hour window")).toBeTruthy();
     expect(getByText("Weekly window")).toBeTruthy();
-    expect(getByText("18.4M · $12.40")).toBeTruthy();
-    expect(getByText("843.4M · $842.50")).toBeTruthy();
+    // Tokens and dollars are separate elements so the value never breaks
+    // mid-string and the detail line can wrap inside its own card.
+    expect(getByText("18.4M")).toBeTruthy();
+    expect(getByText("$12.40")).toBeTruthy();
+    expect(getByText("843.4M")).toBeTruthy();
+    expect(getByText("$842.50")).toBeTruthy();
     expect(() => getByText("Last session")).toThrow();
     expect(getByText("99.7% cache traffic")).toBeTruthy();
-    expect(getAllByText(/processed tokens · calendar window/)).toHaveLength(2);
-    expect(() => getByText("$3,427.91")).toThrow();
+    expect(getAllByText(/Processed tokens · calendar/)).toHaveLength(2);
+    // Calendar windows carry dollars too. Showing `$` only on the reset cards
+    // read as "no cost data here" rather than "a different period".
+    expect(getByText("$3,427.91")).toBeTruthy();
+    // Also the "Cost by model · 30 days" total, hence more than one match.
+    expect(getAllByText("$17,700.00").length).toBeGreaterThan(0);
     expect(getByLabelText("Local usage summary").getAttribute("data-card-count")).toBe("4");
 
     const mix = getByLabelText("Last 7 days token breakdown");
