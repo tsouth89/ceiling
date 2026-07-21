@@ -229,10 +229,12 @@ export function TotalApiValueCard() {
             </div>
           </div>
           {/* Below the ring, not inside it: the change label collided with the
-              stroke once the total needed the full centre. */}
-          {periodChangeLabel && (
-            <span className="api-value-card__period-change">{periodChangeLabel}</span>
-          )}
+              stroke once the total needed the full centre. Rendered even when
+              empty so the card keeps one height across periods and metrics —
+              a shrinking card toggled the scrollbar and reflowed the header. */}
+          <span className="api-value-card__period-change">
+            {periodChangeLabel ?? ""}
+          </span>
           </div>
 
           <ul className="api-value-card__legend">
