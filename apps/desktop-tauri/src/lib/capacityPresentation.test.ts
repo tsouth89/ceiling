@@ -74,6 +74,64 @@ describe("capacityPresentation", () => {
     expect(constraining.window.usedPercent).toBe(55);
   });
 
+  it("surfaces a hot weekly over a freshly reset session (SOU-288)", () => {
+    const snap = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(2),
+      primaryLabel: "Session (5h)",
+      secondary: window(95),
+      secondaryLabel: "Weekly",
+    });
+
+    const constraining = constrainingWindow(snap);
+
+    expect(constraining.id).toBe("secondary");
+    expect(constraining.label).toBe("Weekly");
+    expect(constraining.window.usedPercent).toBe(95);
+  });
+
+  it("prefers a blocking window over a merely higher-pressure one", () => {
+    const exhausted = window(100);
+    const snap = provider({
+      primary: window(100),
+      primaryLabel: "Session",
+      secondary: { ...window(97), isExhausted: false },
+      secondaryLabel: "Weekly",
+    });
+    expect(exhausted.isExhausted).toBe(true);
+
+    // Primary is blocking at 100%, so it outranks the hotter-looking 97% lane.
+    expect(constrainingWindow(snap).id).toBe("primary");
+
+    // And a blocking non-primary wins even when primary reads higher.
+    const blockedExtra = provider({
+      primary: window(80),
+      primaryLabel: "Session",
+      extraRateWindows: [
+        {
+          id: "scoped",
+          title: "Fable only",
+          window: { ...window(40), isExhausted: true },
+        },
+      ],
+    });
+    expect(constrainingWindow(blockedExtra).id).toBe("extra-scoped");
+  });
+
+  it("breaks an exact tie toward the window that resets first", () => {
+    const soon = { ...window(60), resetsAt: "2026-07-21T04:00:00Z" };
+    const later = { ...window(60), resetsAt: "2026-07-28T04:00:00Z" };
+    const snap = provider({
+      primary: later,
+      primaryLabel: "Weekly",
+      secondary: soon,
+      secondaryLabel: "Session",
+    });
+
+    expect(constrainingWindow(snap).label).toBe("Session");
+  });
+
   it("keeps Cursor plan as hero and shows reported Auto and API companions", () => {
     const meters = glanceMeters(
       provider({
