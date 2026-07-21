@@ -1,5 +1,15 @@
 # Changelog
 
+## [Ceiling] 1.4.0 - 2026-07-21
+
+### Added
+- Tell you when local totals cover more than one subscription plan. Codex records the plan behind each request, so if a machine has been used by more than one plan the Charts page now says so instead of letting the figures read as the signed-in account's. Local logs never record which account produced them, so this reports what was seen and does not guess.
+
+### Fixed
+- Count Codex cached input once when working out a model's cache rate. Codex reports cached tokens inside its input count, and adding the cache bucket on top counted them twice, so a model that was really about 97% cached displayed as 49%.
+- Include archived Codex sessions in the Charts page, the reset windows, and the estimated API value. Only the active sessions folder was being read there, so archiving a task quietly shrank every total while the older summary still counted it. Expect these figures to rise if you archive.
+- Say which window each cache percentage measures. The per-model figure covers 30 days while the token mix above it covers 7, and they can legitimately differ.
+
 ## [Ceiling] 1.3.2 - 2026-07-21
 
 ### Fixed
