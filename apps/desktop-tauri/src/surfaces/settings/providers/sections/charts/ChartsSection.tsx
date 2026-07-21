@@ -152,7 +152,7 @@ function MultiPlanNotice({ plans }: { plans?: LocalPlanUsage[] | null }) {
     <p className="usage-periods__note usage-periods__note--warn" role="note">
       <span>
         These totals are <strong>not account-scoped</strong>. Local logs record
-        the plan but not the account, and this machine shows{" "}
+        the plan but not the account. Over the last 30 days this machine shows{" "}
         {named.length} plans ({named.map((p) => `${p.plan} ${share(p.tokens)}`).join(", ")}
         {unlabeled ? `, unlabeled ${share(unlabeled.tokens)}` : ""}).
       </span>
@@ -183,7 +183,9 @@ function ModelBreakdown({ models }: { models: LocalModelCost[] }) {
             </div>
             <div className="usage-model-costs__metrics">
               {model.cacheReadPercent != null && (
-                <span>{model.cacheReadPercent.toFixed(0)}% cache read</span>
+                /* Its own period, because the "· 30 days" header is rows away
+                   and the token-mix card shows a different window above. */
+                <span>{model.cacheReadPercent.toFixed(0)}% cache read · 30 days</span>
               )}
               {model.costPerCall != null && (
                 <span>{formatUsd(model.costPerCall)}/call</span>
