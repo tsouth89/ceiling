@@ -76,7 +76,8 @@ pub struct CostUsageReport {
     pub seven_days: CostSummary,
     pub thirty_days: CostSummary,
     pub latest_session: Option<CostSummary>,
-    /// Exact token totals for caller-supplied reset windows, keyed by ID.
+    /// Exact token totals and priced cost for caller-supplied reset windows,
+    /// keyed by ID.
     pub current_windows: HashMap<String, CostSummary>,
 }
 
