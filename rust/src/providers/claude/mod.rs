@@ -72,6 +72,48 @@ impl Default for ClaudeProvider {
     }
 }
 
+/// Which unit Anthropic used for `utilization` in a single usage response.
+///
+/// The API is inconsistent: some payloads report fractions of the limit
+/// (`0.23` = 23%) and others integer percentages (`23` = 23%). A lone `1.0` is
+/// ambiguous, because it means 100% as a fraction but 1% as a percentage.
+/// Resolving that per value is what made a freshly reset window (`1`, i.e. 1%
+/// used) render as 100%, so the unit is decided once per response instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UtilizationScale {
+    /// Values are already percentages: `23` means 23%.
+    Percent,
+    /// Values are fractions of the limit: `0.23` means 23%.
+    Fraction,
+}
+
+impl UtilizationScale {
+    /// Resolve the unit from every raw utilization in one response.
+    ///
+    /// A value above `1.0` can only be a percentage, since a fraction never
+    /// exceeds the limit, so one such window settles the whole response.
+    /// Otherwise the values are read as fractions, which keeps a genuine `1.0`
+    /// meaning 100%.
+    pub(crate) fn detect(values: impl IntoIterator<Item = f64>) -> Self {
+        if values
+            .into_iter()
+            .any(|value| value.is_finite() && value > 1.0)
+        {
+            Self::Percent
+        } else {
+            Self::Fraction
+        }
+    }
+
+    /// Convert one raw utilization into a 0-100 percentage.
+    pub(crate) fn to_percent(self, utilization: f64) -> f64 {
+        match self {
+            Self::Percent => utilization,
+            Self::Fraction => utilization * 100.0,
+        }
+    }
+}
+
 fn claude_plan_label(tier: &str) -> String {
     let normalized = tier.to_lowercase();
     if normalized.contains("claude_max_5x") || normalized.contains("claude_max_5") {

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use super::UtilizationScale;
 use crate::core::{NamedRateWindow, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
 
 mod credentials_store;
@@ -357,11 +358,15 @@ impl ClaudeOAuthFetcher {
         response: &OAuthUsageResponse,
         credentials: &ClaudeOAuthCredentials,
     ) -> UsageSnapshot {
+        // Anthropic mixes fractions and percentages between payloads, so settle
+        // the unit once from the whole response before reading any window.
+        let scale = response.utilization_scale();
+
         // Primary: 5-hour session window
         let primary = response
             .five_hour
             .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(300)))
+            .and_then(|w| Self::to_rate_window(w, Some(300), scale))
             .unwrap_or_else(|| RateWindow::new(0.0));
 
         let mut usage = UsageSnapshot::new(primary);
@@ -370,7 +375,7 @@ impl ClaudeOAuthFetcher {
         if let Some(weekly) = response
             .seven_day
             .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(10080)))
+            .and_then(|w| Self::to_rate_window(w, Some(10080), scale))
         {
             usage = usage.with_secondary(weekly);
         }
@@ -379,13 +384,13 @@ impl ClaudeOAuthFetcher {
         if let Some(opus) = response
             .seven_day_opus
             .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(10080)))
+            .and_then(|w| Self::to_rate_window(w, Some(10080), scale))
         {
             usage = usage.with_model_specific(opus);
         } else if let Some(sonnet) = response
             .seven_day_sonnet
             .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(10080)))
+            .and_then(|w| Self::to_rate_window(w, Some(10080), scale))
         {
             usage = usage.with_model_specific(sonnet);
         }
@@ -396,7 +401,7 @@ impl ClaudeOAuthFetcher {
             response
                 .seven_day_routines
                 .as_ref()
-                .and_then(|w| Self::to_rate_window(w, Some(10080))),
+                .and_then(|w| Self::to_rate_window(w, Some(10080), scale)),
         )];
         for (id, title, window) in extra_windows {
             if let Some(window) = window {
@@ -422,8 +427,12 @@ impl ClaudeOAuthFetcher {
     }
 
     /// Convert OAuth usage window to RateWindow
-    fn to_rate_window(window: &UsageWindow, window_minutes: Option<u32>) -> Option<RateWindow> {
-        let utilization = normalize_utilization(window.utilization?);
+    fn to_rate_window(
+        window: &UsageWindow,
+        window_minutes: Option<u32>,
+        scale: UtilizationScale,
+    ) -> Option<RateWindow> {
+        let utilization = scale.to_percent(window.utilization?);
 
         let resets_at = window
             .resets_at
@@ -447,11 +456,22 @@ impl Default for ClaudeOAuthFetcher {
     }
 }
 
-fn normalize_utilization(utilization: f64) -> f64 {
-    if utilization > 0.0 && utilization <= 1.0 {
-        utilization * 100.0
-    } else {
-        utilization
+impl OAuthUsageResponse {
+    /// Decide the utilization unit from every window this response carries.
+    fn utilization_scale(&self) -> UtilizationScale {
+        UtilizationScale::detect(
+            [
+                self.five_hour.as_ref(),
+                self.seven_day.as_ref(),
+                self.seven_day_sonnet.as_ref(),
+                self.seven_day_opus.as_ref(),
+                self.seven_day_design.as_ref(),
+                self.seven_day_routines.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|window| window.utilization),
+        )
     }
 }
 
@@ -476,9 +496,22 @@ fn format_reset_date(date: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClaudeOAuthCredentials, ClaudeOAuthFetcher, OAuthUsageResponse, UsageWindow};
+    use super::{
+        ClaudeOAuthCredentials, ClaudeOAuthFetcher, OAuthUsageResponse, UsageWindow,
+        UtilizationScale,
+    };
     use reqwest::header::HeaderValue;
     use std::time::Duration;
+
+    fn test_credentials() -> ClaudeOAuthCredentials {
+        ClaudeOAuthCredentials {
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: vec!["user:profile".to_string()],
+            rate_limit_tier: Some("default_claude_ai".to_string()),
+        }
+    }
 
     #[test]
     fn converts_fractional_utilization_to_percent() {
@@ -487,7 +520,9 @@ mod tests {
             resets_at: None,
         };
 
-        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+        let rate =
+            ClaudeOAuthFetcher::to_rate_window(&window, Some(300), UtilizationScale::Fraction)
+                .expect("rate window");
 
         assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
     }
@@ -499,9 +534,71 @@ mod tests {
             resets_at: None,
         };
 
-        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+        let rate =
+            ClaudeOAuthFetcher::to_rate_window(&window, Some(300), UtilizationScale::Percent)
+                .expect("rate window");
 
         assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
+    }
+
+    /// SOU-286: a freshly reset window reports `1` (1% used). Read per value it
+    /// resolved to 100%, which also fired a false "limit reached" notification.
+    #[test]
+    fn freshly_reset_window_reporting_one_percent_is_not_full() {
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 28, "resets_at": "2026-07-21T04:00:00Z"},
+                "seven_day": {"utilization": 1, "resets_at": "2026-07-28T02:00:00Z"},
+                "seven_day_oauth_apps": {"utilization": 0}
+            }"#,
+        )
+        .expect("percentage OAuth response should parse");
+
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+
+        assert_eq!(response.utilization_scale(), UtilizationScale::Percent);
+        assert!((usage.primary.used_percent - 28.0).abs() < 0.001);
+        assert!(
+            (usage.secondary.expect("weekly").used_percent - 1.0).abs() < 0.001,
+            "a weekly window one hour past its reset must not read as full"
+        );
+    }
+
+    /// The same `1` still means 100% when the response is genuinely fractional.
+    #[test]
+    fn fractional_response_keeps_a_full_window_at_one_hundred() {
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 0.28, "resets_at": "2026-07-21T04:00:00Z"},
+                "seven_day": {"utilization": 1.0, "resets_at": "2026-07-28T02:00:00Z"}
+            }"#,
+        )
+        .expect("fractional OAuth response should parse");
+
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+
+        assert_eq!(response.utilization_scale(), UtilizationScale::Fraction);
+        assert!((usage.primary.used_percent - 28.0).abs() < 0.001);
+        assert!((usage.secondary.expect("weekly").used_percent - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn utilization_scale_detects_unit_from_the_whole_response() {
+        assert_eq!(
+            UtilizationScale::detect([0.0, 1.0, 95.0]),
+            UtilizationScale::Percent,
+            "any value above 1.0 can only be a percentage"
+        );
+        assert_eq!(
+            UtilizationScale::detect([0.0, 0.14, 1.0]),
+            UtilizationScale::Fraction
+        );
+        // Nothing disambiguates an all zero/one response, so 1.0 stays 100%.
+        assert_eq!(
+            UtilizationScale::detect([0.0, 1.0]),
+            UtilizationScale::Fraction
+        );
+        assert_eq!(UtilizationScale::detect([]), UtilizationScale::Fraction);
     }
 
     #[test]
