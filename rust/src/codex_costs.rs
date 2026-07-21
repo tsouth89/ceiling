@@ -44,6 +44,7 @@ pub(crate) fn add_codex_records_to_summary(
             &record.model,
             record.effort.as_deref(),
             record.project.as_deref(),
+            record.plan.as_deref(),
             tokens,
         ) {
             total_cost += cost;
@@ -69,6 +70,7 @@ pub(crate) fn add_codex_record_to_summary(
         &record.model,
         record.effort.as_deref(),
         record.project.as_deref(),
+        record.plan.as_deref(),
         tokens,
     )
 }
@@ -126,11 +128,16 @@ fn add_tokens(summary: &mut ModelTokenCounts, tokens: CodexTokenCounts) {
 /// (tokens are still recorded, but no dollars are fabricated), and `Some(cost)`
 /// when the model has canonical pricing. Unknown-model dollars are never added
 /// to the totals — a period of only-unpriced usage must not read as `$0.00`.
+/// Keyed when a rollout never declared a plan, so unattributed activity stays
+/// visible instead of silently landing on whichever account is displayed.
+pub(crate) const UNATTRIBUTED_PLAN: &str = "unattributed";
+
 fn add_codex_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
     effort: Option<&str>,
     project: Option<&str>,
+    plan: Option<&str>,
     tokens: CodexTokenCounts,
 ) -> Option<f64> {
     if tokens.is_empty() {
@@ -162,6 +169,17 @@ fn add_codex_tokens_to_summary(
         summary
             .by_project_tokens
             .entry(project_bucket.clone())
+            .or_default(),
+        tokens,
+    );
+    let plan_bucket = plan
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+        .unwrap_or(UNATTRIBUTED_PLAN);
+    add_tokens(
+        summary
+            .by_plan_tokens
+            .entry(plan_bucket.to_string())
             .or_default(),
         tokens,
     );
@@ -243,6 +261,7 @@ mod tests {
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
                 project: None,
+                plan: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -254,6 +273,7 @@ mod tests {
                 model: "gpt-4o".to_string(),
                 effort: Some("medium".to_string()),
                 project: None,
+                plan: None,
                 input: 1_000_000,
                 cached: 0,
                 output: 1_000_000,
@@ -290,6 +310,7 @@ mod tests {
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
                 project: None,
+                plan: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -300,6 +321,7 @@ mod tests {
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
                 project: None,
+                plan: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -310,6 +332,7 @@ mod tests {
                 model: "gpt-5.6-sol".to_string(),
                 effort: Some("high".to_string()),
                 project: None,
+                plan: None,
                 input: 200_000,
                 cached: 0,
                 output: 0,
@@ -336,6 +359,7 @@ mod tests {
             model: "gpt-mystery".to_string(),
             effort: None,
             project: None,
+            plan: None,
             input: 1_000_000,
             cached: 0,
             output: 1_000_000,
@@ -361,6 +385,48 @@ mod tests {
         assert_eq!(codex_effort_bucket(Some("   ")), "unknown");
     }
 
+    /// SOU-297: local logs carry no account identity, so `plan_type` is the
+    /// only signal that a machine's activity spans more than one account. A
+    /// rollout can switch plan mid-session, so attribution is per record.
+    #[test]
+    fn summary_splits_tokens_by_plan_and_keeps_undeclared_visible() {
+        let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let record = |plan: Option<&str>| CodexUsageRecord {
+            day_key: "2026-05-31".to_string(),
+            timestamp: None,
+            model: "gpt-5.6-sol".to_string(),
+            effort: None,
+            project: None,
+            plan: plan.map(str::to_string),
+            input: 100_000,
+            cached: 0,
+            output: 0,
+        };
+        let records = vec![
+            record(Some("prolite")),
+            record(Some("team")),
+            record(Some("prolite")),
+            record(None),
+        ];
+
+        let mut summary = CostSummary::default();
+        add_codex_records_to_summary(&mut summary, &records, &range);
+
+        let by_plan = &summary.by_plan_tokens;
+        assert_eq!(by_plan["prolite"].input_tokens, 200_000);
+        assert_eq!(by_plan["team"].input_tokens, 100_000);
+        assert_eq!(
+            by_plan[UNATTRIBUTED_PLAN].input_tokens, 100_000,
+            "a record with no declared plan must stay visible, not fold into a plan"
+        );
+        assert_eq!(
+            by_plan.values().map(|t| t.input_tokens).sum::<u64>(),
+            summary.input_tokens,
+            "the plan split must reconcile with the period total"
+        );
+    }
+
     #[test]
     fn summary_splits_cost_and_tokens_by_project() {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
@@ -371,6 +437,7 @@ mod tests {
             model: "gpt-5.6-sol".to_string(),
             effort: None,
             project: project.map(str::to_string),
+            plan: None,
             input: 200_000,
             cached: 0,
             output: 0,
@@ -404,6 +471,7 @@ mod tests {
             model: "gpt-mystery".to_string(),
             effort: None,
             project: None,
+            plan: None,
             input: 1_000_000,
             cached: 0,
             output: 0,

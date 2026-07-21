@@ -76,6 +76,12 @@ pub struct CodexUsageRecord {
     /// Project/repo the session ran in (basename of the `session_meta` cwd).
     /// `None` when the log never declared a working directory.
     pub project: Option<String>,
+    /// Subscription plan reported by the provider when this delta was billed
+    /// (Codex `rate_limits.plan_type`, e.g. "plus"/"prolite"/"team"). `None`
+    /// when the log never declared one. This is the closest thing the logs
+    /// carry to an account, and it is only a proxy: two accounts on the same
+    /// plan look identical, and one account changing plans looks like two.
+    pub plan: Option<String>,
     pub input: i32,
     pub cached: i32,
     pub output: i32,
@@ -141,6 +147,10 @@ struct CodexParserState {
     /// Project/repo from the session's `session_meta` cwd, attached to each
     /// token delta so cost can be split by project.
     current_project: Option<String>,
+    /// Plan from the most recent `rate_limits`, attached to each token delta.
+    /// Carried forward within a rollout because a session can span a plan or
+    /// account switch and only some lines restate it.
+    current_plan: Option<String>,
     previous_totals: Option<CodexTotals>,
     records: Vec<CodexUsageRecord>,
     /// `Some` while suppressing a child session's replayed parent history.
@@ -173,6 +183,8 @@ struct CodexFastPayload<'a> {
     effort: Option<&'a str>,
     #[serde(default, borrow)]
     info: Option<CodexFastInfo<'a>>,
+    #[serde(default, borrow)]
+    rate_limits: Option<CodexFastRateLimits<'a>>,
     #[serde(default)]
     input_tokens: Option<i32>,
     #[serde(default)]
@@ -181,6 +193,14 @@ struct CodexFastPayload<'a> {
     cache_read_input_tokens: Option<i32>,
     #[serde(default)]
     output_tokens: Option<i32>,
+}
+
+/// Only the plan is read here. It is the closest thing Codex logs carry to an
+/// account, and the fast path would otherwise drop it.
+#[derive(Debug, Deserialize)]
+struct CodexFastRateLimits<'a> {
+    #[serde(default, borrow)]
+    plan_type: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +244,7 @@ impl CodexParserState {
             current_model: initial_model,
             current_effort: None,
             current_project: None,
+            current_plan: None,
             previous_totals: initial_totals,
             records: Vec::new(),
             replay_gate: None,
@@ -363,6 +384,14 @@ impl CodexParserState {
             return;
         };
 
+        if let Some(plan) = payload
+            .get("rate_limits")
+            .and_then(|limits| limits.get("plan_type"))
+            .and_then(|plan| plan.as_str())
+            .filter(|plan| !plan.trim().is_empty())
+        {
+            self.current_plan = Some(plan.to_string());
+        }
         let info = payload.get("info");
         let model = self.token_model(info, payload, obj);
         let timestamp = obj
@@ -397,6 +426,14 @@ impl CodexParserState {
         }
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
             return;
+        }
+        if let Some(plan) = payload
+            .rate_limits
+            .as_ref()
+            .and_then(|limits| limits.plan_type)
+            .filter(|plan| !plan.trim().is_empty())
+        {
+            self.current_plan = Some(plan.to_string());
         }
         let Some(day_key) = codex_timestamp_day_key(timestamp) else {
             return;
@@ -441,6 +478,7 @@ impl CodexParserState {
             model: CostUsagePricing::normalize_codex_model(model),
             effort: self.current_effort.clone(),
             project: self.current_project.clone(),
+            plan: self.current_plan.clone(),
             input,
             cached: cached.min(input),
             output,
