@@ -98,14 +98,100 @@ pub struct ModelTokenCounts {
     pub calls: u64,
 }
 
+/// True when a provider reports cached input *inside* its input count.
+///
+/// Codex does; Claude reports cache reads as their own bucket. Any total that
+/// adds the cache bucket to a Codex input count therefore counts those tokens
+/// twice.
+pub fn provider_folds_cache_into_input(provider_id: &str) -> bool {
+    provider_id.eq_ignore_ascii_case("codex")
+}
+
+/// Token buckets with each token counted exactly once, whatever the provider's
+/// reporting convention.
+///
+/// This exists because the same normalization was previously written twice, and
+/// only one copy handled Codex. The other reported a 97%-cached model as 49%,
+/// since `97 / (100 + 97)` double-counts the cached tokens sitting in both the
+/// input and cache buckets. Build every ratio from this type.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NormalizedTokens {
+    pub fresh_input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+impl NormalizedTokens {
+    /// Fresh input + output + cache read + cache write, each counted once.
+    pub fn processed(&self) -> u64 {
+        self.fresh_input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
+
+    /// Share of processed tokens served from cache. `None` with no activity.
+    pub fn cache_read_percent(&self) -> Option<f64> {
+        let processed = self.processed();
+        (processed > 0).then(|| (self.cache_read_tokens as f64 / processed as f64) * 100.0)
+    }
+}
+
+fn normalize_tokens(
+    provider_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+) -> NormalizedTokens {
+    let folds_cache = provider_folds_cache_into_input(provider_id);
+    // Some sources only populate the legacy aggregate, so take whichever cache
+    // figure is larger rather than trusting one field to be present.
+    let cache_read_tokens = cache_read_tokens.max(if folds_cache { cached_tokens } else { 0 });
+    let fresh_input_tokens = if folds_cache {
+        input_tokens.saturating_sub(cache_read_tokens)
+    } else {
+        input_tokens
+    };
+    NormalizedTokens {
+        fresh_input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+    }
+}
+
+impl CostSummary {
+    /// Provider-normalized buckets for this period.
+    pub fn normalized_tokens(&self, provider_id: &str) -> NormalizedTokens {
+        normalize_tokens(
+            provider_id,
+            self.input_tokens,
+            self.output_tokens,
+            self.cached_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        )
+    }
+}
+
 impl ModelTokenCounts {
     pub fn total(&self) -> u64 {
         self.input_tokens + self.output_tokens
     }
 
-    /// Input + output + cache read + cache write (denominator for cache %).
-    pub fn processed(&self) -> u64 {
-        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+    /// Provider-normalized buckets for this model/effort/project row.
+    pub fn normalized(&self, provider_id: &str) -> NormalizedTokens {
+        normalize_tokens(
+            provider_id,
+            self.input_tokens,
+            self.output_tokens,
+            self.cached_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        )
     }
 
     pub fn merge_from(&mut self, other: &Self) {
@@ -122,18 +208,54 @@ impl ModelTokenCounts {
 mod model_token_counts_tests {
     use super::ModelTokenCounts;
 
+    /// Claude reports cache reads outside its input count, so nothing is
+    /// subtracted and every bucket is summed as reported.
     #[test]
-    fn processed_sums_input_output_and_cache_buckets_not_legacy_cached() {
+    fn normalized_sums_every_bucket_for_a_provider_that_separates_cache() {
         let counts = ModelTokenCounts {
             input_tokens: 10,
             output_tokens: 20,
-            cached_tokens: 999, // legacy aggregate; must not double-count
+            cached_tokens: 999, // legacy aggregate; must not be added in
             cache_read_tokens: 3,
             cache_write_tokens: 4,
             calls: 2,
         };
-        assert_eq!(counts.processed(), 37);
+        let normalized = counts.normalized("claude");
+
+        assert_eq!(normalized.fresh_input_tokens, 10);
+        assert_eq!(normalized.processed(), 37);
         assert_eq!(counts.total(), 30);
+    }
+
+    /// Codex folds cached input into `input_tokens`, so the cache bucket must
+    /// come back out of the input before anything is summed. Counting it in
+    /// both places is what rendered a 97%-cached model as 49%.
+    #[test]
+    fn normalized_removes_cached_input_for_codex_so_cache_rate_is_honest() {
+        let counts = ModelTokenCounts {
+            input_tokens: 100,
+            output_tokens: 0,
+            cached_tokens: 97,
+            cache_read_tokens: 97,
+            cache_write_tokens: 0,
+            calls: 1,
+        };
+        let normalized = counts.normalized("codex");
+
+        assert_eq!(normalized.fresh_input_tokens, 3, "100 input less 97 cached");
+        assert_eq!(normalized.processed(), 100, "not 197");
+        let percent = normalized.cache_read_percent().expect("cache percent");
+        assert!((percent - 97.0).abs() < 0.001, "got {percent}");
+    }
+
+    #[test]
+    fn cache_read_percent_is_none_without_activity() {
+        assert!(
+            ModelTokenCounts::default()
+                .normalized("codex")
+                .cache_read_percent()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1121,6 +1243,138 @@ fn finish_report(
     }
 }
 
+/// Accumulates Codex rollouts into the report's daily, period, and
+/// reset-window buckets, one file at a time.
+///
+/// Extracted so the date-nested `sessions/` tree and the flat
+/// `archived_sessions/` dir go through identical accounting. They previously
+/// did not: only `sessions/` was scanned here, so archiving a task quietly
+/// shrank every total on the charts, while the summary scanner still counted
+/// it. Sharing one ingest path is what keeps the two from drifting again.
+struct CodexReportRollups<'a> {
+    range: &'a CostUsageDayRange,
+    windows: &'a [CurrentUsageWindow],
+    today: NaiveDate,
+    seven_day_start: NaiveDate,
+    daily: HashMap<String, CostSummary>,
+    current_windows: HashMap<String, CostSummary>,
+    latest: Option<(std::time::SystemTime, CostSummary)>,
+    today_sessions: u32,
+    seven_day_sessions: u32,
+    period_sessions: u32,
+    /// Rollout file names already counted. One rollout can appear in the
+    /// sessions tree, the archive dir, and across homes/WSL roots.
+    seen: HashSet<String>,
+}
+
+impl<'a> CodexReportRollups<'a> {
+    fn new(
+        days: u32,
+        range: &'a CostUsageDayRange,
+        windows: &'a [CurrentUsageWindow],
+        today: NaiveDate,
+    ) -> Self {
+        Self {
+            range,
+            windows,
+            today,
+            seven_day_start: today - Duration::days(6),
+            daily: empty_daily_summaries(days),
+            current_windows: empty_current_window_summaries(windows),
+            latest: None,
+            today_sessions: 0,
+            seven_day_sessions: 0,
+            period_sessions: 0,
+            seen: HashSet::new(),
+        }
+    }
+
+    fn ingest(&mut self, path: &Path) {
+        if path
+            .extension()
+            .is_none_or(|extension| extension != "jsonl")
+        {
+            return;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
+        if !self.seen.insert(name.to_string()) {
+            return;
+        }
+        let Ok(parsed) = JsonlScanner::parse_codex_file(path, self.range, 0, None, None) else {
+            return;
+        };
+
+        let mut file_summary = CostSummary::default();
+        let mut contributed_today = false;
+        let mut contributed_seven_days = false;
+        for record in parsed.records.iter().filter(|record| {
+            CostUsageDayRange::is_in_range(
+                &record.day_key,
+                &self.range.since_key,
+                &self.range.until_key,
+            )
+        }) {
+            let Some(day_summary) = self.daily.get_mut(&record.day_key) else {
+                continue;
+            };
+            if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
+                day_summary.total_cost_usd += cost;
+            }
+            if let Some(cost) = add_codex_record_to_summary(&mut file_summary, record) {
+                file_summary.total_cost_usd += cost;
+            }
+            add_to_current_windows(
+                &mut self.current_windows,
+                self.windows,
+                record.timestamp,
+                |summary| {
+                    if let Some(cost) = add_codex_record_to_summary(summary, record) {
+                        summary.total_cost_usd += cost;
+                    }
+                },
+            );
+            if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
+                contributed_today |= date == self.today;
+                contributed_seven_days |= date >= self.seven_day_start;
+            }
+        }
+        if file_summary.input_tokens == 0 && file_summary.output_tokens == 0 {
+            return;
+        }
+        file_summary.sessions_count = 1;
+        self.period_sessions += 1;
+        self.today_sessions += u32::from(contributed_today);
+        self.seven_day_sessions += u32::from(contributed_seven_days);
+        let modified = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if self
+            .latest
+            .as_ref()
+            .is_none_or(|(seen, _)| modified > *seen)
+        {
+            self.latest = Some((modified, file_summary));
+        }
+    }
+
+    fn finish(self, days: u32) -> CostUsageReport {
+        finish_report(
+            self.daily,
+            days,
+            self.latest.map(|(_, summary)| summary),
+            (
+                self.today_sessions,
+                self.seven_day_sessions,
+                self.period_sessions,
+            ),
+            None,
+            self.current_windows,
+        )
+    }
+}
+
 fn scan_codex_report(
     scanner: &CostScanner,
     days: u32,
@@ -1128,14 +1382,8 @@ fn scan_codex_report(
 ) -> CostUsageReport {
     let today = Local::now().date_naive();
     let start = codex_period_start(today, days);
-    let seven_day_start = today - Duration::days(6);
     let range = CostUsageDayRange::new(start, today);
-    let mut daily = empty_daily_summaries(days);
-    let mut latest: Option<(std::time::SystemTime, CostSummary)> = None;
-    let mut today_sessions = 0;
-    let mut seven_day_sessions = 0;
-    let mut period_sessions = 0;
-    let mut current_windows = empty_current_window_summaries(windows);
+    let mut rollups = CodexReportRollups::new(days, &range, windows, today);
 
     for sessions_dir in scanner.get_codex_sessions_dirs() {
         if !sessions_dir.exists() {
@@ -1150,77 +1398,34 @@ fn scan_codex_report(
                 continue;
             };
             for entry in entries.flatten() {
-                let path = entry.path();
-                if path
-                    .extension()
-                    .is_none_or(|extension| extension != "jsonl")
-                {
-                    continue;
-                }
-                let Ok(parsed) = JsonlScanner::parse_codex_file(&path, &range, 0, None, None)
-                else {
-                    continue;
-                };
-                let mut file_summary = CostSummary::default();
-                let mut contributed_today = false;
-                let mut contributed_seven_days = false;
-                for record in parsed.records.iter().filter(|record| {
-                    CostUsageDayRange::is_in_range(
-                        &record.day_key,
-                        &range.since_key,
-                        &range.until_key,
-                    )
-                }) {
-                    let Some(day_summary) = daily.get_mut(&record.day_key) else {
-                        continue;
-                    };
-                    if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
-                        day_summary.total_cost_usd += cost;
-                    }
-                    if let Some(cost) = add_codex_record_to_summary(&mut file_summary, record) {
-                        file_summary.total_cost_usd += cost;
-                    }
-                    add_to_current_windows(
-                        &mut current_windows,
-                        windows,
-                        record.timestamp,
-                        |summary| {
-                            if let Some(cost) = add_codex_record_to_summary(summary, record) {
-                                summary.total_cost_usd += cost;
-                            }
-                        },
-                    );
-                    if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
-                        contributed_today |= date == today;
-                        contributed_seven_days |= date >= seven_day_start;
-                    }
-                }
-                if file_summary.input_tokens == 0 && file_summary.output_tokens == 0 {
-                    continue;
-                }
-                file_summary.sessions_count = 1;
-                period_sessions += 1;
-                today_sessions += u32::from(contributed_today);
-                seven_day_sessions += u32::from(contributed_seven_days);
-                let modified = entry
-                    .metadata()
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                if latest.as_ref().is_none_or(|(seen, _)| modified > *seen) {
-                    latest = Some((modified, file_summary));
-                }
+                rollups.ingest(&entry.path());
             }
         }
     }
 
-    finish_report(
-        daily,
-        days,
-        latest.map(|(_, summary)| summary),
-        (today_sessions, seven_day_sessions, period_sessions),
-        None,
-        current_windows,
-    )
+    // The archive is a flat dir, so gate on the rollout's filename date rather
+    // than walking a date tree that does not exist there.
+    for archived_dir in scanner.get_codex_archived_dirs() {
+        if !archived_dir.exists() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(archived_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let in_range = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| archived_rollout_day_in_range(name, &range));
+            if !in_range {
+                continue;
+            }
+            rollups.ingest(&path);
+        }
+    }
+
+    rollups.finish(days)
 }
 
 fn scan_claude_report(
@@ -1445,6 +1650,64 @@ mod tests {
             Path::new("/a/archived_sessions/rollout-y.jsonl"),
             &mut seen
         ));
+    }
+
+    fn codex_home_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// SOU-296: the report scanner behind the Charts page, the reset windows,
+    /// and the API value card only walked `sessions/`. Archiving a Codex task
+    /// therefore shrank every total, while the summary scanner still counted
+    /// it. The archived rollout must be included, and a rollout present in both
+    /// places must still count once.
+    #[test]
+    fn codex_report_counts_archived_rollouts_exactly_once() {
+        let _guard = codex_home_lock().lock().expect("codex home lock");
+        let today = Local::now().date_naive();
+        let day = today.format("%Y-%m-%d").to_string();
+        let ts = format!("{day}T10:00:00.000Z");
+        let token_line = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":500}}}}}}}}"#
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let day_dir = tmp
+            .path()
+            .join("sessions")
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let archived = tmp.path().join("archived_sessions");
+        std::fs::create_dir_all(&archived).unwrap();
+
+        let shared = format!("rollout-{day}-11111111-1111-1111-1111-111111111111.jsonl");
+        let archived_only = format!("rollout-{day}-22222222-2222-2222-2222-222222222222.jsonl");
+        std::fs::write(day_dir.join(&shared), &token_line).unwrap();
+        std::fs::write(archived.join(&shared), &token_line).unwrap();
+        std::fs::write(archived.join(&archived_only), &token_line).unwrap();
+
+        let previous = std::env::var("CODEX_HOME").ok();
+        // SAFETY: serialized by `codex_home_lock`, and restored below.
+        unsafe { std::env::set_var("CODEX_HOME", tmp.path()) };
+        let report = scan_codex_report(&CostScanner::new(2), 2, &[]);
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
+
+        assert_eq!(
+            report.thirty_days.sessions_count, 2,
+            "the archived-only rollout must count, and the shared one only once"
+        );
+        assert_eq!(
+            report.thirty_days.input_tokens, 2000,
+            "two rollouts of 1000 input tokens, with no double count"
+        );
     }
 
     #[test]
