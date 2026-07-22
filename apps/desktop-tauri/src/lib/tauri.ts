@@ -403,7 +403,10 @@ export function setUiLanguage(language: Language): Promise<void> {
 
 // ── Phase 6b — provider detail pane ──────────────────────────────────
 
-export function getProviderDetail(providerId: string): Promise<ProviderDetail> {
+export function getProviderDetail(
+  providerId: string,
+  accountId: string | null = null,
+): Promise<ProviderDetail> {
   return invoke<ProviderDetail>("get_provider_detail", { providerId });
 }
 

@@ -2,6 +2,15 @@ use super::*;
 
 // ── Provider detail pane (Phase 6b) ──────────────────────────────────
 
+/// One selectable account on the provider detail pane.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDetailAccount {
+    pub account_id: String,
+    pub label: String,
+    pub tint: Option<String>,
+}
+
 /// DTO for the provider detail pane in the Settings Providers tab.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,6 +20,12 @@ pub struct ProviderDetail {
     pub enabled: bool,
 
     // Identity
+    /// Account this payload describes. `None` when the provider has no
+    /// configured accounts and the reading is whatever the CLI is signed in as.
+    pub account_id: Option<String>,
+    /// Every account with a reading for this provider, so the pane can offer a
+    /// selector. One entry means there is nothing to choose between.
+    pub accounts: Vec<ProviderDetailAccount>,
     pub email: Option<String>,
     pub plan: Option<String>,
     pub auth_type: Option<String>,
@@ -72,6 +87,8 @@ pub(crate) fn build_provider_detail(provider_id: &str) -> Result<ProviderDetail,
         id: id.cli_name().to_string(),
         display_name: id.display_name().to_string(),
         enabled,
+        account_id: None,
+        accounts: Vec::new(),
         email: None,
         plan: None,
         auth_type: None,
@@ -105,42 +122,81 @@ pub(crate) fn build_provider_detail(provider_id: &str) -> Result<ProviderDetail,
 pub fn get_provider_detail(
     app: tauri::AppHandle,
     provider_id: String,
+    account_id: Option<String>,
 ) -> Result<ProviderDetail, String> {
     let mut detail = build_provider_detail(&provider_id)?;
 
     // Merge the latest cached snapshot, if any.
     let state = app.state::<Mutex<AppState>>();
-    if let Ok(guard) = state.lock()
-        && let Some(snap) = guard
+    if let Ok(guard) = state.lock() {
+        let readings: Vec<&ProviderUsageSnapshot> = guard
             .provider_cache
             .iter()
-            .find(|s| s.provider_id == detail.id)
-    {
-        let mut snapshot = snap.clone();
-        super::filter_hidden_codex_spark_rows(
-            &mut snapshot,
-            Settings::load().codex_spark_usage_visible(),
-        );
-        detail.email = snapshot.account_email.clone();
-        detail.plan = snapshot.plan_name.clone();
-        detail.organization = snapshot.account_organization.clone();
-        detail.source_label = if snapshot.source_label.is_empty() {
-            None
-        } else {
-            Some(snapshot.source_label.clone())
-        };
-        detail.last_updated = Some(snapshot.updated_at.clone());
-        if snapshot.error.is_none() {
-            detail.session = Some(snapshot.primary.clone());
-            detail.weekly = snapshot.secondary.clone();
-            detail.model_specific = snapshot.model_specific.clone();
-            detail.tertiary = snapshot.tertiary.clone();
-            detail.extra_rate_windows = snapshot.extra_rate_windows.clone();
-            detail.cost = snapshot.cost.clone();
-            detail.pace = snapshot.pace.clone();
+            .filter(|s| s.provider_id == detail.id)
+            .collect();
+
+        detail.accounts = readings
+            .iter()
+            .filter_map(|snap| {
+                Some(ProviderDetailAccount {
+                    account_id: snap.account_id.clone()?,
+                    label: snap
+                        .account_label
+                        .clone()
+                        .unwrap_or_else(|| detail.display_name.clone()),
+                    tint: snap.account_tint.clone(),
+                })
+            })
+            .collect();
+
+        // An explicit choice wins. Without one, summarise the account closest to
+        // its limit rather than whichever reading happened to be first, which is
+        // what this did when a provider could only ever have one.
+        let chosen = account_id
+            .as_deref()
+            .and_then(|wanted| {
+                readings
+                    .iter()
+                    .find(|snap| snap.account_id.as_deref() == Some(wanted))
+            })
+            .or_else(|| {
+                readings.iter().max_by(|a, b| {
+                    a.primary
+                        .used_percent
+                        .total_cmp(&b.primary.used_percent)
+                        .then_with(|| b.account_id.cmp(&a.account_id))
+                })
+            })
+            .copied();
+
+        if let Some(snap) = chosen {
+            let mut snapshot = snap.clone();
+            super::filter_hidden_codex_spark_rows(
+                &mut snapshot,
+                Settings::load().codex_spark_usage_visible(),
+            );
+            detail.account_id = snapshot.account_id.clone();
+            detail.email = snapshot.account_email.clone();
+            detail.plan = snapshot.plan_name.clone();
+            detail.organization = snapshot.account_organization.clone();
+            detail.source_label = if snapshot.source_label.is_empty() {
+                None
+            } else {
+                Some(snapshot.source_label.clone())
+            };
+            detail.last_updated = Some(snapshot.updated_at.clone());
+            if snapshot.error.is_none() {
+                detail.session = Some(snapshot.primary.clone());
+                detail.weekly = snapshot.secondary.clone();
+                detail.model_specific = snapshot.model_specific.clone();
+                detail.tertiary = snapshot.tertiary.clone();
+                detail.extra_rate_windows = snapshot.extra_rate_windows.clone();
+                detail.cost = snapshot.cost.clone();
+                detail.pace = snapshot.pace.clone();
+            }
+            detail.last_error = snapshot.error.clone();
+            detail.has_snapshot = true;
         }
-        detail.last_error = snapshot.error.clone();
-        detail.has_snapshot = true;
     }
 
     Ok(detail)
