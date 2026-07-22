@@ -703,6 +703,62 @@ fn provider_cache_upsert_replaces_existing_provider() {
 }
 
 #[test]
+fn provider_cache_keeps_one_row_per_account() {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(10.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "oauth".to_string(),
+    };
+    let base = ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
+
+    let mut personal = base.clone();
+    personal.account_id = Some("acct-personal".to_string());
+    personal.account_label = Some("tsouth2@example.com (prolite)".to_string());
+    let mut work = base.clone();
+    work.account_id = Some("acct-work".to_string());
+    work.account_label = Some("work@example.com (team)".to_string());
+
+    let mut cache = Vec::new();
+    super::upsert_provider_cache(&mut cache, personal);
+    super::upsert_provider_cache(&mut cache, work);
+
+    // Two accounts on one provider must sit side by side. Keying the cache on
+    // provider alone made the second silently replace the first.
+    assert_eq!(cache.len(), 2, "second account replaced the first");
+    let labels: Vec<_> = cache
+        .iter()
+        .filter_map(|snap| snap.account_label.as_deref())
+        .collect();
+    assert!(labels.contains(&"tsouth2@example.com (prolite)"));
+    assert!(labels.contains(&"work@example.com (team)"));
+}
+
+#[test]
+fn provider_cache_still_replaces_the_same_account() {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(10.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "oauth".to_string(),
+    };
+    let mut first = ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
+    first.account_id = Some("acct-work".to_string());
+    let mut second = first.clone();
+    first.error = Some("old".to_string());
+    second.error = Some("new".to_string());
+
+    let mut cache = vec![first];
+    super::upsert_provider_cache(&mut cache, second);
+
+    // A refresh of the same account updates in place; it does not accumulate.
+    assert_eq!(cache.len(), 1);
+    assert_eq!(cache[0].error.as_deref(), Some("new"));
+}
+
+#[test]
 fn hiding_codex_spark_rows_preserves_other_extra_usage() {
     let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
     let result = ProviderFetchResult {

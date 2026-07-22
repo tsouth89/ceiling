@@ -129,6 +129,11 @@ pub struct ProviderUsageSnapshot {
     pub pace: Option<PaceSnapshot>,
     pub account_organization: Option<String>,
     pub tray_status_label: Option<String>,
+    /// Stable id of the Ceiling-managed account this reading came from.
+    /// Together with `provider_id` it identifies a row; `None` while
+    /// following whichever account the CLI is signed in as.
+    #[serde(default)]
+    pub account_id: Option<String>,
     /// Label of the Ceiling-managed account this reading came from. `None` when
     /// the provider is following whichever account its CLI is signed in as.
     #[serde(default)]
@@ -322,6 +327,7 @@ impl ProviderUsageSnapshot {
             pace,
             account_organization: usage.account_organization.clone(),
             tray_status_label: None,
+            account_id: None,
             account_label: None,
             account_tint: None,
             fetch_duration_ms: None,
@@ -364,6 +370,7 @@ impl ProviderUsageSnapshot {
             pace: None,
             account_organization: None,
             tray_status_label: None,
+            account_id: None,
             account_label: None,
             account_tint: None,
             fetch_duration_ms: None,

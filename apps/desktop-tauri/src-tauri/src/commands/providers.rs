@@ -143,10 +143,12 @@ pub(crate) fn upsert_provider_cache(
     cache: &mut Vec<ProviderUsageSnapshot>,
     snapshot: ProviderUsageSnapshot,
 ) {
-    if let Some(existing) = cache
-        .iter_mut()
-        .find(|existing| existing.provider_id == snapshot.provider_id)
-    {
+    // Keyed by provider *and* account: one provider can now have a reading per
+    // configured account, and keying on provider alone made the second account
+    // overwrite the first.
+    if let Some(existing) = cache.iter_mut().find(|existing| {
+        existing.provider_id == snapshot.provider_id && existing.account_id == snapshot.account_id
+    }) {
         *existing = snapshot;
     } else {
         cache.push(snapshot);
@@ -275,29 +277,48 @@ fn spawn_provider_refreshes(
 
     for id in &inputs.enabled_ids {
         let id = *id;
-        let app_handle = app.clone();
-        let fetch_permits = Arc::clone(&fetch_permits);
-        let mut ctx = build_fetch_context(
+        let base_ctx = build_fetch_context(
             id,
             &inputs.settings,
             &inputs.manual_cookies,
             &inputs.api_keys,
             &inputs.token_accounts,
         );
-        ctx.account_config_dir = inputs.account_dirs.active_dir_for(id);
-        // Carried alongside the reading so every surface can say which account
-        // it is showing, rather than each one re-reading the store.
-        let account = AccountBadge {
-            label: inputs.account_dirs.active_label_for(id).map(str::to_string),
-            tint: inputs.account_dirs.active_tint_for(id).map(str::to_string),
+
+        // One fetch per configured account, so several accounts on one provider
+        // are read side by side rather than replacing each other. With none
+        // configured this is a single ambient fetch, exactly as before.
+        let targets = inputs.account_dirs.targets_for(id);
+        let fetches: Vec<(FetchContext, AccountBadge)> = if targets.is_empty() {
+            vec![(base_ctx, AccountBadge::default())]
+        } else {
+            targets
+                .into_iter()
+                .map(|target| {
+                    let mut ctx = base_ctx.clone();
+                    ctx.account_config_dir = Some(target.config_dir);
+                    // Carried alongside the reading so every surface can say
+                    // which account it shows, rather than re-reading the store.
+                    let badge = AccountBadge {
+                        id: Some(target.id),
+                        label: Some(target.label),
+                        tint: target.tint,
+                    };
+                    (ctx, badge)
+                })
+                .collect()
         };
 
-        handles.push(tokio::spawn(async move {
-            let Ok(_permit) = fetch_permits.acquire_owned().await else {
-                return;
-            };
-            refresh_provider(app_handle, id, ctx, account).await;
-        }));
+        for (ctx, account) in fetches {
+            let app_handle = app.clone();
+            let fetch_permits = Arc::clone(&fetch_permits);
+            handles.push(tokio::spawn(async move {
+                let Ok(_permit) = fetch_permits.acquire_owned().await else {
+                    return;
+                };
+                refresh_provider(app_handle, id, ctx, account).await;
+            }));
+        }
     }
 
     handles
@@ -306,6 +327,8 @@ fn spawn_provider_refreshes(
 /// The active account's display identity, attached to each reading.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AccountBadge {
+    /// Stable account id; `None` while following the CLI.
+    pub id: Option<String>,
     pub label: Option<String>,
     pub tint: Option<String>,
 }
@@ -319,6 +342,7 @@ async fn refresh_provider(
     let mut snapshot = fetch_provider_snapshot(id, ctx).await;
     // Set on failures too: a card that cannot fetch should still say which
     // account it was trying to read.
+    snapshot.account_id = account.id;
     snapshot.account_label = account.label;
     snapshot.account_tint = account.tint;
 

@@ -1321,6 +1321,7 @@ mod tests {
             pace: None,
             account_organization: None,
             tray_status_label: None,
+            account_id: None,
             account_label: None,
             account_tint: None,
             fetch_duration_ms: None,
