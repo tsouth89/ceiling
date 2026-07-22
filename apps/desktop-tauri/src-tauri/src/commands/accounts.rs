@@ -207,9 +207,40 @@ fn with_store<I: Displayable>(
     Ok(bridge_provider(&data))
 }
 
+/// Register the account the CLI is already signed in as, if nothing is
+/// configured yet.
+///
+/// Without this, adding your first account is destructive rather than additive:
+/// the ambient account is only consulted when the store is *empty*, so the
+/// moment a second account is added the original stops being fetched and
+/// vanishes from every surface. Listing it from the start also means the
+/// Accounts page is never a blank that hides an account you are actively using.
+///
+/// Only registers a directory that actually holds a sign-in, so this cannot
+/// invent an entry for someone who has never authenticated.
+fn ensure_ambient_registered<I: Displayable>() {
+    let store: DirectoryAccountStore<I> = DirectoryAccountStore::new();
+    let Ok(mut data) = store.load() else {
+        return;
+    };
+    if !data.accounts.is_empty() {
+        return;
+    }
+    let ambient = I::ambient_dir();
+    if !I::is_signed_in(&ambient) {
+        return;
+    }
+    data.add_account(DirectoryAccount::<I>::new(None, ambient));
+    if let Err(error) = store.save(&data) {
+        tracing::warn!("failed to register the signed-in account: {error}");
+    }
+}
+
 /// Load every provider's directory-backed accounts.
 #[tauri::command]
 pub fn get_directory_accounts() -> Result<Vec<ProviderAccountsBridge>, String> {
+    ensure_ambient_registered::<CodexIdentity>();
+    ensure_ambient_registered::<ClaudeIdentity>();
     let codex = CodexAccountStore::new().load().map_err(|e| e.to_string())?;
     let claude = ClaudeAccountStore::new()
         .load()
@@ -279,6 +310,7 @@ pub async fn add_directory_account(
         path: PathBuf,
         label: Option<String>,
     ) -> Result<ProviderAccountsBridge, String> {
+        ensure_ambient_registered::<I>();
         with_store::<I>(|data| {
             data.add_account(DirectoryAccount::<I>::new(label, path));
             Ok(())
@@ -442,6 +474,40 @@ pub fn update_directory_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reported failure: with nothing configured, Ceiling followed the CLI
+    /// and showed the signed-in account. Adding a second account then made the
+    /// first disappear entirely, because the ambient account is only consulted
+    /// while the store is empty and adding an entry ends that.
+    #[test]
+    fn adding_an_account_must_not_drop_the_one_already_in_use() {
+        let mut data = DirectoryAccountData::<CodexIdentity>::new();
+
+        // What ensure_ambient_registered does before the add.
+        data.add_account(DirectoryAccount::<CodexIdentity>::new(
+            Some("signed in already".to_string()),
+            PathBuf::from("/homes/personal"),
+        ));
+        data.add_account(DirectoryAccount::<CodexIdentity>::new(
+            Some("work".to_string()),
+            PathBuf::from("/homes/work"),
+        ));
+
+        assert_eq!(data.count(), 2, "the original account was dropped");
+        let dirs: Vec<_> = data.accounts.iter().map(|a| a.config_dir.clone()).collect();
+        assert!(dirs.contains(&PathBuf::from("/homes/personal")));
+        assert!(dirs.contains(&PathBuf::from("/homes/work")));
+    }
+
+    #[test]
+    fn registering_the_ambient_account_is_skipped_when_it_is_signed_out() {
+        let empty = tempfile::tempdir().expect("tempdir");
+
+        // A directory with no credential must not become a phantom account.
+        assert!(!<CodexIdentity as AccountIdentity>::is_signed_in(
+            empty.path()
+        ));
+    }
 
     #[test]
     fn a_relative_path_is_rejected() {
