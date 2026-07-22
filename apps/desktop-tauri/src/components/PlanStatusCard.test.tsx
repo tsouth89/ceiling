@@ -61,6 +61,65 @@ function provider(
 }
 
 describe("PlanStatusCard", () => {
+  it("names each account by email when a provider has two (the reported bug)", () => {
+    // Exactly the user's setup: two Codex accounts.
+    const { unmount } = render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "codex",
+          displayName: "Codex",
+          accountId: "acct-personal",
+          accountEmail: "tsouth2@gmail.com",
+          planName: "Pro Lite",
+          // A custom label must NOT be what shows.
+          accountLabel: "Personal",
+        })}
+        showAccount
+        resetTimeRelative
+      />,
+    );
+    expect(screen.getByText("tsouth2@gmail.com (Pro Lite)")).toBeInTheDocument();
+    // The custom label is not shown on the card.
+    expect(screen.queryByText("Personal")).toBeNull();
+    unmount();
+
+    render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "codex",
+          displayName: "Codex",
+          accountId: "acct-work",
+          accountEmail: "bts@cssi.us",
+          planName: "ChatGPT Team",
+          accountLabel: "Work",
+        })}
+        showAccount
+        resetTimeRelative
+      />,
+    );
+    // The second account shows its OWN email, not "Work".
+    expect(screen.getByText("bts@cssi.us (ChatGPT Team)")).toBeInTheDocument();
+    expect(screen.queryByText("Work")).toBeNull();
+  });
+
+  it("stays on the plan chip for a single account, no email clutter", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "codex",
+          displayName: "Codex",
+          accountEmail: "solo@example.com",
+          planName: "ChatGPT Pro",
+        })}
+        showAccount={false}
+        resetTimeRelative
+      />,
+    );
+    // One account: the email is not shown, the plan chip is.
+    expect(screen.queryByText(/solo@example.com/)).toBeNull();
+    expect(screen.getByText("ChatGPT Pro")).toBeInTheDocument();
+  });
+
   it("shows an available Codex reset as a quiet chip", () => {
     render(
       <PlanStatusCard
