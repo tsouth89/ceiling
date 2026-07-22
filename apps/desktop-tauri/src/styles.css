@@ -8940,16 +8940,22 @@ body:has(.dashboard-shell) #root {
 
 /* ── Config-directory accounts (SOU-285) ───────────────────────────── */
 
-/* Which account a card is reporting. Sits under the provider name, and takes
-   the account tint when one is set so several seats stay tellable apart. */
+/* Which account a card is reporting, tinted when the account has a color set.
+   It shares a flex row with the provider name, so it yields: the provider name
+   is the primary identifier and must never be the thing that truncates. */
+.menu-card__name {
+  flex: 0 0 auto;
+}
+
 .menu-card__account {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 60%;
 }
 
 

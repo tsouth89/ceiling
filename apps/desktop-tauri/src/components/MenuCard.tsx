@@ -444,7 +444,7 @@ export default function MenuCard({
   }, [provider.providerId, provider.accountEmail, onLayoutChange]);
 
   const isWayfinder = provider.providerId === "wayfinder";
-  const email = !isWayfinder && provider.accountEmail
+  const rawEmail = !isWayfinder && provider.accountEmail
     ? hideEmail
       ? maskEmail(provider.accountEmail)
       : provider.accountEmail
@@ -454,6 +454,10 @@ export default function MenuCard({
   // Ceiling is following the CLI there is no chosen account to name, so the
   // backend sends null and nothing renders.
   const accountLabel = !isWayfinder ? (provider.accountLabel ?? null) : null;
+  // Account labels are seeded from the directory and usually already contain the
+  // email, so showing both would print it twice in one row.
+  const email =
+    accountLabel && rawEmail && accountLabel.includes(rawEmail) ? null : rawEmail;
 
   const metrics: Array<MetricEntry | InactiveMetricEntry> = [
     ...(isWayfinder

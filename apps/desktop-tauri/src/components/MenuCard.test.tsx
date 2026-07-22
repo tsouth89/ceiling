@@ -284,6 +284,18 @@ describe("MenuCard", () => {
     expect(document.querySelector(".menu-card__account")).toBeNull();
   });
 
+  it("does not print the email twice when the account label already contains it", async () => {
+    const snapshot = provider(null);
+    snapshot.accountEmail = "tsouth2@example.com";
+    // Labels are seeded from the directory, so they usually embed the email.
+    snapshot.accountLabel = "tsouth2@example.com (prolite)";
+    renderCard(snapshot);
+
+    await screen.findByText("tsouth2@example.com (prolite)");
+
+    expect(document.querySelector(".menu-card__email")).toBeNull();
+  });
+
   it("renders Wayfinder telemetry without quota or identity rows", async () => {
     const snapshot = provider(null);
     snapshot.providerId = "wayfinder";
