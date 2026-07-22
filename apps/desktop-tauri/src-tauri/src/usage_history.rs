@@ -92,22 +92,35 @@ pub fn provider_history(provider_id: &str, account_email: Option<&str>) -> Vec<U
     let Ok(guard) = store().lock() else {
         return Vec::new();
     };
-    let exact = scope_key(provider_id, account_email);
-    if let Some(points) = guard.series.get(&exact) {
-        return visible_history(provider_id, points);
-    }
-
-    // Providers do not always expose an account identity on every source. If
-    // the exact anonymous/authenticated scope is absent, use the freshest local
-    // series for that provider without persisting any raw identity.
-    let prefix = format!("{}:", provider_id.to_ascii_lowercase());
-    guard
-        .series
-        .iter()
-        .filter(|(key, _)| key.starts_with(&prefix))
-        .max_by_key(|(_, points)| points.last().map(|point| point.recorded_at.as_str()))
-        .map(|(_, points)| visible_history(provider_id, points))
+    select_series(&guard.series, provider_id, account_email)
+        .map(|points| visible_history(provider_id, points))
         .unwrap_or_default()
+}
+
+/// Pick the series to chart for a provider/account.
+///
+/// Providers do not always expose an account identity on every source, so an
+/// identified read falls back to this provider's anonymous series, which is the
+/// same account seen without its email.
+///
+/// It deliberately does **not** fall back to whichever series is freshest. That
+/// reaches into a *different* account's history, which is exactly the cross-seat
+/// leak multi-account switching must not have: switching accounts would chart
+/// the previous seat's data until the new one accumulated its own.
+fn select_series<'a>(
+    series: &'a HashMap<String, Vec<UsageHistoryPoint>>,
+    provider_id: &str,
+    account_email: Option<&str>,
+) -> Option<&'a Vec<UsageHistoryPoint>> {
+    let exact = scope_key(provider_id, account_email);
+    if let Some(points) = series.get(&exact) {
+        return Some(points);
+    }
+    let anonymous = scope_key(provider_id, None);
+    if anonymous == exact {
+        return None;
+    }
+    series.get(&anonymous)
 }
 
 fn visible_history(provider_id: &str, points: &[UsageHistoryPoint]) -> Vec<UsageHistoryPoint> {
@@ -253,6 +266,69 @@ mod tests {
     fn normalizes_window_labels_for_stable_series() {
         assert_eq!(normalize_id("Session (5h)"), "session-5h");
         assert_eq!(normalize_id(" API "), "api");
+    }
+
+    fn series_with(
+        entries: &[(&str, Option<&str>, &str)],
+    ) -> HashMap<String, Vec<UsageHistoryPoint>> {
+        let mut series = HashMap::new();
+        for (provider, email, recorded_at) in entries {
+            series.insert(
+                scope_key(provider, *email),
+                vec![UsageHistoryPoint {
+                    recorded_at: recorded_at.to_string(),
+                    windows: Vec::new(),
+                }],
+            );
+        }
+        series
+    }
+
+    #[test]
+    fn switching_accounts_does_not_chart_the_previous_seat() {
+        // The personal seat has history; the work seat is brand new. Charting
+        // personal's data under work's label is the leak this guards.
+        let series = series_with(&[(
+            "codex",
+            Some("personal@example.com"),
+            "2026-07-21T00:00:00Z",
+        )]);
+
+        let selected = select_series(&series, "codex", Some("work@example.com"));
+
+        assert!(selected.is_none(), "got another account's series");
+    }
+
+    #[test]
+    fn an_identified_read_still_finds_the_same_account_recorded_anonymously() {
+        // A source that reports no email wrote to the anonymous scope; that is
+        // the same person, so bridging to it is correct.
+        let series = series_with(&[("codex", None, "2026-07-21T00:00:00Z")]);
+
+        let selected = select_series(&series, "codex", Some("person@example.com"));
+
+        assert!(selected.is_some());
+    }
+
+    #[test]
+    fn an_exact_account_match_wins_over_the_anonymous_series() {
+        let series = series_with(&[
+            ("codex", None, "2026-07-21T00:00:00Z"),
+            ("codex", Some("person@example.com"), "2026-07-20T00:00:00Z"),
+        ]);
+
+        let selected = select_series(&series, "codex", Some("person@example.com")).unwrap();
+
+        // Freshness must not override identity.
+        assert_eq!(selected[0].recorded_at, "2026-07-20T00:00:00Z");
+    }
+
+    #[test]
+    fn another_providers_series_is_never_selected() {
+        let series = series_with(&[("claude", Some("person@example.com"), "2026-07-21T00:00:00Z")]);
+
+        assert!(select_series(&series, "codex", Some("person@example.com")).is_none());
+        assert!(select_series(&series, "codex", None).is_none());
     }
 
     #[test]
