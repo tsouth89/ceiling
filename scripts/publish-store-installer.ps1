@@ -82,34 +82,26 @@ if ($SkipPublicVerification) {
 
 $downloadPath = Join-Path ([System.IO.Path]::GetTempPath()) "ceiling-store-$Version-$([guid]::NewGuid().ToString('N')).exe"
 try {
-    $verified = $false
-    for ($attempt = 1; $attempt -le 6; $attempt++) {
-        try {
-            $response = Invoke-WebRequest `
-                -Uri $installerUrl `
-                -OutFile $downloadPath `
-                -MaximumRedirection 0
-            if ($response.StatusCode -ne 200) {
-                throw "Expected HTTP 200, received $($response.StatusCode)."
-            }
-
-            $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($downloadHash -ne $expectedHash) {
-                throw "Public installer SHA-256 mismatch. Expected $expectedHash, got $downloadHash."
-            }
-
-            $verified = $true
-            break
-        } catch {
-            if ($attempt -eq 6) {
-                throw
-            }
-            Start-Sleep -Seconds 5
-        }
+    & curl.exe `
+        --fail `
+        --silent `
+        --show-error `
+        --location `
+        --max-redirs 0 `
+        --connect-timeout 10 `
+        --max-time 180 `
+        --retry 3 `
+        --retry-delay 5 `
+        --retry-connrefused `
+        --output $downloadPath `
+        $installerUrl
+    if ($LASTEXITCODE -ne 0) {
+        throw "Direct public download failed with curl exit code $LASTEXITCODE."
     }
 
-    if (-not $verified) {
-        throw "Could not verify the public installer URL."
+    $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($downloadHash -ne $expectedHash) {
+        throw "Public installer SHA-256 mismatch. Expected $expectedHash, got $downloadHash."
     }
 } finally {
     Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
