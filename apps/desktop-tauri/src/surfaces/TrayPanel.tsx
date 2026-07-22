@@ -434,7 +434,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return (
       <div
         className={`menu-stack__item${isSelected ? " menu-stack__item--selected" : ""}`}
-        id={`card-${p.providerId}`}
+        id={`card-${providerRowKey(p)}`}
         key={providerRowKey(p)}
       >
         {isOverview ? (

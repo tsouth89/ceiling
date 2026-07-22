@@ -9,7 +9,6 @@ import {
   getDirectoryAccounts,
   probeAccountDirectory,
   removeDirectoryAccount,
-  setActiveDirectoryAccount,
 } from "../../../lib/tauri";
 
 /** CLI to invoke when telling the user how to sign a second account in. */
@@ -176,11 +175,6 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
                 <div className="credential-card__info">
                   <strong>{account.label}</strong>
                   <span className="credential-card__meta">
-                    {account.isActive && (
-                      <span className="credential-card__badge credential-card__badge--set">
-                        {t("AccountsActive")}
-                      </span>
-                    )}
                     {!account.signedIn && (
                       <span className="credential-card__badge credential-card__badge--warn">
                         {t("AccountsSignedOut")}
@@ -202,22 +196,6 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
                   </span>
                 </div>
                 <div className="credential-card__actions">
-                  {!account.isActive && (
-                    <button
-                      className="credential-btn credential-btn--secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void onRun(() =>
-                          setActiveDirectoryAccount(
-                            provider.providerId,
-                            account.id,
-                          ),
-                        )
-                      }
-                    >
-                      {t("AccountsTrackThis")}
-                    </button>
-                  )}
                   <button
                     className="credential-btn credential-btn--danger"
                     disabled={busy}
