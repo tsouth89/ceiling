@@ -9119,3 +9119,17 @@ body:has(.dashboard-shell) #root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Account identity in the pop-out drill-in header and the activity timeline. */
+.provider-focus__account {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.activity-timeline__account {
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+  font-weight: 500;
+}

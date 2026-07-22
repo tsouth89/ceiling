@@ -604,7 +604,9 @@ export default function MenuCard({
                   {promo.title}
                 </span>
               ))}
-              {planName && (
+              {/* The account line already shows the plan, so drop the badge
+                  when an account is named to avoid printing it twice. */}
+              {planName && !accountName && (
                 <span className="menu-card__plan-badge">{planName}</span>
               )}
             </div>

@@ -12,6 +12,7 @@ import { useLocale } from "../hooks/useLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import { getProviderChartData } from "../lib/tauri";
 import { providerSupportsChartData } from "../lib/providerCharts";
+import { accountIdentityLabel } from "../lib/providerRow";
 import {
   allMeasuredWindows,
   codexResetCredits,
@@ -245,6 +246,9 @@ export default function ProviderDetailView({
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
   const primaryLabel = provider.primaryLabel?.trim() || "Primary";
   const planName = displayPlanName(provider.planName);
+  // A drill-in opens a specific account, so name it whenever there is an email.
+  // Without this, two accounts on one provider open two identical detail views.
+  const accountName = accountIdentityLabel(provider);
   const resetCredits = codexResetCredits(provider);
   const updated = Number.isNaN(Date.parse(provider.updatedAt))
     ? provider.updatedAt
@@ -262,6 +266,17 @@ export default function ProviderDetailView({
         />
         <div>
           <h2>{provider.displayName}</h2>
+          {accountName && (
+            <span
+              className="provider-focus__account"
+              style={
+                provider.accountTint ? { color: provider.accountTint } : undefined
+              }
+              title={accountName}
+            >
+              {accountName}
+            </span>
+          )}
           <span>{updatedLabel}</span>
         </div>
         <div className="provider-focus__badges">

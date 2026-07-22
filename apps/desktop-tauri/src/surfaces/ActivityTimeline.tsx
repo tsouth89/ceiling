@@ -2,7 +2,11 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { allMeasuredWindows } from "../lib/capacityPresentation";
-import { providerRowKey } from "../lib/providerRow";
+import {
+  accountIdentityLabel,
+  hasMultipleAccounts,
+  providerRowKey,
+} from "../lib/providerRow";
 
 /**
  * Activity is a calm schedule of the rate-window resets providers report.
@@ -14,6 +18,8 @@ type TimelineEntry = {
   key: string;
   providerId: string;
   displayName: string;
+  /** Account name, when this provider has more than one; else null. */
+  accountName: string | null;
   label: string;
   window: RateWindowSnapshot;
   resetMs: number | null;
@@ -78,10 +84,15 @@ function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
         : NaN;
       entries.push({
         // Includes the account: two accounts both have a "session" window, so
-      // keying on provider alone collided them into one timeline row.
-      key: `${providerRowKey(provider)}:${measured.id}`,
+        // keying on provider alone collided them into one timeline row.
+        key: `${providerRowKey(provider)}:${measured.id}`,
         providerId: provider.providerId,
         displayName: provider.displayName,
+        // Two Codex rows are otherwise identical text; name the account so they
+        // are not indistinguishable.
+        accountName: hasMultipleAccounts(providers, provider.providerId)
+          ? accountIdentityLabel(provider)
+          : null,
         label: measured.label,
         window: measured.window,
         resetMs: Number.isNaN(parsed) ? null : parsed,
@@ -167,7 +178,12 @@ function FeaturedReset({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }
           className="activity-next__icon"
           title={entry.displayName}
         />
-        <span>{entry.displayName}</span>
+        <span>
+          {entry.displayName}
+          {entry.accountName && (
+            <span className="activity-timeline__account"> · {entry.accountName}</span>
+          )}
+        </span>
         <span className="activity-next__window">{entry.label}</span>
       </div>
       <div className="activity-next__glance">
@@ -196,7 +212,12 @@ function TimelineRow({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) 
             className="activity-row__icon"
             title={entry.displayName}
           />
-          <span className="activity-row__name">{entry.displayName}</span>
+          <span className="activity-row__name">
+            {entry.displayName}
+            {entry.accountName && (
+              <span className="activity-timeline__account"> · {entry.accountName}</span>
+            )}
+          </span>
           <span className="activity-row__label">{entry.label}</span>
           <span className="activity-row__pct">{Math.round(usedPct)}% used</span>
         </div>
