@@ -127,12 +127,19 @@ struct ThresholdAlertKey {
     provider: ProviderId,
     window: String,
     kind: NotificationType,
+    /// See [`ThresholdWindowKey::account`]: alerts are per account, so one
+    /// account's state cannot clear or suppress another's.
+    account: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ThresholdWindowKey {
     provider: ProviderId,
     window: String,
+    /// Which account this limit belongs to. Two accounts on one provider hit
+    /// their limits independently, and sharing a key meant a quiet account
+    /// cleared a busy account's pending alert on the very same pass.
+    account: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -437,6 +444,7 @@ impl NotificationManager {
     pub fn check_and_notify(
         &mut self,
         provider: ProviderId,
+        account: Option<&str>,
         window: &str,
         used_percent: f64,
         settings: &Settings,
@@ -450,6 +458,7 @@ impl NotificationManager {
         let window_key = ThresholdWindowKey {
             provider,
             window: window.to_string(),
+            account: account.map(str::to_string),
         };
 
         // A window gets one calm warning per cycle. Crossing critical or
@@ -457,7 +466,7 @@ impl NotificationManager {
         let notification_type = if used_percent >= thresholds.high {
             Some(NotificationType::HighUsage)
         } else if used_percent < rearm_below {
-            self.clear_window_alerts(provider, window);
+            self.clear_window_alerts(provider, account, window);
             self.pending_thresholds.remove(&window_key);
             None
         } else {
@@ -476,6 +485,7 @@ impl NotificationManager {
                     provider,
                     window: window.to_string(),
                     kind,
+                    account: account.map(str::to_string),
                 });
             }
             self.pending_thresholds.remove(&window_key);
@@ -487,6 +497,7 @@ impl NotificationManager {
                 provider,
                 window: window.to_string(),
                 kind: notif_type,
+                account: account.map(str::to_string),
             };
             if !self.sent_notifications.contains(&key) {
                 if self.pending_thresholds.get(&window_key) != Some(&notif_type) {
@@ -592,9 +603,10 @@ impl NotificationManager {
         }
     }
 
-    fn clear_window_alerts(&mut self, provider: ProviderId, window: &str) {
-        self.sent_notifications
-            .retain(|key| !(key.provider == provider && key.window == window));
+    fn clear_window_alerts(&mut self, provider: ProviderId, account: Option<&str>, window: &str) {
+        self.sent_notifications.retain(|key| {
+            !(key.provider == provider && key.window == window && key.account.as_deref() == account)
+        });
     }
 
     /// Send a notification for a status issue
@@ -611,6 +623,8 @@ impl NotificationManager {
             provider,
             window: "status".to_string(),
             kind: NotificationType::StatusIssue,
+            // A provider outage is not an account-level event.
+            account: None,
         };
         if !self.sent_notifications.contains(&key) {
             self.sent_notifications.insert(key);
@@ -676,6 +690,7 @@ impl NotificationManager {
                 provider,
                 window: "session".to_string(),
                 kind: NotificationType::SessionDepleted,
+                account: None,
             });
         }
         // Check for restored transition: was depleted, now is not
@@ -684,6 +699,7 @@ impl NotificationManager {
                 provider,
                 window: "session".to_string(),
                 kind: NotificationType::SessionDepleted,
+                account: None,
             };
             if self.sent_notifications.contains(&depleted_key) {
                 let title = NotificationType::SessionRestored.title();
@@ -1253,16 +1269,16 @@ mod tests {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Cursor, "session", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 86.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "weekly", 20.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "weekly", 20.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
 
         // Simulate many refreshes with the same split (high session, quiet weekly).
         for _ in 0..10 {
-            manager.check_and_notify(ProviderId::Cursor, "session", 87.0, &settings);
-            manager.check_and_notify(ProviderId::Cursor, "weekly", 25.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, None, "session", 87.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, None, "weekly", 25.0, &settings);
         }
         assert_eq!(
             manager.toasts_shown, 1,
@@ -1271,20 +1287,67 @@ mod tests {
     }
 
     #[test]
+    fn threshold_alerts_are_isolated_per_account() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings::default();
+        let work = Some("acct-work");
+        let personal = Some("acct-personal");
+
+        // Baseline both accounts below the threshold, or already-high usage at
+        // first sight is treated as no crossing and never warns.
+        manager.check_and_notify(ProviderId::Codex, work, "session", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, personal, "session", 10.0, &settings);
+
+        // What a refresh does with two accounts: every cached reading is checked
+        // in one pass, in whatever order the fetches finished. The busy account
+        // must still get its warning.
+        for _ in 0..5 {
+            manager.check_and_notify(ProviderId::Codex, work, "session", 95.0, &settings);
+            manager.check_and_notify(ProviderId::Codex, personal, "session", 10.0, &settings);
+        }
+
+        assert_eq!(
+            manager.toasts_shown, 1,
+            "a quiet account cleared the busy account's high-usage alert"
+        );
+    }
+
+    #[test]
+    fn a_quiet_account_does_not_rearm_a_busy_accounts_alert() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings::default();
+        let work = Some("acct-work");
+        let personal = Some("acct-personal");
+
+        manager.check_and_notify(ProviderId::Codex, personal, "session", 10.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, work, "session", 40.0, &settings);
+
+        // Reversed order: the quiet account is seen first. Sharing a key let it
+        // clear the sent-alert record, so the busy account re-toasted on every
+        // refresh instead of staying quiet after the first warning.
+        for _ in 0..5 {
+            manager.check_and_notify(ProviderId::Codex, personal, "session", 10.0, &settings);
+            manager.check_and_notify(ProviderId::Codex, work, "session", 95.0, &settings);
+        }
+
+        assert_eq!(manager.toasts_shown, 1, "repeat toasts for the same limit");
+    }
+
+    #[test]
     fn threshold_alerts_are_isolated_per_window() {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Claude, "session", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "weekly", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "session", 86.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "weekly", 92.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "session", 87.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "weekly", 93.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "session", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "weekly", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "weekly", 92.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "session", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "weekly", 93.0, &settings);
         assert_eq!(manager.toasts_shown, 2);
 
-        manager.check_and_notify(ProviderId::Claude, "session", 87.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "weekly", 93.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "session", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "weekly", 93.0, &settings);
         assert_eq!(manager.toasts_shown, 2);
     }
 
@@ -1293,20 +1356,20 @@ mod tests {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Codex, "session", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 86.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
 
         // Still near the high threshold — do not re-arm.
-        manager.check_and_notify(ProviderId::Codex, "session", 83.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 83.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 86.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
 
         // Drop clearly below high-hysteresis, then climb again.
-        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 86.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 80.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 2);
     }
 
@@ -1331,20 +1394,20 @@ mod tests {
         let mut manager = NotificationManager::new();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Cursor, "session", 95.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "weekly", 20.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 96.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "weekly", 20.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 96.0, &settings);
         assert_eq!(manager.toasts_shown, 0);
 
         // Completing startup enables future transitions without replaying the
         // same already-high state observed during launch.
         manager.arm_after_startup_baseline();
-        manager.check_and_notify(ProviderId::Cursor, "session", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 95.0, &settings);
         assert_eq!(manager.toasts_shown, 0);
 
-        manager.check_and_notify(ProviderId::Cursor, "session", 60.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 86.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "session", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 60.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "session", 87.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
     }
 
@@ -1353,8 +1416,8 @@ mod tests {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Cursor, "monthly", 82.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "monthly", 83.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "monthly", 82.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "monthly", 83.0, &settings);
 
         assert_eq!(
             manager.toasts_shown, 0,
@@ -1367,9 +1430,9 @@ mod tests {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Cursor, "monthly", 95.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "monthly", 82.0, &settings);
-        manager.check_and_notify(ProviderId::Cursor, "monthly", 81.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "monthly", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "monthly", 82.0, &settings);
+        manager.check_and_notify(ProviderId::Cursor, None, "monthly", 81.0, &settings);
 
         assert_eq!(manager.toasts_shown, 0);
     }
@@ -1380,7 +1443,7 @@ mod tests {
         let settings = Settings::default();
 
         manager.check_session_transition(ProviderId::Claude, 50.0, &settings);
-        manager.check_and_notify(ProviderId::Claude, "session", 100.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, None, "session", 100.0, &settings);
         manager.check_session_transition(ProviderId::Claude, 100.0, &settings);
         manager.check_session_transition(ProviderId::Claude, 100.0, &settings);
         assert_eq!(
@@ -1394,8 +1457,8 @@ mod tests {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Codex, "session", 80.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "session", 5.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 80.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 5.0, &settings);
         manager.check_session_transition(ProviderId::Claude, 40.0, &settings);
         manager.check_session_transition(ProviderId::Claude, 100.0, &settings);
         manager.check_session_transition(ProviderId::Claude, 42.0, &settings);
@@ -1425,9 +1488,9 @@ mod tests {
         let settings = Settings::default();
 
         for window in ["monthly", "primary"] {
-            manager.check_and_notify(ProviderId::Cursor, window, 40.0, &settings);
-            manager.check_and_notify(ProviderId::Cursor, window, 100.0, &settings);
-            manager.check_and_notify(ProviderId::Cursor, window, 100.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, None, window, 40.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, None, window, 100.0, &settings);
+            manager.check_and_notify(ProviderId::Cursor, None, window, 100.0, &settings);
         }
 
         assert_eq!(manager.toasts_shown, 0);
@@ -1438,11 +1501,11 @@ mod tests {
         let mut manager = NotificationManager::new_armed();
         let settings = Settings::default();
 
-        manager.check_and_notify(ProviderId::Codex, "weekly", 40.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "weekly", 86.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "weekly", 87.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "weekly", 95.0, &settings);
-        manager.check_and_notify(ProviderId::Codex, "weekly", 100.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "weekly", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "weekly", 86.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "weekly", 87.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "weekly", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "weekly", 100.0, &settings);
 
         assert_eq!(manager.toasts_shown, 1);
     }
