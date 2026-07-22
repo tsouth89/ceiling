@@ -188,8 +188,31 @@ impl ClaudeOAuthFetcher {
         credentials: ClaudeOAuthCredentials,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let usage_response = self.fetch_usage(&credentials).await?;
-        let usage = self.build_usage_snapshot(&usage_response, &credentials);
+        let mut usage = self.build_usage_snapshot(&usage_response, &credentials);
+
+        // Stamp which account this reading belongs to. Capacity baselines are
+        // scoped by email and organization, so without them two accounts share
+        // one baseline and a switch inherits the previous seat's history.
+        if let Some(identity) = self.identity() {
+            if let Some(email) = identity.email {
+                usage = usage.with_email(email);
+            }
+            if let Some(organization) = identity.organization_name {
+                usage = usage.with_organization(organization);
+            }
+        }
+
         Ok(ProviderFetchResult::new(usage, "oauth"))
+    }
+
+    /// Identity of the account this fetcher reads, for labeling and scoping.
+    fn identity(&self) -> Option<crate::core::ClaudeIdentity> {
+        use crate::core::AccountIdentity;
+        let dir = self
+            .config_dir
+            .clone()
+            .unwrap_or_else(crate::core::ambient_claude_config_dir);
+        crate::core::ClaudeIdentity::read(&dir)
     }
 
     /// If the token is expired (or about to expire), refresh it using the

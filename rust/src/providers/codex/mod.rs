@@ -82,7 +82,19 @@ impl Provider for CodexProvider {
         };
 
         match api.fetch_usage().await {
-            Ok((usage, cost)) => {
+            Ok((mut usage, cost)) => {
+                // Stamp which account this reading belongs to. Capacity baselines
+                // are scoped by it, so without it two accounts share one baseline
+                // and a switch inherits the previous seat's history.
+                if let Some(identity) = api.identity() {
+                    if let Some(email) = identity.email {
+                        usage = usage.with_email(email);
+                    } else if let Some(account_id) = identity.account_id {
+                        // No email claim, but the account id still separates seats.
+                        usage = usage.with_email(account_id);
+                    }
+                }
+
                 let mut result = ProviderFetchResult::new(usage, "oauth");
                 if let Some(c) = cost {
                     result = result.with_cost(c);

@@ -261,8 +261,12 @@ pub fn probe_account_directory(
 }
 
 /// Add a config directory as an account and make it active.
+///
+/// Adding switches to the new account, so the outgoing reading is dropped and
+/// refetched exactly as an explicit switch does.
 #[tauri::command]
-pub fn add_directory_account(
+pub async fn add_directory_account(
+    app: tauri::AppHandle,
     provider_id: String,
     config_dir: String,
     label: Option<String>,
@@ -281,19 +285,30 @@ pub fn add_directory_account(
         })
     }
 
-    match id {
-        ProviderId::Codex => add::<CodexIdentity>(path, label),
-        ProviderId::Claude => add::<ClaudeIdentity>(path, label),
-        other => Err(format!(
-            "{} does not use config-directory accounts.",
-            other.display_name()
-        )),
-    }
+    let bridge = match id {
+        ProviderId::Codex => add::<CodexIdentity>(path, label)?,
+        ProviderId::Claude => add::<ClaudeIdentity>(path, label)?,
+        other => {
+            return Err(format!(
+                "{} does not use config-directory accounts.",
+                other.display_name()
+            ));
+        }
+    };
+
+    evict_cached_reading(&app, id);
+    super::refresh_providers(app).await?;
+
+    Ok(bridge)
 }
 
 /// Remove an account. Removing the last one returns to following the CLI.
+///
+/// Removing the active account promotes another one, so the outgoing reading is
+/// dropped and refetched exactly as an explicit switch does.
 #[tauri::command]
-pub fn remove_directory_account(
+pub async fn remove_directory_account(
+    app: tauri::AppHandle,
     provider_id: String,
     account_id: String,
 ) -> Result<ProviderAccountsBridge, String> {
@@ -307,19 +322,30 @@ pub fn remove_directory_account(
         })
     }
 
-    match id {
-        ProviderId::Codex => remove::<CodexIdentity>(uuid),
-        ProviderId::Claude => remove::<ClaudeIdentity>(uuid),
-        other => Err(format!(
-            "{} does not use config-directory accounts.",
-            other.display_name()
-        )),
-    }
+    let bridge = match id {
+        ProviderId::Codex => remove::<CodexIdentity>(uuid)?,
+        ProviderId::Claude => remove::<ClaudeIdentity>(uuid)?,
+        other => {
+            return Err(format!(
+                "{} does not use config-directory accounts.",
+                other.display_name()
+            ));
+        }
+    };
+
+    evict_cached_reading(&app, id);
+    super::refresh_providers(app).await?;
+
+    Ok(bridge)
 }
 
 /// Switch which account Ceiling tracks for a provider.
+///
+/// Drops the outgoing account's cached reading before refetching, so the panel
+/// never shows one seat's usage under another's name during the gap.
 #[tauri::command]
-pub fn set_active_directory_account(
+pub async fn set_active_directory_account(
+    app: tauri::AppHandle,
     provider_id: String,
     account_id: String,
 ) -> Result<ProviderAccountsBridge, String> {
@@ -335,14 +361,41 @@ pub fn set_active_directory_account(
         })
     }
 
-    match id {
-        ProviderId::Codex => activate::<CodexIdentity>(uuid),
-        ProviderId::Claude => activate::<ClaudeIdentity>(uuid),
-        other => Err(format!(
-            "{} does not use config-directory accounts.",
-            other.display_name()
-        )),
-    }
+    let bridge = match id {
+        ProviderId::Codex => activate::<CodexIdentity>(uuid)?,
+        ProviderId::Claude => activate::<ClaudeIdentity>(uuid)?,
+        other => {
+            return Err(format!(
+                "{} does not use config-directory accounts.",
+                other.display_name()
+            ));
+        }
+    };
+
+    evict_cached_reading(&app, id);
+    // Capacity baselines and enforcement expectations are scoped by account
+    // identity, so the incoming account re-baselines on its own first reading
+    // rather than inheriting the outgoing one's history. Nothing to reset here.
+    super::refresh_providers(app).await?;
+
+    Ok(bridge)
+}
+
+/// Forget a provider's cached reading so the UI shows "loading" rather than the
+/// previous account's numbers while the refetch is in flight.
+fn evict_cached_reading(app: &tauri::AppHandle, provider: ProviderId) {
+    use tauri::Manager;
+
+    let state = app.state::<std::sync::Mutex<crate::state::AppState>>();
+    let Ok(mut guard) = state.lock() else {
+        return;
+    };
+    guard
+        .provider_cache
+        .retain(|snapshot| snapshot.provider_id != provider.cli_name());
+    // The remaining entries are now a partial view, so let the next staleness
+    // check re-fetch rather than treating this as a fresh full cycle.
+    guard.provider_cache_updated_at = None;
 }
 
 /// Relabel an account and/or set its accent color.

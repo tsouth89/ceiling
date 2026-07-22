@@ -954,6 +954,31 @@ mod tests {
     }
 
     #[test]
+    fn a_scoped_client_reports_its_own_account_identity() {
+        // Payload: {"email":"work@example.com",
+        //   "https://api.openai.com/auth":{"chatgpt_plan_type":"team"}}
+        let payload = "eyJlbWFpbCI6IndvcmtAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJ0ZWFtIn19";
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("auth.json"),
+            format!(
+                r#"{{"tokens":{{"id_token":"h.{payload}.s","access_token":"secret","account_id":"acct-work"}}}}"#
+            ),
+        )
+        .expect("write auth");
+
+        // This is what stamps `account_email` on the snapshot, which is what
+        // capacity baselines and enforcement expectations are scoped by.
+        let identity = CodexApi::new()
+            .scoped(home.path().to_path_buf())
+            .identity()
+            .expect("identity");
+
+        assert_eq!(identity.email.as_deref(), Some("work@example.com"));
+        assert_eq!(identity.plan_type.as_deref(), Some("team"));
+    }
+
+    #[test]
     fn an_account_directory_without_credentials_reports_itself() {
         let home = tempfile::tempdir().expect("tempdir");
 
