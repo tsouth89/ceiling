@@ -190,10 +190,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     initialProviderId,
   );
   const [gridExpanded, setGridExpanded] = useState(false);
+  // Counted in rows rather than providers: a provider with two accounts
+  // occupies two rows, and the check below already counts rows. Counting
+  // providers here made the two disagree once accounts could multiply them.
   const expectsDenseOverview =
     selectedProviderId === null &&
     !gridExpanded &&
-    settings.enabledProviders.length + 1 > DENSE_OVERVIEW_THRESHOLD;
+    sorted.length + 1 > DENSE_OVERVIEW_THRESHOLD;
   const denseTrayProviders = useMemo(() => {
     if (!expectsDenseOverview) return sorted;
     return hydrateProviderSlots(denseProviderSlots, providersById);
