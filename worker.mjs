@@ -5,6 +5,7 @@ const SESSION_MESSAGE = "ceiling-admin-session-v1";
 const VISITOR_ID_ROTATION_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_EVENTS = new Set(["$pageview", "download_clicked", "github_clicked"]);
 const LATEST_RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`;
+const PUBLIC_HOST = "ceiling.win";
 const DOWNLOAD_ROUTES = {
   "/download": /-Setup\.exe$/i,
   "/download/portable": /-portable\.exe$/i,
@@ -13,6 +14,12 @@ const DOWNLOAD_ROUTES = {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.hostname === `www.${PUBLIC_HOST}`) {
+      url.hostname = PUBLIC_HOST;
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 301);
+    }
 
     if (request.method === "POST" && url.pathname === "/api/events") {
       return captureEvent(request, env, ctx);
@@ -55,9 +62,21 @@ export default {
       return Response.redirect(target, 302);
     }
 
-    return env.ASSETS.fetch(request);
+    return publicAssetResponse(await env.ASSETS.fetch(request));
   },
 };
+
+function publicAssetResponse(response) {
+  const headers = new Headers(response.headers);
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 // Resolve the newest signed installer at click time so the download button never
 // needs editing when a release ships. Cached at the edge; falls back to the

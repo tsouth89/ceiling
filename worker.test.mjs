@@ -156,3 +156,26 @@ test("event capture is a no-op when analytics is not configured", async () => {
   }), {}, { waitUntil() {} });
   assert.equal(response.status, 204);
 });
+
+test("public assets include baseline security headers", async () => {
+  const env = {
+    ASSETS: { fetch: async () => new Response("page", { headers: { "Content-Type": "text/html" } }) },
+  };
+  const response = await worker.fetch(new Request("https://ceiling.win/"), env, { waitUntil() {} });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Referrer-Policy"), "strict-origin-when-cross-origin");
+  assert.equal(response.headers.get("X-Content-Type-Options"), "nosniff");
+  assert.match(response.headers.get("Permissions-Policy"), /camera=\(\)/);
+});
+
+test("www requests redirect to the canonical host", async () => {
+  const response = await worker.fetch(
+    new Request("https://www.ceiling.win/privacy/?from=test"),
+    {},
+    { waitUntil() {} },
+  );
+
+  assert.equal(response.status, 301);
+  assert.equal(response.headers.get("Location"), "https://ceiling.win/privacy/?from=test");
+});
