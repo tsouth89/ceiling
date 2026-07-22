@@ -49,6 +49,15 @@ commands.allow = [
   "add_token_account",
   "remove_token_account",
   "set_active_token_account",
+  # Config-directory accounts (SOU-285). Registering a command in the invoke
+  # handler is not enough; it must be allowed here too, or every call fails at
+  # runtime with "not allowed by ACL".
+  "get_directory_accounts",
+  "probe_account_directory",
+  "add_directory_account",
+  "remove_directory_account",
+  "set_active_directory_account",
+  "update_directory_account",
   "get_app_info",
   "get_provider_chart_data",
   "get_provider_local_usage_summary",

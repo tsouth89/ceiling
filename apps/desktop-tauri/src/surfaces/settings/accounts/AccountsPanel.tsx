@@ -236,6 +236,12 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
         </ul>
       )}
 
+      <p className="settings-section__hint accounts-setup-hint">
+        {t("AccountsSetupHint")}{" "}
+        <code className="accounts-path">
+          {provider.envVar}=&lt;path&gt; {cli} login
+        </code>
+      </p>
       <div className="credential-add-form accounts-add">
         <input
           className="text-input"
@@ -287,12 +293,6 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
         )}
       </div>
 
-      <p className="settings-section__hint accounts-setup-hint">
-        {t("AccountsSetupHint")}{" "}
-        <code className="accounts-path">
-          {provider.envVar}=&lt;path&gt; {cli} login
-        </code>
-      </p>
     </div>
   );
 }
