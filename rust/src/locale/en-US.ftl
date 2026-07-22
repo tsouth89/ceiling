@@ -645,5 +645,5 @@ AccountsCheckButton = Check
 AccountsAddButton = Add
 AccountsProbeSignedOut = No account is signed in there yet.
 AccountsProbeAlreadyAdded = Already added as
-AccountsSetupHint = To sign a second account into its own directory, run this in a terminal:
+AccountsSetupHint = To sign a second account into its own directory, run this in PowerShell, then paste that path below:
 AccountsTint = Accent color

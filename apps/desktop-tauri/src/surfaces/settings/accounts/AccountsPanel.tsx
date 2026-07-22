@@ -239,7 +239,7 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
       <p className="settings-section__hint accounts-setup-hint">
         {t("AccountsSetupHint")}{" "}
         <code className="accounts-path">
-          {provider.envVar}=&lt;path&gt; {cli} login
+          $env:{provider.envVar}=&quot;&lt;path&gt;&quot;; {cli} login
         </code>
       </p>
       <div className="credential-add-form accounts-add">

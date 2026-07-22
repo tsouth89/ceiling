@@ -3,7 +3,7 @@
 ## [Ceiling] 1.5.0 - 2026-07-22
 
 ### Added
-- Track more than one Codex or Claude account and switch between which one Ceiling watches, from a new Accounts tab. An account is a config directory (`CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude) rather than a token you paste, because each CLI refreshes its own sign-in in place and a copy would stop working within hours. Sign a second account in with `CODEX_HOME=<path> codex login`, point Ceiling at that folder, and it reads the name and plan off the folder itself so there is nothing to type. Adding an account checks the folder first and tells you whose account is in it before you commit.
+- Track more than one Codex or Claude account and switch between which one Ceiling watches, from a new Accounts tab. An account is a config directory (`CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude) rather than a token you paste, because each CLI refreshes its own sign-in in place and a copy would stop working within hours. Sign a second account in with `$env:CODEX_HOME="<path>"; codex login`, point Ceiling at that folder, and it reads the name and plan off the folder itself so there is nothing to type. Adding an account checks the folder first and tells you whose account is in it before you commit.
 - Name the account each provider card is reporting, with an optional color so several accounts stay easy to tell apart at a glance.
 - Ceiling keeps following whichever account your CLI is signed in as until you add accounts yourself, so nothing changes if you only have one.
 
