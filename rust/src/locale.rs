@@ -204,10 +204,6 @@ locale_keys! {
     ShowResetWhenExhausted,
     ShowResetWhenExhaustedHelper,
     TrayIcon,
-    MergeTrayIcons,
-    MergeTrayIconsHelper,
-    PerProviderTrayIcons,
-    PerProviderTrayIconsHelper,
 
     // Provider settings (Preferences)
     ProviderEnabled,
@@ -620,10 +616,6 @@ locale_keys! {
     NotificationTestFailed,
 
     // Tauri desktop shell — Display tab fields
-    TrayIconModeLabel,
-    TrayIconModeHelper,
-    TrayIconModeSingle,
-    TrayIconModePerProvider,
     ShowProviderIcons,
     ShowProviderIconsHelper,
     PreferHighestUsage,

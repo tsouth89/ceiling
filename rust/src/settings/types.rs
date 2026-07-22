@@ -207,35 +207,6 @@ impl UpdateChannel {
     }
 }
 
-/// Tray icon display mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TrayIconMode {
-    /// Single tray icon showing the primary provider or merged view
-    #[default]
-    Single,
-    /// One tray icon per enabled provider
-    PerProvider,
-}
-
-impl TrayIconMode {
-    /// Get the display name for this mode
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            TrayIconMode::Single => "Single Icon",
-            TrayIconMode::PerProvider => "Per Provider",
-        }
-    }
-
-    /// Get a description for this mode
-    pub fn description(&self) -> &'static str {
-        match self {
-            TrayIconMode::Single => "Show one tray icon for all providers",
-            TrayIconMode::PerProvider => "Show a separate tray icon for each enabled provider",
-        }
-    }
-}
-
 /// Metric preference for display in tray and UI
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]

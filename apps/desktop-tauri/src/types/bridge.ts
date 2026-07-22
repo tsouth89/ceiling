@@ -12,7 +12,6 @@ export type SettingsTabId =
 
 // ── Narrowed string-literal unions (persisted settings enums) ─────────
 
-export type TrayIconMode = "single" | "perProvider";
 
 export type MetricPreference =
   | "automatic"
@@ -229,7 +228,6 @@ export interface SettingsSnapshot {
   spendBudgetLimitUsd?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
-  trayIconMode: TrayIconMode;
   switcherShowsIcons: boolean;
   menuBarShowsHighestUsage: boolean;
   menuBarShowsPercent: boolean;
@@ -307,7 +305,6 @@ export interface SettingsUpdate {
   spendBudgetLimitUsd?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
-  trayIconMode?: TrayIconMode;
   switcherShowsIcons?: boolean;
   menuBarShowsHighestUsage?: boolean;
   menuBarShowsPercent?: boolean;
@@ -458,6 +455,11 @@ export interface ProviderUsageSnapshot {
   pace: PaceSnapshot | null;
   accountOrganization: string | null;
   trayStatusLabel: string | null;
+  /**
+   * Stable id of the Ceiling-managed account this reading came from. Together
+   * with providerId it identifies a displayed row; null while following the CLI.
+   */
+  accountId?: string | null;
   /** Ceiling-managed account this reading came from, or null when following the CLI. */
   accountLabel?: string | null;
   /** Accent color for that account (validated hex). */

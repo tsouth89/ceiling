@@ -10,8 +10,7 @@ use codexbar::locale;
 use codexbar::providers::copilot::{CopilotApi, device_flow::CopilotDeviceFlow};
 use codexbar::secure_file::{self, SecureFileStatus};
 use codexbar::settings::{
-    ApiKeys, Language, ManualCookies, MetricPreference, Settings, ThemePreference, TrayIconMode,
-    UpdateChannel,
+    ApiKeys, Language, ManualCookies, MetricPreference, Settings, ThemePreference, UpdateChannel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

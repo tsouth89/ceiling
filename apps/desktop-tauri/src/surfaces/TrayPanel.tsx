@@ -20,6 +20,7 @@ import { useLocale } from "../hooks/useLocale";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import MenuCard from "../components/MenuCard";
+import { onePerProvider, providerRowKey } from "../lib/providerRow";
 import PlanStatusCard from "../components/PlanStatusCard";
 import MenuSurface, {
   MenuEmpty,
@@ -223,12 +224,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       }
       return sorted;
     }
-    // Detail: show ONLY the selected provider (macOS behavior — no appended errors)
-    const match = sorted.find((p) => p.providerId === selectedProviderId);
-    if (!match) {
+    // Detail: only the selected provider, but every account configured for it.
+    // Picking a single match would hide the second seat behind the first.
+    const matches = sorted.filter((p) => p.providerId === selectedProviderId);
+    if (matches.length === 0) {
       return sorted;
     }
-    return [match];
+    return matches;
   }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
 
   const layoutKey = useMemo(
@@ -430,7 +432,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       <div
         className={`menu-stack__item${isSelected ? " menu-stack__item--selected" : ""}`}
         id={`card-${p.providerId}`}
-        key={p.providerId}
+        key={providerRowKey(p)}
       >
         {isOverview ? (
           <PlanStatusCard
@@ -495,7 +497,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       >
         {settings.agentSessionsEnabled && <AgentSessions />}
         <ProviderGrid
-          providers={expectsDenseOverview ? denseTrayProviders : sorted}
+          providers={onePerProvider(
+            expectsDenseOverview ? denseTrayProviders : sorted,
+          )}
           selectedProviderId={selectedProviderId}
           showAsUsed={settings.showAsUsed}
           showProviderIcons={settings.switcherShowsIcons}
@@ -515,7 +519,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
                 </div>
               ))
             : visibleProviders.map((p, idx) => (
-                <Fragment key={p.providerId}>
+                <Fragment key={providerRowKey(p)}>
                   {idx > 0 && <div className="menu-stack__sep" />}
                   {renderProviderCard(p)}
                 </Fragment>

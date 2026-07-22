@@ -10,6 +10,16 @@ use super::{
     ClaudeAccountData, ClaudeAccountStore, CodexAccountData, CodexAccountStore, ProviderId,
 };
 
+/// One account Ceiling should fetch for a provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTarget {
+    /// Stable id, used to key this account's reading in the provider cache.
+    pub id: String,
+    pub label: String,
+    pub tint: Option<String>,
+    pub config_dir: PathBuf,
+}
+
 /// Accounts configured for each directory-backed provider.
 #[derive(Debug, Default, Clone)]
 pub struct ConfiguredAccounts {
@@ -31,6 +41,33 @@ impl ConfiguredAccounts {
                 tracing::warn!("failed to load Claude accounts: {error}");
                 ClaudeAccountData::default()
             }),
+        }
+    }
+
+    /// Every account to fetch for `provider`.
+    ///
+    /// Empty means nothing is configured, so the caller should do a single fetch
+    /// against whichever account the CLI is signed in as. That is deliberately
+    /// distinct from "one configured account": the ambient case must not be
+    /// pinned to a path resolved when the refresh cycle started.
+    pub fn targets_for(&self, provider: ProviderId) -> Vec<AccountTarget> {
+        fn targets<I: crate::core::AccountIdentity>(
+            data: &crate::core::DirectoryAccountData<I>,
+        ) -> Vec<AccountTarget> {
+            data.accounts
+                .iter()
+                .map(|account| AccountTarget {
+                    id: account.id.to_string(),
+                    label: account.label.clone(),
+                    tint: account.tint.clone(),
+                    config_dir: account.config_dir.clone(),
+                })
+                .collect()
+        }
+        match provider {
+            ProviderId::Codex => targets(&self.codex),
+            ProviderId::Claude => targets(&self.claude),
+            _ => Vec::new(),
         }
     }
 
@@ -137,6 +174,43 @@ mod tests {
             accounts.active_label_for(ProviderId::Claude),
             Some("personal")
         );
+    }
+
+    #[test]
+    fn every_configured_account_is_fetched_not_just_the_active_one() {
+        let mut accounts = ConfiguredAccounts::default();
+        accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("personal".to_string()),
+                PathBuf::from("/homes/personal"),
+            ));
+        accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("work".to_string()),
+                PathBuf::from("/homes/work"),
+            ));
+
+        let targets = accounts.targets_for(ProviderId::Codex);
+
+        // Both seats are read side by side; fetching only the active one is what
+        // made a second account replace the first rather than join it.
+        assert_eq!(targets.len(), 2);
+        let dirs: Vec<_> = targets.iter().map(|t| t.config_dir.clone()).collect();
+        assert!(dirs.contains(&PathBuf::from("/homes/personal")));
+        assert!(dirs.contains(&PathBuf::from("/homes/work")));
+        // Ids must be distinct, or the cache would collapse them again.
+        assert_ne!(targets[0].id, targets[1].id);
+    }
+
+    #[test]
+    fn nothing_configured_yields_no_targets_so_the_caller_follows_the_cli() {
+        let accounts = ConfiguredAccounts::default();
+
+        assert!(accounts.targets_for(ProviderId::Codex).is_empty());
+        assert!(accounts.targets_for(ProviderId::Claude).is_empty());
+        assert!(accounts.targets_for(ProviderId::Cursor).is_empty());
     }
 
     #[test]

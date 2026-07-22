@@ -25,7 +25,6 @@ pub struct SettingsUpdate {
     pub provider_usage_thresholds:
         Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
     pub predictive_pace_warning_enabled: Option<bool>,
-    pub tray_icon_mode: Option<String>,
     pub switcher_shows_icons: Option<bool>,
     pub menu_bar_shows_highest_usage: Option<bool>,
     pub menu_bar_shows_percent: Option<bool>,
@@ -94,8 +93,7 @@ impl SettingsUpdate {
     }
 
     fn refreshes_tray_presentation(&self) -> bool {
-        self.tray_icon_mode.is_some()
-            || self.switcher_shows_icons.is_some()
+        self.switcher_shows_icons.is_some()
             || self.menu_bar_shows_highest_usage.is_some()
             || self.menu_bar_shows_percent.is_some()
             || self.show_as_used.is_some()
@@ -146,11 +144,6 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.refresh_all_providers_on_menu_open {
             settings.refresh_all_providers_on_menu_open = v;
-        }
-        if let Some(ref s) = self.tray_icon_mode
-            && let Some(mode) = parse_tray_icon_mode(s)
-        {
-            settings.tray_icon_mode = mode;
         }
         if let Some(v) = self.provider_metrics.clone() {
             apply_provider_metrics(settings, v);
@@ -371,14 +364,6 @@ fn apply_provider_metrics(
     }
 }
 
-fn parse_tray_icon_mode(s: &str) -> Option<TrayIconMode> {
-    match s {
-        "single" => Some(TrayIconMode::Single),
-        "perProvider" => Some(TrayIconMode::PerProvider),
-        _ => None,
-    }
-}
-
 fn parse_update_channel(s: &str) -> Option<UpdateChannel> {
     match s {
         "stable" => Some(UpdateChannel::Stable),
@@ -457,7 +442,6 @@ mod tests {
         assert!(
             !SettingsUpdate {
                 provider_metrics: Some(Default::default()),
-                tray_icon_mode: Some("single".to_string()),
                 ..Default::default()
             }
             .refreshes_provider_data()

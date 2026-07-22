@@ -1321,6 +1321,7 @@ mod tests {
             pace: None,
             account_organization: None,
             tray_status_label: None,
+            account_id: None,
             account_label: None,
             account_tint: None,
             fetch_duration_ms: None,
@@ -1402,9 +1403,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_per_provider_mode_still_collapses_to_one_summary() {
+    fn several_providers_collapse_to_one_tray_summary() {
         let settings = Settings {
-            tray_icon_mode: codexbar::settings::TrayIconMode::PerProvider,
             provider_order: codexbar::settings::normalize_provider_order(&[
                 "claude".to_string(),
                 "codex".to_string(),
@@ -1431,7 +1431,6 @@ mod tests {
     #[test]
     fn status_labels_single_mode_collapses_to_selected_provider() {
         let settings = Settings {
-            tray_icon_mode: codexbar::settings::TrayIconMode::Single,
             menu_bar_shows_highest_usage: true,
             ..Settings::default()
         };
@@ -1455,7 +1454,6 @@ mod tests {
     #[test]
     fn tray_presentation_excludes_disabled_cached_providers() {
         let settings = Settings {
-            tray_icon_mode: codexbar::settings::TrayIconMode::PerProvider,
             enabled_providers: ["codex".to_string()].into_iter().collect(),
             ..Settings::default()
         };

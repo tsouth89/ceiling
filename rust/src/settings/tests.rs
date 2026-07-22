@@ -346,7 +346,6 @@ fn float_bar_raw_clamps_out_of_range_opacity_on_load() {
             "sound_volume": 100,
             "high_usage_threshold": 70.0,
             "critical_usage_threshold": 90.0,
-            "merge_tray_icons": false,
             "show_as_used": true,
             "enable_animations": true,
             "reset_time_relative": true,
@@ -721,12 +720,15 @@ fn test_settings_roundtrip_with_language() {
 }
 
 #[test]
-fn test_settings_with_utf8_bom_parses_perprovider_tray_mode() {
+fn test_settings_with_utf8_bom_parses() {
+    // Covers two things: a leading BOM, which some editors write, and that a
+    // settings file still carrying the removed `tray_icon_mode` field loads
+    // rather than failing for an existing user.
     let json = "\u{feff}{\n            \"enabled_providers\": [\"claude\", \"codex\"],\n            \"refresh_interval_secs\": 300,\n            \"tray_icon_mode\": \"perprovider\"\n        }";
 
     let settings: Settings = serde_json::from_str(json.trim_start_matches('\u{feff}')).unwrap();
 
-    assert_eq!(settings.tray_icon_mode, TrayIconMode::PerProvider);
+    assert_eq!(settings.refresh_interval_secs, 300);
 }
 
 #[test]
