@@ -852,6 +852,7 @@ locale_keys! {
     AccountsCheckButton,
     AccountsAddButton,
     AccountsProbeSignedOut,
+    AccountsProbeMissing,
     AccountsProbeAlreadyAdded,
     AccountsSetupHint,
     AccountsTint,
