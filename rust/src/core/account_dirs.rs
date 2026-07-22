@@ -32,6 +32,11 @@ pub trait AccountIdentity: Clone + Serialize + DeserializeOwned {
     /// resolvable signed-in account.
     fn read(config_dir: &Path) -> Option<Self>;
 
+    /// Whether this directory currently holds a usable sign-in. Distinct from
+    /// [`Self::read`]: a directory can be signed in while carrying no readable
+    /// identity, and can carry a cached identity while signed out.
+    fn is_signed_in(config_dir: &Path) -> bool;
+
     /// Best-effort human label for this identity.
     fn suggested_label(&self) -> Option<String>;
 }
@@ -419,6 +424,9 @@ mod tests {
         }
         fn read(_config_dir: &Path) -> Option<Self> {
             None
+        }
+        fn is_signed_in(_config_dir: &Path) -> bool {
+            false
         }
         fn suggested_label(&self) -> Option<String> {
             Some(self.name.clone())

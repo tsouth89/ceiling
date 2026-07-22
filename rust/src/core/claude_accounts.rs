@@ -114,6 +114,10 @@ impl AccountIdentity for ClaudeIdentity {
         identity_from_files(profile.as_deref(), credentials.as_deref())
     }
 
+    fn is_signed_in(config_dir: &Path) -> bool {
+        claude_credentials_path(config_dir).exists()
+    }
+
     /// e.g. `person@example.com (Acme Inc)`, falling back to the subscription
     /// bucket when there is no organization worth naming.
     fn suggested_label(&self) -> Option<String> {

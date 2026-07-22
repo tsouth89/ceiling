@@ -74,6 +74,10 @@ impl AccountIdentity for CodexIdentity {
         identity_from_auth_json(&content)
     }
 
+    fn is_signed_in(config_dir: &Path) -> bool {
+        config_dir.join("auth.json").exists()
+    }
+
     /// e.g. `person@example.com (pro)`.
     fn suggested_label(&self) -> Option<String> {
         let base = self

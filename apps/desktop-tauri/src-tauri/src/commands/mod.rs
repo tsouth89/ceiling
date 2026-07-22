@@ -23,6 +23,7 @@ use crate::state::AppState;
 use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 
+mod accounts;
 mod chart;
 mod diagnostics;
 mod tokens;
@@ -59,6 +60,7 @@ pub use system::*;
 #[cfg(test)]
 mod tests;
 
+pub use accounts::*;
 pub use chart::*;
 pub use diagnostics::*;
 pub use tokens::*;
