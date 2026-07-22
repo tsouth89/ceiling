@@ -795,6 +795,7 @@ fn notify_usage_thresholds(
                 for (window_key, used_percent) in alerts {
                     guard.notification_manager.check_and_notify(
                         provider,
+                        snapshot.account_id.as_deref(),
                         window_key,
                         used_percent,
                         settings,
