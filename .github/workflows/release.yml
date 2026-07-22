@@ -276,6 +276,27 @@ jobs:
             throw "Failed to create or update the draft GitHub release."
           }
 
+      - name: Publish Microsoft Store installer to Cloudflare R2
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          foreach ($name in @(
+            "CLOUDFLARE_API_TOKEN",
+            "CLOUDFLARE_ACCOUNT_ID",
+            "CLOUDFLARE_R2_BUCKET"
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The release environment is missing $name."
+            }
+          }
+          & .\scripts\publish-store-installer.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -AssetsDir $env:RELEASE_ASSETS_DIR `
+            -BucketName $env:CLOUDFLARE_R2_BUCKET
+
       - name: Sign out of Azure
         if: always()
         shell: pwsh
