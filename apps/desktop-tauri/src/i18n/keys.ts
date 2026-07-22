@@ -611,6 +611,7 @@ export const ALL_LOCALE_KEYS = [
   "AccountsCheckButton",
   "AccountsAddButton",
   "AccountsProbeSignedOut",
+  "AccountsProbeMissing",
   "AccountsProbeAlreadyAdded",
   "AccountsSetupHint",
   "AccountsTint",

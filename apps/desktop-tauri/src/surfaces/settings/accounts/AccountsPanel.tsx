@@ -239,7 +239,8 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
       <p className="settings-section__hint accounts-setup-hint">
         {t("AccountsSetupHint")}{" "}
         <code className="accounts-path">
-          $env:{provider.envVar}=&quot;&lt;path&gt;&quot;; {cli} login
+          mkdir &quot;&lt;path&gt;&quot;; $env:{provider.envVar}=&quot;&lt;path&gt;&quot;;{" "}
+          {cli} login
         </code>
       </p>
       <div className="credential-add-form accounts-add">
@@ -286,9 +287,11 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
           <p className="credential-card__meta accounts-probe">
             {probe.alreadyAddedAs
               ? `${t("AccountsProbeAlreadyAdded")} ${probe.alreadyAddedAs}`
-              : probe.signedIn
-                ? (probe.suggestedLabel ?? probe.configDir)
-                : t("AccountsProbeSignedOut")}
+              : !probe.exists
+                ? t("AccountsProbeMissing")
+                : probe.signedIn
+                  ? (probe.suggestedLabel ?? probe.configDir)
+                  : t("AccountsProbeSignedOut")}
           </p>
         )}
       </div>
