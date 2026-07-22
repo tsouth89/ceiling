@@ -67,11 +67,34 @@ impl Provider for CodexProvider {
         &self.metadata
     }
 
-    async fn fetch_usage(&self, _ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+    async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Fetching Codex usage via OAuth API");
 
-        match self.api.fetch_usage().await {
-            Ok((usage, cost)) => {
+        // A configured account pins the credential to its own CODEX_HOME;
+        // otherwise follow whichever account the CLI is signed in as.
+        let scoped;
+        let api = match &ctx.account_config_dir {
+            Some(dir) => {
+                scoped = self.api.scoped(dir.clone());
+                &scoped
+            }
+            None => &self.api,
+        };
+
+        match api.fetch_usage().await {
+            Ok((mut usage, cost)) => {
+                // Stamp which account this reading belongs to. Capacity baselines
+                // are scoped by it, so without it two accounts share one baseline
+                // and a switch inherits the previous seat's history.
+                if let Some(identity) = api.identity() {
+                    if let Some(email) = identity.email {
+                        usage = usage.with_email(email);
+                    } else if let Some(account_id) = identity.account_id {
+                        // No email claim, but the account id still separates seats.
+                        usage = usage.with_email(account_id);
+                    }
+                }
+
                 let mut result = ProviderFetchResult::new(usage, "oauth");
                 if let Some(c) = cost {
                     result = result.with_cost(c);

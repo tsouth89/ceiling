@@ -3,6 +3,7 @@ export type VisibleSurfaceMode = Exclude<SurfaceMode, "hidden">;
 export type SettingsTabId =
   | "general"
   | "providers"
+  | "accounts"
   | "notifications"
   | "menuBar"
   | "menu"
@@ -457,6 +458,10 @@ export interface ProviderUsageSnapshot {
   pace: PaceSnapshot | null;
   accountOrganization: string | null;
   trayStatusLabel: string | null;
+  /** Ceiling-managed account this reading came from, or null when following the CLI. */
+  accountLabel?: string | null;
+  /** Accent color for that account (validated hex). */
+  accountTint?: string | null;
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
 }
@@ -772,6 +777,48 @@ export interface UsageHistoryPoint {
 }
 
 // ── Token account types ──────────────────────────────────────────────
+
+/**
+ * One config-directory-backed account (Codex `CODEX_HOME` / Claude
+ * `CLAUDE_CONFIG_DIR`). No credential material crosses the bridge.
+ */
+export interface DirectoryAccountBridge {
+  id: string;
+  label: string;
+  configDir: string;
+  tint: string | null;
+  isActive: boolean;
+  /** Whether that directory currently holds a usable sign-in. */
+  signedIn: boolean;
+  email: string | null;
+  organization: string | null;
+  plan: string | null;
+  addedAt: string;
+  lastUsed: string | null;
+}
+
+export interface ProviderAccountsBridge {
+  providerId: string;
+  displayName: string;
+  /** Env var that selects this provider's config directory. */
+  envVar: string;
+  accounts: DirectoryAccountBridge[];
+  activeIndex: number;
+  /** No accounts configured: Ceiling follows whichever the CLI is signed in as. */
+  followingCli: boolean;
+  ambientDir: string;
+}
+
+export interface AccountProbeBridge {
+  configDir: string;
+  exists: boolean;
+  signedIn: boolean;
+  suggestedLabel: string | null;
+  email: string | null;
+  organization: string | null;
+  plan: string | null;
+  alreadyAddedAs: string | null;
+}
 
 export interface TokenAccountSupportBridge {
   providerId: string;

@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::usage::ProviderSelection;
-use crate::core::{FetchContext, ProviderId, SourceMode, instantiate_provider};
+use crate::core::{ConfiguredAccounts, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::CostScanner;
 
 #[derive(Args, Debug, Clone)]
@@ -82,12 +82,17 @@ async fn usage_response(provider: Option<&str>) -> String {
         workspace_id: None,
         api_region: None,
         gateway_url: None,
+        account_config_dir: None,
     };
+    let accounts = ConfiguredAccounts::load();
 
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
         let provider = instantiate_provider(provider_id);
-        match provider.fetch_usage(&ctx).await {
+        match provider
+            .fetch_usage(&ctx.clone().for_account(provider_id, &accounts))
+            .await
+        {
             Ok(result) => results.push(serde_json::json!({
                 "provider": provider_id.cli_name(),
                 "source": result.source_label,

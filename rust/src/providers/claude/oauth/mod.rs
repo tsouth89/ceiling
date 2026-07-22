@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use reqwest::header::{HeaderValue, RETRY_AFTER};
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -15,8 +16,8 @@ use crate::core::{NamedRateWindow, ProviderError, ProviderFetchResult, RateWindo
 mod credentials_store;
 mod refresh;
 
-pub(super) fn credentials_file_available() -> bool {
-    credentials_store::credentials_file_available()
+pub(super) fn credentials_file_available(config_dir: Option<&std::path::Path>) -> bool {
+    credentials_store::credentials_file_available(config_dir)
 }
 
 /// OAuth credentials from Claude CLI
@@ -110,6 +111,9 @@ pub struct ExtraUsage {
 /// Claude OAuth fetcher
 pub struct ClaudeOAuthFetcher {
     client: Client,
+    /// Explicit `CLAUDE_CONFIG_DIR` for a Ceiling-managed account. When `None`
+    /// the fetcher follows whichever account the CLI is signed in as.
+    config_dir: Option<PathBuf>,
 }
 
 static RATE_LIMIT_BACKOFF_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
@@ -121,14 +125,37 @@ impl ClaudeOAuthFetcher {
     pub fn new() -> Self {
         Self {
             client: Client::new(),
+            config_dir: None,
         }
+    }
+
+    /// Build a fetcher pinned to a specific `CLAUDE_CONFIG_DIR`, for tracking one
+    /// of several configured Claude accounts.
+    pub fn with_config_dir(config_dir: PathBuf) -> Self {
+        Self {
+            config_dir: Some(config_dir),
+            ..Self::new()
+        }
+    }
+
+    /// The same fetcher aimed at a different account. Reuses the underlying
+    /// connection pool rather than building a second one per fetch.
+    pub fn scoped(&self, config_dir: PathBuf) -> Self {
+        Self {
+            client: self.client.clone(),
+            config_dir: Some(config_dir),
+        }
+    }
+
+    fn config_dir(&self) -> Option<&std::path::Path> {
+        self.config_dir.as_deref()
     }
 
     /// Load credentials and fetch usage, transparently refreshing an expired
     /// OAuth token first (like the Claude CLI does) so the panel stays green
     /// without the user having to re-run `claude`.
     pub async fn fetch(&self) -> Result<ProviderFetchResult, ProviderError> {
-        let (credentials, source) = credentials_store::load_credentials()?;
+        let (credentials, source) = credentials_store::load_credentials(self.config_dir())?;
         let credentials = self.ensure_fresh_credentials(credentials, source).await;
         self.fetch_with_credentials(credentials).await
     }
@@ -161,8 +188,31 @@ impl ClaudeOAuthFetcher {
         credentials: ClaudeOAuthCredentials,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let usage_response = self.fetch_usage(&credentials).await?;
-        let usage = self.build_usage_snapshot(&usage_response, &credentials);
+        let mut usage = self.build_usage_snapshot(&usage_response, &credentials);
+
+        // Stamp which account this reading belongs to. Capacity baselines are
+        // scoped by email and organization, so without them two accounts share
+        // one baseline and a switch inherits the previous seat's history.
+        if let Some(identity) = self.identity() {
+            if let Some(email) = identity.email {
+                usage = usage.with_email(email);
+            }
+            if let Some(organization) = identity.organization_name {
+                usage = usage.with_organization(organization);
+            }
+        }
+
         Ok(ProviderFetchResult::new(usage, "oauth"))
+    }
+
+    /// Identity of the account this fetcher reads, for labeling and scoping.
+    fn identity(&self) -> Option<crate::core::ClaudeIdentity> {
+        use crate::core::AccountIdentity;
+        let dir = self
+            .config_dir
+            .clone()
+            .unwrap_or_else(crate::core::ambient_claude_config_dir);
+        crate::core::ClaudeIdentity::read(&dir)
     }
 
     /// If the token is expired (or about to expire), refresh it using the
@@ -192,7 +242,7 @@ impl ClaudeOAuthFetcher {
         // refreshes it. Re-read right before hitting the network: if the CLI (or
         // a concurrent poll) already refreshed the on-disk token, adopt it rather
         // than rotating a second refresh token against the same account.
-        if let Ok((disk, disk_source)) = credentials_store::load_credentials() {
+        if let Ok((disk, disk_source)) = credentials_store::load_credentials(self.config_dir()) {
             if !disk.is_expired() {
                 credentials_store::store_refreshed(&disk_source, &disk);
                 return disk;
@@ -208,7 +258,9 @@ impl ClaudeOAuthFetcher {
         match refresh::refresh_access_token(&self.client, &refresh_token, &credentials).await {
             Ok(refreshed) => {
                 credentials_store::store_refreshed(&source, &refreshed);
-                if let Err(err) = credentials_store::persist_refreshed_credentials(&refreshed) {
+                if let Err(err) =
+                    credentials_store::persist_refreshed_credentials(&refreshed, self.config_dir())
+                {
                     tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
                 }
                 tracing::debug!("Refreshed expired Claude OAuth token");

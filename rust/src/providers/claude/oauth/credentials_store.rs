@@ -10,13 +10,12 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use super::ClaudeOAuthCredentials;
 use crate::core::ProviderError;
 
-const CREDENTIALS_PATH: &str = ".claude/.credentials.json";
 const KEYRING_SERVICE: &str = "Claude Code-credentials";
 const ENV_TOKEN_KEY: &str = "CODEXBAR_CLAUDE_OAUTH_TOKEN";
 const ENV_SCOPES_KEY: &str = "CODEXBAR_CLAUDE_OAUTH_SCOPES";
@@ -89,18 +88,31 @@ pub(super) fn store_refreshed(source: &CredentialSource, credentials: &ClaudeOAu
 }
 
 /// Load OAuth credentials from environment, file, or Claude Code's OS credential store.
-pub(super) fn load_credentials() -> Result<(ClaudeOAuthCredentials, CredentialSource), ProviderError>
-{
-    // Try environment variables first
-    if let Some(creds) = load_from_environment() {
+///
+/// `config_dir` selects a specific Ceiling-managed account; `None` follows
+/// whichever account the CLI is currently signed in as.
+pub(super) fn load_credentials(
+    config_dir: Option<&Path>,
+) -> Result<(ClaudeOAuthCredentials, CredentialSource), ProviderError> {
+    // The environment token and the OS credential store are both single global
+    // slots with no way to tell which account they belong to. Consulting them
+    // for an explicitly chosen account would silently serve a different seat's
+    // usage under that account's label, so an explicit account resolves from its
+    // own directory or not at all.
+    let is_explicit = is_explicit_account(config_dir);
+
+    if !is_explicit && let Some(creds) = load_from_environment() {
         return Ok((creds, CredentialSource::Environment));
     }
 
-    // Try credentials file
-    let file_error = match load_from_file() {
-        Ok(creds) => return Ok((creds, CredentialSource::File(credentials_path()?))),
+    let file_error = match load_from_file(config_dir) {
+        Ok(creds) => return Ok((creds, CredentialSource::File(credentials_path(config_dir)?))),
         Err(err) => err,
     };
+
+    if is_explicit {
+        return Err(file_error);
+    }
 
     // Current Claude Code builds store the same JSON payload in the OS credential store.
     if let Some((creds, source)) = load_from_keyring()? {
@@ -108,6 +120,15 @@ pub(super) fn load_credentials() -> Result<(ClaudeOAuthCredentials, CredentialSo
     }
 
     Err(file_error)
+}
+
+/// Whether `config_dir` names an account other than the one the CLI is signed
+/// in as. Passing the ambient directory explicitly is still the ambient account.
+fn is_explicit_account(config_dir: Option<&Path>) -> bool {
+    match config_dir {
+        Some(dir) => !crate::core::same_dir(dir, &crate::core::ambient_claude_config_dir()),
+        None => false,
+    }
 }
 
 /// Load credentials from environment variables
@@ -137,14 +158,15 @@ fn load_from_environment() -> Option<ClaudeOAuthCredentials> {
     })
 }
 
-/// Load credentials from ~/.claude/.credentials.json
-fn load_from_file() -> Result<ClaudeOAuthCredentials, ProviderError> {
-    let path = credentials_path()?;
+/// Load credentials from the config directory's `.credentials.json`
+fn load_from_file(config_dir: Option<&Path>) -> Result<ClaudeOAuthCredentials, ProviderError> {
+    let path = credentials_path(config_dir)?;
 
     if !path.exists() {
-        return Err(ProviderError::OAuth(
-            "Claude OAuth credentials not found. Run `claude` to authenticate.".to_string(),
-        ));
+        return Err(ProviderError::OAuth(format!(
+            "Claude OAuth credentials not found in {}. Run `claude` to authenticate.",
+            path.display()
+        )));
     }
 
     let content = std::fs::read_to_string(&path)
@@ -153,8 +175,8 @@ fn load_from_file() -> Result<ClaudeOAuthCredentials, ProviderError> {
     parse_credentials_json(&content)
 }
 
-pub(super) fn credentials_file_available() -> bool {
-    load_from_file().is_ok()
+pub(super) fn credentials_file_available(config_dir: Option<&Path>) -> bool {
+    load_from_file(config_dir).is_ok()
 }
 
 /// Load credentials from Claude Code's OS keychain / credential manager entry.
@@ -321,19 +343,26 @@ fn push_keyring_candidate(candidates: &mut Vec<String>, value: String) {
 }
 
 /// Get the credentials file path
-fn credentials_path() -> Result<PathBuf, ProviderError> {
-    dirs::home_dir()
-        .map(|home| home.join(CREDENTIALS_PATH))
-        .ok_or_else(|| ProviderError::OAuth("Could not find home directory".to_string()))
+/// Resolve the credentials file for a config directory, defaulting to the one
+/// the CLI itself would use (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
+fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError> {
+    let dir = config_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::core::ambient_claude_config_dir);
+    Ok(crate::core::claude_credentials_path(&dir))
 }
 
-/// Persist refreshed tokens back to `~/.claude/.credentials.json`, updating
-/// only the `claudeAiOauth` token fields and leaving everything else (e.g.
-/// `mcpOAuth`) untouched. Written atomically via a temp file + rename.
+/// Persist refreshed tokens back to the config directory's `.credentials.json`,
+/// updating only the `claudeAiOauth` token fields and leaving everything else
+/// (e.g. `mcpOAuth`) untouched. Written atomically via a temp file + rename.
+///
+/// `config_dir` must be the same account the credentials were loaded from, or a
+/// refresh would be written over a different seat's tokens.
 pub(super) fn persist_refreshed_credentials(
     credentials: &ClaudeOAuthCredentials,
+    config_dir: Option<&Path>,
 ) -> Result<(), ProviderError> {
-    let path = credentials_path()?;
+    let path = credentials_path(config_dir)?;
     if !path.exists() {
         // Loaded from keyring/env; there is no file to update.
         return Ok(());
@@ -411,10 +440,172 @@ fn apply_refresh_to_credentials_json(
 #[cfg(test)]
 mod tests {
     use super::{
-        CredentialSource, apply_refresh_to_credentials_json, cached_refreshed_if_fresher,
-        parse_credentials_json, store_refreshed,
+        CredentialSource, ENV_TOKEN_KEY, apply_refresh_to_credentials_json,
+        cached_refreshed_if_fresher, credentials_path, load_credentials, parse_credentials_json,
+        store_refreshed,
     };
     use crate::providers::claude::oauth::ClaudeOAuthCredentials;
+    use std::path::Path;
+
+    /// `CLAUDE_CONFIG_DIR` and the env token are process-global, so the tests
+    /// that manipulate them run one at a time.
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// Restores an environment variable to its prior value on drop, so a failing
+    /// assertion cannot leak state into another test.
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: serialized by `env_lock`, and restored on drop.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn set_str(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: serialized by `env_lock`, and restored on drop.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: serialized by `env_lock`, and restored on drop.
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: serialized by `env_lock`.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    const CREDENTIALS_JSON: &str = r#"{"claudeAiOauth":{"accessToken":"from-disk",
+        "refreshToken":"r","scopes":["user:profile"],"subscriptionType":"max"}}"#;
+
+    fn write_credentials(dir: &Path) {
+        std::fs::create_dir_all(dir).expect("create dir");
+        std::fs::write(dir.join(".credentials.json"), CREDENTIALS_JSON).expect("write credentials");
+    }
+
+    #[test]
+    fn the_default_path_honors_claude_config_dir() {
+        let _guard = env_lock().lock().expect("env lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _env = EnvGuard::set("CLAUDE_CONFIG_DIR", dir.path());
+
+        let path = credentials_path(None).expect("path");
+
+        assert_eq!(path, dir.path().join(".credentials.json"));
+    }
+
+    #[test]
+    fn an_explicit_account_reads_its_own_directory() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _env = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let account = tempfile::tempdir().expect("tempdir");
+
+        let path = credentials_path(Some(account.path())).expect("path");
+
+        assert_eq!(path, account.path().join(".credentials.json"));
+    }
+
+    #[test]
+    fn an_explicit_account_never_falls_back_to_the_global_env_token() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _config = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let _token = EnvGuard::set_str(ENV_TOKEN_KEY, "env-token");
+        // A configured account whose directory holds no credentials.
+        let account = tempfile::tempdir().expect("tempdir");
+
+        let result = load_credentials(Some(account.path()));
+
+        // Serving the env token here would label another seat's usage as this
+        // account's, which is exactly the leak switching must not have.
+        assert!(
+            result.is_err(),
+            "an account with no credentials must fail rather than borrow a global token"
+        );
+    }
+
+    #[test]
+    fn the_ambient_account_still_uses_the_global_env_token() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _config = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let _token = EnvGuard::set_str(ENV_TOKEN_KEY, "env-token");
+
+        let (credentials, source) = load_credentials(None).expect("credentials");
+
+        assert_eq!(credentials.access_token, "env-token");
+        assert_eq!(source, CredentialSource::Environment);
+    }
+
+    #[test]
+    fn naming_the_ambient_directory_explicitly_is_still_the_ambient_account() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _config = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let _token = EnvGuard::set_str(ENV_TOKEN_KEY, "env-token");
+
+        let (credentials, _) = load_credentials(Some(ambient.path())).expect("credentials");
+
+        assert_eq!(credentials.access_token, "env-token");
+    }
+
+    #[test]
+    fn an_explicit_account_loads_from_its_own_credentials_file() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _config = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let _token = EnvGuard::unset(ENV_TOKEN_KEY);
+        let account = tempfile::tempdir().expect("tempdir");
+        write_credentials(account.path());
+
+        let (credentials, source) = load_credentials(Some(account.path())).expect("credentials");
+
+        assert_eq!(credentials.access_token, "from-disk");
+        assert_eq!(
+            source,
+            CredentialSource::File(account.path().join(".credentials.json"))
+        );
+    }
+
+    #[test]
+    fn two_accounts_resolve_to_different_credential_files() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _token = EnvGuard::unset(ENV_TOKEN_KEY);
+        let personal = tempfile::tempdir().expect("tempdir");
+        let work = tempfile::tempdir().expect("tempdir");
+        write_credentials(personal.path());
+
+        let personal_path = credentials_path(Some(personal.path())).expect("path");
+        let work_path = credentials_path(Some(work.path())).expect("path");
+
+        assert_ne!(personal_path, work_path);
+        // The seat that is not signed in reports that, rather than showing the
+        // other seat's usage.
+        assert!(load_credentials(Some(personal.path())).is_ok());
+        assert!(load_credentials(Some(work.path())).is_err());
+    }
 
     #[test]
     fn parses_claude_code_credentials_payload() {

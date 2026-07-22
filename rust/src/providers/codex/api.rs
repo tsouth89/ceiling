@@ -5,6 +5,7 @@
 use crate::core::{CostSnapshot, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -14,12 +15,18 @@ const USAGE_PATH: &str = "/wham/usage";
 const RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
 
-static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceLock::new();
+/// Keyed by auth file path: with more than one Codex account configured, a
+/// single shared slot would be evicted on every alternating fetch and each
+/// account would re-read from disk instead of ever hitting the cache.
+static CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedCodexCredentials>>> =
+    OnceLock::new();
 
 /// Codex API client
 pub struct CodexApi {
     client: reqwest::Client,
-    home_dir: PathBuf,
+    /// Explicit `CODEX_HOME` for a Ceiling-managed account. When `None` the
+    /// client resolves the home the CLI itself would use.
+    codex_home: Option<PathBuf>,
 }
 
 impl CodexApi {
@@ -40,8 +47,40 @@ impl CodexApi {
 
         Self {
             client,
-            home_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            codex_home: None,
         }
+    }
+
+    /// Build a client pinned to a specific `CODEX_HOME`, for tracking one of
+    /// several configured Codex accounts.
+    pub fn with_codex_home(codex_home: PathBuf) -> Self {
+        Self {
+            codex_home: Some(codex_home),
+            ..Self::new()
+        }
+    }
+
+    /// The same client aimed at a different account. Reuses the underlying
+    /// connection pool rather than building a second one per fetch.
+    pub fn scoped(&self, codex_home: PathBuf) -> Self {
+        Self {
+            client: self.client.clone(),
+            codex_home: Some(codex_home),
+        }
+    }
+
+    /// The `CODEX_HOME` this client reads from.
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home
+            .clone()
+            .unwrap_or_else(crate::core::ambient_codex_home)
+    }
+
+    /// Identity claims for this client's home, for labeling and for keying usage
+    /// by account. Never includes token material.
+    pub fn identity(&self) -> Option<crate::core::CodexIdentity> {
+        use crate::core::AccountIdentity;
+        crate::core::CodexIdentity::read(&self.codex_home())
     }
 
     /// Fetch usage information from Codex API
@@ -127,10 +166,10 @@ impl CodexApi {
         let auth_path = self.get_auth_path();
 
         if !auth_path.exists() {
-            return Err(ProviderError::NotInstalled(
-                "Codex auth.json not found. Run `codex login` in a terminal to sign in."
-                    .to_string(),
-            ));
+            return Err(ProviderError::NotInstalled(format!(
+                "Codex auth.json not found in {}. Run `codex login` in a terminal to sign in.",
+                auth_path.display()
+            )));
         }
 
         let modified = std::fs::metadata(&auth_path)
@@ -190,8 +229,8 @@ impl CodexApi {
         })
     }
 
-    fn credential_cache() -> &'static Mutex<Option<CachedCodexCredentials>> {
-        CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None))
+    fn credential_cache() -> &'static Mutex<HashMap<PathBuf, CachedCodexCredentials>> {
+        CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     fn cached_credentials(
@@ -199,11 +238,8 @@ impl CodexApi {
         modified: Option<SystemTime>,
     ) -> Option<CodexCredentials> {
         let guard = Self::credential_cache().lock().ok()?;
-        let cached = guard.as_ref()?;
-        if cached.path == path
-            && cached.modified == modified
-            && cached.loaded_at.elapsed() <= CREDENTIAL_CACHE_TTL
-        {
+        let cached = guard.get(path)?;
+        if cached.modified == modified && cached.loaded_at.elapsed() <= CREDENTIAL_CACHE_TTL {
             return Some(cached.credentials.clone());
         }
         None
@@ -215,39 +251,28 @@ impl CodexApi {
         credentials: CodexCredentials,
     ) {
         if let Ok(mut guard) = Self::credential_cache().lock() {
-            *guard = Some(CachedCodexCredentials {
+            // Drop entries that can no longer be served, so a long-lived process
+            // that cycles through homes does not grow this map without bound.
+            guard.retain(|_, entry| entry.loaded_at.elapsed() <= CREDENTIAL_CACHE_TTL);
+            guard.insert(
                 path,
-                modified,
-                loaded_at: Instant::now(),
-                credentials,
-            });
+                CachedCodexCredentials {
+                    modified,
+                    loaded_at: Instant::now(),
+                    credentials,
+                },
+            );
         }
     }
 
     fn get_auth_path(&self) -> PathBuf {
-        // Check CODEX_HOME env var
-        if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let trimmed = codex_home.trim();
-            if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("auth.json");
-            }
-        }
-
-        self.home_dir.join(".codex").join("auth.json")
+        self.codex_home().join("auth.json")
     }
 
     fn resolve_base_url(&self) -> String {
-        // Check CODEX_HOME for config.toml
-        let config_path = if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let trimmed = codex_home.trim();
-            if !trimmed.is_empty() {
-                PathBuf::from(trimmed).join("config.toml")
-            } else {
-                self.home_dir.join(".codex").join("config.toml")
-            }
-        } else {
-            self.home_dir.join(".codex").join("config.toml")
-        };
+        // Each home carries its own config.toml, so a per-account base URL
+        // override follows the account rather than leaking across them.
+        let config_path = self.codex_home().join("config.toml");
 
         if let Ok(content) = std::fs::read_to_string(&config_path)
             && let Some(base_url) = parse_chatgpt_base_url(&content)
@@ -602,7 +627,6 @@ struct CodexCredentials {
 }
 
 struct CachedCodexCredentials {
-    path: PathBuf,
     modified: Option<SystemTime>,
     loaded_at: Instant,
     credentials: CodexCredentials,
@@ -912,6 +936,107 @@ fn capitalize(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const AUTH_JSON: &str =
+        r#"{"tokens":{"access_token":"from-account-dir","account_id":"acct-scoped"}}"#;
+
+    #[test]
+    fn a_scoped_client_reads_its_own_account_directory() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(home.path().join("auth.json"), AUTH_JSON).expect("write auth");
+
+        let api = CodexApi::new().scoped(home.path().to_path_buf());
+        let credentials = api.load_credentials().expect("credentials");
+
+        assert_eq!(credentials.access_token, "from-account-dir");
+        assert_eq!(credentials.account_id.as_deref(), Some("acct-scoped"));
+        assert_eq!(api.get_auth_path(), home.path().join("auth.json"));
+    }
+
+    #[test]
+    fn a_scoped_client_reports_its_own_account_identity() {
+        // Payload: {"email":"work@example.com",
+        //   "https://api.openai.com/auth":{"chatgpt_plan_type":"team"}}
+        let payload = "eyJlbWFpbCI6IndvcmtAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJ0ZWFtIn19";
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("auth.json"),
+            format!(
+                r#"{{"tokens":{{"id_token":"h.{payload}.s","access_token":"secret","account_id":"acct-work"}}}}"#
+            ),
+        )
+        .expect("write auth");
+
+        // This is what stamps `account_email` on the snapshot, which is what
+        // capacity baselines and enforcement expectations are scoped by.
+        let identity = CodexApi::new()
+            .scoped(home.path().to_path_buf())
+            .identity()
+            .expect("identity");
+
+        assert_eq!(identity.email.as_deref(), Some("work@example.com"));
+        assert_eq!(identity.plan_type.as_deref(), Some("team"));
+    }
+
+    #[test]
+    fn an_account_directory_without_credentials_reports_itself() {
+        let home = tempfile::tempdir().expect("tempdir");
+
+        // `CodexCredentials` has no `Debug` on purpose, so unwrap the error by hand.
+        let Err(error) = CodexApi::new()
+            .scoped(home.path().to_path_buf())
+            .load_credentials()
+        else {
+            panic!("a directory with no auth.json cannot resolve credentials");
+        };
+
+        // Naming the directory matters once several accounts exist: "not signed
+        // in" is useless if it does not say which account.
+        assert!(
+            error
+                .to_string()
+                .contains(&home.path().display().to_string()),
+            "error should name the account directory, got: {error}"
+        );
+    }
+
+    /// Guards correctness under alternation, which is what a refresh cycle does
+    /// with several accounts configured. Note this does not by itself prove the
+    /// per-path credential cache: the previous single-slot cache also returned
+    /// the right token here, it just never hit.
+    #[test]
+    fn alternating_between_accounts_always_serves_each_accounts_own_token() {
+        let personal = tempfile::tempdir().expect("tempdir");
+        let work = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            personal.path().join("auth.json"),
+            r#"{"tokens":{"access_token":"personal-token","account_id":"acct-personal"}}"#,
+        )
+        .expect("write personal");
+        std::fs::write(
+            work.path().join("auth.json"),
+            r#"{"tokens":{"access_token":"work-token","account_id":"acct-work"}}"#,
+        )
+        .expect("write work");
+
+        let api = CodexApi::new();
+        let personal_api = api.scoped(personal.path().to_path_buf());
+        let work_api = api.scoped(work.path().to_path_buf());
+
+        for _ in 0..3 {
+            assert_eq!(
+                personal_api
+                    .load_credentials()
+                    .expect("personal")
+                    .access_token,
+                "personal-token"
+            );
+            assert_eq!(
+                work_api.load_credentials().expect("work").access_token,
+                "work-token"
+            );
+        }
+    }
 
     #[test]
     fn parses_codex_credentials_without_retaining_refresh_token() {

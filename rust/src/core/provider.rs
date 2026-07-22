@@ -507,6 +507,13 @@ pub struct FetchContext {
 
     /// Optional provider gateway URL, used by local gateway-backed providers.
     pub gateway_url: Option<String>,
+
+    /// Config directory of the Ceiling-managed account to fetch, for providers
+    /// whose accounts are directory-backed (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`).
+    ///
+    /// `None` means follow whichever account the CLI is signed in as, which is
+    /// what happens until the user configures accounts explicitly.
+    pub account_config_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for FetchContext {
@@ -521,7 +528,21 @@ impl Default for FetchContext {
             workspace_id: None,
             api_region: None,
             gateway_url: None,
+            account_config_dir: None,
         }
+    }
+}
+
+impl FetchContext {
+    /// Aim this context at whichever account is configured for `provider`,
+    /// leaving it following the CLI when none is.
+    pub fn for_account(
+        mut self,
+        provider: ProviderId,
+        accounts: &super::ConfiguredAccounts,
+    ) -> Self {
+        self.account_config_dir = accounts.active_dir_for(provider);
+        self
     }
 }
 

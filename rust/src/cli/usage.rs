@@ -4,8 +4,8 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::core::{
-    CostSnapshot, FetchContext, ProviderFetchResult, ProviderId, RateWindow, SourceMode, UsagePace,
-    UsageSnapshot, instantiate_provider,
+    ConfiguredAccounts, CostSnapshot, FetchContext, ProviderFetchResult, ProviderId, RateWindow,
+    SourceMode, UsagePace, UsageSnapshot, instantiate_provider,
 };
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel, fetch_provider_status};
 
@@ -156,6 +156,7 @@ struct UsageCommand {
     fetch_status: bool,
     pretty: bool,
     ctx: FetchContext,
+    accounts: ConfiguredAccounts,
 }
 
 impl UsageCommand {
@@ -172,6 +173,7 @@ impl UsageCommand {
             fetch_status: args.status,
             pretty: args.pretty,
             ctx: build_usage_fetch_context(&args, source_mode),
+            accounts: ConfiguredAccounts::load(),
         })
     }
 
@@ -205,6 +207,7 @@ fn build_usage_fetch_context(args: &UsageArgs, source_mode: SourceMode) -> Fetch
         workspace_id: None,
         api_region: None,
         gateway_url: None,
+        account_config_dir: None,
     }
 }
 
@@ -272,7 +275,11 @@ async fn fetch_provider_result(
     let status_future = command
         .fetch_status
         .then(|| fetch_provider_status(provider_id.cli_name()));
-    let result = provider.fetch_usage(&command.ctx).await?;
+    let ctx = command
+        .ctx
+        .clone()
+        .for_account(provider_id, &command.accounts);
+    let result = provider.fetch_usage(&ctx).await?;
     let status = if let Some(fut) = status_future {
         fut.await
     } else {

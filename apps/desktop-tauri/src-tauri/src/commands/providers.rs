@@ -229,6 +229,7 @@ struct ProviderRefreshInputs {
     manual_cookies: ManualCookies,
     api_keys: ApiKeys,
     token_accounts: HashMap<ProviderId, ProviderAccountData>,
+    account_dirs: ConfiguredAccounts,
 }
 
 impl ProviderRefreshInputs {
@@ -248,8 +249,19 @@ impl ProviderRefreshInputs {
             manual_cookies,
             api_keys,
             token_accounts,
+            account_dirs: ConfiguredAccounts::load(),
         }
     }
+}
+
+/// Note which account each config directory holds right now.
+///
+/// Runs on the refresh cycle because that is already when Ceiling reads these
+/// credentials. It is what lets local activity be attributed to an account in
+/// the common setup where someone keeps one config directory and re-runs
+/// `codex login` to switch, since the logs themselves carry no account id.
+fn record_account_observations(accounts: &ConfiguredAccounts) {
+    codexbar::core::AccountLedger::record_and_persist(accounts, chrono::Utc::now().timestamp());
 }
 
 fn spawn_provider_refreshes(
@@ -259,31 +271,56 @@ fn spawn_provider_refreshes(
     let mut handles = Vec::with_capacity(inputs.enabled_ids.len());
     let fetch_permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROVIDER_FETCHES));
 
+    record_account_observations(&inputs.account_dirs);
+
     for id in &inputs.enabled_ids {
         let id = *id;
         let app_handle = app.clone();
         let fetch_permits = Arc::clone(&fetch_permits);
-        let ctx = build_fetch_context(
+        let mut ctx = build_fetch_context(
             id,
             &inputs.settings,
             &inputs.manual_cookies,
             &inputs.api_keys,
             &inputs.token_accounts,
         );
+        ctx.account_config_dir = inputs.account_dirs.active_dir_for(id);
+        // Carried alongside the reading so every surface can say which account
+        // it is showing, rather than each one re-reading the store.
+        let account = AccountBadge {
+            label: inputs.account_dirs.active_label_for(id).map(str::to_string),
+            tint: inputs.account_dirs.active_tint_for(id).map(str::to_string),
+        };
 
         handles.push(tokio::spawn(async move {
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
                 return;
             };
-            refresh_provider(app_handle, id, ctx).await;
+            refresh_provider(app_handle, id, ctx, account).await;
         }));
     }
 
     handles
 }
 
-async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchContext) {
-    let snapshot = fetch_provider_snapshot(id, ctx).await;
+/// The active account's display identity, attached to each reading.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AccountBadge {
+    pub label: Option<String>,
+    pub tint: Option<String>,
+}
+
+async fn refresh_provider(
+    app: tauri::AppHandle,
+    id: ProviderId,
+    ctx: FetchContext,
+    account: AccountBadge,
+) {
+    let mut snapshot = fetch_provider_snapshot(id, ctx).await;
+    // Set on failures too: a card that cannot fetch should still say which
+    // account it was trying to read.
+    snapshot.account_label = account.label;
+    snapshot.account_tint = account.tint;
 
     let state = app.state::<Mutex<AppState>>();
     let (snapshot, capacity_events, notifications_armed) = if let Ok(mut guard) = state.lock() {

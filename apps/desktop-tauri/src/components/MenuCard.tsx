@@ -444,12 +444,20 @@ export default function MenuCard({
   }, [provider.providerId, provider.accountEmail, onLayoutChange]);
 
   const isWayfinder = provider.providerId === "wayfinder";
-  const email = !isWayfinder && provider.accountEmail
+  const rawEmail = !isWayfinder && provider.accountEmail
     ? hideEmail
       ? maskEmail(provider.accountEmail)
       : provider.accountEmail
     : null;
   const planName = !isWayfinder ? displayPlanName(provider.planName) : null;
+  // Present only once the user has configured accounts for this provider. While
+  // Ceiling is following the CLI there is no chosen account to name, so the
+  // backend sends null and nothing renders.
+  const accountLabel = !isWayfinder ? (provider.accountLabel ?? null) : null;
+  // Account labels are seeded from the directory and usually already contain the
+  // email, so showing both would print it twice in one row.
+  const email =
+    accountLabel && rawEmail && accountLabel.includes(rawEmail) ? null : rawEmail;
 
   const metrics: Array<MetricEntry | InactiveMetricEntry> = [
     ...(isWayfinder
@@ -547,6 +555,19 @@ export default function MenuCard({
           />
           <div className="menu-card__name-group">
             <span className="menu-card__name">{provider.displayName}</span>
+            {accountLabel && (
+              <span
+                className="menu-card__account"
+                style={
+                  provider.accountTint
+                    ? { color: provider.accountTint }
+                    : undefined
+                }
+                title={accountLabel}
+              >
+                {accountLabel}
+              </span>
+            )}
             {!provider.error && email && <span className="menu-card__email">{email}</span>}
           </div>
         </div>
