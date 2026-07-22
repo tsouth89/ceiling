@@ -476,20 +476,30 @@ pub(super) fn preserve_last_good_transient_failure(
     id: ProviderId,
     snapshot: ProviderUsageSnapshot,
 ) -> ProviderUsageSnapshot {
+    // Scoped to the account, not just the provider. Substituting another
+    // account's reading here would report one seat's usage under the other's
+    // name, and a shared counter let one account's failure consume the other's
+    // single allowed retry.
+    let key = (id, snapshot.account_id.clone());
+
     if snapshot.error.is_none() {
-        guard.transient_provider_failure_counts.remove(&id);
+        guard.transient_provider_failure_counts.remove(&key);
         return snapshot;
     }
 
     if id != ProviderId::Claude || !is_transient_claude_auth_error(snapshot.error.as_deref()) {
-        guard.transient_provider_failure_counts.remove(&id);
+        guard.transient_provider_failure_counts.remove(&key);
         return snapshot;
     }
 
     let Some(previous) = guard
         .provider_cache
         .iter()
-        .find(|cached| cached.provider_id == id.cli_name() && cached.error.is_none())
+        .find(|cached| {
+            cached.provider_id == id.cli_name()
+                && cached.account_id == snapshot.account_id
+                && cached.error.is_none()
+        })
         .cloned()
     else {
         return snapshot;
@@ -497,7 +507,7 @@ pub(super) fn preserve_last_good_transient_failure(
 
     let count = guard
         .transient_provider_failure_counts
-        .entry(id)
+        .entry(key)
         .or_insert(0);
     if *count == 0 {
         *count = 1;

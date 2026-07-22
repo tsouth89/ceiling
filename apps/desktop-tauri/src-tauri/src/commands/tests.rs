@@ -848,6 +848,86 @@ fn hiding_codex_spark_rows_preserves_other_extra_usage() {
     assert_eq!(snapshot.extra_rate_windows[0].id, "credits");
 }
 
+fn claude_account_snapshot(account_id: &str, used: f64) -> ProviderUsageSnapshot {
+    let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(used)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "OAuth".to_string(),
+    };
+    let mut snapshot =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
+    snapshot.account_id = Some(account_id.to_string());
+    snapshot
+}
+
+fn claude_account_error(account_id: &str) -> ProviderUsageSnapshot {
+    let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+    let mut snapshot = ProviderUsageSnapshot::from_error(
+        ProviderId::Claude,
+        &metadata,
+        "Unauthorized".to_string(),
+    );
+    snapshot.account_id = Some(account_id.to_string());
+    snapshot
+}
+
+#[test]
+fn a_transient_failure_never_substitutes_another_accounts_reading() {
+    let mut state = crate::state::AppState::new();
+    // Only the personal account has a good reading cached.
+    state
+        .provider_cache
+        .push(claude_account_snapshot("acct-personal", 42.0));
+
+    let preserved = super::providers::preserve_last_good_transient_failure(
+        &mut state,
+        ProviderId::Claude,
+        claude_account_error("acct-work"),
+    );
+
+    // Substituting personal's reading here would report one seat's usage under
+    // the other's name. The work account has nothing good to fall back to, so
+    // its error must surface.
+    assert_eq!(preserved.account_id.as_deref(), Some("acct-work"));
+    assert!(preserved.error.is_some());
+}
+
+#[test]
+fn each_account_gets_its_own_transient_failure_grace() {
+    let mut state = crate::state::AppState::new();
+    state
+        .provider_cache
+        .push(claude_account_snapshot("acct-personal", 42.0));
+    state
+        .provider_cache
+        .push(claude_account_snapshot("acct-work", 77.0));
+
+    let personal = super::providers::preserve_last_good_transient_failure(
+        &mut state,
+        ProviderId::Claude,
+        claude_account_error("acct-personal"),
+    );
+    let work = super::providers::preserve_last_good_transient_failure(
+        &mut state,
+        ProviderId::Claude,
+        claude_account_error("acct-work"),
+    );
+
+    // A shared counter let the first account's failure consume the second's one
+    // allowed retry, so the second showed an error it should have ridden out.
+    assert_eq!(personal.error, None, "personal lost its grace");
+    assert_eq!(
+        work.error, None,
+        "work lost its grace to personal's failure"
+    );
+    assert_eq!(
+        work.primary.used_percent, 77.0,
+        "work got personal's numbers"
+    );
+}
+
 #[test]
 fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
     let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();

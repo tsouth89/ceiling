@@ -120,7 +120,10 @@ pub struct AppState {
     pub current_target: SurfaceTarget,
     pub tray_anchor: Option<TrayAnchor>,
     pub provider_cache: Vec<ProviderUsageSnapshot>,
-    pub transient_provider_failure_counts: HashMap<ProviderId, u8>,
+    /// Keyed by provider *and* account: two accounts on one provider fail
+    /// independently, and sharing a counter let one account's failure consume
+    /// the other's single allowed retry.
+    pub transient_provider_failure_counts: HashMap<(ProviderId, Option<String>), u8>,
     pub provider_cache_updated_at: Option<std::time::Instant>,
     pub provider_refresh_started_at: Option<std::time::Instant>,
     pub is_refreshing: bool,
