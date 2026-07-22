@@ -404,6 +404,53 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// Every command in `generate_handler!` must also be allowed in
+    /// `permissions/commands.toml`.
+    ///
+    /// Registering a command without allowlisting it compiles, passes every
+    /// other test, and then fails at runtime with "not allowed by ACL" the
+    /// moment a user opens the surface that calls it. That shipped once: all six
+    /// config-directory account commands were registered but not allowed, so the
+    /// entire Accounts tab rendered an error in 1.5.0.
+    #[test]
+    fn every_registered_command_is_allowed_by_the_acl() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        const COMMANDS_TOML: &str = include_str!("../permissions/commands.toml");
+
+        let handler = MAIN_RS
+            .split_once("tauri::generate_handler![")
+            .expect("invoke handler")
+            .1
+            .split_once("])")
+            .expect("end of handler")
+            .0;
+
+        let registered: Vec<&str> = handler
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .filter_map(|line| line.trim_end_matches(',').rsplit("::").next())
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(
+            registered.len() > 30,
+            "parsed too few commands ({}); the handler format probably changed              and this test is no longer checking anything",
+            registered.len()
+        );
+
+        let missing: Vec<&str> = registered
+            .iter()
+            .copied()
+            .filter(|name| !COMMANDS_TOML.contains(&format!("\"{name}\"")))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "these commands are registered but not allowed in              permissions/commands.toml, so calling them fails at runtime: {missing:?}"
+        );
+    }
+
     #[test]
     fn close_request_hides_tray_first_surfaces() {
         assert!(should_hide_close_request(SurfaceMode::TrayPanel));
