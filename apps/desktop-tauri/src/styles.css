@@ -9069,3 +9069,40 @@ body:has(.dashboard-shell) #root {
   min-width: 0;
   flex: 0 1 auto;
 }
+
+/* Account selector on the provider detail pane. Reads as tabs because that is
+   what it does: the rest of the pane describes whichever is chosen. */
+.provider-detail__accounts {
+  display: flex;
+  gap: 4px;
+  margin-block-end: 12px;
+  border-block-end: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  overflow-x: auto;
+}
+
+.provider-detail__account {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: none;
+  border-block-end: 2px solid transparent;
+  background: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.provider-detail__account:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.provider-detail__account--selected {
+  color: var(--text-primary);
+  border-block-end-color: var(--accent, #4f8ff7);
+}
+
+.provider-detail__account:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
