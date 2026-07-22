@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
 import { openSettingsWindow, quitApp as quitApplication } from "../lib/tauri";
+import { providerRowKey } from "../lib/providerRow";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
@@ -391,7 +392,7 @@ export default function PopOutPanel({
                     className={`menu-stack${selectedProviderId === null ? " menu-stack--overview" : ""}`}
                   >
                     {sorted.map((p, idx) => (
-                      <Fragment key={p.providerId}>
+                      <Fragment key={providerRowKey(p)}>
                         {idx > 0 && <div className="menu-stack__sep" />}
                         <div className="menu-stack__item">
                           <PlanStatusCard

@@ -20,6 +20,7 @@ import { useLocale } from "../hooks/useLocale";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import MenuCard from "../components/MenuCard";
+import { providerRowKey } from "../lib/providerRow";
 import PlanStatusCard from "../components/PlanStatusCard";
 import MenuSurface, {
   MenuEmpty,
@@ -430,7 +431,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       <div
         className={`menu-stack__item${isSelected ? " menu-stack__item--selected" : ""}`}
         id={`card-${p.providerId}`}
-        key={p.providerId}
+        key={providerRowKey(p)}
       >
         {isOverview ? (
           <PlanStatusCard
@@ -515,7 +516,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
                 </div>
               ))
             : visibleProviders.map((p, idx) => (
-                <Fragment key={p.providerId}>
+                <Fragment key={providerRowKey(p)}>
                   {idx > 0 && <div className="menu-stack__sep" />}
                   {renderProviderCard(p)}
                 </Fragment>

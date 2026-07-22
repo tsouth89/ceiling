@@ -458,6 +458,11 @@ export interface ProviderUsageSnapshot {
   pace: PaceSnapshot | null;
   accountOrganization: string | null;
   trayStatusLabel: string | null;
+  /**
+   * Stable id of the Ceiling-managed account this reading came from. Together
+   * with providerId it identifies a displayed row; null while following the CLI.
+   */
+  accountId?: string | null;
   /** Ceiling-managed account this reading came from, or null when following the CLI. */
   accountLabel?: string | null;
   /** Accent color for that account (validated hex). */
