@@ -58,6 +58,15 @@ impl ConfiguredAccounts {
         }
     }
 
+    /// Accent color of the active account for `provider`, when one is set.
+    pub fn active_tint_for(&self, provider: ProviderId) -> Option<&str> {
+        match provider {
+            ProviderId::Codex => self.codex.active_account()?.tint.as_deref(),
+            ProviderId::Claude => self.claude.active_account()?.tint.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Whether `provider` stores its accounts as config directories.
     pub fn supports(provider: ProviderId) -> bool {
         matches!(provider, ProviderId::Codex | ProviderId::Claude)

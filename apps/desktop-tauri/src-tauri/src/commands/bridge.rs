@@ -129,6 +129,13 @@ pub struct ProviderUsageSnapshot {
     pub pace: Option<PaceSnapshot>,
     pub account_organization: Option<String>,
     pub tray_status_label: Option<String>,
+    /// Label of the Ceiling-managed account this reading came from. `None` when
+    /// the provider is following whichever account its CLI is signed in as.
+    #[serde(default)]
+    pub account_label: Option<String>,
+    /// Accent color for that account, so several seats stay distinguishable.
+    #[serde(default)]
+    pub account_tint: Option<String>,
     pub fetch_duration_ms: Option<u128>,
     pub wayfinder_usage: Option<codexbar::core::WayfinderUsageSnapshot>,
 }
@@ -315,6 +322,8 @@ impl ProviderUsageSnapshot {
             pace,
             account_organization: usage.account_organization.clone(),
             tray_status_label: None,
+            account_label: None,
+            account_tint: None,
             fetch_duration_ms: None,
             wayfinder_usage: result.wayfinder_usage.clone(),
         }
@@ -355,6 +364,8 @@ impl ProviderUsageSnapshot {
             pace: None,
             account_organization: None,
             tray_status_label: None,
+            account_label: None,
+            account_tint: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
         }

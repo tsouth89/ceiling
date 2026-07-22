@@ -262,6 +262,28 @@ describe("MenuCard", () => {
     expect(document.querySelector(".menu-metric--inactive")).not.toBeNull();
   });
 
+  it("names the tracked account and tints it, and stays silent without one", async () => {
+    const tracked = provider(null);
+    tracked.accountLabel = "work@example.com (team)";
+    tracked.accountTint = "#4f8ff7";
+    const { unmount } = renderCard(tracked);
+
+    const label = await screen.findByText("work@example.com (team)");
+    expect(label).toBeInTheDocument();
+    expect(label).toHaveStyle({ color: "rgb(79, 143, 247)" });
+    unmount();
+
+    // Following the CLI: no account was chosen, so naming one would be a lie.
+    const following = provider(null);
+    following.accountLabel = null;
+    renderCard(following);
+    // Let the locale settle before asserting an absence, so the assertion is
+    // about the account label and not about the card still mounting.
+    await screen.findByText(following.displayName);
+
+    expect(document.querySelector(".menu-card__account")).toBeNull();
+  });
+
   it("renders Wayfinder telemetry without quota or identity rows", async () => {
     const snapshot = provider(null);
     snapshot.providerId = "wayfinder";

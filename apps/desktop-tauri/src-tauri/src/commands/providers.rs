@@ -285,20 +285,42 @@ fn spawn_provider_refreshes(
             &inputs.token_accounts,
         );
         ctx.account_config_dir = inputs.account_dirs.active_dir_for(id);
+        // Carried alongside the reading so every surface can say which account
+        // it is showing, rather than each one re-reading the store.
+        let account = AccountBadge {
+            label: inputs.account_dirs.active_label_for(id).map(str::to_string),
+            tint: inputs.account_dirs.active_tint_for(id).map(str::to_string),
+        };
 
         handles.push(tokio::spawn(async move {
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
                 return;
             };
-            refresh_provider(app_handle, id, ctx).await;
+            refresh_provider(app_handle, id, ctx, account).await;
         }));
     }
 
     handles
 }
 
-async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchContext) {
-    let snapshot = fetch_provider_snapshot(id, ctx).await;
+/// The active account's display identity, attached to each reading.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AccountBadge {
+    pub label: Option<String>,
+    pub tint: Option<String>,
+}
+
+async fn refresh_provider(
+    app: tauri::AppHandle,
+    id: ProviderId,
+    ctx: FetchContext,
+    account: AccountBadge,
+) {
+    let mut snapshot = fetch_provider_snapshot(id, ctx).await;
+    // Set on failures too: a card that cannot fetch should still say which
+    // account it was trying to read.
+    snapshot.account_label = account.label;
+    snapshot.account_tint = account.tint;
 
     let state = app.state::<Mutex<AppState>>();
     let (snapshot, capacity_events, notifications_armed) = if let Ok(mut guard) = state.lock() {

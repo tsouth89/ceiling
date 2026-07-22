@@ -458,6 +458,10 @@ export interface ProviderUsageSnapshot {
   pace: PaceSnapshot | null;
   accountOrganization: string | null;
   trayStatusLabel: string | null;
+  /** Ceiling-managed account this reading came from, or null when following the CLI. */
+  accountLabel?: string | null;
+  /** Accent color for that account (validated hex). */
+  accountTint?: string | null;
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
 }
