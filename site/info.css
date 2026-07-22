@@ -6,6 +6,7 @@
   --muted: #a6b0ba;
   --line: rgba(205, 221, 231, 0.16);
   --cyan: #82e8f3;
+
   font-family: "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
 
@@ -90,4 +91,3 @@ footer {
 
 footer a { color: var(--muted); text-decoration: none; }
 :focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; border-radius: 4px; }
-
