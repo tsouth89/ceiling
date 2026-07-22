@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Local, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
@@ -43,6 +43,11 @@ pub struct CapacityEventPayload {
     pub previous_reset_at: String,
     pub current_reset_at: String,
     pub occurred_at: String,
+    /// True when this was detected on the first reading after launch, i.e. it
+    /// happened while Ceiling was not running. The event is real, but
+    /// `occurred_at` is when it was *noticed*, not when it happened.
+    #[serde(default)]
+    pub while_away: bool,
 }
 
 impl CapacityEventPayload {
@@ -73,7 +78,28 @@ impl CapacityEventPayload {
         }
     }
 
+    /// Local time this happened, when it is known well enough to name.
+    fn occurred_local_time(&self) -> Option<String> {
+        DateTime::parse_from_rfc3339(&self.occurred_at)
+            .ok()
+            .map(|at| at.with_timezone(&Local).format("%-I:%M %p").to_string())
+    }
+
     pub fn notification_body(&self) -> String {
+        let base = self.notification_body_live();
+        if !self.while_away {
+            return base;
+        }
+        // Say plainly that this already happened. Announcing it as if it just
+        // occurred is what the old behavior was avoiding by staying silent, and
+        // silence is worse than a timestamp.
+        match self.occurred_local_time() {
+            Some(time) => format!("{base} This happened at {time}, while Ceiling was closed."),
+            None => format!("{base} This happened while Ceiling was closed."),
+        }
+    }
+
+    fn notification_body_live(&self) -> String {
         let remaining = (100.0 - self.current_used_percent).clamp(0.0, 100.0);
         match self.kind {
             CapacityEventKind::ScheduledReset => format!(
@@ -176,6 +202,8 @@ struct PersistedEvent {
     previous_reset_at: DateTime<Utc>,
     current_reset_at: DateTime<Utc>,
     occurred_at: DateTime<Utc>,
+    #[serde(default)]
+    while_away: bool,
 }
 
 impl PersistedEvent {
@@ -193,6 +221,7 @@ impl PersistedEvent {
             previous_reset_at: self.previous_reset_at.to_rfc3339(),
             current_reset_at: self.current_reset_at.to_rfc3339(),
             occurred_at: self.occurred_at.to_rfc3339(),
+            while_away: self.while_away,
         }
     }
 }
@@ -253,9 +282,18 @@ impl CapacityEventObserver {
         };
 
         if self.seen_scopes.insert(scope.clone()) {
+            // First reading of this scope since launch. The persisted baseline is
+            // from a previous run, so anything that changed did so while Ceiling
+            // was not watching. Report it as such rather than staying silent:
+            // saying nothing is what made an overnight reset invisible.
+            let away = self
+                .baselines
+                .get(&scope)
+                .map(|previous| detect_away_events(snapshot, previous, &current))
+                .unwrap_or_default();
             self.baselines.insert(scope, current);
             self.persist();
-            return Vec::new();
+            return away;
         }
 
         let Some(previous) = self.baselines.get(&scope).cloned() else {
@@ -390,6 +428,57 @@ impl CapacityEventObserver {
     }
 }
 
+/// How stale a baseline may be and still be worth announcing against.
+///
+/// Reopening Ceiling after a week should not replay a reset nobody is waiting to
+/// hear about; reopening the morning after should.
+const AWAY_BASELINE_MAX_AGE_HOURS: i64 = 24;
+
+/// Resets found on the first reading after launch.
+///
+/// Only *scheduled* resets qualify. The live path emits those immediately but
+/// holds surprise, partial and shift events for a confirming second reading,
+/// because a lone reading can be anomalous. After a restart there is no earlier
+/// reading this session to confirm against, so anything needing confirmation
+/// cannot be trusted and is silently absorbed into the new baseline as before.
+///
+/// A scheduled reset needs no second opinion: the window's own reset time having
+/// passed is corroboration independent of the usage number.
+fn detect_away_events(
+    snapshot: &ProviderUsageSnapshot,
+    previous: &ProviderObservation,
+    current: &ProviderObservation,
+) -> Vec<CapacityEventPayload> {
+    if current.observed_at - previous.observed_at > Duration::hours(AWAY_BASELINE_MAX_AGE_HOURS) {
+        return Vec::new();
+    }
+
+    let mut emitted = Vec::new();
+    for (window_id, current_window) in &current.windows {
+        let Some(previous_window) = previous.windows.get(window_id) else {
+            continue;
+        };
+        let Some(mut event) =
+            detect_reset(snapshot, previous, current, previous_window, current_window)
+        else {
+            continue;
+        };
+        if event.kind != CapacityEventKind::ScheduledReset {
+            continue;
+        }
+        event.while_away = true;
+        // The window was due to reset at its previous reset time, which is a far
+        // better answer to "when did this happen" than "when I noticed".
+        if previous_window.resets_at > previous.observed_at
+            && previous_window.resets_at <= current.observed_at
+        {
+            event.occurred_at = previous_window.resets_at;
+        }
+        emitted.push(event.payload());
+    }
+    emitted
+}
+
 fn detect_reset(
     snapshot: &ProviderUsageSnapshot,
     previous_observation: &ProviderObservation,
@@ -434,6 +523,7 @@ fn detect_reset(
         previous_reset_at: previous.resets_at,
         current_reset_at: current.resets_at,
         occurred_at: current_observation.observed_at,
+        while_away: false,
     })
 }
 
@@ -463,6 +553,7 @@ fn detect_banked_reset_grant(
         previous_reset_at: previous.observed_at,
         current_reset_at: current.observed_at,
         occurred_at: current.observed_at,
+        while_away: false,
     })
 }
 
@@ -566,6 +657,7 @@ fn detect_transition(
             previous_reset_at,
             current_reset_at,
             occurred_at: current.observed_at,
+            while_away: false,
         },
         candidate,
     ))
@@ -1070,6 +1162,127 @@ mod tests {
         assert_eq!(events[0].kind, CapacityEventKind::ScheduledReset);
         assert_eq!(events[0].window_id, "weekly");
         assert_eq!(events[0].window_label, "Weekly");
+    }
+
+    /// Simulates a restart: a fresh observer inherits the persisted baselines but
+    /// not `seen_scopes`, exactly as `load_default` leaves it.
+    fn restarted_with(baselines: &CapacityEventObserver) -> CapacityEventObserver {
+        CapacityEventObserver {
+            baselines: baselines.baselines.clone(),
+            ..CapacityEventObserver::default()
+        }
+    }
+
+    #[test]
+    fn a_reset_while_ceiling_was_closed_is_reported_rather_than_swallowed() {
+        let evening = Utc::now() - Duration::hours(8);
+        let reset_at = evening + Duration::hours(3);
+        let mut observer = CapacityEventObserver::default();
+        observer.observe(&snapshot(evening, 92.0, reset_at));
+
+        // Ceiling is closed over the reset and reopened in the morning.
+        let morning = evening + Duration::hours(8);
+        let events = restarted_with(&observer).observe(&snapshot(
+            morning,
+            3.0,
+            reset_at + Duration::hours(5),
+        ));
+
+        assert_eq!(events.len(), 1, "the overnight reset must be reported");
+        assert!(events[0].while_away);
+        // Reported for when it happened, not when it was noticed.
+        assert_eq!(events[0].occurred_at, reset_at.to_rfc3339());
+        assert!(
+            events[0]
+                .notification_body()
+                .contains("while Ceiling was closed"),
+            "body should not imply it just happened: {}",
+            events[0].notification_body()
+        );
+    }
+
+    #[test]
+    fn an_away_drop_that_would_need_confirming_is_not_announced() {
+        // A large drop with an unchanged reset time reads as a partial reset,
+        // which the live path only emits after a second corroborating reading.
+        // There is no such reading after a restart, so it must stay silent
+        // rather than alerting on one possibly-anomalous number.
+        let earlier = Utc::now() - Duration::hours(2);
+        let reset_at = earlier + Duration::days(20);
+        let mut observer = CapacityEventObserver::default();
+        observer.observe(&snapshot(earlier, 99.0, reset_at));
+
+        let events = restarted_with(&observer).observe(&snapshot(
+            earlier + Duration::hours(2),
+            40.0,
+            reset_at,
+        ));
+
+        assert!(events.is_empty(), "got: {events:?}");
+    }
+
+    #[test]
+    fn an_away_reset_older_than_a_day_is_not_replayed() {
+        let long_ago = Utc::now() - Duration::hours(30);
+        let reset_at = long_ago + Duration::hours(3);
+        let mut observer = CapacityEventObserver::default();
+        observer.observe(&snapshot(long_ago, 92.0, reset_at));
+
+        // Reopening after a long absence should not announce stale history.
+        let events = restarted_with(&observer).observe(&snapshot(
+            Utc::now(),
+            3.0,
+            Utc::now() + Duration::hours(4),
+        ));
+
+        assert!(events.is_empty(), "got: {events:?}");
+    }
+
+    #[test]
+    fn a_restart_without_a_reset_stays_quiet() {
+        let earlier = Utc::now() - Duration::hours(2);
+        let reset_at = earlier + Duration::hours(3);
+        let mut observer = CapacityEventObserver::default();
+        observer.observe(&snapshot(earlier, 40.0, reset_at));
+
+        // Usage climbed while away; that is not an event.
+        let events = restarted_with(&observer).observe(&snapshot(
+            earlier + Duration::hours(2),
+            55.0,
+            reset_at,
+        ));
+
+        assert!(events.is_empty(), "got: {events:?}");
+    }
+
+    #[test]
+    fn a_first_ever_launch_has_nothing_to_compare_and_stays_quiet() {
+        let mut observer = CapacityEventObserver::default();
+
+        let events = observer.observe(&snapshot(Utc::now(), 3.0, Utc::now() + Duration::hours(4)));
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn away_events_are_only_emitted_once() {
+        let evening = Utc::now() - Duration::hours(8);
+        let reset_at = evening + Duration::hours(3);
+        let mut observer = CapacityEventObserver::default();
+        observer.observe(&snapshot(evening, 92.0, reset_at));
+
+        let mut restarted = restarted_with(&observer);
+        let morning = evening + Duration::hours(8);
+        let first = restarted.observe(&snapshot(morning, 3.0, reset_at + Duration::hours(5)));
+        // The next poll in the same session must not repeat it.
+        let second = restarted.observe(&snapshot(
+            morning + Duration::minutes(1),
+            4.0,
+            reset_at + Duration::hours(5),
+        ));
+
+        assert_eq!(first.len(), 1);
+        assert!(second.is_empty(), "got: {second:?}");
     }
 
     #[test]

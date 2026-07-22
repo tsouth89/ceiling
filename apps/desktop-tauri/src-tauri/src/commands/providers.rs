@@ -345,14 +345,27 @@ async fn refresh_provider(
     crate::usage_history::record_snapshot(&snapshot);
     events::emit_provider_updated(&app, &snapshot);
     let notification_settings = Settings::load();
-    if !notifications_armed {
-        for event in &capacity_events {
+
+    // The startup gate exists so re-establishing state at launch does not toast.
+    // Away events are the exception: they are detected on exactly that first
+    // cycle and are the only chance to report a reset that happened while
+    // Ceiling was closed, so suppressing them means never mentioning it at all.
+    let capacity_events: Vec<_> = if notifications_armed {
+        capacity_events
+    } else {
+        let (away, suppressed): (Vec<_>, Vec<_>) = capacity_events
+            .into_iter()
+            .partition(|event| event.while_away);
+        for event in &suppressed {
             tracing::debug!(
                 provider = %event.provider_id,
                 kind = ?event.kind,
                 "suppressing capacity event while establishing startup baseline"
             );
         }
+        away
+    };
+    if capacity_events.is_empty() {
         return;
     }
 
@@ -363,7 +376,11 @@ async fn refresh_provider(
         && notification_settings.capacity_event_notifications_enabled
         && let Some((title, body)) = capacity_event_notification(&capacity_events)
     {
+        let while_away = capacity_events.iter().any(|event| event.while_away);
         let notified = match state.lock() {
+            Ok(mut guard) if while_away => guard
+                .notification_manager
+                .notify_capacity_event_while_away(&title, &body),
             Ok(mut guard) => guard
                 .notification_manager
                 .notify_capacity_event(&title, &body),
@@ -1021,6 +1038,7 @@ mod predictive_warning_tests {
                 previous_reset_at: "2026-08-06T22:49:57Z".into(),
                 current_reset_at: "2026-08-06T22:49:57Z".into(),
                 occurred_at: "2026-07-15T20:21:45Z".into(),
+                while_away: false,
             };
         let events = vec![
             event("auto", "Auto", 99.4, 49.7),
@@ -1049,6 +1067,7 @@ mod predictive_warning_tests {
             previous_reset_at: "2026-07-25T03:42:20Z".into(),
             current_reset_at: "2026-07-25T03:42:20Z".into(),
             occurred_at: "2026-07-18T03:25:06Z".into(),
+            while_away: false,
         };
         let banked = CapacityEventPayload {
             provider_id: "codex".into(),
@@ -1063,6 +1082,7 @@ mod predictive_warning_tests {
             previous_reset_at: "2026-07-18T03:20:05Z".into(),
             current_reset_at: "2026-07-18T03:25:06Z".into(),
             occurred_at: "2026-07-18T03:25:06Z".into(),
+            while_away: false,
         };
 
         let (title, body) = capacity_event_notification(&[partial, banked]).unwrap();

@@ -525,6 +525,12 @@ export interface CapacityEventPayload {
   previousResetAt: string;
   currentResetAt: string;
   occurredAt: string;
+  /**
+   * True when this was detected on the first reading after launch, i.e. it
+   * happened while Ceiling was closed. `occurredAt` is then the window's own
+   * reset time rather than when it was noticed.
+   */
+  whileAway?: boolean;
 }
 
 export interface SafeDiagnostics {

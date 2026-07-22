@@ -1,5 +1,19 @@
 # Changelog
 
+## [Ceiling] 1.5.0 - 2026-07-22
+
+### Added
+- Track more than one Codex or Claude account and switch between which one Ceiling watches, from a new Accounts tab. An account is a config directory (`CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude) rather than a token you paste, because each CLI refreshes its own sign-in in place and a copy would stop working within hours. Sign a second account in with `CODEX_HOME=<path> codex login`, point Ceiling at that folder, and it reads the name and plan off the folder itself so there is nothing to type. Adding an account checks the folder first and tells you whose account is in it before you commit.
+- Name the account each provider card is reporting, with an optional color so several accounts stay easy to tell apart at a glance.
+- Ceiling keeps following whichever account your CLI is signed in as until you add accounts yourself, so nothing changes if you only have one.
+
+### Fixed
+- Tell you about a reset that happened while Ceiling was closed. Resets found on the first check after starting up were being absorbed silently to avoid announcing stale news as if it had just happened, which meant an overnight reset was never mentioned at all. These now say when they actually happened, for example "This happened at 2:00 AM, while Ceiling was closed".
+- Read the right Claude sign-in when `CLAUDE_CONFIG_DIR` is set. Ceiling already read that folder's history but always took credentials from the default location, so anyone using a second Claude profile was seeing the wrong account's numbers.
+- Stop two accounts on one provider sharing a single usage baseline. Codex and Claude readings did not record which account they came from, so switching accounts would have carried the previous one's history across.
+- Stop the usage chart falling back to another account's history. A newly added account has nothing recorded yet, and the chart filled that gap with whichever account had data most recently.
+- Keep both accounts' sign-ins cached when tracking more than one Codex account, instead of each check evicting the other.
+
 ## [Ceiling] 1.4.0 - 2026-07-21
 
 ### Added
