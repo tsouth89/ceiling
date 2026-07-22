@@ -9,8 +9,8 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::core::{
-    CostSnapshot, FetchContext, ProviderError, ProviderFetchResult, ProviderId, RateWindow,
-    SourceMode, instantiate_provider,
+    ConfiguredAccounts, CostSnapshot, FetchContext, ProviderError, ProviderFetchResult, ProviderId,
+    RateWindow, SourceMode, instantiate_provider,
 };
 use crate::settings::{ApiKeys, ManualCookies, Settings};
 
@@ -178,6 +178,7 @@ async fn collect_provider_diagnostic(
         api_region: settings
             .provider_config(provider_id)
             .and_then(|config| config.api_region.clone()),
+        account_config_dir: ConfiguredAccounts::load().active_dir_for(provider_id),
         gateway_url: settings
             .provider_config(provider_id)
             .and_then(|config| config.gateway_url.clone()),

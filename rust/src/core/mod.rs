@@ -3,6 +3,7 @@
 mod account_dirs;
 mod claude_accounts;
 mod codex_accounts;
+mod configured_accounts;
 mod cost_pricing;
 mod credential_migration;
 mod http;
@@ -22,6 +23,7 @@ mod widget_snapshot;
 pub use account_dirs::*;
 pub use claude_accounts::*;
 pub use codex_accounts::*;
+pub use configured_accounts::*;
 pub use cost_pricing::*;
 pub use credential_migration::*;
 pub use http::*;

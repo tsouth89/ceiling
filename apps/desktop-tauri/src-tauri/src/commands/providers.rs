@@ -229,6 +229,7 @@ struct ProviderRefreshInputs {
     manual_cookies: ManualCookies,
     api_keys: ApiKeys,
     token_accounts: HashMap<ProviderId, ProviderAccountData>,
+    account_dirs: ConfiguredAccounts,
 }
 
 impl ProviderRefreshInputs {
@@ -248,6 +249,7 @@ impl ProviderRefreshInputs {
             manual_cookies,
             api_keys,
             token_accounts,
+            account_dirs: ConfiguredAccounts::load(),
         }
     }
 }
@@ -263,13 +265,14 @@ fn spawn_provider_refreshes(
         let id = *id;
         let app_handle = app.clone();
         let fetch_permits = Arc::clone(&fetch_permits);
-        let ctx = build_fetch_context(
+        let mut ctx = build_fetch_context(
             id,
             &inputs.settings,
             &inputs.manual_cookies,
             &inputs.api_keys,
             &inputs.token_accounts,
         );
+        ctx.account_config_dir = inputs.account_dirs.active_dir_for(id);
 
         handles.push(tokio::spawn(async move {
             let Ok(_permit) = fetch_permits.acquire_owned().await else {

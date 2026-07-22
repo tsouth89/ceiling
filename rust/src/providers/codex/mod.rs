@@ -67,10 +67,21 @@ impl Provider for CodexProvider {
         &self.metadata
     }
 
-    async fn fetch_usage(&self, _ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+    async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Fetching Codex usage via OAuth API");
 
-        match self.api.fetch_usage().await {
+        // A configured account pins the credential to its own CODEX_HOME;
+        // otherwise follow whichever account the CLI is signed in as.
+        let scoped;
+        let api = match &ctx.account_config_dir {
+            Some(dir) => {
+                scoped = self.api.scoped(dir.clone());
+                &scoped
+            }
+            None => &self.api,
+        };
+
+        match api.fetch_usage().await {
             Ok((usage, cost)) => {
                 let mut result = ProviderFetchResult::new(usage, "oauth");
                 if let Some(c) = cost {

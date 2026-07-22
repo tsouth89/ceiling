@@ -138,6 +138,15 @@ impl ClaudeOAuthFetcher {
         }
     }
 
+    /// The same fetcher aimed at a different account. Reuses the underlying
+    /// connection pool rather than building a second one per fetch.
+    pub fn scoped(&self, config_dir: PathBuf) -> Self {
+        Self {
+            client: self.client.clone(),
+            config_dir: Some(config_dir),
+        }
+    }
+
     fn config_dir(&self) -> Option<&std::path::Path> {
         self.config_dir.as_deref()
     }

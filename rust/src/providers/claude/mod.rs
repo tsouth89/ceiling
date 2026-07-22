@@ -429,7 +429,13 @@ impl ClaudeProvider {
         {
             return self.oauth_fetcher.fetch_with_access_token(token).await;
         }
-        self.oauth_fetcher.fetch().await
+
+        // A configured account pins the credential to its own CLAUDE_CONFIG_DIR;
+        // otherwise follow whichever account the CLI is signed in as.
+        match &ctx.account_config_dir {
+            Some(dir) => self.oauth_fetcher.scoped(dir.clone()).fetch().await,
+            None => self.oauth_fetcher.fetch().await,
+        }
     }
 
     async fn fetch_via_admin_api(
