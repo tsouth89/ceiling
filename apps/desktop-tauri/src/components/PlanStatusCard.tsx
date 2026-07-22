@@ -169,6 +169,9 @@ export default function PlanStatusCard({
   const meters = glanceMeters(provider);
   const freshness = capacityFreshness(provider);
   const planName = displayPlanName(provider.planName, provider.displayName);
+  // Present only once accounts are configured. The label already reads
+  // "email (plan)", so it carries the plan too and nothing is lost.
+  const accountLabel = provider.accountLabel ?? null;
   const notEnforcedSummary = inactiveWindowSummary(provider, "notEnforced");
   const unavailableSummary = inactiveWindowSummary(provider, "unavailable");
   const resetCredits = codexResetCredits(provider);
@@ -196,8 +199,25 @@ export default function PlanStatusCard({
         <div className="plan-status-card__identity">
           <div className="plan-status-card__title-row">
             <span className="plan-status-card__name">{provider.displayName}</span>
-            {planName && (
-              <span className="plan-status-card__plan">{planName}</span>
+            {/* Two rows of the same provider are otherwise indistinguishable:
+                both read just "Codex". The account name is what tells them
+                apart, so it outranks the plan for the limited space here. */}
+            {accountLabel ? (
+              <span
+                className="plan-status-card__account"
+                style={
+                  provider.accountTint
+                    ? { color: provider.accountTint }
+                    : undefined
+                }
+                title={accountLabel}
+              >
+                {accountLabel}
+              </span>
+            ) : (
+              planName && (
+                <span className="plan-status-card__plan">{planName}</span>
+              )
             )}
           </div>
           {!provider.error && (freshness === "stale" || resetCredits != null) && (

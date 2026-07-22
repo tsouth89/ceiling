@@ -622,7 +622,7 @@ FirstRunDismiss = Dismiss
 
 # Config-directory accounts (SOU-285)
 SectionAccounts = Accounts
-AccountsIntro = Ceiling reads the account your CLI is signed in as. Add a config directory to track a specific account instead.
+AccountsIntro = Every account listed here is tracked, and each one gets its own bars. Add a config directory to track another.
 AccountsFollowingCli = Following the CLI
 AccountsFollowingCliHint = Tracking whichever account is signed in at
 AccountsActive = Active

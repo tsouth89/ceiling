@@ -9055,3 +9055,17 @@ body:has(.dashboard-shell) #root {
   background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
   user-select: all;
 }
+
+/* Which account a glance row is reporting. Takes the account tint when set, so
+   two rows of one provider are distinguishable at a glance rather than by
+   reading their numbers. */
+.plan-status-card__account {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
+}
