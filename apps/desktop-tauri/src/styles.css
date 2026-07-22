@@ -9106,3 +9106,16 @@ body:has(.dashboard-shell) #root {
   cursor: default;
   opacity: 0.6;
 }
+
+/* Which account a flyout row reports. Its own line under the provider name,
+   because the topline is space-between and would crush it. */
+.taskbar-flyout__provider-account {
+  margin-top: 1px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

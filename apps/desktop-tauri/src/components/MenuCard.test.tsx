@@ -82,6 +82,7 @@ function renderCard(
     showAsUsed?: boolean;
     showResetWhenExhausted?: boolean;
     onLayoutChange?: () => void;
+    showAccount?: boolean;
   } = {},
 ) {
   return render(
@@ -92,6 +93,7 @@ function renderCard(
         resetTimeRelative={true}
         showAsUsed={opts.showAsUsed}
         showResetWhenExhausted={opts.showResetWhenExhausted}
+        showAccount={opts.showAccount}
         onLayoutChange={opts.onLayoutChange}
       />
     </LocaleProvider>,
@@ -262,36 +264,36 @@ describe("MenuCard", () => {
     expect(document.querySelector(".menu-metric--inactive")).not.toBeNull();
   });
 
-  it("names the tracked account and tints it, and stays silent without one", async () => {
+  it("names the account by email with plan, tinted, when several share a provider", async () => {
     const tracked = provider(null);
-    tracked.accountLabel = "work@example.com (team)";
+    tracked.accountEmail = "work@example.com";
+    tracked.planName = "ChatGPT Team";
+    // A custom label must not be what shows; the email is the identity.
+    tracked.accountLabel = "Work";
     tracked.accountTint = "#4f8ff7";
-    const { unmount } = renderCard(tracked);
+    const { unmount } = renderCard(tracked, { showAccount: true });
 
-    const label = await screen.findByText("work@example.com (team)");
+    const label = await screen.findByText("work@example.com (ChatGPT Team)");
     expect(label).toBeInTheDocument();
     expect(label).toHaveStyle({ color: "rgb(79, 143, 247)" });
     unmount();
 
-    // Following the CLI: no account was chosen, so naming one would be a lie.
-    const following = provider(null);
-    following.accountLabel = null;
-    renderCard(following);
-    // Let the locale settle before asserting an absence, so the assertion is
-    // about the account label and not about the card still mounting.
-    await screen.findByText(following.displayName);
+    // A single account for this provider: naming it is noise, so it stays hidden.
+    const single = provider(null);
+    single.accountEmail = "solo@example.com";
+    renderCard(single, { showAccount: false });
+    await screen.findByText(single.displayName);
 
     expect(document.querySelector(".menu-card__account")).toBeNull();
   });
 
-  it("does not print the email twice when the account label already contains it", async () => {
+  it("does not also print the standalone email row once the account line shows it", async () => {
     const snapshot = provider(null);
     snapshot.accountEmail = "tsouth2@example.com";
-    // Labels are seeded from the directory, so they usually embed the email.
-    snapshot.accountLabel = "tsouth2@example.com (prolite)";
-    renderCard(snapshot);
+    snapshot.planName = "Pro Lite";
+    renderCard(snapshot, { showAccount: true });
 
-    await screen.findByText("tsouth2@example.com (prolite)");
+    await screen.findByText("tsouth2@example.com (Pro Lite)");
 
     expect(document.querySelector(".menu-card__email")).toBeNull();
   });

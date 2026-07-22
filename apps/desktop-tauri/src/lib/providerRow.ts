@@ -95,3 +95,23 @@ export function representativeForProvider<
     return (candidate.accountId ?? "") < (best.accountId ?? "") ? candidate : best;
   });
 }
+
+/**
+ * How an account is named on a usage card: its email, plus plan when known.
+ *
+ * Deliberately the email, not `accountLabel`. The label is what the user typed
+ * when adding the account ("Work"), or an auto-derived "email (plan)" when they
+ * did not — so two accounts could show two different *kinds* of thing, one an
+ * email and one a nickname. The email is the real identity and is consistent.
+ * The custom label still names the account on the Accounts page.
+ */
+export function accountIdentityLabel(
+  provider: Pick<
+    ProviderUsageSnapshot,
+    "accountEmail" | "accountLabel" | "planName"
+  >,
+): string | null {
+  const identity = provider.accountEmail ?? provider.accountLabel ?? null;
+  if (!identity) return null;
+  return provider.planName ? `${identity} (${provider.planName})` : identity;
+}
