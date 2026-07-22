@@ -9018,3 +9018,40 @@ body:has(.dashboard-shell) #root {
 .accounts-setup-hint {
   margin-block-start: 8px;
 }
+
+/* Adding an account is a short procedure, so it reads as numbered steps rather
+   than one dense sentence with a placeholder to substitute. */
+.accounts-setup {
+  margin-block-start: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+}
+
+.accounts-setup__title {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.accounts-setup__steps {
+  margin: 0;
+  padding-inline-start: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+/* The command is the one thing to copy, so it gets its own line and can be
+   selected without catching the surrounding prose. */
+.accounts-setup__command {
+  display: block;
+  margin-block-start: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+  user-select: all;
+}

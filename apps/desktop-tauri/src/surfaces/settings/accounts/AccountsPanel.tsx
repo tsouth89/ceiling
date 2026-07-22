@@ -141,6 +141,9 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
   };
 
   const cli = LOGIN_CLI[provider.providerId] ?? provider.providerId;
+  // A literal path beats "<path>": it is copy-pasteable and shows the shape of
+  // the answer, sitting beside the directory already in use.
+  const suggestedDir = `${provider.ambientDir}-work`;
 
   return (
     <div className="accounts-provider">
@@ -236,18 +239,25 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
         </ul>
       )}
 
-      <p className="settings-section__hint accounts-setup-hint">
-        {t("AccountsSetupHint")}{" "}
-        <code className="accounts-path">
-          mkdir &quot;&lt;path&gt;&quot;; $env:{provider.envVar}=&quot;&lt;path&gt;&quot;;{" "}
-          {cli} login
-        </code>
-      </p>
+      <div className="accounts-setup">
+        <h5 className="accounts-setup__title">{t("AccountsSetupTitle")}</h5>
+        <ol className="accounts-setup__steps">
+          <li>
+            {t("AccountsSetupStep1")}
+            <code className="accounts-path accounts-setup__command">
+              mkdir &quot;{suggestedDir}&quot;; $env:{provider.envVar}=&quot;
+              {suggestedDir}&quot;; {cli} login
+            </code>
+          </li>
+          <li>{t("AccountsSetupStep2")}</li>
+          <li>{t("AccountsSetupStep3")}</li>
+        </ol>
+      </div>
       <div className="credential-add-form accounts-add">
         <input
           className="text-input"
           type="text"
-          placeholder={t("AccountsDirPlaceholder")}
+          placeholder={suggestedDir}
           value={dir}
           onChange={(e) => {
             setDir(e.target.value);
