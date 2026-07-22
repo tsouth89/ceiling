@@ -907,12 +907,22 @@ export type LocaleChangedPayload = Language;
 // ── Phase 6b — provider detail pane ──────────────────────────────────
 
 /** Aggregated per-provider payload powering the Settings detail pane. */
+export interface ProviderDetailAccount {
+  accountId: string;
+  label: string;
+  tint: string | null;
+}
+
 export interface ProviderDetail {
   id: string;
   displayName: string;
   enabled: boolean;
 
   // Identity
+  /** Account this payload describes; null while following the CLI. */
+  accountId?: string | null;
+  /** Every account with a reading, so the pane can offer a selector. */
+  accounts?: ProviderDetailAccount[];
   email: string | null;
   plan: string | null;
   authType: string | null;

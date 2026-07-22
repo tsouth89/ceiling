@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CookieSourceOption,
   CredentialStorageStatus,
@@ -124,12 +124,21 @@ export function ProviderDetailPane({
     };
   }, []);
 
-  const load = useCallback(async (id: string, signal?: { stale: boolean }) => {
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  // Read inside listener effects, which must not resubscribe when it changes.
+  const selectedAccountIdRef = useRef<string | null>(null);
+  selectedAccountIdRef.current = selectedAccountId;
+
+  const load = useCallback(async (
+    id: string,
+    signal?: { stale: boolean },
+    accountId: string | null = null,
+  ) => {
     setLoading(true);
     setError(null);
     try {
       const [next, cookieOpts, regionOpts, storageStatus] = await Promise.all([
-        getProviderDetail(id),
+        getProviderDetail(id, accountId),
         getProviderCookieSourceOptions(id),
         getProviderRegionOptions(id),
         getCredentialStorageStatus(),
@@ -146,6 +155,10 @@ export function ProviderDetailPane({
       setCookieOptions([]);
       setRegionOptions([]);
       setCredentialStatus(null);
+    // A selection belongs to one provider; carrying it across panes would
+    // ask for an account that provider does not have.
+    setSelectedAccountId(null);
+    selectedAccountIdRef.current = null;
     } finally {
       if (!signal?.stale) setLoading(false);
     }
@@ -164,7 +177,7 @@ export function ProviderDetailPane({
     setRegionOptions([]);
     setCredentialStatus(null);
     const signal = { stale: false };
-    void load(providerId, signal);
+    void load(providerId, signal, selectedAccountIdRef.current);
     return () => { signal.stale = true; };
   }, [providerId, load]);
 
@@ -177,7 +190,7 @@ export function ProviderDetailPane({
       (event) => {
         const pid = event.payload?.providerId;
         if (!pid || pid === providerId) {
-          void load(providerId, signal);
+          void load(providerId, signal, selectedAccountIdRef.current);
         }
       },
     );
@@ -282,6 +295,37 @@ export function ProviderDetailPane({
 
   return (
     <div className="provider-detail">
+      {/* Only rendered with something to choose between. One account means this
+          pane already describes it, and a selector would be noise. */}
+      {(detail.accounts?.length ?? 0) > 1 && (
+        <div className="provider-detail__accounts" role="tablist">
+          {detail.accounts?.map((account) => {
+            const selected = account.accountId === detail.accountId;
+            return (
+              <button
+                key={account.accountId}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                className={`provider-detail__account${selected ? " provider-detail__account--selected" : ""}`}
+                style={
+                  account.tint && selected
+                    ? { borderBottomColor: account.tint }
+                    : undefined
+                }
+                disabled={loading}
+                onClick={() => {
+                  setSelectedAccountId(account.accountId);
+                  void load(detail.id, undefined, account.accountId);
+                }}
+              >
+                {account.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <IdentitySection provider={detail} subtitle={subtitle} t={t} />
 
       <DataSourceSection provider={detail} t={t} />
