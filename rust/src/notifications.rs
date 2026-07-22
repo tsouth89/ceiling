@@ -230,11 +230,20 @@ impl NotificationManager {
     /// should never miss, so they may bypass the rolling cooldown while still
     /// respecting the one-toast-per-refresh ceiling.
     pub fn notify_capacity_event(&mut self, title: &str, body: &str) -> bool {
-        self.emit_toast_with_priority(title, body, ToastPriority::Reset)
+        self.emit_toast_with_priority(title, body, ToastPriority::Reset, false)
+    }
+
+    /// A reset that happened while Ceiling was closed.
+    ///
+    /// Bypasses the startup gate, because such an event is detected on exactly
+    /// the cycle that gate covers and would otherwise never be reported at all.
+    /// Every other guard, including the circuit breaker, still applies.
+    pub fn notify_capacity_event_while_away(&mut self, title: &str, body: &str) -> bool {
+        self.emit_toast_with_priority(title, body, ToastPriority::Reset, true)
     }
 
     fn emit_toast(&mut self, title: &str, body: &str) -> bool {
-        self.emit_toast_with_priority(title, body, ToastPriority::Normal)
+        self.emit_toast_with_priority(title, body, ToastPriority::Normal, false)
     }
 
     fn emit_toast_with_priority(
@@ -242,8 +251,9 @@ impl NotificationManager {
         title: &str,
         body: &str,
         priority: ToastPriority,
+        bypass_startup_gate: bool,
     ) -> bool {
-        if !self.notifications_armed {
+        if !self.notifications_armed && !bypass_startup_gate {
             tracing::debug!(
                 "Suppressing toast while establishing startup baseline: {} — {}",
                 title,
