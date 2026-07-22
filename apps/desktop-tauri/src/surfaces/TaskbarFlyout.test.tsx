@@ -98,6 +98,32 @@ describe("TaskbarFlyout", () => {
     ];
   });
 
+  it("shows both accounts' emails when a provider has two (screenshot-1 bug)", async () => {
+    // Exactly the reported setup: two Codex accounts in the taskbar flyout.
+    const personal = provider("codex", "Codex", 46, 6 * 24 * 60, "Weekly");
+    personal.accountId = "acct-personal";
+    personal.accountEmail = "tsouth2@gmail.com";
+    personal.planName = "Pro Lite";
+    const work = provider("codex", "Codex", 16, 6 * 24 * 60, "Weekly");
+    work.accountId = "acct-work";
+    work.accountEmail = "bts@cssi.us";
+    work.planName = "ChatGPT Team";
+    providerState.providers = [personal, work];
+
+    render(<TaskbarFlyout state={state} />);
+
+    // Both accounts appear, each named by its own email — not two bare "Codex"
+    // rows, which is what the user saw.
+    expect(
+      await screen.findByText("tsouth2@gmail.com (Pro Lite)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("bts@cssi.us (ChatGPT Team)")).toBeInTheDocument();
+    // Both rows still render.
+    expect(screen.getAllByText("Codex")).toHaveLength(2);
+    expect(screen.getByText("46%")).toBeInTheDocument();
+    expect(screen.getByText("16%")).toBeInTheDocument();
+  });
+
   it("shows at-a-glance usage and the soonest provider reset", async () => {
     providerState.providers[0].resetCreditsAvailable = 1;
     render(<TaskbarFlyout state={state} />);

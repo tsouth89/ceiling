@@ -6,8 +6,17 @@ import type { ProviderUsageSnapshot } from "../types/bridge";
 // Stub the async, backend-fetching ChartsSection so this test exercises only
 // ChartsPanel's own selection logic.
 vi.mock("./settings/providers/sections/charts/ChartsSection", () => ({
-  ChartsSection: ({ providerId }: { providerId: string }) => (
-    <div data-testid="charts-section">{providerId}</div>
+  ChartsSection: ({
+    providerId,
+    accountEmail,
+  }: {
+    providerId: string;
+    accountEmail?: string | null;
+  }) => (
+    <div data-testid="charts-section">
+      {providerId}
+      {accountEmail ? `:${accountEmail}` : ""}
+    </div>
   ),
 }));
 vi.mock("./ProviderComparison", () => ({
@@ -95,6 +104,65 @@ describe("ChartsPanel", () => {
     expect(getByRole("tab", { name: /Compare/ }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(getByRole("tab", { name: /Claude/ }));
     expect(getByTestId("charts-section").textContent).toBe("claude");
+  });
+
+  it("keeps two accounts of one provider as distinct, selectable tabs", () => {
+    // The reported setup and my own #124 regression: selecting the second
+    // account's chart reverted on the next render because the validity check
+    // compared a row key against a bare providerId.
+    const { getAllByRole, getByTestId, rerender } = render(
+      <ChartsPanel
+        providers={[
+          provider({
+            providerId: "codex",
+            displayName: "Codex",
+            accountId: "acct-personal",
+            accountEmail: "tsouth2@gmail.com",
+            planName: "Pro Lite",
+          }),
+          provider({
+            providerId: "codex",
+            displayName: "Codex",
+            accountId: "acct-work",
+            accountEmail: "bts@cssi.us",
+            planName: "ChatGPT Team",
+          }),
+        ]}
+      />,
+    );
+
+    // Two Codex tabs, each named by its own email — not two bare "Codex".
+    const personalTab = getAllByRole("tab", { name: /tsouth2@gmail.com/ });
+    const workTab = getAllByRole("tab", { name: /bts@cssi.us/ });
+    expect(personalTab).toHaveLength(1);
+    expect(workTab).toHaveLength(1);
+
+    fireEvent.click(workTab[0]);
+    expect(getByTestId("charts-section").textContent).toBe("codex:bts@cssi.us");
+
+    // A background refresh re-renders with a fresh providers array. The
+    // selection must survive rather than snapping back.
+    rerender(
+      <ChartsPanel
+        providers={[
+          provider({
+            providerId: "codex",
+            displayName: "Codex",
+            accountId: "acct-personal",
+            accountEmail: "tsouth2@gmail.com",
+            planName: "Pro Lite",
+          }),
+          provider({
+            providerId: "codex",
+            displayName: "Codex",
+            accountId: "acct-work",
+            accountEmail: "bts@cssi.us",
+            planName: "ChatGPT Team",
+          }),
+        ]}
+      />,
+    );
+    expect(getByTestId("charts-section").textContent).toBe("codex:bts@cssi.us");
   });
 
   it("omits the selector when only one provider is supported", () => {

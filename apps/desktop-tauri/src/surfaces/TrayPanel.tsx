@@ -21,6 +21,7 @@ import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import MenuCard from "../components/MenuCard";
 import {
+  hasMultipleAccounts,
   onePerProvider,
   providerRowKey,
   representativeForProvider,
@@ -453,6 +454,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         {isOverview ? (
           <PlanStatusCard
             provider={p}
+            showAccount={hasMultipleAccounts(sorted, p.providerId)}
             isRefreshing={refreshingProviderIds.has(p.providerId)}
             resetTimeRelative={settings.resetTimeRelative}
             showResetWhenExhausted={settings.showResetWhenExhausted}
@@ -462,6 +464,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         ) : (
           <MenuCard
             provider={p}
+            showAccount={hasMultipleAccounts(sorted, p.providerId)}
             isRefreshing={refreshingProviderIds.has(p.providerId)}
             hideEmail={settings.hidePersonalInfo}
             resetTimeRelative={settings.resetTimeRelative}

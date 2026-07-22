@@ -6,7 +6,12 @@ import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
 import ProviderComparison from "./ProviderComparison";
 import { TotalApiValueCard } from "../components/TotalApiValueCard";
-import { providerRowKey, representativeForProvider } from "../lib/providerRow";
+import {
+  accountIdentityLabel,
+  hasMultipleAccounts,
+  providerRowKey,
+  representativeForProvider,
+} from "../lib/providerRow";
 
 const COMPARE_ID = "compare";
 
@@ -51,9 +56,13 @@ export default function ChartsPanel({
       return;
     }
     setSelectedId((prev) =>
-      prev && (supported.some((p) => p.providerId === prev) || (prev === COMPARE_ID && comparisonProviders))
+      prev &&
+      (supported.some((p) => providerRowKey(p) === prev) ||
+        (prev === COMPARE_ID && comparisonProviders))
         ? prev
-        : comparisonProviders ? COMPARE_ID : supported[0].providerId,
+        : comparisonProviders
+          ? COMPARE_ID
+          : providerRowKey(supported[0]),
     );
   }, [supported, comparisonProviders]);
 
@@ -114,7 +123,11 @@ export default function ChartsPanel({
                   className="charts-provider-tab__icon"
                   title={p.displayName}
                 />
-                <span>{p.accountLabel ?? p.displayName}</span>
+                <span>
+                  {hasMultipleAccounts(supported, p.providerId)
+                    ? (accountIdentityLabel(p) ?? p.displayName)
+                    : p.displayName}
+                </span>
               </button>
             );
           })}

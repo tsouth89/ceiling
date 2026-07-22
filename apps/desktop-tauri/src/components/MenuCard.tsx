@@ -22,6 +22,7 @@ import {
 import PaceDetailsChart from "./PaceDetailsChart";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
+import { accountIdentityLabel } from "../lib/providerRow";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -59,6 +60,8 @@ interface MenuCardProps {
   compactMetrics?: boolean;
   /** When false, hide local token activity (overview glance). Default true. */
   showActivitySection?: boolean;
+  /** True when this provider has more than one account. */
+  showAccount?: boolean;
   isRefreshing?: boolean;
   onLayoutChange?: () => void;
 }
@@ -406,6 +409,7 @@ export default function MenuCard({
   showAsUsed = false,
   compactMetrics: _compactMetrics = false,
   showActivitySection = true,
+  showAccount = false,
   isRefreshing = false,
   onLayoutChange,
 }: MenuCardProps) {
@@ -450,14 +454,12 @@ export default function MenuCard({
       : provider.accountEmail
     : null;
   const planName = !isWayfinder ? displayPlanName(provider.planName) : null;
-  // Present only once the user has configured accounts for this provider. While
-  // Ceiling is following the CLI there is no chosen account to name, so the
-  // backend sends null and nothing renders.
-  const accountLabel = !isWayfinder ? (provider.accountLabel ?? null) : null;
-  // Account labels are seeded from the directory and usually already contain the
-  // email, so showing both would print it twice in one row.
-  const email =
-    accountLabel && rawEmail && accountLabel.includes(rawEmail) ? null : rawEmail;
+  // The account's email, shown only when several accounts share this provider.
+  const accountName =
+    !isWayfinder && showAccount ? accountIdentityLabel(provider) : null;
+  // The account line already carries the email, so do not also print the raw
+  // email row below it.
+  const email = accountName ? null : rawEmail;
 
   const metrics: Array<MetricEntry | InactiveMetricEntry> = [
     ...(isWayfinder
@@ -555,7 +557,7 @@ export default function MenuCard({
           />
           <div className="menu-card__name-group">
             <span className="menu-card__name">{provider.displayName}</span>
-            {accountLabel && (
+            {accountName && (
               <span
                 className="menu-card__account"
                 style={
@@ -563,9 +565,9 @@ export default function MenuCard({
                     ? { color: provider.accountTint }
                     : undefined
                 }
-                title={accountLabel}
+                title={accountName}
               >
-                {accountLabel}
+                {accountName}
               </span>
             )}
             {!provider.error && email && <span className="menu-card__email">{email}</span>}
@@ -602,7 +604,9 @@ export default function MenuCard({
                   {promo.title}
                 </span>
               ))}
-              {planName && (
+              {/* The account line already shows the plan, so drop the badge
+                  when an account is named to avoid printing it twice. */}
+              {planName && !accountName && (
                 <span className="menu-card__plan-badge">{planName}</span>
               )}
             </div>

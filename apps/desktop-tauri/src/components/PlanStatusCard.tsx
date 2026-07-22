@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
+import { accountIdentityLabel } from "../lib/providerRow";
 import { getProviderIcon } from "./providers/providerIcons";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
@@ -156,6 +157,7 @@ export default function PlanStatusCard({
   showResetWhenExhausted = false,
   showAsUsed = false,
   isRefreshing = false,
+  showAccount = false,
   onSelect,
 }: {
   provider: ProviderUsageSnapshot;
@@ -163,15 +165,18 @@ export default function PlanStatusCard({
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
   isRefreshing?: boolean;
+  // True when this provider has more than one account. With one, the account
+  // name is noise, so it stays hidden and the plan chip shows as before.
+  showAccount?: boolean;
   onSelect?: () => void;
 }) {
   const brand = getProviderIcon(provider.providerId).brandColor;
   const meters = glanceMeters(provider);
   const freshness = capacityFreshness(provider);
   const planName = displayPlanName(provider.planName, provider.displayName);
-  // Present only once accounts are configured. The label already reads
-  // "email (plan)", so it carries the plan too and nothing is lost.
-  const accountLabel = provider.accountLabel ?? null;
+  // The account's email, shown only when several accounts share this provider.
+  // It replaces the plan chip because it already carries the plan.
+  const accountName = showAccount ? accountIdentityLabel(provider) : null;
   const notEnforcedSummary = inactiveWindowSummary(provider, "notEnforced");
   const unavailableSummary = inactiveWindowSummary(provider, "unavailable");
   const resetCredits = codexResetCredits(provider);
@@ -202,7 +207,7 @@ export default function PlanStatusCard({
             {/* Two rows of the same provider are otherwise indistinguishable:
                 both read just "Codex". The account name is what tells them
                 apart, so it outranks the plan for the limited space here. */}
-            {accountLabel ? (
+            {accountName ? (
               <span
                 className="plan-status-card__account"
                 style={
@@ -210,9 +215,9 @@ export default function PlanStatusCard({
                     ? { color: provider.accountTint }
                     : undefined
                 }
-                title={accountLabel}
+                title={accountName}
               >
-                {accountLabel}
+                {accountName}
               </span>
             ) : (
               planName && (

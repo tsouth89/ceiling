@@ -15,7 +15,11 @@ import {
   setSurfaceMode,
 } from "../lib/tauri";
 import type { BootstrapState, ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
-import { providerRowKey } from "../lib/providerRow";
+import {
+  accountIdentityLabel,
+  hasMultipleAccounts,
+  providerRowKey,
+} from "../lib/providerRow";
 
 const FLYOUT_WIDTH = 344;
 const MAX_VISIBLE_PROVIDERS = 6;
@@ -92,11 +96,15 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   return [...preferred, ...remaining].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
 }
 
-function ProviderRow({ provider, showAsUsed, now }: {
+function ProviderRow({ provider, showAccount, showAsUsed, now }: {
   provider: ProviderUsageSnapshot;
+  // True when this provider has more than one account, so the account name is
+  // needed to tell its rows apart. With one account it would be noise.
+  showAccount: boolean;
   showAsUsed: boolean;
   now: number;
 }) {
+  const accountName = showAccount ? accountIdentityLabel(provider) : null;
   const icon = getProviderIcon(provider.providerId);
   if (provider.error) {
     return (
@@ -107,6 +115,11 @@ function ProviderRow({ provider, showAsUsed, now }: {
             <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
             <span className="taskbar-flyout__provider-unavailable">Unavailable</span>
           </div>
+          {accountName && (
+            <div className="taskbar-flyout__provider-account" title={accountName}>
+              {accountName}
+            </div>
+          )}
           <div className="taskbar-flyout__provider-status">Last sync failed · open Ceiling for details</div>
         </div>
       </div>
@@ -132,6 +145,11 @@ function ProviderRow({ provider, showAsUsed, now }: {
             </span>
           )}
         </div>
+        {accountName && (
+          <div className="taskbar-flyout__provider-account" title={accountName}>
+            {accountName}
+          </div>
+        )}
         <div className="taskbar-flyout__meters">
           {windows.map(({ id, label, window }) => {
             const percent = valueFor(window, showAsUsed);
@@ -282,7 +300,13 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
 
         <div className="taskbar-flyout__providers">
           {visibleProviders.map((provider) => (
-            <ProviderRow key={providerRowKey(provider)} provider={provider} showAsUsed={settings.showAsUsed} now={now} />
+            <ProviderRow
+              key={providerRowKey(provider)}
+              provider={provider}
+              showAccount={hasMultipleAccounts(taskbarProviders, provider.providerId)}
+              showAsUsed={settings.showAsUsed}
+              now={now}
+            />
           ))}
           {visibleProviders.length === 0 && (
             <div className="taskbar-flyout__empty">Syncing provider usage…</div>
