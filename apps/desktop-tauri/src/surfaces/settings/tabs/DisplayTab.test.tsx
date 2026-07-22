@@ -14,7 +14,6 @@ import DisplayTab from "./DisplayTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 
 const baseSettings = {
-  trayIconMode: "single",
   switcherShowsIcons: false,
   menuBarShowsHighestUsage: false,
   menuBarShowsPercent: false,

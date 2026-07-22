@@ -105,13 +105,6 @@ pub struct Settings {
 
     pub provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
 
-    /// Merge mode: show all enabled providers in a single tray icon
-    pub merge_tray_icons: bool,
-
-    /// Tray icon display mode: single icon or per-provider icons
-    #[serde(default)]
-    pub tray_icon_mode: TrayIconMode,
-
     /// Show provider icons in the merged switcher UI
     #[serde(default = "default_true")]
     pub switcher_shows_icons: bool,
@@ -534,8 +527,6 @@ impl Default for Settings {
             spend_budget_limit_usd: default_spend_budget_limit_usd(),
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: HashMap::new(),
-            merge_tray_icons: false, // Show single provider by default
-            tray_icon_mode: TrayIconMode::default(), // Single icon by default
             switcher_shows_icons: true,
             menu_bar_shows_highest_usage: false,
             menu_bar_shows_percent: false,

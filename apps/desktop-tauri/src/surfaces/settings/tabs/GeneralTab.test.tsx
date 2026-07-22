@@ -34,7 +34,6 @@ const settings: SettingsSnapshot = {
   spendBudgetWarningUsd: 5,
   spendBudgetLimitUsd: 15,
   predictivePaceWarningEnabled: false,
-  trayIconMode: "single",
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,

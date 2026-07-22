@@ -46,3 +46,21 @@ export function hasMultipleAccounts(
 ): boolean {
   return providers.filter((entry) => entry.providerId === providerId).length > 1;
 }
+
+/**
+ * Collapse to one entry per provider, keeping the first.
+ *
+ * For surfaces that switch *providers* rather than list readings: the tray grid
+ * shows one icon per provider, so two accounts must not produce two icons.
+ * Selecting that provider then reveals every account beneath it.
+ */
+export function onePerProvider<
+  T extends Pick<ProviderUsageSnapshot, "providerId">,
+>(providers: T[]): T[] {
+  const seen = new Set<string>();
+  return providers.filter((entry) => {
+    if (seen.has(entry.providerId)) return false;
+    seen.add(entry.providerId);
+    return true;
+  });
+}

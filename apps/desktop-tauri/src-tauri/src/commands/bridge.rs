@@ -546,7 +546,6 @@ pub struct SettingsSnapshot {
     provider_usage_thresholds:
         std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>,
     predictive_pace_warning_enabled: bool,
-    tray_icon_mode: &'static str,
     switcher_shows_icons: bool,
     menu_bar_shows_highest_usage: bool,
     menu_bar_shows_percent: bool,
@@ -652,7 +651,6 @@ impl From<Settings> for SettingsSnapshot {
             spend_budget_limit_usd: settings.spend_budget_limit_usd,
             provider_usage_thresholds: settings.provider_usage_thresholds,
             predictive_pace_warning_enabled: settings.predictive_pace_warning_enabled,
-            tray_icon_mode: tray_icon_mode_label(settings.tray_icon_mode),
             switcher_shows_icons: settings.switcher_shows_icons,
             menu_bar_shows_highest_usage: settings.menu_bar_shows_highest_usage,
             menu_bar_shows_percent: settings.menu_bar_shows_percent,
@@ -711,13 +709,6 @@ pub(crate) fn provider_catalog_for(settings: &Settings) -> Vec<ProviderCatalogEn
             cookie_domain: provider.cookie_domain().map(ToString::to_string),
         })
         .collect()
-}
-
-fn tray_icon_mode_label(mode: TrayIconMode) -> &'static str {
-    match mode {
-        TrayIconMode::Single => "single",
-        TrayIconMode::PerProvider => "perProvider",
-    }
 }
 
 pub(super) fn update_channel_label(channel: UpdateChannel) -> &'static str {

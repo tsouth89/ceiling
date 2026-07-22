@@ -12,7 +12,6 @@ export type SettingsTabId =
 
 // ── Narrowed string-literal unions (persisted settings enums) ─────────
 
-export type TrayIconMode = "single" | "perProvider";
 
 export type MetricPreference =
   | "automatic"
@@ -229,7 +228,6 @@ export interface SettingsSnapshot {
   spendBudgetLimitUsd?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
-  trayIconMode: TrayIconMode;
   switcherShowsIcons: boolean;
   menuBarShowsHighestUsage: boolean;
   menuBarShowsPercent: boolean;
@@ -307,7 +305,6 @@ export interface SettingsUpdate {
   spendBudgetLimitUsd?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
-  trayIconMode?: TrayIconMode;
   switcherShowsIcons?: boolean;
   menuBarShowsHighestUsage?: boolean;
   menuBarShowsPercent?: boolean;
