@@ -26,6 +26,13 @@ pub struct PowerToysSnapshot {
 pub struct PowerToysProviderSnapshot {
     id: String,
     name: String,
+    /// Which account this entry reports. A provider can appear more than once,
+    /// so `id` alone no longer identifies an entry; consumers keying on it
+    /// would collapse two accounts into one.
+    account_id: Option<String>,
+    /// Human name for that account, so two entries for one provider are not
+    /// two indistinguishable rows.
+    account_label: Option<String>,
     status_text: String,
     subtitle: Option<String>,
     primary_label: Option<String>,
@@ -80,6 +87,8 @@ fn provider_snapshot(provider: ProviderUsageSnapshot) -> PowerToysProviderSnapsh
     PowerToysProviderSnapshot {
         id: provider.provider_id,
         name: provider.display_name,
+        account_id: provider.account_id,
+        account_label: provider.account_label,
         status_text,
         subtitle,
         primary_label: provider.primary_label,

@@ -69,3 +69,55 @@ describe("orderProviderSnapshots", () => {
     expect(ordered.map((provider) => provider.providerId)).toEqual(["codex"]);
   });
 });
+
+describe("orderProviderSnapshots with several accounts", () => {
+  const snap = (providerId: string, accountId: string) =>
+    ({
+      providerId,
+      accountId,
+      displayName: providerId,
+    }) as unknown as Parameters<typeof orderProviderSnapshots>[0][number];
+
+  const catalog = [
+    { id: "codex", displayName: "Codex" },
+    { id: "claude", displayName: "Claude" },
+  ] as unknown as Parameters<typeof orderProviderSnapshots>[1];
+
+  it("keeps both accounts of a provider", () => {
+    const out = orderProviderSnapshots(
+      [snap("codex", "b"), snap("codex", "a")],
+      catalog,
+      ["codex"],
+    );
+
+    expect(out).toHaveLength(2);
+  });
+
+  it("orders two accounts the same way regardless of arrival order", () => {
+    // Fetches finish in whatever order they finish. Without a tiebreak the
+    // comparator was non-transitive and the rows swapped between refreshes.
+    const one = orderProviderSnapshots(
+      [snap("codex", "b"), snap("codex", "a")],
+      catalog,
+      ["codex"],
+    ).map((p) => p.accountId);
+    const other = orderProviderSnapshots(
+      [snap("codex", "a"), snap("codex", "b")],
+      catalog,
+      ["codex"],
+    ).map((p) => p.accountId);
+
+    expect(one).toEqual(other);
+  });
+
+  it("keeps a provider's accounts adjacent", () => {
+    const out = orderProviderSnapshots(
+      [snap("codex", "b"), snap("claude", "c"), snap("codex", "a")],
+      catalog,
+      ["codex", "claude"],
+    ).map((p) => p.providerId);
+
+    // An unrelated provider must not be sorted in between two accounts.
+    expect(out).toEqual(["codex", "codex", "claude"]);
+  });
+});

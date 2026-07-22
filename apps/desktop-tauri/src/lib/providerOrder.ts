@@ -24,8 +24,19 @@ export function orderProviderSnapshots(
     const aOrder = order.get(a.providerId);
     const bOrder = order.get(b.providerId);
     if (aOrder != null && bOrder != null && aOrder !== bOrder) return aOrder - bOrder;
+    // Both ordered and equal means two accounts of one provider. Falling through
+    // to the `aOrder != null` branch returned -1 for compare(a,b) *and*
+    // compare(b,a), which is not a valid comparator: sort output became
+    // implementation-defined and the two rows swapped between refreshes as
+    // fetches finished in different orders.
+    if (aOrder != null && bOrder != null) {
+      return (a.accountId ?? "").localeCompare(b.accountId ?? "");
+    }
     if (aOrder != null) return -1;
     if (bOrder != null) return 1;
-    return a.displayName.localeCompare(b.displayName);
+    const byName = a.displayName.localeCompare(b.displayName);
+    return byName !== 0
+      ? byName
+      : (a.accountId ?? "").localeCompare(b.accountId ?? "");
   });
 }

@@ -118,6 +118,31 @@ describe("useProviders", () => {
     vi.useRealTimers();
   });
 
+  it("drops a removed account instead of leaving a ghost card", async () => {
+    vi.useFakeTimers();
+    const personal = { ...provider("codex", 12), accountId: "acct-personal" };
+    const work = { ...provider("codex", 88), accountId: "acct-work" };
+    tauriMocks.getCachedProviders.mockResolvedValue([personal, work]);
+
+    const { result } = renderHook(() => useProviders());
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(result.current.providers).toHaveLength(2);
+
+    // Deleting an account evicts its rows in the backend and emits
+    // settings-changed, which re-reads the whole cache.
+    tauriMocks.getCachedProviders.mockResolvedValue([personal]);
+    await act(async () => {
+      emitProviderEvent("settings-changed", undefined);
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    const ids = result.current.providers.map((p) => p.accountId);
+    expect(ids).toEqual(["acct-personal"]);
+    vi.useRealTimers();
+  });
+
   it("uses stale-aware refresh on mount", async () => {
     renderHook(() => useProviders());
 

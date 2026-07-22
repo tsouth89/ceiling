@@ -74,8 +74,16 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
   const settingsReloadEpochRef = useRef(0);
   const settingsReloadingRef = useRef(false);
 
-  const mergeSnapshots = useCallback((snapshots: ProviderUsageSnapshot[]) => {
-    if (snapshots.length === 0) return;
+  /**
+   * @param authoritative the payload is the complete cache, so rows missing
+   * from it have been removed and must be dropped. Event-driven merges are
+   * partial and only ever upsert.
+   */
+  const mergeSnapshots = useCallback((
+    snapshots: ProviderUsageSnapshot[],
+    authoritative = false,
+  ) => {
+    if (snapshots.length === 0 && !authoritative) return;
     setProviders((prev) => {
       const next = [...prev];
       // Keyed by provider *and* account. Keying on provider alone meant a
@@ -94,7 +102,12 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
           next.push(snapshot);
         }
       }
-      return next;
+      if (!authoritative) return next;
+      // Deleting an account evicts its rows in the backend, but an upsert-only
+      // merge left the card on screen indefinitely, still showing its last
+      // percentages as though live.
+      const live = new Set(snapshots.map(providerRowKey));
+      return next.filter((provider) => live.has(providerRowKey(provider)));
     });
   }, []);
 
@@ -174,7 +187,7 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
       getCachedProviders()
         .then((cached) => {
           if (!cancelled && epoch === settingsReloadEpochRef.current) {
-            mergeSnapshots(cached);
+            mergeSnapshots(cached, true);
           }
         })
         .finally(() => {

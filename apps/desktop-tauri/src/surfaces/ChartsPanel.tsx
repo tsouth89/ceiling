@@ -6,6 +6,7 @@ import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
 import ProviderComparison from "./ProviderComparison";
 import { TotalApiValueCard } from "../components/TotalApiValueCard";
+import { providerRowKey, representativeForProvider } from "../lib/providerRow";
 
 const COMPARE_ID = "compare";
 
@@ -35,8 +36,10 @@ export default function ChartsPanel({
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const comparisonProviders = useMemo(() => {
-    const codex = supported.find((provider) => provider.providerId === "codex");
-    const claude = supported.find((provider) => provider.providerId === "claude");
+    // Compare is provider-versus-provider, so it needs one reading each. Taking
+    // the first was arbitrary once a provider could have two accounts.
+    const codex = representativeForProvider(supported, "codex");
+    const claude = representativeForProvider(supported, "claude");
     return codex && claude ? [codex, claude] as const : null;
   }, [supported]);
 
@@ -70,7 +73,8 @@ export default function ChartsPanel({
   }
 
   const comparing = selectedId === COMPARE_ID && comparisonProviders !== null;
-  const selected = supported.find((p) => p.providerId === selectedId) ?? supported[0];
+  const selected =
+    supported.find((p) => providerRowKey(p) === selectedId) ?? supported[0];
   const tabCount = supported.length + (comparisonProviders ? 1 : 0);
 
   return (
@@ -92,16 +96,17 @@ export default function ChartsPanel({
             </button>
           )}
           {supported.map((p) => {
-            const isActive = !comparing && p.providerId === selected.providerId;
+            const isActive =
+              !comparing && providerRowKey(p) === providerRowKey(selected);
             return (
               <button
-                key={p.providerId}
+                key={providerRowKey(p)}
                 type="button"
                 role="tab"
                 aria-selected={isActive}
                 className="charts-provider-tab"
                 data-active={isActive ? "true" : "false"}
-                onClick={() => setSelectedId(p.providerId)}
+                onClick={() => setSelectedId(providerRowKey(p))}
               >
                 <ProviderIcon
                   providerId={p.providerId}
@@ -109,7 +114,7 @@ export default function ChartsPanel({
                   className="charts-provider-tab__icon"
                   title={p.displayName}
                 />
-                <span>{p.displayName}</span>
+                <span>{p.accountLabel ?? p.displayName}</span>
               </button>
             );
           })}
@@ -119,7 +124,7 @@ export default function ChartsPanel({
         <ProviderComparison providers={[comparisonProviders[0], comparisonProviders[1]]} />
       ) : (
         <ChartsSection
-          key={selected.providerId}
+          key={providerRowKey(selected)}
           providerId={selected.providerId}
           accountEmail={selected.accountEmail}
           providerSnapshot={selected}

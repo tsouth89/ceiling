@@ -15,6 +15,7 @@ import {
   setSurfaceMode,
 } from "../lib/tauri";
 import type { BootstrapState, ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
+import { providerRowKey } from "../lib/providerRow";
 
 const FLYOUT_WIDTH = 344;
 const MAX_VISIBLE_PROVIDERS = 6;
@@ -281,7 +282,7 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
 
         <div className="taskbar-flyout__providers">
           {visibleProviders.map((provider) => (
-            <ProviderRow key={provider.providerId} provider={provider} showAsUsed={settings.showAsUsed} now={now} />
+            <ProviderRow key={providerRowKey(provider)} provider={provider} showAsUsed={settings.showAsUsed} now={now} />
           ))}
           {visibleProviders.length === 0 && (
             <div className="taskbar-flyout__empty">Syncing provider usage…</div>
