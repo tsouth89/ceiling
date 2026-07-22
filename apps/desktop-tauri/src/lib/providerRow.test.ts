@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hasMultipleAccounts,
+  representativeForProvider,
   providerIdFromRowKey,
   providerRowKey,
   rowKeyIsProvider,
@@ -55,5 +56,41 @@ describe("hasMultipleAccounts", () => {
 
     expect(hasMultipleAccounts(providers, "codex")).toBe(true);
     expect(hasMultipleAccounts(providers, "claude")).toBe(false);
+  });
+});
+
+describe("representativeForProvider", () => {
+  const snap = (providerId: string, accountId: string | null, used: number) => ({
+    providerId,
+    accountId,
+    primary: { usedPercent: used },
+  });
+
+  it("picks the most-constrained account", () => {
+    const rows = [
+      snap("codex", "acct-personal", 12),
+      snap("codex", "acct-work", 91),
+      snap("claude", "acct-c", 99),
+    ];
+
+    // The seat about to run out is the one worth summarising.
+    expect(representativeForProvider(rows, "codex")?.accountId).toBe("acct-work");
+  });
+
+  it("is stable across refreshes when usage ties", () => {
+    const a = [snap("codex", "acct-b", 50), snap("codex", "acct-a", 50)];
+    const b = [snap("codex", "acct-a", 50), snap("codex", "acct-b", 50)];
+
+    // Order of arrival must not change what is shown, or the row flickers.
+    expect(representativeForProvider(a, "codex")?.accountId).toBe(
+      representativeForProvider(b, "codex")?.accountId,
+    );
+  });
+
+  it("returns null when the provider has no reading", () => {
+    expect(representativeForProvider([], "codex")).toBeNull();
+    expect(
+      representativeForProvider([snap("claude", null, 10)], "codex"),
+    ).toBeNull();
   });
 });

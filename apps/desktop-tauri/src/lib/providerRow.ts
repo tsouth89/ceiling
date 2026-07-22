@@ -64,3 +64,34 @@ export function onePerProvider<
     return true;
   });
 }
+
+/**
+ * The account that best represents a provider on a provider-level summary.
+ *
+ * Some surfaces are about the provider rather than a reading of it: the
+ * Settings providers list configures "Codex", not one of its accounts. Those
+ * still need one snapshot to summarise, and building a Map keyed by provider
+ * silently picked whichever account happened to be last.
+ *
+ * Picks the most-constrained account, matching how the tray already chooses
+ * which window to surface: the seat about to run out is the one worth showing.
+ * Ties resolve on account id so the choice is stable between refreshes rather
+ * than flickering.
+ */
+export function representativeForProvider<
+  T extends Pick<ProviderUsageSnapshot, "providerId" | "accountId"> & {
+    // Only the used percentage matters here, so do not demand a whole
+    // RateWindowSnapshot from callers that have less.
+    primary?: { usedPercent: number } | null;
+  },
+>(providers: T[], providerId: string): T | null {
+  const rows = providers.filter((entry) => entry.providerId === providerId);
+  if (rows.length === 0) return null;
+
+  return rows.reduce((best, candidate) => {
+    const bestUsed = best.primary?.usedPercent ?? -1;
+    const candidateUsed = candidate.primary?.usedPercent ?? -1;
+    if (candidateUsed !== bestUsed) return candidateUsed > bestUsed ? candidate : best;
+    return (candidate.accountId ?? "") < (best.accountId ?? "") ? candidate : best;
+  });
+}

@@ -16,6 +16,7 @@ import { ProviderDetailPane } from "../providers/ProviderDetailPane";
 import { reorderProviders } from "../../../lib/tauri";
 import { setDetectedProviderIgnored } from "../../../lib/detectedProviderPreferences";
 import { useProviders } from "../../../hooks/useProviders";
+import { representativeForProvider } from "../../../lib/providerRow";
 
 interface ProvidersTabProps {
   settings: BootstrapState["settings"];
@@ -63,10 +64,12 @@ export default function ProvidersTab({
   };
 
   const rows: ProviderSidebarRow[] = useMemo(() => {
-    const snapshotMap = new Map(snapshots.map((s) => [s.providerId, s]));
     return orderedProviders.map((p) => {
       const isOn = enabled.has(p.id);
-      const snap = snapshotMap.get(p.id) ?? null;
+      // This list configures providers, not accounts, so each row still
+      // summarises one snapshot. With several accounts that has to be a
+      // deliberate choice rather than whichever the Map saw last.
+      const snap = representativeForProvider(snapshots, p.id);
       return {
         id: p.id,
         displayName: p.displayName,
