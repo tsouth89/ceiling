@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { allMeasuredWindows } from "../lib/capacityPresentation";
+import { providerRowKey } from "../lib/providerRow";
 
 /**
  * Activity is a calm schedule of the rate-window resets providers report.
@@ -76,7 +77,9 @@ function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
         ? Date.parse(measured.window.resetsAt)
         : NaN;
       entries.push({
-        key: `${provider.providerId}:${measured.id}`,
+        // Includes the account: two accounts both have a "session" window, so
+      // keying on provider alone collided them into one timeline row.
+      key: `${providerRowKey(provider)}:${measured.id}`,
         providerId: provider.providerId,
         displayName: provider.displayName,
         label: measured.label,

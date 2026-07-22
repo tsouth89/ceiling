@@ -4,6 +4,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { capacityFreshness } from "../lib/capacityPresentation";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import { useLocale } from "../hooks/useLocale";
+import { providerRowKey } from "../lib/providerRow";
 
 /**
  * Accounts = "what is Ceiling watching, and is it healthy?" One card per
@@ -135,7 +136,7 @@ export default function AccountsPanel({
       <div className="accounts-list">
         {providers.map((provider) => (
           <AccountRow
-            key={provider.providerId}
+            key={providerRowKey(provider)}
             provider={provider}
             hideEmail={hideEmail}
             nowMs={nowMs}

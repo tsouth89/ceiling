@@ -20,7 +20,11 @@ import { useLocale } from "../hooks/useLocale";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import MenuCard from "../components/MenuCard";
-import { onePerProvider, providerRowKey } from "../lib/providerRow";
+import {
+  onePerProvider,
+  providerRowKey,
+  representativeForProvider,
+} from "../lib/providerRow";
 import PlanStatusCard from "../components/PlanStatusCard";
 import MenuSurface, {
   MenuEmpty,
@@ -178,10 +182,19 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       ),
     [settings.enabledProviders, settings.providerOrder, sorted, state.providers],
   );
-  const providersById = useMemo(
-    () => new Map(sorted.map((provider) => [provider.providerId, provider])),
-    [sorted],
-  );
+  const providersById = useMemo(() => {
+    // The dense overview has one tile per provider. `new Map` keyed by provider
+    // keeps the *last* duplicate, so two accounts collapsed to an arbitrary one
+    // that disagreed with the normal view. Choose the same way every other
+    // provider-level summary does.
+    const byProvider = new Map<string, ProviderUsageSnapshot>();
+    for (const provider of sorted) {
+      if (byProvider.has(provider.providerId)) continue;
+      const best = representativeForProvider(sorted, provider.providerId);
+      if (best) byProvider.set(provider.providerId, best);
+    }
+    return byProvider;
+  }, [sorted]);
   const initialProviderId =
     surfaceTarget?.kind === "provider" ? surfaceTarget.providerId : null;
 

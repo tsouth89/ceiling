@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
 import { openSettingsWindow, quitApp as quitApplication } from "../lib/tauri";
-import { providerRowKey } from "../lib/providerRow";
+import { providerRowKey, representativeForProvider } from "../lib/providerRow";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
@@ -185,12 +185,29 @@ export default function PopOutPanel({
     }
   }, [providers.length, selectedProviderId, sorted]);
 
-  const selectedProvider = useMemo(
-    () => sorted.find((provider) => provider.providerId === selectedProviderId) ?? null,
-    [selectedProviderId, sorted],
-  );
+  // Which row is open, when the user clicked a specific card. Selection is
+  // still tracked by provider because deep links name a provider, not an
+  // account, so both are kept.
+  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
+
+  const selectedProvider = useMemo(() => {
+    if (selectedProviderId === null) return null;
+    // An exact row wins; `.find` by provider alone opened the first account no
+    // matter which card was clicked, so clicking the second account showed the
+    // first account's numbers under its name.
+    const exact = sorted.find(
+      (provider) =>
+        providerRowKey(provider) === selectedRowKey &&
+        provider.providerId === selectedProviderId,
+    );
+    if (exact) return exact;
+    // Arrived by deep link, or the chosen row is gone: summarise the account
+    // closest to its limit, as every other surface does.
+    return representativeForProvider(sorted, selectedProviderId);
+  }, [selectedProviderId, selectedRowKey, sorted]);
 
   const handleGridClick = useCallback((nextProviderId: string | null) => {
+    if (nextProviderId === null) setSelectedRowKey(null);
     setSelectedProviderId(nextProviderId);
   }, []);
 
@@ -401,7 +418,10 @@ export default function PopOutPanel({
                             resetTimeRelative={settings.resetTimeRelative}
                             showResetWhenExhausted={settings.showResetWhenExhausted}
                             showAsUsed={settings.showAsUsed}
-                            onSelect={() => handleGridClick(p.providerId)}
+                            onSelect={() => {
+                              setSelectedRowKey(providerRowKey(p));
+                              handleGridClick(p.providerId);
+                            }}
                           />
                         </div>
                       </Fragment>

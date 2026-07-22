@@ -538,10 +538,20 @@ mod windows_host {
             .into_iter()
             .filter(|provider_id| settings.enabled_providers.contains(provider_id))
             .map(|provider_id| {
+                // One tile per provider, showing the account closest to its
+                // limit. `.find` returned whichever account sat first in the
+                // cache, which changes as fetches finish in different orders,
+                // so the tile flipped between accounts between refreshes.
                 let snapshot = guard
                     .provider_cache
                     .iter()
-                    .find(|snapshot| snapshot.provider_id == provider_id);
+                    .filter(|snapshot| snapshot.provider_id == provider_id)
+                    .max_by(|a, b| {
+                        a.primary
+                            .used_percent
+                            .total_cmp(&b.primary.used_percent)
+                            .then_with(|| b.account_id.cmp(&a.account_id))
+                    });
                 let percent =
                     snapshot
                         .filter(|snapshot| snapshot.error.is_none())
