@@ -5,6 +5,7 @@ import type {
   RefreshCompletePayload,
   RefreshStartedPayload,
 } from "../types/bridge";
+import { providerRowKey } from "../lib/providerRow";
 import {
   getCachedProviders,
   refreshProviders,
@@ -77,13 +78,19 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
     if (snapshots.length === 0) return;
     setProviders((prev) => {
       const next = [...prev];
-      const byId = new Map(next.map((provider, index) => [provider.providerId, index]));
+      // Keyed by provider *and* account. Keying on provider alone meant a
+      // provider's second account replaced its first here, so only one of two
+      // configured accounts ever reached the UI.
+      const byRow = new Map(
+        next.map((provider, index) => [providerRowKey(provider), index]),
+      );
       for (const snapshot of snapshots) {
-        const idx = byId.get(snapshot.providerId);
+        const rowKey = providerRowKey(snapshot);
+        const idx = byRow.get(rowKey);
         if (idx !== undefined) {
           next[idx] = snapshot;
         } else {
-          byId.set(snapshot.providerId, next.length);
+          byRow.set(rowKey, next.length);
           next.push(snapshot);
         }
       }
@@ -102,7 +109,10 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
   }, [mergeSnapshots]);
 
   const queueSnapshot = useCallback((snapshot: ProviderUsageSnapshot) => {
-    pendingSnapshotsRef.current.set(snapshot.providerId, snapshot);
+    // Both accounts of a provider land inside the same 80ms flush window, so
+    // this queue must key by account too or the second silently discards the
+    // first before it is ever merged.
+    pendingSnapshotsRef.current.set(providerRowKey(snapshot), snapshot);
     if (settingsReloadingRef.current || flushTimerRef.current !== undefined) return;
     flushTimerRef.current = window.setTimeout(flushPendingSnapshots, 80);
   }, [flushPendingSnapshots]);

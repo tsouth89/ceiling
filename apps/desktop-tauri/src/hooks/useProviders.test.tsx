@@ -74,6 +74,50 @@ describe("useProviders", () => {
     );
   });
 
+  it("keeps both accounts of one provider instead of the last one winning", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useProviders());
+
+    const personal = { ...provider("codex", 12), accountId: "acct-personal" };
+    const work = { ...provider("codex", 88), accountId: "acct-work" };
+
+    // Both land inside the same 80ms flush window, which is what happens on a
+    // real refresh: the fan-out fetches every account concurrently.
+    act(() => {
+      emitProviderEvent("provider-updated", personal);
+      emitProviderEvent("provider-updated", work);
+      vi.advanceTimersByTime(100);
+    });
+
+    const ids = result.current.providers.map((p) => p.accountId).sort();
+    expect(ids).toEqual(["acct-personal", "acct-work"]);
+    vi.useRealTimers();
+  });
+
+  it("still replaces a reading of the same account rather than duplicating it", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useProviders());
+
+    act(() => {
+      emitProviderEvent("provider-updated", {
+        ...provider("codex", 12),
+        accountId: "acct-work",
+      });
+      vi.advanceTimersByTime(100);
+    });
+    act(() => {
+      emitProviderEvent("provider-updated", {
+        ...provider("codex", 44),
+        accountId: "acct-work",
+      });
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(result.current.providers).toHaveLength(1);
+    expect(result.current.providers[0].primary?.usedPercent).toBe(44);
+    vi.useRealTimers();
+  });
+
   it("uses stale-aware refresh on mount", async () => {
     renderHook(() => useProviders());
 
