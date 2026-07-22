@@ -640,3 +640,7 @@ AccountsProbeMissing = That folder does not exist yet. Create it and sign in fir
 AccountsProbeAlreadyAdded = Already added as
 AccountsSetupHint = To sign a second account into its own directory, run this in PowerShell, then paste that path below:
 AccountsTint = Accent color
+AccountsSetupTitle = Adding another account
+AccountsSetupStep1 = Create a folder for it and sign in. Run this in PowerShell:
+AccountsSetupStep2 = A browser opens. Sign in with the account you want to add, not the one you are already using.
+AccountsSetupStep3 = Come back here, paste that folder below, then Check and Add. Both accounts are shown side by side.

@@ -847,6 +847,10 @@ locale_keys! {
     AccountsProbeMissing,
     AccountsProbeAlreadyAdded,
     AccountsSetupHint,
+    AccountsSetupTitle,
+    AccountsSetupStep1,
+    AccountsSetupStep2,
+    AccountsSetupStep3,
     AccountsTint,
 
     // Tauri desktop shell — Token accounts (Phase 6e, review)
