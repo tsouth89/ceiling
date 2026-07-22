@@ -29,11 +29,27 @@ Create an annotated `v<version>` tag from the merged `main` commit and push it.
 4. verifies the publisher and RFC 3161 timestamps;
 5. regenerates SHA-256 sidecars after signing;
 6. installs, validates, and uninstalls the signed build; and
-7. creates or updates a draft GitHub release.
+7. creates or updates a draft GitHub release; and
+8. uploads the immutable installer and checksum to Cloudflare R2, then verifies
+   the public download has no redirect and the expected SHA-256.
 
 The GitHub `release` environment accepts only `v*` tags. Its federated identity
 is `repo:tsouth89/ceiling:environment:release`; the workflow uses environment
 variables for Azure resource identifiers and does not store an Azure secret.
+
+Microsoft Store installers are published under
+`https://downloads.ceiling.win/releases/v<version>/`. The `release` environment
+must define these Cloudflare values:
+
+- variable `CLOUDFLARE_ACCOUNT_ID`;
+- variable `CLOUDFLARE_R2_BUCKET` (`ceiling-downloads`); and
+- secret `CLOUDFLARE_R2_API_TOKEN`, scoped to the Ceiling account with R2 object
+  write access.
+
+The release workflow runs `scripts/publish-store-installer.ps1`, which validates
+the signed installer's checksum before upload and downloads it again from the
+custom domain with redirects disabled. This keeps the Microsoft Store package
+URL versioned, immutable, and directly downloadable.
 
 For a local unsigned packaging rehearsal, use the managed Windows checkout:
 
@@ -115,9 +131,11 @@ Invalidation and no-cache recovery:
    a clean Windows profile.
 3. Run `scripts\release-doctor.ps1 -Version <version>` and resolve all failures.
 4. Publish the GitHub draft only after the manual checks pass.
-5. Publish a new Winget package identity for Ceiling. Do not reuse the
+5. Submit the versioned `downloads.ceiling.win` installer URL to Microsoft
+   Partner Center.
+6. Publish a new Winget package identity for Ceiling. Do not reuse the
    `Finesssee.Win-CodexBar` package identifier or product code.
-6. Verify the GitHub download URL and SHA-256 before submitting the immutable
+7. Verify the GitHub download URL and SHA-256 before submitting the immutable
    Winget manifest.
 
 ## First-release gate
