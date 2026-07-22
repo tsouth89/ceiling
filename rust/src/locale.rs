@@ -836,6 +836,26 @@ locale_keys! {
     OpenCodeGoWorkspaceHelp,
     CredsOpenAiHistoryHelp,
 
+    // Tauri desktop shell — Config-directory accounts (SOU-285)
+    SectionAccounts,
+    AccountsIntro,
+    AccountsFollowingCli,
+    AccountsFollowingCliHint,
+    AccountsActive,
+    AccountsSignedOut,
+    AccountsTrackThis,
+    AccountsRemove,
+    AccountsEmpty,
+    AccountsAddTitle,
+    AccountsDirPlaceholder,
+    AccountsLabelPlaceholder,
+    AccountsCheckButton,
+    AccountsAddButton,
+    AccountsProbeSignedOut,
+    AccountsProbeAlreadyAdded,
+    AccountsSetupHint,
+    AccountsTint,
+
     // Tauri desktop shell — Token accounts (Phase 6e, review)
     TokenAccountActive,
     TokenAccountSetActive,

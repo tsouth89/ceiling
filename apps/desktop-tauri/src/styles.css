@@ -8937,3 +8937,65 @@ body:has(.dashboard-shell) #root {
 .first-run__action:hover {
   opacity: 0.9;
 }
+
+/* ── Config-directory accounts (SOU-285) ───────────────────────────── */
+
+.credential-card__badge--warn {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--status-warning-text);
+}
+
+/* Directory paths are the identity of an account here, so they stay legible
+   rather than being truncated into ambiguity. */
+.credential-card__path,
+.accounts-path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.accounts-provider {
+  margin-block-start: 18px;
+  padding-block-start: 14px;
+  border-block-start: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.accounts-provider:first-of-type {
+  margin-block-start: 8px;
+  padding-block-start: 0;
+  border-block-start: none;
+}
+
+.accounts-provider__title {
+  margin: 0 0 8px;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.accounts-following {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-block-end: 10px;
+}
+
+/* The tint is an accent stripe, so it needs a border to colour even when the
+   account has none set. */
+.accounts-card {
+  border-inline-start: 3px solid transparent;
+}
+
+.accounts-add__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.accounts-probe {
+  margin: 6px 0 0;
+}
+
+.accounts-setup-hint {
+  margin-block-start: 8px;
+}

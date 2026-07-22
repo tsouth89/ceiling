@@ -20,6 +20,8 @@ import type {
   CursorModelActivity,
   ProviderSummary,
   ProviderUsageSnapshot,
+  AccountProbeBridge,
+  ProviderAccountsBridge,
   ProviderTokenAccountsBridge,
   TokenAccountSupportBridge,
   SettingsSnapshot,
@@ -282,6 +284,66 @@ export function exportCostCsv(providerId: string): Promise<string> {
 }
 
 // ── Token account bridge ─────────────────────────────────────────────
+
+export function getDirectoryAccounts(): Promise<ProviderAccountsBridge[]> {
+  return invoke<ProviderAccountsBridge[]>("get_directory_accounts");
+}
+
+export function probeAccountDirectory(
+  providerId: string,
+  configDir: string,
+): Promise<AccountProbeBridge> {
+  return invoke<AccountProbeBridge>("probe_account_directory", {
+    providerId,
+    configDir,
+  });
+}
+
+export function addDirectoryAccount(
+  providerId: string,
+  configDir: string,
+  label: string | null,
+): Promise<ProviderAccountsBridge> {
+  return invoke<ProviderAccountsBridge>("add_directory_account", {
+    providerId,
+    configDir,
+    label,
+  });
+}
+
+export function removeDirectoryAccount(
+  providerId: string,
+  accountId: string,
+): Promise<ProviderAccountsBridge> {
+  return invoke<ProviderAccountsBridge>("remove_directory_account", {
+    providerId,
+    accountId,
+  });
+}
+
+export function setActiveDirectoryAccount(
+  providerId: string,
+  accountId: string,
+): Promise<ProviderAccountsBridge> {
+  return invoke<ProviderAccountsBridge>("set_active_directory_account", {
+    providerId,
+    accountId,
+  });
+}
+
+export function updateDirectoryAccount(
+  providerId: string,
+  accountId: string,
+  label: string | null,
+  tint: string | null,
+): Promise<ProviderAccountsBridge> {
+  return invoke<ProviderAccountsBridge>("update_directory_account", {
+    providerId,
+    accountId,
+    label,
+    tint,
+  });
+}
 
 export function getTokenAccountProviders(): Promise<TokenAccountSupportBridge[]> {
   return invoke<TokenAccountSupportBridge[]>("get_token_account_providers");

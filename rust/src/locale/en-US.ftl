@@ -627,3 +627,23 @@ FirstRunStepFloatbar = Turn on the floating bar or taskbar glance
 FirstRunOpenProviders = Open provider settings
 FirstRunOpenDisplay = Open display settings
 FirstRunDismiss = Dismiss
+
+# Config-directory accounts (SOU-285)
+SectionAccounts = Accounts
+AccountsIntro = Ceiling reads the account your CLI is signed in as. Add a config directory to track a specific account instead.
+AccountsFollowingCli = Following the CLI
+AccountsFollowingCliHint = Tracking whichever account is signed in at
+AccountsActive = Active
+AccountsSignedOut = Signed out
+AccountsTrackThis = Track this account
+AccountsRemove = Remove
+AccountsEmpty = No accounts added yet.
+AccountsAddTitle = Add an account
+AccountsDirPlaceholder = Full path to the config directory
+AccountsLabelPlaceholder = Label (optional, read from the directory)
+AccountsCheckButton = Check
+AccountsAddButton = Add
+AccountsProbeSignedOut = No account is signed in there yet.
+AccountsProbeAlreadyAdded = Already added as
+AccountsSetupHint = To sign a second account into its own directory, run this in a terminal:
+AccountsTint = Accent color
