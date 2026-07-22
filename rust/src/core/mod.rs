@@ -1,6 +1,7 @@
 //! Core data models and traits
 
 mod account_dirs;
+mod account_ledger;
 mod claude_accounts;
 mod codex_accounts;
 mod configured_accounts;
@@ -21,6 +22,7 @@ mod usage_snapshot;
 mod widget_snapshot;
 
 pub use account_dirs::*;
+pub use account_ledger::*;
 pub use claude_accounts::*;
 pub use codex_accounts::*;
 pub use configured_accounts::*;

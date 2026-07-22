@@ -254,12 +254,24 @@ impl ProviderRefreshInputs {
     }
 }
 
+/// Note which account each config directory holds right now.
+///
+/// Runs on the refresh cycle because that is already when Ceiling reads these
+/// credentials. It is what lets local activity be attributed to an account in
+/// the common setup where someone keeps one config directory and re-runs
+/// `codex login` to switch, since the logs themselves carry no account id.
+fn record_account_observations(accounts: &ConfiguredAccounts) {
+    codexbar::core::AccountLedger::record_and_persist(accounts, chrono::Utc::now().timestamp());
+}
+
 fn spawn_provider_refreshes(
     app: &tauri::AppHandle,
     inputs: &ProviderRefreshInputs,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(inputs.enabled_ids.len());
     let fetch_permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROVIDER_FETCHES));
+
+    record_account_observations(&inputs.account_dirs);
 
     for id in &inputs.enabled_ids {
         let id = *id;
