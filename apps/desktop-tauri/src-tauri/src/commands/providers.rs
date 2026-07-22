@@ -581,6 +581,43 @@ fn finish_provider_refresh(state: &tauri::State<'_, Mutex<AppState>>) -> Result<
 
 /// Persist the in-memory provider cache as `widget-snapshot.json` so
 /// `codexbar statusline` / `codexbar mcp` can read quota without networking.
+/// One reading per provider for the always-visible taskbar strip, choosing the
+/// account closest to its limit.
+///
+/// That strip has room for one entry per provider and exists to warn you, so
+/// the seat about to run out is the one worth surfacing. This is the same
+/// principle already applied to windows: show what is actually constraining
+/// you, not whichever reading arrived last. Hovering opens the flyout, which
+/// shows every account with its own label.
+///
+/// Without this a provider with two accounts emitted two entries under one
+/// `ProviderId`, which is ambiguous for every consumer downstream.
+pub(super) fn most_constrained_per_provider(
+    cached: &[ProviderUsageSnapshot],
+) -> Vec<&ProviderUsageSnapshot> {
+    let mut best: Vec<&ProviderUsageSnapshot> = Vec::new();
+    for snapshot in cached.iter().filter(|snap| snap.error.is_none()) {
+        match best
+            .iter_mut()
+            .find(|existing| existing.provider_id == snapshot.provider_id)
+        {
+            Some(existing) => {
+                let existing_used = existing.primary.used_percent;
+                let used = snapshot.primary.used_percent;
+                // Ties resolve on account id so the strip does not flicker
+                // between accounts as readings land in different orders.
+                let replace = used > existing_used
+                    || (used == existing_used && snapshot.account_id < existing.account_id);
+                if replace {
+                    *existing = snapshot;
+                }
+            }
+            None => best.push(snapshot),
+        }
+    }
+    best
+}
+
 fn persist_widget_snapshot_from_cache(
     state: &tauri::State<'_, Mutex<AppState>>,
     enabled_ids: &[ProviderId],
@@ -593,9 +630,8 @@ fn persist_widget_snapshot_from_cache(
         }
     };
 
-    let entries: Vec<_> = cached
-        .iter()
-        .filter(|snap| snap.error.is_none())
+    let entries: Vec<_> = most_constrained_per_provider(&cached)
+        .into_iter()
         .filter_map(widget_entry_from_usage_snapshot)
         .collect();
     if entries.is_empty() {

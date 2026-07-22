@@ -702,6 +702,66 @@ fn provider_cache_upsert_replaces_existing_provider() {
     assert_eq!(cache[0].error.as_deref(), Some("new"));
 }
 
+fn account_snapshot(account_id: &str, used: f64) -> ProviderUsageSnapshot {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(used)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "oauth".to_string(),
+    };
+    let mut snapshot =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
+    snapshot.account_id = Some(account_id.to_string());
+    snapshot
+}
+
+#[test]
+fn the_taskbar_strip_shows_the_account_closest_to_its_limit() {
+    let cached = vec![
+        account_snapshot("acct-personal", 12.0),
+        account_snapshot("acct-work", 91.0),
+    ];
+
+    let chosen = super::most_constrained_per_provider(&cached);
+
+    // One entry per provider, and it is the seat about to run out. Emitting
+    // both would put two entries under one ProviderId, which is ambiguous for
+    // everything downstream.
+    assert_eq!(chosen.len(), 1);
+    assert_eq!(chosen[0].account_id.as_deref(), Some("acct-work"));
+}
+
+#[test]
+fn the_taskbar_strip_does_not_flicker_between_tied_accounts() {
+    let one = vec![
+        account_snapshot("acct-b", 50.0),
+        account_snapshot("acct-a", 50.0),
+    ];
+    let other = vec![
+        account_snapshot("acct-a", 50.0),
+        account_snapshot("acct-b", 50.0),
+    ];
+
+    // Readings land in whatever order they finish, which must not change what
+    // the strip shows.
+    assert_eq!(
+        super::most_constrained_per_provider(&one)[0].account_id,
+        super::most_constrained_per_provider(&other)[0].account_id
+    );
+}
+
+#[test]
+fn the_taskbar_strip_skips_providers_that_failed_to_fetch() {
+    let mut errored = account_snapshot("acct-work", 91.0);
+    errored.error = Some("offline".to_string());
+
+    let cached = vec![errored];
+    let chosen = super::most_constrained_per_provider(&cached);
+
+    assert!(chosen.is_empty());
+}
+
 #[test]
 fn provider_cache_keeps_one_row_per_account() {
     let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
