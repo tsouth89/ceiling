@@ -1,5 +1,7 @@
 //! Core data models and traits
 
+mod account_dirs;
+mod claude_accounts;
 mod codex_accounts;
 mod cost_pricing;
 mod credential_migration;
@@ -17,6 +19,8 @@ mod usage_pace;
 mod usage_snapshot;
 mod widget_snapshot;
 
+pub use account_dirs::*;
+pub use claude_accounts::*;
 pub use codex_accounts::*;
 pub use cost_pricing::*;
 pub use credential_migration::*;

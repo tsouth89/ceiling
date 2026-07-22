@@ -33,7 +33,7 @@ pub use web_api::{ClaudeDesktopSessionStatus, ClaudeWebApiFetcher, claude_deskto
 /// Detect a usable Claude Code credentials file without returning its
 /// contents or account identity.
 pub fn claude_code_credentials_available() -> bool {
-    oauth::credentials_file_available()
+    oauth::credentials_file_available(None)
 }
 
 /// Claude provider implementation

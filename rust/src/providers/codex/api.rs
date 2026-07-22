@@ -70,7 +70,8 @@ impl CodexApi {
     /// Identity claims for this client's home, for labeling and for keying usage
     /// by account. Never includes token material.
     pub fn identity(&self) -> Option<crate::core::CodexIdentity> {
-        crate::core::read_identity(&self.codex_home())
+        use crate::core::AccountIdentity;
+        crate::core::CodexIdentity::read(&self.codex_home())
     }
 
     /// Fetch usage information from Codex API
