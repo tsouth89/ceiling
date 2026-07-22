@@ -2,7 +2,14 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://ceiling.win/</loc>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
+    <lastmod>2026-07-22</lastmod>
+  </url>
+  <url>
+    <loc>https://ceiling.win/privacy/</loc>
+    <lastmod>2026-07-22</lastmod>
+  </url>
+  <url>
+    <loc>https://ceiling.win/support/</loc>
+    <lastmod>2026-07-22</lastmod>
   </url>
 </urlset>

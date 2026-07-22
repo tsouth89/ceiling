@@ -9,12 +9,15 @@
       content="Ceiling is a local-first Windows app that keeps AI capacity, reset times, alerts, and usage history nearby. Track Codex, Claude, Cursor, Gemini, and Copilot from the taskbar."
     />
     <meta name="theme-color" content="#07090c" />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
     <link rel="canonical" href="https://ceiling.win/" />
     <link rel="icon" href="/favicon.png" type="image/png" />
     <link rel="apple-touch-icon" href="/favicon.png" />
     <link rel="preload" as="image" href="/ceiling-taskbar.png" />
 
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Ceiling" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:title" content="Ceiling — Know what you have left before it stops you." />
     <meta
       property="og:description"
@@ -22,6 +25,7 @@
     />
     <meta property="og:url" content="https://ceiling.win/" />
     <meta property="og:image" content="https://ceiling.win/og.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Ceiling's taskbar capacity strip and usage overview" />
@@ -29,22 +33,41 @@
     <meta name="twitter:title" content="Ceiling — AI capacity and reset tracker for Windows" />
     <meta name="twitter:description" content="Keep AI capacity, reset times, alerts, and usage history visible from the Windows taskbar." />
     <meta name="twitter:image" content="https://ceiling.win/og.png" />
+    <meta name="twitter:image:alt" content="Ceiling's taskbar capacity strip and usage overview" />
 
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "Ceiling",
-        "operatingSystem": "Windows",
-        "applicationCategory": "UtilitiesApplication",
-        "description": "A local-first Windows app that tracks AI subscription capacity, reset windows, alerts, and usage history for Codex, Claude, Cursor, Gemini, and Copilot.",
-        "url": "https://ceiling.win/",
-        "downloadUrl": "https://ceiling.win/download",
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD"
-        }
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://ceiling.win/#website",
+            "url": "https://ceiling.win/",
+            "name": "Ceiling",
+            "alternateName": "Ceiling AI Usage Monitor"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://ceiling.win/#app",
+            "name": "Ceiling",
+            "operatingSystem": "Windows 10, Windows 11",
+            "applicationCategory": "UtilitiesApplication",
+            "description": "A local-first Windows app that tracks AI subscription capacity, reset windows, alerts, and usage history for Codex, Claude, Cursor, Gemini, and Copilot.",
+            "url": "https://ceiling.win/",
+            "downloadUrl": "https://ceiling.win/download",
+            "image": "https://ceiling.win/og.png",
+            "screenshot": "https://ceiling.win/ceiling-overview.png",
+            "softwareRequirements": "Windows 10 or Windows 11",
+            "isAccessibleForFree": true,
+            "license": "https://github.com/tsouth89/ceiling/blob/main/LICENSE",
+            "sameAs": "https://github.com/tsouth89/ceiling",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            }
+          }
+        ]
       }
     </script>
 
@@ -493,7 +516,7 @@
           </div>
           <a class="release" href="https://github.com/tsouth89/ceiling/releases/latest">Free and open source · Windows 10 / 11 · Signed builds</a>
 
-          <div class="hero-product" aria-label="Ceiling interface preview">
+          <div class="hero-product" role="group" aria-label="Ceiling interface preview">
             <div class="taskbar">
               <img
                 src="/ceiling-taskbar.png"
@@ -605,8 +628,8 @@
         <section class="providers" aria-labelledby="providers-heading">
           <h2 id="providers-heading">One quiet view for the plans you use.</h2>
           <p>Ceiling currently supports the AI subscriptions and sessions that are hardest to keep track of during a working day.</p>
-          <div class="provider-list" aria-label="Supported providers">
-            <span>OpenAI Codex</span><span>Claude</span><span>Cursor</span><span>Gemini</span><span>GitHub Copilot</span>
+          <div class="provider-list" role="list" aria-label="Supported providers">
+            <span role="listitem">OpenAI Codex</span><span role="listitem">Claude</span><span role="listitem">Cursor</span><span role="listitem">Gemini</span><span role="listitem">GitHub Copilot</span>
           </div>
         </section>
 
@@ -635,6 +658,8 @@
       <footer class="footer">
         <span>Ceiling for Windows</span>
         <div class="footer-links">
+          <a href="/privacy/">Privacy</a>
+          <a href="/support/">Support</a>
           <a href="https://github.com/tsouth89/ceiling" data-analytics="github_clicked">GitHub</a>
           <a href="https://github.com/tsouth89/ceiling/releases/latest">Releases</a>
           <a href="https://github.com/tsouth89/ceiling/blob/main/docs/DATA_SOURCES.md">Data sources</a>
