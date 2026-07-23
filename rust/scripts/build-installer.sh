@@ -10,6 +10,7 @@ TARGET_BIN_DIR="$RUST_DIR/target/$TARGET_TRIPLE/release"
 OUTPUT_DIR="$RUST_DIR/target/installer"
 INSTALLER_DEPS_DIR="$RUST_DIR/target/installer-deps"
 INSTALLER_PATH="$OUTPUT_DIR/CodexBar-${VERSION}-Setup.exe"
+STORE_INSTALLER_PATH="$OUTPUT_DIR/CodexBar-${VERSION}-Store-Setup.exe"
 INNO_IMAGE="${INNO_SETUP_IMAGE:-amake/innosetup}"
 CONTAINER_NAME="codexbar-inno-${VERSION//./-}-$$"
 VC_REDIST_URL="${VC_REDIST_URL:-https://aka.ms/vc14/vc_redist.x64.exe}"
@@ -18,6 +19,9 @@ VC_REDIST_SHA256="${VC_REDIST_SHA256:-}"
 WEBVIEW2_BOOTSTRAPPER_URL="${WEBVIEW2_BOOTSTRAPPER_URL:-https://go.microsoft.com/fwlink/p/?LinkId=2124703}"
 WEBVIEW2_BOOTSTRAPPER_PATH="$INSTALLER_DEPS_DIR/MicrosoftEdgeWebview2Setup.exe"
 WEBVIEW2_BOOTSTRAPPER_SHA256="${WEBVIEW2_BOOTSTRAPPER_SHA256:-}"
+WEBVIEW2_STANDALONE_INSTALLER_URL="${WEBVIEW2_STANDALONE_INSTALLER_URL:-https://go.microsoft.com/fwlink/?linkid=2124701}"
+WEBVIEW2_STANDALONE_INSTALLER_PATH="$INSTALLER_DEPS_DIR/MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+WEBVIEW2_STANDALONE_INSTALLER_SHA256="${WEBVIEW2_STANDALONE_INSTALLER_SHA256:-}"
 
 for required_file in "$TARGET_BIN_DIR/codexbar.exe" "$TARGET_BIN_DIR/codexbar-cli.exe" "$TARGET_BIN_DIR/codexbar-desktop.exe" "$RUST_DIR/icons/icon.ico"; do
   if [[ ! -f "$required_file" ]]; then
@@ -62,6 +66,14 @@ EOF
   exit 1
 fi
 
+if [[ -z "$WEBVIEW2_STANDALONE_INSTALLER_SHA256" ]]; then
+  cat >&2 <<'EOF'
+WEBVIEW2_STANDALONE_INSTALLER_SHA256 is required to verify MicrosoftEdgeWebView2RuntimeInstallerX64.exe.
+Set WEBVIEW2_STANDALONE_INSTALLER_SHA256 to the expected SHA-256 hash from a trusted source.
+EOF
+  exit 1
+fi
+
 if [[ -z "$WEBVIEW2_BOOTSTRAPPER_SHA256" ]]; then
   cat >&2 <<'EOF'
 WEBVIEW2_BOOTSTRAPPER_SHA256 is required to verify MicrosoftEdgeWebview2Setup.exe.
@@ -79,6 +91,18 @@ verify_sha256 \
   "$WEBVIEW2_BOOTSTRAPPER_SHA256" \
   "MicrosoftEdgeWebview2Setup.exe"
 
+curl -L "$WEBVIEW2_STANDALONE_INSTALLER_URL" -o "$WEBVIEW2_STANDALONE_INSTALLER_PATH"
+verify_sha256 \
+  "$WEBVIEW2_STANDALONE_INSTALLER_PATH" \
+  "$WEBVIEW2_STANDALONE_INSTALLER_SHA256" \
+  "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+
+WEBVIEW2_STANDALONE_INSTALLER_SIZE="$(wc -c < "$WEBVIEW2_STANDALONE_INSTALLER_PATH")"
+if [[ "$WEBVIEW2_STANDALONE_INSTALLER_SIZE" -lt 52428800 ]]; then
+  echo "WebView2 dependency is only $WEBVIEW2_STANDALONE_INSTALLER_SIZE bytes; expected the offline x64 standalone installer." >&2
+  exit 1
+fi
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
@@ -90,17 +114,22 @@ docker create \
   -w /work/rust/installer \
   --entrypoint /bin/sh \
   "$INNO_IMAGE" \
-  -lc "/opt/bin/iscc /Qp /DAppVersion=$VERSION /DTargetBinDir=..\\\\target\\\\$TARGET_TRIPLE\\\\release /DVCRedistPath=..\\\\target\\\\installer-deps\\\\vc_redist.x64.exe /DWebView2BootstrapperPath=..\\\\target\\\\installer-deps\\\\MicrosoftEdgeWebview2Setup.exe /DOutputDir=C:\\\\inno-out /DOutputBaseFilename=CodexBar-$VERSION-Setup codexbar.iss" \
+  -lc "/opt/bin/iscc /Qp /DAppVersion=$VERSION /DTargetBinDir=..\\\\target\\\\$TARGET_TRIPLE\\\\release /DVCRedistPath=..\\\\target\\\\installer-deps\\\\vc_redist.x64.exe /DWebView2InstallerPath=..\\\\target\\\\installer-deps\\\\MicrosoftEdgeWebview2Setup.exe /DWebView2InstallerFileName=MicrosoftEdgeWebview2Setup.exe /DOutputDir=C:\\\\inno-out /DOutputBaseFilename=CodexBar-$VERSION-Setup codexbar.iss && /opt/bin/iscc /Qp /DAppVersion=$VERSION /DTargetBinDir=..\\\\target\\\\$TARGET_TRIPLE\\\\release /DVCRedistPath=..\\\\target\\\\installer-deps\\\\vc_redist.x64.exe /DWebView2InstallerPath=..\\\\target\\\\installer-deps\\\\MicrosoftEdgeWebView2RuntimeInstallerX64.exe /DWebView2InstallerFileName=MicrosoftEdgeWebView2RuntimeInstallerX64.exe /DOutputDir=C:\\\\inno-out /DOutputBaseFilename=CodexBar-$VERSION-Store-Setup codexbar.iss" \
   >/dev/null
 
 docker start -a "$CONTAINER_NAME" >/dev/null
 docker cp \
   "$CONTAINER_NAME:/home/xclient/.wine/drive_c/inno-out/CodexBar-$VERSION-Setup.exe" \
   "$INSTALLER_PATH"
+docker cp \
+  "$CONTAINER_NAME:/home/xclient/.wine/drive_c/inno-out/CodexBar-$VERSION-Store-Setup.exe" \
+  "$STORE_INSTALLER_PATH"
 
-if [[ ! -f "$INSTALLER_PATH" ]]; then
-  echo "Expected installer was not created: $INSTALLER_PATH" >&2
-  exit 1
-fi
+for installer_path in "$INSTALLER_PATH" "$STORE_INSTALLER_PATH"; do
+  if [[ ! -f "$installer_path" ]]; then
+    echo "Expected installer was not created: $installer_path" >&2
+    exit 1
+  fi
+done
 
-printf '%s\n' "$INSTALLER_PATH"
+printf '%s\n' "$INSTALLER_PATH" "$STORE_INSTALLER_PATH"

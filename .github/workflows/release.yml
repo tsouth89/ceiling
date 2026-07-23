@@ -196,13 +196,15 @@ jobs:
             -WorkRoot $env:RELEASE_WORK_ROOT `
             -PackageOnly
 
-      - name: Sign installer
+      - name: Sign installers
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files: ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
+          files: |
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Store-Setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -240,6 +242,8 @@ jobs:
           path: |
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe.sha256
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Store-Setup.exe
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Store-Setup.exe.sha256
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-portable.exe
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-portable.exe.sha256
           if-no-files-found: error
@@ -254,6 +258,8 @@ jobs:
           $assets = @(
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe",
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe.sha256",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Store-Setup.exe",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Store-Setup.exe.sha256",
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-portable.exe",
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-portable.exe.sha256"
           )

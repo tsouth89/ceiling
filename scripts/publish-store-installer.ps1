@@ -17,7 +17,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $resolvedAssetsDir = (Resolve-Path -LiteralPath $AssetsDir).Path
-$installerName = "Ceiling-$Version-Setup.exe"
+$installerName = "Ceiling-$Version-Store-Setup.exe"
 $hashName = "$installerName.sha256"
 $installerPath = Join-Path $resolvedAssetsDir $installerName
 $hashPath = Join-Path $resolvedAssetsDir $hashName
