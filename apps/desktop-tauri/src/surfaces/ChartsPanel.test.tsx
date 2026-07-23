@@ -106,11 +106,10 @@ describe("ChartsPanel", () => {
     expect(getByTestId("charts-section").textContent).toBe("claude");
   });
 
-  it("keeps two accounts of one provider as distinct, selectable tabs", () => {
-    // The reported setup and my own #124 regression: selecting the second
-    // account's chart reverted on the next render because the validity check
-    // compared a row key against a bare providerId.
-    const { getAllByRole, getByTestId, rerender } = render(
+  it("collapses a provider's accounts into a single tab, since local logs are machine-wide", () => {
+    // Local activity is scanned from logs that carry no account identity, so
+    // two Codex accounts must not present as two tabs of separable data.
+    const { getAllByRole, getByTestId } = render(
       <ChartsPanel
         providers={[
           provider({
@@ -118,51 +117,25 @@ describe("ChartsPanel", () => {
             displayName: "Codex",
             accountId: "acct-personal",
             accountEmail: "tsouth2@gmail.com",
-            planName: "Pro Lite",
           }),
           provider({
             providerId: "codex",
             displayName: "Codex",
             accountId: "acct-work",
             accountEmail: "bts@cssi.us",
-            planName: "ChatGPT Team",
           }),
+          provider({ providerId: "claude", displayName: "Claude" }),
         ]}
       />,
     );
 
-    // Two Codex tabs, each named by its own email — not two bare "Codex".
-    const personalTab = getAllByRole("tab", { name: /tsouth2@gmail.com/ });
-    const workTab = getAllByRole("tab", { name: /bts@cssi.us/ });
-    expect(personalTab).toHaveLength(1);
-    expect(workTab).toHaveLength(1);
+    // One Codex tab, one Claude tab, plus Compare — not one tab per account.
+    expect(getAllByRole("tab", { name: /Codex/ })).toHaveLength(1);
+    expect(getAllByRole("tab", { name: /Claude/ })).toHaveLength(1);
 
-    fireEvent.click(workTab[0]);
-    expect(getByTestId("charts-section").textContent).toBe("codex:bts@cssi.us");
-
-    // A background refresh re-renders with a fresh providers array. The
-    // selection must survive rather than snapping back.
-    rerender(
-      <ChartsPanel
-        providers={[
-          provider({
-            providerId: "codex",
-            displayName: "Codex",
-            accountId: "acct-personal",
-            accountEmail: "tsouth2@gmail.com",
-            planName: "Pro Lite",
-          }),
-          provider({
-            providerId: "codex",
-            displayName: "Codex",
-            accountId: "acct-work",
-            accountEmail: "bts@cssi.us",
-            planName: "ChatGPT Team",
-          }),
-        ]}
-      />,
-    );
-    expect(getByTestId("charts-section").textContent).toBe("codex:bts@cssi.us");
+    fireEvent.click(getAllByRole("tab", { name: /Codex/ })[0]);
+    // One Codex section, not one per account.
+    expect(getByTestId("charts-section").textContent).toMatch(/^codex/);
   });
 
   it("omits the selector when only one provider is supported", () => {
