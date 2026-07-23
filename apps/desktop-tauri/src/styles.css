@@ -7708,11 +7708,18 @@ body:has(.dashboard-shell) #root {
 }
 .usage-periods {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-  gap: 8px;
-}
-.usage-periods[data-card-count="4"] {
+  /* Always two columns, so a provider with three boxes (one reset window)
+     and one with four (two windows) lay out consistently instead of
+     reflowing between 3-across and 2x2 with different box sizes. */
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+/* A single current window (e.g. Codex when its 5-hour limit is lifted)
+   spans the top row, keeping the 7-day/30-day pair aligned beneath it
+   rather than leaving an empty cell. */
+.usage-periods[data-window-count="1"] .usage-period--current {
+  grid-column: 1 / -1;
 }
 .usage-period {
   min-width: 0;

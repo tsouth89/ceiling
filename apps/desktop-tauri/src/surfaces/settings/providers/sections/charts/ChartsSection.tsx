@@ -647,6 +647,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         <div
           className="usage-periods"
           data-card-count={usagePeriods.length}
+          data-window-count={usagePeriods.filter((period) => period.current).length}
           aria-label="Local usage summary"
         >
           {usagePeriods.map((period) => (
