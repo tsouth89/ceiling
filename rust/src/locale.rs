@@ -43,11 +43,16 @@ pub fn format_locale(lang: Language, key: LocaleKey, args: &[&str]) -> String {
     format_template(&get_text(lang, key), args)
 }
 
-// Ceiling ships English only. The Language setting is retained but every value
-// resolves to the English bundle (the non-English .ftl files were removed).
-fn language_id(_lang: Language) -> &'static LanguageIdentifier {
+// Ceiling ships English and Simplified Chinese bundles. Languages without their
+// own `.ftl` fall back to English via Fluent's `fallback_language`, so any key
+// missing from a translation still resolves to readable English text.
+fn language_id(lang: Language) -> &'static LanguageIdentifier {
     static EN_US: LazyLock<LanguageIdentifier> = LazyLock::new(|| "en-US".parse().unwrap());
-    &EN_US
+    static ZH_CN: LazyLock<LanguageIdentifier> = LazyLock::new(|| "zh-CN".parse().unwrap());
+    match lang {
+        Language::Chinese => &ZH_CN,
+        _ => &EN_US,
+    }
 }
 
 /// Get the current UI language from settings

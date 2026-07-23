@@ -1,8 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+const { setLanguageMock } = vi.hoisted(() => ({
+  setLanguageMock: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("../../../hooks/useLocale", () => ({
-  useLocale: () => ({ t: (key: string) => key }),
+  useLocale: () => ({ t: (key: string) => key, setLanguage: setLanguageMock }),
 }));
 
 const { sendTestNotificationMock } = vi.hoisted(() => ({
@@ -77,14 +81,24 @@ const settings: SettingsSnapshot = {
 };
 
 describe("GeneralTab", () => {
-  it("keeps general settings focused on startup behavior", () => {
+  it("keeps general settings focused on startup and language", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
 
     expect(screen.getByText("StartAtLogin")).toBeInTheDocument();
     expect(screen.getByText("StartMinimized")).toBeInTheDocument();
-    expect(screen.queryByText("InterfaceLanguage")).not.toBeInTheDocument();
+    expect(screen.getByText("InterfaceLanguage")).toBeInTheDocument();
     expect(screen.queryByText("RefreshIntervalLabel")).not.toBeInTheDocument();
     expect(screen.queryByText("RefreshAllProvidersOnMenuOpen")).not.toBeInTheDocument();
+  });
+
+  it("switches the interface language through the locale provider", () => {
+    setLanguageMock.mockClear();
+    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "InterfaceLanguage" }));
+    fireEvent.click(screen.getByRole("option", { name: "中文" }));
+
+    expect(setLanguageMock).toHaveBeenCalledWith("chinese");
   });
 
   it("uses a simple sound toggle without a separate volume control", () => {
