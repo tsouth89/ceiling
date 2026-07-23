@@ -523,11 +523,11 @@ try {
 
     if ($UploadRelease) {
         $gh = Require-Command "gh"
+        # The Store installer is intentionally excluded here. It is signed,
+        # finalized, and published only by the protected release workflow.
         $assetPaths = @(
             $installerAsset,
             "$installerAsset.sha256",
-            $storeInstallerAsset,
-            "$storeInstallerAsset.sha256",
             $portableExe,
             "$portableExe.sha256"
         )
