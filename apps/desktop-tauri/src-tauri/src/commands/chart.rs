@@ -8,7 +8,7 @@
 use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
-    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow,
+    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report_scoped,
     get_cost_usage_report_with_windows,
 };
 use codexbar::locale::{self, LocaleKey};
@@ -331,10 +331,19 @@ struct PersistedChartCache {
 pub async fn get_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
+    account_id: Option<String>,
     source_label: Option<String>,
     usage_windows: Option<Vec<LocalUsageWindowRequest>>,
 ) -> ProviderChartData {
     let usage_windows = usage_windows.unwrap_or_default();
+    // An account's local logs live under its own config directory. Scanning
+    // that directory is what makes its charts distinct from another account's;
+    // without it every account shows the same machine-wide totals.
+    let scoped_home = account_id.as_deref().and_then(|id| {
+        codexbar::core::ProviderId::from_cli_name(&provider_id).and_then(|provider| {
+            codexbar::core::ConfiguredAccounts::load().config_dir_for_account(provider, id)
+        })
+    });
     let cache_key = chart_cache_key(
         &provider_id,
         account_email.as_deref(),
@@ -347,7 +356,13 @@ pub async fn get_provider_chart_data(
         if current_unix_ms().saturating_sub(cached.refreshed_at_ms)
             > CHART_CACHE_TTL.as_millis() as i64
         {
-            schedule_chart_cache_refresh(cache_key, provider_id, account_email, usage_windows);
+            schedule_chart_cache_refresh(
+                cache_key,
+                provider_id,
+                account_email,
+                scoped_home.clone(),
+                usage_windows,
+            );
         }
         return cached.data;
     }
@@ -357,7 +372,13 @@ pub async fn get_provider_chart_data(
     if !quota_history.is_empty() {
         let mut immediate = ProviderChartData::empty(provider_id.clone());
         immediate.quota_history = quota_history;
-        schedule_chart_cache_refresh(cache_key, provider_id, account_email, usage_windows);
+        schedule_chart_cache_refresh(
+            cache_key,
+            provider_id,
+            account_email,
+            scoped_home.clone(),
+            usage_windows,
+        );
         return immediate;
     }
 
@@ -367,6 +388,7 @@ pub async fn get_provider_chart_data(
         build_provider_chart_data_with_cancel(
             provider_id,
             account_email,
+            scoped_home,
             usage_windows,
             Some(cancel),
         )
@@ -413,6 +435,7 @@ fn schedule_chart_cache_refresh(
     key: String,
     provider_id: String,
     account_email: Option<String>,
+    scoped_home: Option<std::path::PathBuf>,
     usage_windows: Vec<LocalUsageWindowRequest>,
 ) {
     let Ok(mut active) = active_cache_refreshes().lock() else {
@@ -426,7 +449,13 @@ fn schedule_chart_cache_refresh(
     tauri::async_runtime::spawn(async move {
         let refresh_key = key.clone();
         let refreshed = tauri::async_runtime::spawn_blocking(move || {
-            build_provider_chart_data_with_cancel(provider_id, account_email, usage_windows, None)
+            build_provider_chart_data_with_cancel(
+                provider_id,
+                account_email,
+                scoped_home,
+                usage_windows,
+                None,
+            )
         })
         .await;
         match refreshed {
@@ -867,12 +896,13 @@ pub(crate) fn build_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
-    build_provider_chart_data_with_cancel(provider_id, account_email, Vec::new(), None)
+    build_provider_chart_data_with_cancel(provider_id, account_email, None, Vec::new(), None)
 }
 
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
+    scoped_home: Option<std::path::PathBuf>,
     usage_window_requests: Vec<LocalUsageWindowRequest>,
     cancel: Option<Arc<AtomicBool>>,
 ) -> ProviderChartData {
@@ -897,7 +927,7 @@ fn build_provider_chart_data_with_cancel(
     // reset-aligned windows so one pass over the logs serves both.
     let (comparison_specs, comparison_windows) = comparison_period_specs(Utc::now());
     usage_windows.extend(comparison_windows);
-    let report = get_cost_usage_report_with_windows(&provider_id, 30, &usage_windows);
+    let report = get_cost_usage_report_scoped(&provider_id, 30, &usage_windows, scoped_home);
     let cost_history: Vec<DailyCostPoint> = report
         .as_ref()
         .map(|report| {

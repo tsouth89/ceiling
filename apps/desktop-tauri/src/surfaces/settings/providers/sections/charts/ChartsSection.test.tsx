@@ -239,6 +239,7 @@ describe("ChartsSection local usage summary", () => {
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith(
       "claude",
       undefined,
+      undefined,
       [],
       "Claude CLI",
     );

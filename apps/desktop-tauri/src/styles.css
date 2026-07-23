@@ -9133,3 +9133,9 @@ body:has(.dashboard-shell) #root {
   color: var(--text-muted, rgba(255, 255, 255, 0.5));
   font-weight: 500;
 }
+
+.charts-compare-note {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
