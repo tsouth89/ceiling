@@ -1,20 +1,27 @@
 # Changelog
 
-## [Ceiling] 1.5.0 - 2026-07-22
+## [Ceiling] 1.5.1 - 2026-07-23
+
+Supersedes 1.5.0, which was never released.
 
 ### Added
-- Track more than one Codex or Claude account at the same time, from a new Accounts tab. Both accounts show side by side rather than one replacing the other, so you can watch a personal and a work seat at once. An account is a config directory (`CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude) rather than a token you paste, because each CLI refreshes its own sign-in in place and a copy would stop working within hours. Sign a second account in with `mkdir "<path>"; $env:CODEX_HOME="<path>"; codex login`, point Ceiling at that folder, and it reads the name and plan off the folder itself so there is nothing to type. Adding an account checks the folder first and tells you whose account is in it before you commit.
-- Name the account each provider card is reporting, with an optional color so several accounts stay easy to tell apart at a glance.
-- Ceiling keeps following whichever account your CLI is signed in as until you add accounts yourself, so nothing changes if you only have one.
+- Track more than one Codex or Claude account at the same time, from a new Accounts tab. Both accounts show side by side, so you can watch a personal and a work seat at once. An account is a config directory (`CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude) rather than a token you paste, because each CLI refreshes its own sign-in in place and a copy would stop working within hours. Sign a second account in with `mkdir "<path>"; $env:CODEX_HOME="<path>"; codex login`, point Ceiling at that folder, and it reads the name and plan off the folder itself so there is nothing to type. Adding an account checks the folder first and tells you whose account is in it before you commit.
+- Name the account each provider card is reporting by its email, so two accounts of one provider are easy to tell apart. Each account can carry an optional accent color.
+- Your currently signed-in account is listed automatically, so adding a second one leaves you with two rather than replacing the first.
+
+### Changed
+- Show local activity on the Charts page once per provider, not per account. Token and cost history is scanned from local logs, which record the plan but not the account, so a per-account split of that data was never real. Account-specific usage (the quota bars and resets) stays per-account on the overview, flyout and tray, since that comes from each account's API.
+- Balance the usage-period boxes so a provider with one active window and one with two lay out consistently.
 
 ### Removed
-- Remove the tray icon mode and merge tray icons settings. Neither had any effect: Ceiling has always drawn a single tray icon and nothing ever read those values.
+- The tray icon mode and merge tray icons settings. Neither had any effect: Ceiling has always drawn a single tray icon and nothing read those values.
 
 ### Fixed
-- Tell you about a reset that happened while Ceiling was closed. Resets found on the first check after starting up were being absorbed silently to avoid announcing stale news as if it had just happened, which meant an overnight reset was never mentioned at all. These now say when they actually happened, for example "This happened at 2:00 AM, while Ceiling was closed".
-- Read the right Claude sign-in when `CLAUDE_CONFIG_DIR` is set. Ceiling already read that folder's history but always took credentials from the default location, so anyone using a second Claude profile was seeing the wrong account's numbers.
-- Stop two accounts on one provider sharing a single usage baseline. Codex and Claude readings did not record which account they came from, so switching accounts would have carried the previous one's history across.
-- Stop the usage chart falling back to another account's history. A newly added account has nothing recorded yet, and the chart filled that gap with whichever account had data most recently.
+- Tell you about a reset that happened while Ceiling was closed. These were absorbed silently to avoid announcing stale news as if it just happened, which meant an overnight reset was never mentioned at all. They now say when they actually happened, for example "This happened at 2:00 AM, while Ceiling was closed".
+- Fire usage-threshold alerts per account. With two accounts on one provider, a quiet account was clearing a busy account's pending alert on the same refresh, so the warning never fired.
+- Read the right Claude sign-in when `CLAUDE_CONFIG_DIR` is set. Ceiling read that folder's history but always took credentials from the default location, so a second Claude profile showed the wrong account's numbers.
+- Stop one account showing another's usage. Readings did not record which account they came from, so two accounts shared a single baseline, a transient auth error could substitute the other account's data, and the usage chart fell back to whichever account had data most recently.
+- Show every account's usage instead of one replacing the others across the overview, taskbar flyout, tray, charts tabs, provider detail and activity timeline, and drop a removed account's card instead of leaving it on screen.
 - Keep both accounts' sign-ins cached when tracking more than one Codex account, instead of each check evicting the other.
 
 ## [Ceiling] 1.4.0 - 2026-07-21
