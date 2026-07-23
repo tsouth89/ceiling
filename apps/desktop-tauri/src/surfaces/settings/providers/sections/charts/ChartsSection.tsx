@@ -416,7 +416,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     getProviderChartData(
       providerId,
       accountEmail ?? undefined,
-      providerSnapshot?.accountId ?? undefined,
+      undefined,
       usageWindows,
       sourceLabel,
     )
@@ -503,7 +503,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         const next = await getProviderChartData(
           providerId,
           accountEmail ?? undefined,
-          providerSnapshot?.accountId ?? undefined,
+          undefined,
           usageWindows,
           sourceLabel,
         );

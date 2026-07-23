@@ -7,9 +7,7 @@ import { ChartsSection } from "./settings/providers/sections/charts/ChartsSectio
 import ProviderComparison from "./ProviderComparison";
 import { TotalApiValueCard } from "../components/TotalApiValueCard";
 import {
-  accountIdentityLabel,
-  hasMultipleAccounts,
-  providerRowKey,
+  onePerProvider,
   representativeForProvider,
 } from "../lib/providerRow";
 
@@ -33,8 +31,10 @@ export default function ChartsPanel({
 
   const supported = useMemo(
     () =>
-      providers.filter(
-        (p) => providerSupportsChartData(p.providerId) && !p.error,
+      onePerProvider(
+        providers.filter(
+          (p) => providerSupportsChartData(p.providerId) && !p.error,
+        ),
       ),
     [providers],
   );
@@ -57,12 +57,12 @@ export default function ChartsPanel({
     }
     setSelectedId((prev) =>
       prev &&
-      (supported.some((p) => providerRowKey(p) === prev) ||
+      (supported.some((p) => p.providerId === prev) ||
         (prev === COMPARE_ID && comparisonProviders))
         ? prev
         : comparisonProviders
           ? COMPARE_ID
-          : providerRowKey(supported[0]),
+          : supported[0].providerId,
     );
   }, [supported, comparisonProviders]);
 
@@ -83,7 +83,7 @@ export default function ChartsPanel({
 
   const comparing = selectedId === COMPARE_ID && comparisonProviders !== null;
   const selected =
-    supported.find((p) => providerRowKey(p) === selectedId) ?? supported[0];
+    supported.find((p) => p.providerId === selectedId) ?? supported[0];
   const tabCount = supported.length + (comparisonProviders ? 1 : 0);
 
   return (
@@ -105,17 +105,16 @@ export default function ChartsPanel({
             </button>
           )}
           {supported.map((p) => {
-            const isActive =
-              !comparing && providerRowKey(p) === providerRowKey(selected);
+            const isActive = !comparing && p.providerId === selected.providerId;
             return (
               <button
-                key={providerRowKey(p)}
+                key={p.providerId}
                 type="button"
                 role="tab"
                 aria-selected={isActive}
                 className="charts-provider-tab"
                 data-active={isActive ? "true" : "false"}
-                onClick={() => setSelectedId(providerRowKey(p))}
+                onClick={() => setSelectedId(p.providerId)}
               >
                 <ProviderIcon
                   providerId={p.providerId}
@@ -123,11 +122,7 @@ export default function ChartsPanel({
                   className="charts-provider-tab__icon"
                   title={p.displayName}
                 />
-                <span>
-                  {hasMultipleAccounts(supported, p.providerId)
-                    ? (accountIdentityLabel(p) ?? p.displayName)
-                    : p.displayName}
-                </span>
+                <span>{p.displayName}</span>
               </button>
             );
           })}
@@ -143,7 +138,7 @@ export default function ChartsPanel({
         </>
       ) : (
         <ChartsSection
-          key={providerRowKey(selected)}
+          key={selected.providerId}
           providerId={selected.providerId}
           accountEmail={selected.accountEmail}
           providerSnapshot={selected}
