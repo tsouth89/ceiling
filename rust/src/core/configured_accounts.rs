@@ -104,6 +104,32 @@ impl ConfiguredAccounts {
         }
     }
 
+    /// The config directory of the account with `account_id`, if configured.
+    ///
+    /// Charts scan a provider's local logs, which live under this directory. An
+    /// account's charts are only distinct from another's when scanned from its
+    /// own directory rather than the shared ambient one.
+    pub fn config_dir_for_account(
+        &self,
+        provider: ProviderId,
+        account_id: &str,
+    ) -> Option<PathBuf> {
+        fn find<I: crate::core::AccountIdentity>(
+            data: &crate::core::DirectoryAccountData<I>,
+            account_id: &str,
+        ) -> Option<PathBuf> {
+            data.accounts
+                .iter()
+                .find(|account| account.id.to_string() == account_id)
+                .map(|account| account.config_dir.clone())
+        }
+        match provider {
+            ProviderId::Codex => find(&self.codex, account_id),
+            ProviderId::Claude => find(&self.claude, account_id),
+            _ => None,
+        }
+    }
+
     /// Whether `provider` stores its accounts as config directories.
     pub fn supports(provider: ProviderId) -> bool {
         matches!(provider, ProviderId::Codex | ProviderId::Claude)

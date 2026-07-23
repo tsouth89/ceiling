@@ -123,7 +123,12 @@ export default function ProviderComparison({ providers }: {
     const load = async () => {
       try {
         const results = await Promise.all(providers.map(async (provider) => {
-          const result = await getProviderChartData(provider.providerId, provider.accountEmail ?? undefined, providerLocalUsageWindows(provider));
+          const result = await getProviderChartData(
+            provider.providerId,
+            provider.accountEmail ?? undefined,
+            undefined,
+            providerLocalUsageWindows(provider),
+          );
           return [provider.providerId, result] as const;
         }));
         if (cancelled) return;

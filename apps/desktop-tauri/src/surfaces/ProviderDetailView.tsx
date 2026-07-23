@@ -219,7 +219,11 @@ export default function ProviderDetailView({
     }
     let cancelled = false;
     setChartData(null);
-    getProviderChartData(provider.providerId, provider.accountEmail ?? undefined)
+    getProviderChartData(
+      provider.providerId,
+      provider.accountEmail ?? undefined,
+      provider.accountId ?? undefined,
+    )
       .then((data) => {
         if (!cancelled) setChartData(data);
       })

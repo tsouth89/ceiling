@@ -413,7 +413,13 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         cancelled = true;
       };
     }
-    getProviderChartData(providerId, accountEmail ?? undefined, usageWindows, sourceLabel)
+    getProviderChartData(
+      providerId,
+      accountEmail ?? undefined,
+      providerSnapshot?.accountId ?? undefined,
+      usageWindows,
+      sourceLabel,
+    )
       .then((d) => {
         if (!cancelled) {
           chartDataCache.set(cacheKey, d);
@@ -497,6 +503,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
         const next = await getProviderChartData(
           providerId,
           accountEmail ?? undefined,
+          providerSnapshot?.accountId ?? undefined,
           usageWindows,
           sourceLabel,
         );

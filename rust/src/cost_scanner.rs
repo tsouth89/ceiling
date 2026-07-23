@@ -526,12 +526,27 @@ struct ClaudeUsageRecord {
 /// Cost usage scanner
 pub struct CostScanner {
     days: u32,
+    /// When set, scan only this provider config directory's logs instead of
+    /// every candidate home. This is what makes one account's charts distinct
+    /// from another's: each account is its own directory.
+    scoped_home: Option<PathBuf>,
 }
 
 impl CostScanner {
     /// Create a new scanner for the last N days
     pub fn new(days: u32) -> Self {
-        Self { days }
+        Self {
+            days,
+            scoped_home: None,
+        }
+    }
+
+    /// A scanner that reads only `home`'s logs (an account's config directory).
+    pub fn scoped_to(days: u32, home: PathBuf) -> Self {
+        Self {
+            days,
+            scoped_home: Some(home),
+        }
     }
 
     /// Scan Codex local logs
@@ -628,6 +643,16 @@ impl CostScanner {
     }
 
     fn get_codex_sessions_dirs(&self) -> Vec<PathBuf> {
+        if let Some(home) = &self.scoped_home {
+            // Only this account's directory. No ambient home, no custom dirs, no
+            // WSL roots, or the scan would pull in other accounts' logs.
+            return codex_sessions_dir_candidates(
+                None,
+                Some(home.to_string_lossy().into_owned()),
+                &[],
+                &[],
+            );
+        }
         let settings = Settings::load();
         let codex_home = std::env::var("CODEX_HOME").ok();
         codex_sessions_dir_candidates(
@@ -722,6 +747,9 @@ impl CostScanner {
     }
 
     fn get_claude_projects_dir(&self) -> PathBuf {
+        if let Some(home) = &self.scoped_home {
+            return home.join("projects");
+        }
         if let Ok(claude_config) = std::env::var("CLAUDE_CONFIG_DIR") {
             let trimmed = claude_config.trim();
             if !trimmed.is_empty() {
@@ -1098,8 +1126,23 @@ pub fn get_cost_usage_report_with_windows(
     days: u32,
     current_windows: &[CurrentUsageWindow],
 ) -> Option<CostUsageReport> {
+    get_cost_usage_report_scoped(provider, days, current_windows, None)
+}
+
+/// As [`get_cost_usage_report_with_windows`], but scoped to one account's config
+/// directory when `scoped_home` is given, so its charts reflect only its own
+/// logs rather than every account's on the machine.
+pub fn get_cost_usage_report_scoped(
+    provider: &str,
+    days: u32,
+    current_windows: &[CurrentUsageWindow],
+    scoped_home: Option<PathBuf>,
+) -> Option<CostUsageReport> {
     let days = days.max(1);
-    let scanner = CostScanner::new(days);
+    let scanner = match scoped_home {
+        Some(home) => CostScanner::scoped_to(days, home),
+        None => CostScanner::new(days),
+    };
     match provider {
         "codex" => Some(scan_codex_report(&scanner, days, current_windows)),
         "claude" => Some(scan_claude_report(&scanner, days, current_windows)),
@@ -1675,6 +1718,69 @@ mod tests {
     /// therefore shrank every total, while the summary scanner still counted
     /// it. The archived rollout must be included, and a rollout present in both
     /// places must still count once.
+    /// Two accounts live in two config directories. A scoped scan must read only
+    /// its own directory, or both accounts' charts show the same machine-wide
+    /// totals (the reported bug: identical stats on both Codex tabs).
+    #[test]
+    fn a_scoped_scan_reads_only_its_own_account_directory() {
+        let today = Local::now().date_naive();
+        let day = today.format("%Y-%m-%d").to_string();
+        let ts = format!("{day}T10:00:00.000Z");
+        let line = |input: u32| {
+            format!(
+                r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+            )
+        };
+
+        fn day_dir(home: &Path, today: chrono::NaiveDate) -> PathBuf {
+            home.join("sessions")
+                .join(today.format("%Y").to_string())
+                .join(today.format("%m").to_string())
+                .join(today.format("%d").to_string())
+        }
+
+        // Personal home: one rollout of 1000 input tokens.
+        let personal = tempfile::tempdir().unwrap();
+        let pd = day_dir(personal.path(), today);
+        std::fs::create_dir_all(&pd).unwrap();
+        std::fs::write(
+            pd.join(format!(
+                "rollout-{day}-11111111-1111-1111-1111-111111111111.jsonl"
+            )),
+            line(1000),
+        )
+        .unwrap();
+
+        // Work home: one rollout of 7000 input tokens.
+        let work = tempfile::tempdir().unwrap();
+        let wd = day_dir(work.path(), today);
+        std::fs::create_dir_all(&wd).unwrap();
+        std::fs::write(
+            wd.join(format!(
+                "rollout-{day}-22222222-2222-2222-2222-222222222222.jsonl"
+            )),
+            line(7000),
+        )
+        .unwrap();
+
+        let personal_report = scan_codex_report(
+            &CostScanner::scoped_to(2, personal.path().to_path_buf()),
+            2,
+            &[],
+        );
+        let work_report = scan_codex_report(
+            &CostScanner::scoped_to(2, work.path().to_path_buf()),
+            2,
+            &[],
+        );
+
+        // Each account sees only its own logs, not the other's, and not the sum.
+        assert_eq!(personal_report.thirty_days.input_tokens, 1000);
+        assert_eq!(work_report.thirty_days.input_tokens, 7000);
+        assert_eq!(personal_report.thirty_days.sessions_count, 1);
+        assert_eq!(work_report.thirty_days.sessions_count, 1);
+    }
+
     #[test]
     fn codex_report_counts_archived_rollouts_exactly_once() {
         let _guard = codex_home_lock().lock().expect("codex home lock");

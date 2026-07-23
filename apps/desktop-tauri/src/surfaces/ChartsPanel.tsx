@@ -134,7 +134,13 @@ export default function ChartsPanel({
         </div>
       )}
       {comparing ? (
-        <ProviderComparison providers={[comparisonProviders[0], comparisonProviders[1]]} />
+        <>
+          <p className="charts-compare-note">
+            Compares all Codex usage against all Claude usage on this machine,
+            across every account.
+          </p>
+          <ProviderComparison providers={[comparisonProviders[0], comparisonProviders[1]]} />
+        </>
       ) : (
         <ChartsSection
           key={providerRowKey(selected)}
