@@ -14,8 +14,11 @@
 #ifndef VCRedistPath
   #define VCRedistPath "..\\target\\installer-deps\\vc_redist.x64.exe"
 #endif
-#ifndef WebView2BootstrapperPath
-  #define WebView2BootstrapperPath "..\\target\\installer-deps\\MicrosoftEdgeWebview2Setup.exe"
+#ifndef WebView2InstallerPath
+  #define WebView2InstallerPath "..\\target\\installer-deps\\MicrosoftEdgeWebview2Setup.exe"
+#endif
+#ifndef WebView2InstallerFileName
+  #define WebView2InstallerFileName "MicrosoftEdgeWebview2Setup.exe"
 #endif
 
 [Setup]
@@ -52,7 +55,7 @@ Source: "{#TargetBinDir}\ceiling.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#TargetBinDir}\codexbar-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\icons\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VCRedistPath}"; Flags: dontcopy
-Source: "{#WebView2BootstrapperPath}"; Flags: dontcopy
+Source: "{#WebView2InstallerPath}"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"
@@ -95,13 +98,13 @@ begin
   if not WebView2NeedsInstall() then
     exit;
 
-  ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
+  ExtractTemporaryFile('{#WebView2InstallerFileName}');
 
   WizardForm.StatusLabel.Caption := 'Installing Microsoft Edge WebView2 Runtime...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
     if not Exec(
-      ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'),
+      ExpandConstant('{tmp}\{#WebView2InstallerFileName}'),
       '/silent /install',
       '',
       SW_HIDE,

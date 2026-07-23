@@ -22,8 +22,8 @@
     Root directory for the managed source checkout, cache, and output assets.
 
 .PARAMETER RefreshInstallerDependencies
-    Re-download WebView2 and VC++ bootstrapper files instead of reusing the
-    signed cached copies.
+    Re-download the WebView2 bootstrapper, WebView2 standalone installer, and
+    VC++ redistributable instead of reusing the signed cached copies.
 
 .PARAMETER WarmCacheOnly
     Build the desktop binary and stop before installer packaging. Use this to
@@ -150,6 +150,25 @@ function Assert-MicrosoftSignature {
     $subject = $signature.SignerCertificate.Subject
     if ($subject -notlike "*Microsoft Corporation*") {
         throw "$Path signer is unexpected: $subject"
+    }
+}
+
+function Assert-WebView2StandaloneInstaller {
+    param([string]$Path)
+
+    Assert-MicrosoftSignature -Path $Path
+
+    $file = Get-Item -LiteralPath $Path
+    if ($file.Name -ne "MicrosoftEdgeWebView2RuntimeInstallerX64.exe") {
+        throw "Unexpected WebView2 standalone installer name: $($file.Name)"
+    }
+
+    # The online bootstrapper is only a few MB. The x64 Evergreen Standalone
+    # Installer is much larger, so this prevents Store releases from silently
+    # regressing to an installer that downloads the runtime during setup.
+    $minimumStandaloneSize = 50MB
+    if ($file.Length -lt $minimumStandaloneSize) {
+        throw "WebView2 dependency is only $($file.Length) bytes. Expected the x64 Evergreen Standalone Installer, not the online bootstrapper."
     }
 }
 
@@ -414,6 +433,7 @@ try {
 
     $vcRedistPath = Join-Path $InstallerDepsDir "vc_redist.x64.exe"
     $webView2BootstrapperPath = Join-Path $InstallerDepsDir "MicrosoftEdgeWebview2Setup.exe"
+    $webView2StandaloneInstallerPath = Join-Path $InstallerDepsDir "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
 
     if ($RefreshInstallerDependencies -or -not (Test-Path $vcRedistPath)) {
         Invoke-DownloadWithRetry -Uri "https://aka.ms/vc14/vc_redist.x64.exe" -OutFile $vcRedistPath
@@ -421,9 +441,13 @@ try {
     if ($RefreshInstallerDependencies -or -not (Test-Path $webView2BootstrapperPath)) {
         Invoke-DownloadWithRetry -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $webView2BootstrapperPath
     }
+    if ($RefreshInstallerDependencies -or -not (Test-Path $webView2StandaloneInstallerPath)) {
+        Invoke-DownloadWithRetry -Uri "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile $webView2StandaloneInstallerPath
+    }
 
     Assert-MicrosoftSignature -Path $vcRedistPath
     Assert-MicrosoftSignature -Path $webView2BootstrapperPath
+    Assert-WebView2StandaloneInstaller -Path $webView2StandaloneInstallerPath
 
     $iscc = Get-InnoSetupCompiler
 
@@ -437,9 +461,21 @@ try {
             "/DAppVersion=$version",
             "/DTargetBinDir=$releaseBinDir",
             "/DVCRedistPath=$vcRedistPath",
-            "/DWebView2BootstrapperPath=$webView2BootstrapperPath",
+            "/DWebView2InstallerPath=$webView2BootstrapperPath",
+            "/DWebView2InstallerFileName=MicrosoftEdgeWebview2Setup.exe",
             "/DOutputDir=$installerOut",
             "/DOutputBaseFilename=Ceiling-$version-Setup",
+            "codexbar.iss"
+        )
+        Invoke-Native $iscc @(
+            "/Qp",
+            "/DAppVersion=$version",
+            "/DTargetBinDir=$releaseBinDir",
+            "/DVCRedistPath=$vcRedistPath",
+            "/DWebView2InstallerPath=$webView2StandaloneInstallerPath",
+            "/DWebView2InstallerFileName=MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+            "/DOutputDir=$installerOut",
+            "/DOutputBaseFilename=Ceiling-$version-Store-Setup",
             "codexbar.iss"
         )
     } finally {
@@ -447,10 +483,12 @@ try {
     }
 
     $installer = Join-Path $installerOut "Ceiling-$version-Setup.exe"
+    $storeInstaller = Join-Path $installerOut "Ceiling-$version-Store-Setup.exe"
     $portableExe = Join-Path $AssetsDir "Ceiling-$version-portable.exe"
     $installerAsset = Join-Path $AssetsDir "Ceiling-$version-Setup.exe"
+    $storeInstallerAsset = Join-Path $AssetsDir "Ceiling-$version-Store-Setup.exe"
 
-    foreach ($path in @($desktopExe, $releaseExe, $installer)) {
+    foreach ($path in @($desktopExe, $releaseExe, $installer, $storeInstaller)) {
         if (-not (Test-Path $path)) {
             throw "Missing expected asset: $path"
         }
@@ -458,8 +496,9 @@ try {
 
     Copy-Item $desktopExe $portableExe -Force
     Copy-Item $installer $installerAsset -Force
+    Copy-Item $storeInstaller $storeInstallerAsset -Force
 
-    foreach ($asset in @($installerAsset, $portableExe)) {
+    foreach ($asset in @($installerAsset, $storeInstallerAsset, $portableExe)) {
         $fileName = Split-Path $asset -Leaf
         $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
         "$hash  $fileName" | Set-Content -Encoding ascii "$asset.sha256"
@@ -467,6 +506,7 @@ try {
 
     if ($PackageOnly) {
         Write-Host "Unsigned installer ready for signing: $installerAsset"
+        Write-Host "Unsigned Store installer ready for signing: $storeInstallerAsset"
         Write-Host "Run scripts\finalize-windows-release.ps1 after signing the installer."
     }
 
@@ -486,6 +526,8 @@ try {
         $assetPaths = @(
             $installerAsset,
             "$installerAsset.sha256",
+            $storeInstallerAsset,
+            "$storeInstallerAsset.sha256",
             $portableExe,
             "$portableExe.sha256"
         )

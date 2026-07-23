@@ -1,5 +1,10 @@
 # Changelog
 
+## [Ceiling] 1.5.2 - 2026-07-23
+
+### Fixed
+- Add a signed Microsoft Store installer that bundles the full Microsoft Edge WebView2 Evergreen Standalone Installer and needs no runtime download during setup. The regular smaller installer remains available for GitHub and Winget.
+
 ## [Ceiling] 1.5.1 - 2026-07-23
 
 Supersedes 1.5.0, which was never released.
