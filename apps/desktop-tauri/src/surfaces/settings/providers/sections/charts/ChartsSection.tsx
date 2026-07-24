@@ -125,6 +125,23 @@ function formatUsd(value: number): string {
   }).format(value);
 }
 
+/**
+ * Pricing-coverage note for a period card (SOU-302).
+ *
+ * Matches the Estimated API value card: only speak when some model tokens are
+ * unpriced, so fully-priced windows stay quiet. Dollars stay the priced subset.
+ */
+function pricingCoverageNote(
+  pricedTokens: number | null | undefined,
+  totalModelTokens: number | null | undefined,
+): string | null {
+  const total = totalModelTokens ?? 0;
+  const priced = pricedTokens ?? 0;
+  if (total <= 0 || priced >= total) return null;
+  const percent = Math.round((priced / total) * 100);
+  return `${percent}% of tokens priced`;
+}
+
 /** Backend bucket for records whose rollout never declared a plan. */
 const UNATTRIBUTED_PLAN = "unattributed";
 
@@ -613,6 +630,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           label: window.label,
           tokens: window.tokens,
           cost: window.cost ?? null,
+          pricingNote: pricingCoverageNote(
+            window.pricedTokens,
+            window.totalModelTokens,
+          ),
           detail: `Since ${formatWindowStart(window.startsAt)}`,
           detailSecondary: `Resets ${formatWindowReset(window.endsAt)}`,
           current: true,
@@ -621,6 +642,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           label: "Last 7 days",
           tokens: data.localUsage.sevenDayTokens,
           cost: data.localUsage.sevenDayCost ?? null,
+          pricingNote: pricingCoverageNote(
+            data.localUsage.sevenDayPricedTokens,
+            data.localUsage.sevenDayTotalModelTokens,
+          ),
           detail: "Processed tokens · calendar",
           detailSecondary: null as string | null,
           current: false,
@@ -629,6 +654,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           label: "Last 30 days",
           tokens: data.localUsage.thirtyDayTokens,
           cost: data.localUsage.thirtyDayCost ?? null,
+          pricingNote: pricingCoverageNote(
+            data.localUsage.thirtyDayPricedTokens,
+            data.localUsage.thirtyDayTotalModelTokens,
+          ),
           detail: "Processed tokens · calendar",
           detailSecondary: null as string | null,
           current: false,
@@ -664,6 +693,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
               <strong>{formatTokens(period.tokens)}</strong>
               {period.cost != null && (
                 <span className="usage-period__money">{formatUsd(period.cost)}</span>
+              )}
+              {period.pricingNote && (
+                <span className="usage-period__pricing">{period.pricingNote}</span>
               )}
               <small>
                 {period.detail}

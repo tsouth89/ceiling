@@ -7864,6 +7864,15 @@ body:has(.dashboard-shell) #root {
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
+/* SOU-302: partial pricing coverage — same signal as Estimated API value. */
+.usage-period > .usage-period__pricing {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
 .usage-periods__note {
   grid-column: 1 / -1;
   display: flex;

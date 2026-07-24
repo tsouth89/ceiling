@@ -35,6 +35,9 @@ const enrichedData = {
         endsAt: new Date(Date.now() + 3_600_000).toISOString(),
         tokens: 18_400_000,
         cost: 12.4,
+        // Fully priced: no coverage note on this card.
+        pricedTokens: 18_400_000,
+        totalModelTokens: 18_400_000,
         tokenBreakdown: {
           processedTokens: 18_400_000,
           freshInputTokens: 100_000,
@@ -50,6 +53,9 @@ const enrichedData = {
         endsAt: new Date(Date.now() + 3 * 24 * 3_600_000).toISOString(),
         tokens: 843_400_000,
         cost: 842.5,
+        // 80% priced — dollars are the priced subset only (SOU-302).
+        pricedTokens: 800_000_000,
+        totalModelTokens: 1_000_000_000,
         tokenBreakdown: {
           processedTokens: 843_400_000,
           freshInputTokens: 1_000_000,
@@ -59,6 +65,10 @@ const enrichedData = {
         },
       },
     ],
+    sevenDayPricedTokens: 4_000_000_000,
+    sevenDayTotalModelTokens: 4_949_300_000,
+    thirtyDayPricedTokens: 23_550_000_000,
+    thirtyDayTotalModelTokens: 23_550_000_000,
     comparisonPeriods: [],
     latestTokens: 2_100_000,
     topModel: "claude-opus-4-8",
@@ -113,6 +123,9 @@ describe("ChartsSection local usage summary", () => {
     expect(getByText("$12.40")).toBeTruthy();
     expect(getByText("843.4M")).toBeTruthy();
     expect(getByText("$842.50")).toBeTruthy();
+    // Partial pricing on the weekly card; fully-priced 5-hour stays quiet.
+    expect(getByText("80% of tokens priced")).toBeTruthy();
+    expect(getByText("81% of tokens priced")).toBeTruthy(); // 7-day calendar
     expect(() => getByText("Last session")).toThrow();
     expect(getByText("99.7% cache traffic")).toBeTruthy();
     expect(getAllByText(/Processed tokens · calendar/)).toHaveLength(2);

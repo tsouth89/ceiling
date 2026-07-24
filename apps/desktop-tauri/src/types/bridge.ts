@@ -647,9 +647,17 @@ export interface ProviderLocalUsageSummary {
   sevenDayCost: number | null;
   sevenDayTokens: number | null;
   sevenDayTokenBreakdown?: LocalTokenBreakdown | null;
+  /** Model tokens with a canonical price over the last 7 calendar days. */
+  sevenDayPricedTokens?: number;
+  /** All model tokens (priced + unpriced) over the last 7 calendar days. */
+  sevenDayTotalModelTokens?: number;
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
   thirtyDayTokenBreakdown?: LocalTokenBreakdown | null;
+  /** Model tokens with a canonical price over the last 30 calendar days. */
+  thirtyDayPricedTokens?: number;
+  /** All model tokens (priced + unpriced) over the last 30 calendar days. */
+  thirtyDayTotalModelTokens?: number;
   currentWindows: LocalUsageWindowSummary[];
   comparisonPeriods: LocalUsageComparisonPeriod[];
   latestTokens: number | null;
@@ -753,6 +761,10 @@ export interface LocalUsageWindowSummary extends LocalUsageWindowRequest {
   tokenBreakdown: LocalTokenBreakdown;
   /** Estimated API-value USD for this reset window from priced models only. */
   cost?: number | null;
+  /** Model tokens with a canonical price (pricing-coverage numerator). */
+  pricedTokens?: number;
+  /** All model tokens (priced + unpriced) — pricing-coverage denominator. */
+  totalModelTokens?: number;
 }
 
 export interface LocalUsageComparisonPeriod {
