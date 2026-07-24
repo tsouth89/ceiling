@@ -308,9 +308,7 @@ fn float_bar_settings_round_trip_through_raw() {
         float_bar_contrast: Some("dark-text".to_string()),
         float_bar_click_through: true,
         float_bar_provider_ids: vec!["claude".into(), "codex".into()],
-        taskbar_account_by_provider: [("codex".into(), "work-id".into())]
-            .into_iter()
-            .collect(),
+        taskbar_account_by_provider: [("codex".into(), "work-id".into())].into_iter().collect(),
         float_bar_dark_text: true,
         float_bar_show_reset_inline: true,
         float_bar_show_cost: true,

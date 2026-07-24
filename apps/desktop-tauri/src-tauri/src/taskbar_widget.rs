@@ -89,7 +89,9 @@ where
     if candidates.is_empty() {
         return None;
     }
-    if let Some(want) = preferred_account_id.map(str::trim).filter(|id| !id.is_empty())
+    if let Some(want) = preferred_account_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
         && let Some(hit) = candidates
             .iter()
             .find(|snapshot| snapshot.account_id.as_deref() == Some(want))
