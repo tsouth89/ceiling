@@ -23,6 +23,9 @@ const settings = {
   floatBarShowResetInline: false,
   floatBarDarkText: false,
   floatBarClickThrough: false,
+  floatBarProviderIds: [],
+  enabledProviders: ["codex", "claude", "cursor", "grok"],
+  providerOrder: ["codex", "claude", "cursor", "grok"],
 } as unknown as SettingsSnapshot;
 
 describe("FloatBar settings", () => {
@@ -77,6 +80,42 @@ describe("FloatBar settings", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Show Taskbar Usage" }));
     expect(set).toHaveBeenCalledWith({ taskbarWidgetEnabled: false });
     expect(set).not.toHaveBeenCalledWith(expect.objectContaining({ floatBarEnabled: false }));
+  });
+
+  it("lists enabled providers for the taskbar strip and can pin a custom order", () => {
+    const set = vi.fn();
+    render(
+      <FloatBarSettingsSection settings={settings} saving={false} set={set} />,
+    );
+
+    expect(screen.getByText("Providers on the strip")).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Show Grok on taskbar strip" }),
+    ).toBeChecked();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Grok up" }),
+    );
+    expect(set).toHaveBeenCalledWith({
+      floatBarProviderIds: ["codex", "claude", "grok", "cursor"],
+    });
+  });
+
+  it("restores automatic strip order", () => {
+    const set = vi.fn();
+    render(
+      <FloatBarSettingsSection
+        settings={{
+          ...settings,
+          floatBarProviderIds: ["grok", "cursor"],
+        }}
+        saving={false}
+        set={set}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Use automatic order" }));
+    expect(set).toHaveBeenCalledWith({ floatBarProviderIds: [] });
   });
 
   it("persists the all-monitors preference independently", () => {

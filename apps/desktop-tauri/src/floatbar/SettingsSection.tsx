@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Field, Select, Toggle } from "../components/FormControls";
+import { ProviderIcon } from "../components/providers/ProviderIcon";
 import type {
   FloatBarOrientation,
   FloatBarContrast,
@@ -9,10 +10,41 @@ import type {
   SettingsUpdate,
 } from "../types/bridge";
 
+/** Keep in sync with `MAX_TASKBAR_WIDGET_PROVIDERS` in taskbar_widget.rs. */
+const MAX_STRIP_PROVIDERS = 5;
+
+const PROVIDER_LABELS: Record<string, string> = {
+  codex: "Codex",
+  claude: "Claude",
+  cursor: "Cursor",
+  grok: "Grok",
+  gemini: "Gemini",
+  copilot: "Copilot",
+  openaiapi: "OpenAI",
+};
+
 interface Props {
   settings: SettingsSnapshot;
   saving: boolean;
   set: (patch: SettingsUpdate) => void;
+}
+
+function providerLabel(id: string): string {
+  return PROVIDER_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** Enabled providers in Providers-tab order (fallback: settings.enabled list). */
+function enabledProvidersInDisplayOrder(settings: SettingsSnapshot): string[] {
+  const enabled = new Set(settings.enabledProviders);
+  const order =
+    settings.providerOrder && settings.providerOrder.length > 0
+      ? settings.providerOrder
+      : settings.enabledProviders;
+  const ordered = order.filter((id) => enabled.has(id));
+  for (const id of settings.enabledProviders) {
+    if (!ordered.includes(id)) ordered.push(id);
+  }
+  return ordered;
 }
 
 function useDraftNumber(value: number) {
@@ -49,6 +81,55 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
   };
   const commitScale = () => {
     scale.commit(scale.draft, (value) => set({ floatBarScale: value }));
+  };
+
+  const enabledOrdered = useMemo(
+    () => enabledProvidersInDisplayOrder(settings),
+    [settings],
+  );
+  const customStrip = (settings.floatBarProviderIds?.length ?? 0) > 0;
+  const selectedStripIds = useMemo(() => {
+    if (!customStrip) {
+      return enabledOrdered.slice(0, MAX_STRIP_PROVIDERS);
+    }
+    const enabled = new Set(settings.enabledProviders);
+    return settings.floatBarProviderIds.filter((id) => enabled.has(id));
+  }, [customStrip, enabledOrdered, settings.enabledProviders, settings.floatBarProviderIds]);
+
+  const commitStripIds = (ids: string[]) => {
+    // Empty list restores automatic order (enabled providers, Providers tab order).
+    set({ floatBarProviderIds: ids });
+  };
+
+  const toggleStripProvider = (id: string, include: boolean) => {
+    const base = customStrip
+      ? settings.floatBarProviderIds.filter((pid) =>
+          settings.enabledProviders.includes(pid),
+        )
+      : enabledOrdered.slice(0, MAX_STRIP_PROVIDERS);
+    if (include) {
+      if (base.includes(id)) return;
+      if (base.length >= MAX_STRIP_PROVIDERS) return;
+      commitStripIds([...base, id]);
+      return;
+    }
+    commitStripIds(base.filter((pid) => pid !== id));
+  };
+
+  const moveStripProvider = (id: string, delta: -1 | 1) => {
+    const base = customStrip
+      ? settings.floatBarProviderIds.filter((pid) =>
+          settings.enabledProviders.includes(pid),
+        )
+      : [...selectedStripIds];
+    const index = base.indexOf(id);
+    if (index < 0) return;
+    const next = index + delta;
+    if (next < 0 || next >= base.length) return;
+    const copy = [...base];
+    const [row] = copy.splice(index, 1);
+    copy.splice(next, 0, row);
+    commitStripIds(copy);
   };
 
   return (
@@ -104,6 +185,89 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
               onChange={(v) => set({ floatBarShowResetInline: v })}
             />
           </Field>
+        </div>
+
+        <div className="settings-section__group taskbar-provider-picker">
+          <div className="taskbar-provider-picker__header">
+            <div>
+              <div className="taskbar-provider-picker__title">Providers on the strip</div>
+              <p className="settings-section__hint">
+                Choose up to {MAX_STRIP_PROVIDERS} enabled providers and their order for the
+                taskbar strip and floating bar. Automatic uses your Providers tab order
+                (Codex, Claude, Cursor, Grok, …).
+              </p>
+            </div>
+            {customStrip && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={saving}
+                onClick={() => commitStripIds([])}
+              >
+                Use automatic order
+              </button>
+            )}
+          </div>
+          {enabledOrdered.length === 0 ? (
+            <p className="settings-section__hint">Enable providers on the Providers tab first.</p>
+          ) : (
+            <ul className="taskbar-provider-picker__list">
+              {enabledOrdered.map((id) => {
+                const checked = selectedStripIds.includes(id);
+                const rank = selectedStripIds.indexOf(id);
+                const atCap =
+                  !checked && selectedStripIds.length >= MAX_STRIP_PROVIDERS;
+                return (
+                  <li key={id} className="taskbar-provider-picker__row">
+                    <label className="taskbar-provider-picker__label">
+                      <input
+                        type="checkbox"
+                        className="toggle"
+                        checked={checked}
+                        disabled={
+                          saving ||
+                          !settings.taskbarWidgetEnabled ||
+                          (atCap && !checked)
+                        }
+                        aria-label={`Show ${providerLabel(id)} on taskbar strip`}
+                        onChange={(e) => toggleStripProvider(id, e.target.checked)}
+                      />
+                      <ProviderIcon providerId={id} size={16} title={providerLabel(id)} />
+                      <span>{providerLabel(id)}</span>
+                      {checked && rank >= 0 && (
+                        <span className="taskbar-provider-picker__rank">{rank + 1}</span>
+                      )}
+                    </label>
+                    <span className="providers-sidebar__reorder-controls">
+                      <button
+                        type="button"
+                        className="providers-sidebar__reorder-button"
+                        aria-label={`Move ${providerLabel(id)} up`}
+                        disabled={saving || !checked || rank <= 0}
+                        onClick={() => moveStripProvider(id, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="providers-sidebar__reorder-button"
+                        aria-label={`Move ${providerLabel(id)} down`}
+                        disabled={
+                          saving ||
+                          !checked ||
+                          rank < 0 ||
+                          rank >= selectedStripIds.length - 1
+                        }
+                        onClick={() => moveStripProvider(id, 1)}
+                      >
+                        ↓
+                      </button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       </section>
 

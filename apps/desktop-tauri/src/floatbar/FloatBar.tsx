@@ -513,14 +513,19 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     const enabled = new Set(settings.enabledProviders);
     let list = providers.filter((p) => enabled.has(p.providerId));
     if (filterIds && filterIds.length > 0) {
-      const wanted = new Set(filterIds);
-      list = list.filter((p) => wanted.has(p.providerId));
+      // Explicit Display order from Settings → Taskbar Usage / Floating Bar.
+      const byId = new Map(list.map((p) => [p.providerId, p]));
+      list = filterIds
+        .map((id) => byId.get(id))
+        .filter((p): p is (typeof list)[number] => p !== undefined);
+    } else {
+      list = [...list].sort(
+        (a, b) =>
+          floatBarWindow(b).window.usedPercent -
+          floatBarWindow(a).window.usedPercent,
+      );
     }
-    return [...list].sort(
-      (a, b) =>
-        floatBarWindow(b).window.usedPercent -
-        floatBarWindow(a).window.usedPercent,
-    );
+    return list;
   }, [providers, settings.enabledProviders, filterIds]);
 
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.

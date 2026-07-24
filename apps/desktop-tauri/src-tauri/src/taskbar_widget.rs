@@ -7,6 +7,11 @@ use crate::floatbar::taskbar::{TaskbarLandmarks, TaskbarLayout};
 
 const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Max provider tiles on the native taskbar strip. Keep this small enough that
+/// a typical primary taskbar still has a verified empty gap; the selection and
+/// order come from `float_bar_provider_ids` (or enabled providers in display order).
+const MAX_TASKBAR_WIDGET_PROVIDERS: usize = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChildPlacement {
     x: i32,
@@ -45,15 +50,24 @@ pub fn native_mode_enabled(settings: &codexbar::settings::Settings) -> bool {
     settings.taskbar_widget_enabled
 }
 
-fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) -> bool {
+/// Ordered provider ids for the native taskbar strip (and float-bar allowlist).
+/// Empty `float_bar_provider_ids` means auto: enabled providers in the Providers
+/// tab display order, capped at [`MAX_TASKBAR_WIDGET_PROVIDERS`].
+fn taskbar_strip_provider_ids(settings: &codexbar::settings::Settings) -> Vec<String> {
     let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
         settings.provider_display_order_names()
     } else {
         settings.float_bar_provider_ids.clone()
     };
     preferred_ids
-        .iter()
-        .any(|provider_id| settings.enabled_providers.contains(provider_id))
+        .into_iter()
+        .filter(|provider_id| settings.enabled_providers.contains(provider_id))
+        .take(MAX_TASKBAR_WIDGET_PROVIDERS)
+        .collect()
+}
+
+fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) -> bool {
+    !taskbar_strip_provider_ids(settings).is_empty()
 }
 
 fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
@@ -524,11 +538,7 @@ mod windows_host {
             .get()
             .ok_or_else(|| "Native taskbar widget app handle is unavailable".to_string())?;
         let settings = codexbar::settings::Settings::load();
-        let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
-            settings.provider_display_order_names()
-        } else {
-            settings.float_bar_provider_ids.clone()
-        };
+        let preferred_ids = taskbar_strip_provider_ids(&settings);
         let state = app.state::<Mutex<crate::state::AppState>>();
         let guard = state
             .lock()
@@ -536,7 +546,6 @@ mod windows_host {
 
         let providers = preferred_ids
             .into_iter()
-            .filter(|provider_id| settings.enabled_providers.contains(provider_id))
             .map(|provider_id| {
                 // One tile per provider, showing the account closest to its
                 // limit. `.find` returned whichever account sat first in the
@@ -583,7 +592,6 @@ mod windows_host {
                         .flatten(),
                 }
             })
-            .take(3)
             .collect();
 
         // The taskbar surface follows Windows. Manual contrast is retained only
@@ -1532,6 +1540,58 @@ mod tests {
         assert!(!native_mode_has_configured_provider(&settings));
         settings.float_bar_provider_ids = vec!["codex".to_string()];
         assert!(native_mode_has_configured_provider(&settings));
+    }
+
+    #[test]
+    fn taskbar_strip_auto_includes_enabled_providers_after_cursor() {
+        let settings = Settings {
+            enabled_providers: ["codex", "claude", "cursor", "grok"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            float_bar_provider_ids: Vec::new(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            taskbar_strip_provider_ids(&settings),
+            vec![
+                "codex".to_string(),
+                "claude".to_string(),
+                "cursor".to_string(),
+                "grok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn taskbar_strip_respects_explicit_order_and_cap() {
+        let settings = Settings {
+            enabled_providers: ["codex", "claude", "cursor", "grok", "gemini"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            float_bar_provider_ids: vec![
+                "grok".to_string(),
+                "cursor".to_string(),
+                "claude".to_string(),
+                "codex".to_string(),
+                "gemini".to_string(),
+                "openaiapi".to_string(),
+            ],
+            ..Settings::default()
+        };
+        let ids = taskbar_strip_provider_ids(&settings);
+        assert_eq!(
+            ids,
+            vec![
+                "grok".to_string(),
+                "cursor".to_string(),
+                "claude".to_string(),
+                "codex".to_string(),
+                "gemini".to_string(),
+            ]
+        );
+        assert_eq!(ids.len(), MAX_TASKBAR_WIDGET_PROVIDERS);
     }
 
     #[test]

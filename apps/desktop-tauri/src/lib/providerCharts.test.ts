@@ -13,6 +13,7 @@ describe("providerSupportsChartData", () => {
     expect(providerSupportsChartData("openai")).toBe(true);
     expect(providerSupportsChartData("cursor")).toBe(true);
     expect(providerSupportsChartData("OpenAI")).toBe(true);
+    expect(providerSupportsChartData("grok")).toBe(true);
 
     expect(providerSupportsChartData("copilot")).toBe(false);
     expect(providerSupportsChartData("deepseek")).toBe(false);
