@@ -1115,11 +1115,17 @@ mod windows_host {
             0x0000, 0x0000, 0x03c0, 0x0ff0, 0x1ff8, 0x200c, 0x303c, 0x307c, 0x38fc, 0x38fc, 0x3cfc,
             0x1ef8, 0x0ef0, 0x03c0, 0x0000, 0x0000,
         ];
+        // 16x16 raster of the official Grok monogram (same path as ProviderIcon-grok.svg).
+        const GROK: [u16; 16] = [
+            0x0000, 0x0000, 0x47c0, 0x27f0, 0x3038, 0x3818, 0x340c, 0x320c, 0x310c, 0x300c, 0x3018,
+            0x1818, 0x0fec, 0x07e4, 0x0000, 0x0000,
+        ];
 
         let mask = match provider_id {
             "codex" => Some(&CODEX),
             "claude" => Some(&CLAUDE),
             "cursor" => Some(&CURSOR),
+            "grok" => Some(&GROK),
             _ => None,
         };
         if let Some(mask) = mask {
@@ -1179,6 +1185,8 @@ mod windows_host {
             "claude" => rgb(216, 116, 75),
             "cursor" => rgb(15, 201, 181),
             "codex" => rgb(64, 196, 222),
+            // xAI / Grok monogram is monochrome; light silver for dark taskbar chrome.
+            "grok" => rgb(231, 233, 234),
             _ => rgb(204, 211, 220),
         }
     }
