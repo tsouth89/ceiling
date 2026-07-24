@@ -73,7 +73,7 @@ export default function ChartsPanel({
         <div className="charts-empty">
           <strong>No charts yet</strong>
           Limits and local usage history show up here for providers Ceiling can
-          chart — Codex, Claude, Cursor, OpenAI, and Grok (weekly pool samples).
+          chart — Codex, Claude, Cursor, OpenAI, and Grok (weekly pool + local sessions).
         </div>
       </div>
     );

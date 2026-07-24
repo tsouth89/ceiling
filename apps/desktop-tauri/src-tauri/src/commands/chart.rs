@@ -202,6 +202,10 @@ pub struct LocalTokenBreakdown {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// Reasoning tokens when the provider reports them (Grok). Not added into
+    /// `processed_tokens` because they are often already counted in output.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
 }
 
 /// Per-model local spend for a period. `cost` is `None` for models with no
@@ -1331,6 +1335,7 @@ fn current_unix_ms() -> i64 {
 fn localized_estimate_note(provider_id: &str, lang: codexbar::settings::Language) -> String {
     match provider_id {
         "claude" => locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogsClaude),
+        "grok" => locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogsGrok),
         _ => locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogs),
     }
 }
@@ -1344,6 +1349,11 @@ fn scan_local_cost(
     match provider_id {
         "codex" => Some(scanner.scan_codex_with_cancel(cancel)),
         "claude" => Some(scanner.scan_claude_with_cancel(cancel)),
+        // Grok has no cancel-aware summary path yet; use the full report scan.
+        "grok" => {
+            let _ = (scanner, cancel);
+            codexbar::cost_scanner::get_cost_usage_report("grok", days).map(|r| r.thirty_days)
+        }
         _ => None,
     }
 }
@@ -1356,6 +1366,7 @@ fn token_breakdown(provider_id: &str, summary: &CostSummary) -> LocalTokenBreakd
         output_tokens: normalized.output_tokens,
         cache_read_tokens: normalized.cache_read_tokens,
         cache_write_tokens: normalized.cache_write_tokens,
+        reasoning_tokens: summary.reasoning_tokens,
     }
 }
 
@@ -2206,6 +2217,7 @@ mod tests {
                 output_tokens: 14_000_000,
                 cache_read_tokens: 4_810_000_000,
                 cache_write_tokens: 120_000_000,
+                reasoning_tokens: 0,
             }
         );
     }
@@ -2228,6 +2240,30 @@ mod tests {
                 output_tokens: 2_000_000,
                 cache_read_tokens: 808_000_000,
                 cache_write_tokens: 0,
+                reasoning_tokens: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn grok_token_breakdown_folds_cache_and_surfaces_reasoning() {
+        let summary = CostSummary {
+            input_tokens: 1000,
+            output_tokens: 100,
+            cached_tokens: 800,
+            cache_read_tokens: 800,
+            reasoning_tokens: 40,
+            ..CostSummary::default()
+        };
+        assert_eq!(
+            token_breakdown("grok", &summary),
+            LocalTokenBreakdown {
+                processed_tokens: 1100, // fresh 200 + output 100 + cache 800
+                fresh_input_tokens: 200,
+                output_tokens: 100,
+                cache_read_tokens: 800,
+                cache_write_tokens: 0,
+                reasoning_tokens: 40,
             }
         );
     }
