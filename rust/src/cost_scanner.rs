@@ -19,8 +19,8 @@ use crate::codex_costs::{
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
 use crate::grok_costs::{
-    discover_grok_session_dirs, grok_sessions_dir, load_session_meta, parse_grok_updates_file,
-    should_count_grok_record, GrokUsageRecord,
+    GrokUsageRecord, discover_grok_session_dirs, grok_sessions_dir, load_session_meta,
+    parse_grok_updates_file, should_count_grok_record,
 };
 use crate::settings::Settings;
 
@@ -118,10 +118,7 @@ pub struct ModelTokenCounts {
 /// twice.
 pub fn provider_folds_cache_into_input(provider_id: &str) -> bool {
     // Codex and Grok report cache-read tokens inside the input total.
-    matches!(
-        provider_id.to_ascii_lowercase().as_str(),
-        "codex" | "grok"
-    )
+    matches!(provider_id.to_ascii_lowercase().as_str(), "codex" | "grok")
 }
 
 /// Token buckets with each token counted exactly once, whatever the provider's

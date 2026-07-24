@@ -142,10 +142,7 @@ pub fn parse_grok_updates_file(
             continue;
         };
         for record in records_from_event(&event, meta) {
-            if record
-                .timestamp
-                .is_some_and(|ts| ts < cutoff)
-            {
+            if record.timestamp.is_some_and(|ts| ts < cutoff) {
                 continue;
             }
             records.push(record);
@@ -202,9 +199,7 @@ fn records_from_event(event: &GrokUpdateEvent, meta: &SessionMeta) -> Vec<GrokUs
                 output: counts.output_tokens.unwrap_or(0),
                 cache_read: counts.cached_read_tokens.unwrap_or(0),
                 reasoning: counts.reasoning_tokens.unwrap_or(0),
-                dedup_key: dedup_key
-                    .as_ref()
-                    .map(|key| format!("{key}:{model}")),
+                dedup_key: dedup_key.as_ref().map(|key| format!("{key}:{model}")),
             })
             .filter(|r| r.input > 0 || r.output > 0 || r.cache_read > 0 || r.reasoning > 0)
             .collect();
@@ -233,7 +228,7 @@ fn parse_timestamp(
     meta: Option<&GrokParamsMeta>,
 ) -> Option<DateTime<Utc>> {
     if let Some(ms) = meta.and_then(|m| m.agent_timestamp_ms) {
-        let secs = (ms / 1000) as i64;
+        let secs = ms / 1000;
         let nsecs = ((ms % 1000) * 1_000_000) as u32;
         return Utc.timestamp_opt(secs, nsecs).single();
     }
@@ -259,10 +254,10 @@ pub fn should_count_grok_record(
     if record.timestamp.is_some_and(|ts| ts < cutoff) {
         return false;
     }
-    if let Some(key) = record.dedup_key.as_ref() {
-        if !seen.insert(key.clone()) {
-            return false;
-        }
+    if let Some(key) = record.dedup_key.as_ref()
+        && !seen.insert(key.clone())
+    {
+        return false;
     }
     true
 }
@@ -354,7 +349,10 @@ mod tests {
     fn parses_turn_completed_with_cache_and_reasoning() {
         let dir = tempdir().unwrap();
         let session = dir.path().join("sess");
-        let ts = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap().timestamp() as f64;
+        let ts = Utc
+            .with_ymd_and_hms(2026, 7, 20, 12, 0, 0)
+            .unwrap()
+            .timestamp() as f64;
         let ms = (ts * 1000.0) as i64;
         let updates = format!(
             r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"totalTokens":1100,"cachedReadTokens":800,"reasoningTokens":40,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40}}}}}}}}}}}}"#
@@ -381,7 +379,6 @@ mod tests {
         assert_eq!(r.reasoning, 40);
         assert_eq!(r.effort.as_deref(), Some("high"));
         assert_eq!(r.project.as_deref(), Some("ceiling"));
-
     }
 
     #[test]
