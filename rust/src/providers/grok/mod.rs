@@ -85,9 +85,7 @@ impl GrokProvider {
         source_label: &str,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let auth_header = format!("Bearer {}", credentials.access_token);
-        let billing = self
-            .fetch_billing(Some(auth_header.clone()), None)
-            .await?;
+        let billing = self.fetch_billing(Some(auth_header.clone()), None).await?;
         let plan = self
             .fetch_plan_name(Some(auth_header), None)
             .await
