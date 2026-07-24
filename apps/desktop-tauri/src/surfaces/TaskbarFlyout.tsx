@@ -18,7 +18,9 @@ import type { BootstrapState, ProviderUsageSnapshot, RateWindowSnapshot } from "
 import {
   accountIdentityLabel,
   hasMultipleAccounts,
+  orderFlyoutProviders,
   providerRowKey,
+  selectStripAccount,
 } from "../lib/providerRow";
 
 const FLYOUT_WIDTH = 344;
@@ -96,11 +98,13 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   return [...preferred, ...remaining].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
 }
 
-function ProviderRow({ provider, showAccount, showAsUsed, now }: {
+function ProviderRow({ provider, showAccount, onStrip, showAsUsed, now }: {
   provider: ProviderUsageSnapshot;
   // True when this provider has more than one account, so the account name is
   // needed to tell its rows apart. With one account it would be noise.
   showAccount: boolean;
+  /** This row is the account currently driving the compact strip tile. */
+  onStrip: boolean;
   showAsUsed: boolean;
   now: number;
 }) {
@@ -108,11 +112,17 @@ function ProviderRow({ provider, showAccount, showAsUsed, now }: {
   const icon = getProviderIcon(provider.providerId);
   if (provider.error) {
     return (
-      <div className="taskbar-flyout__provider taskbar-flyout__provider--error" style={{ "--provider-brand": icon.brandColor } as CSSProperties}>
+      <div
+        className={`taskbar-flyout__provider taskbar-flyout__provider--error${onStrip ? " taskbar-flyout__provider--on-strip" : ""}`}
+        style={{ "--provider-brand": icon.brandColor } as CSSProperties}
+      >
         <ProviderIcon providerId={provider.providerId} size={27} className="taskbar-flyout__provider-icon" />
         <div className="taskbar-flyout__provider-content">
           <div className="taskbar-flyout__provider-topline">
             <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
+            {onStrip && (
+              <span className="taskbar-flyout__on-strip">On strip</span>
+            )}
             <span className="taskbar-flyout__provider-unavailable">Unavailable</span>
           </div>
           {accountName && (
@@ -132,11 +142,17 @@ function ProviderRow({ provider, showAccount, showAsUsed, now }: {
     allMeasuredWindows(provider).filter(isUtilityWindow).length - windows.length,
   );
   return (
-    <div className="taskbar-flyout__provider" style={{ "--provider-brand": icon.brandColor } as CSSProperties}>
+    <div
+      className={`taskbar-flyout__provider${onStrip ? " taskbar-flyout__provider--on-strip" : ""}`}
+      style={{ "--provider-brand": icon.brandColor } as CSSProperties}
+    >
       <ProviderIcon providerId={provider.providerId} size={27} className="taskbar-flyout__provider-icon" />
       <div className="taskbar-flyout__provider-content">
         <div className="taskbar-flyout__provider-topline">
           <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
+          {onStrip && (
+            <span className="taskbar-flyout__on-strip">On strip</span>
+          )}
           {resetCredits != null && (
             <span
               className={`taskbar-flyout__reset-credit${resetCredits === 0 ? " taskbar-flyout__reset-credit--empty" : ""}`}
@@ -200,10 +216,25 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
       settings.providerOrder,
     );
     const selected = settings.floatBarProviderIds ?? [];
-    if (selected.length === 0) return ordered;
-    const selectedIds = new Set(selected);
-    return ordered.filter((provider) => selectedIds.has(provider.providerId));
-  }, [providers, settings.enabledProviders, settings.floatBarProviderIds, settings.providerOrder, state.providers]);
+    const filtered =
+      selected.length === 0
+        ? ordered
+        : ordered.filter((provider) => selected.includes(provider.providerId));
+    // Strip account first within each multi-account provider so the flyout
+    // matches the tile the user is looking at.
+    return orderFlyoutProviders(
+      filtered,
+      selected,
+      settings.taskbarAccountByProvider ?? {},
+    );
+  }, [
+    providers,
+    settings.enabledProviders,
+    settings.floatBarProviderIds,
+    settings.providerOrder,
+    settings.taskbarAccountByProvider,
+    state.providers,
+  ]);
   const visibleProviders = taskbarProviders.slice(0, MAX_VISIBLE_PROVIDERS);
   const hiddenProviderCount = Math.max(0, taskbarProviders.length - visibleProviders.length);
   const visibleWindowCount = visibleProviders.reduce(
@@ -299,15 +330,34 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
         </header>
 
         <div className="taskbar-flyout__providers">
-          {visibleProviders.map((provider) => (
+          {visibleProviders.map((provider) => {
+            const multi = hasMultipleAccounts(
+              taskbarProviders,
+              provider.providerId,
+            );
+            const stripAccount = multi
+              ? selectStripAccount(
+                  taskbarProviders.filter(
+                    (row) => row.providerId === provider.providerId,
+                  ),
+                  settings.taskbarAccountByProvider?.[provider.providerId],
+                )
+              : null;
+            const onStrip =
+              multi &&
+              stripAccount != null &&
+              providerRowKey(stripAccount) === providerRowKey(provider);
+            return (
             <ProviderRow
               key={providerRowKey(provider)}
               provider={provider}
-              showAccount={hasMultipleAccounts(taskbarProviders, provider.providerId)}
+              showAccount={multi}
+              onStrip={onStrip}
               showAsUsed={settings.showAsUsed}
               now={now}
             />
-          ))}
+            );
+          })}
           {visibleProviders.length === 0 && (
             <div className="taskbar-flyout__empty">Syncing provider usage…</div>
           )}

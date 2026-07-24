@@ -97,6 +97,80 @@ export function representativeForProvider<
 }
 
 /**
+ * Which account the compact taskbar/float strip should show for a provider.
+ *
+ * Matches the native strip: an explicit pin wins when that account is present,
+ * otherwise the hottest primary window (stable account-id tiebreak).
+ */
+export function selectStripAccount<
+  T extends Pick<ProviderUsageSnapshot, "accountId"> & {
+    primary?: { usedPercent: number } | null;
+  },
+>(
+  candidates: T[],
+  preferredAccountId?: string | null,
+): T | undefined {
+  if (candidates.length === 0) return undefined;
+  const want = preferredAccountId?.trim();
+  if (want) {
+    const hit = candidates.find((row) => row.accountId === want);
+    if (hit) return hit;
+  }
+  return [...candidates].sort((a, b) => {
+    const delta =
+      (b.primary?.usedPercent ?? -1) - (a.primary?.usedPercent ?? -1);
+    if (delta !== 0) return delta;
+    return (b.accountId ?? "").localeCompare(a.accountId ?? "");
+  })[0];
+}
+
+/**
+ * Flyout list order: strip providers in strip order, and within each multi-
+ * account provider put the strip account first so it matches the tile.
+ */
+export function orderFlyoutProviders(
+  providers: ProviderUsageSnapshot[],
+  stripProviderIds: string[],
+  pinnedAccounts: Record<string, string>,
+): ProviderUsageSnapshot[] {
+  const byProvider = new Map<string, ProviderUsageSnapshot[]>();
+  for (const row of providers) {
+    const group = byProvider.get(row.providerId) ?? [];
+    group.push(row);
+    byProvider.set(row.providerId, group);
+  }
+
+  const providerOrder =
+    stripProviderIds.length > 0
+      ? stripProviderIds.filter((id) => byProvider.has(id))
+      : [...byProvider.keys()];
+
+  // Append any remaining providers not in the strip list (should be rare after
+  // the flyout's own filter, but keeps the helper total).
+  for (const id of byProvider.keys()) {
+    if (!providerOrder.includes(id)) providerOrder.push(id);
+  }
+
+  const result: ProviderUsageSnapshot[] = [];
+  for (const providerId of providerOrder) {
+    const group = byProvider.get(providerId) ?? [];
+    const strip = selectStripAccount(group, pinnedAccounts[providerId]);
+    if (!strip) continue;
+    result.push(strip);
+    const rest = group
+      .filter((row) => providerRowKey(row) !== providerRowKey(strip))
+      .sort((a, b) => {
+        const delta =
+          (b.primary?.usedPercent ?? -1) - (a.primary?.usedPercent ?? -1);
+        if (delta !== 0) return delta;
+        return (a.accountId ?? "").localeCompare(b.accountId ?? "");
+      });
+    result.push(...rest);
+  }
+  return result;
+}
+
+/**
  * How an account is named on a usage card: its email, plus plan when known.
  *
  * Deliberately the email, not `accountLabel`. The label is what the user typed

@@ -32,6 +32,9 @@ struct ProviderReadout {
     provider_id: String,
     percent: Option<u8>,
     window_label: String,
+    /// Short multi-account tag (label/email local-part) when the provider has
+    /// more than one reading; keeps the strip tile identifiable.
+    account_tag: Option<String>,
     reset: Option<String>,
 }
 
@@ -104,6 +107,32 @@ where
             .total_cmp(&b.primary.used_percent)
             .then_with(|| b.account_id.cmp(&a.account_id))
     })
+}
+
+/// Short multi-account tag for the strip detail line: custom label, else the
+/// local-part of the email. Keeps tiles readable without the full identity.
+fn short_account_tag(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<String> {
+    if let Some(label) = snapshot
+        .account_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(label.to_string());
+    }
+    snapshot
+        .account_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|email| {
+            email
+                .split_once('@')
+                .map(|(local, _)| local)
+                .unwrap_or(email)
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
 }
 
 fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
@@ -587,6 +616,12 @@ mod windows_host {
                 // its limit (stable across fetch order). Users can pin a
                 // specific Codex/Claude account in Settings → Taskbar Usage.
                 let preferred = settings.taskbar_account_for(&provider_id);
+                let multi_account = guard
+                    .provider_cache
+                    .iter()
+                    .filter(|snapshot| snapshot.provider_id == provider_id)
+                    .count()
+                    > 1;
                 let snapshot = super::select_strip_snapshot(
                     guard.provider_cache.iter(),
                     &provider_id,
@@ -610,6 +645,9 @@ mod windows_host {
                         snapshot.and_then(|snapshot| snapshot.primary_label.as_deref()),
                         snapshot.and_then(|snapshot| snapshot.primary.window_minutes),
                     ),
+                    account_tag: multi_account
+                        .then(|| snapshot.and_then(short_account_tag))
+                        .flatten(),
                     reset: settings
                         .float_bar_show_reset_inline
                         .then(|| {
@@ -682,6 +720,11 @@ mod windows_host {
             Some(minutes) if minutes >= 40_320 => "Monthly".to_string(),
             _ => "Usage".to_string(),
         }
+    }
+
+    /// Short account identity for the strip detail line (multi-account only).
+    fn short_account_tag(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<String> {
+        super::short_account_tag(snapshot)
     }
 
     fn hide_existing() {
@@ -1088,11 +1131,16 @@ mod windows_host {
                 );
             }
 
-            let detail = match provider.reset.as_deref() {
-                Some(reset) => format!("{} · {reset}", provider.window_label),
-                None => provider.window_label.clone(),
+            let detail = match (provider.account_tag.as_deref(), provider.reset.as_deref()) {
+                (Some(tag), Some(reset)) => {
+                    format!("{} · {tag} · {reset}", provider.window_label)
+                }
+                (Some(tag), None) => format!("{} · {tag}", provider.window_label),
+                (None, Some(reset)) => format!("{} · {reset}", provider.window_label),
+                (None, None) => provider.window_label.clone(),
             };
-            let detail: String = detail.chars().take(15).collect();
+            // Multi-account tags need a bit more room than the old 15-char cap.
+            let detail: String = detail.chars().take(20).collect();
             let detail = wide_without_nul(&detail);
             unsafe {
                 SelectObject(hdc, detail_font);
@@ -1974,5 +2022,18 @@ mod tests {
         ];
         let picked = select_strip_snapshot(cache.iter(), "codex", Some("gone")).unwrap();
         assert_eq!(picked.account_id.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn short_account_tag_prefers_label_then_email_local_part() {
+        let mut labeled = snap("codex", Some("id"), 10.0);
+        labeled.account_label = Some("Work".into());
+        labeled.account_email = Some("me@job.test".into());
+        assert_eq!(short_account_tag(&labeled).as_deref(), Some("Work"));
+
+        let mut emailed = snap("codex", Some("id"), 10.0);
+        emailed.account_label = None;
+        emailed.account_email = Some("me@job.test".into());
+        assert_eq!(short_account_tag(&emailed).as_deref(), Some("me"));
     }
 }

@@ -124,6 +124,32 @@ describe("TaskbarFlyout", () => {
     expect(screen.getByText("16%")).toBeInTheDocument();
   });
 
+  it("marks the strip account and lists it first when multi-account", async () => {
+    const personal = provider("codex", "Codex", 20, 6 * 24 * 60, "Weekly");
+    personal.accountId = "acct-personal";
+    personal.accountEmail = "me@home.test";
+    const work = provider("codex", "Codex", 80, 6 * 24 * 60, "Weekly");
+    work.accountId = "acct-work";
+    work.accountEmail = "me@job.test";
+    providerState.providers = [work, personal];
+    const pinnedState = {
+      ...state,
+      settings: {
+        ...state.settings,
+        floatBarProviderIds: ["codex"],
+        taskbarAccountByProvider: { codex: "acct-personal" },
+      },
+    } as BootstrapState;
+
+    render(<TaskbarFlyout state={pinnedState} />);
+
+    expect(await screen.findByText("On strip")).toBeInTheDocument();
+    const accounts = screen.getAllByText(/me@/);
+    // Pinned personal seat leads even though work is hotter.
+    expect(accounts[0].textContent).toContain("me@home.test");
+    expect(accounts[1].textContent).toContain("me@job.test");
+  });
+
   it("shows at-a-glance usage and the soonest provider reset", async () => {
     providerState.providers[0].resetCreditsAvailable = 1;
     render(<TaskbarFlyout state={state} />);
