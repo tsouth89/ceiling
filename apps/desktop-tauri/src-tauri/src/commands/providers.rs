@@ -377,6 +377,9 @@ async fn refresh_provider(
         (snapshot, Vec::new(), false)
     };
     crate::usage_history::record_snapshot(&snapshot);
+    // Track open quota runs every sample so a confirmed reset can close a run
+    // with peak used % and observation span (SOU-298).
+    crate::quota_run_history::record_snapshot(&snapshot);
     events::emit_provider_updated(&app, &snapshot);
     let notification_settings = Settings::load();
 
@@ -399,6 +402,12 @@ async fn refresh_provider(
         }
         away
     };
+    // Persist completed runs for every classified reset we keep, including away
+    // events that skip the toast gate. Do this before the empty early-return so
+    // a quiet launch that only reports while_away still records history.
+    if !capacity_events.is_empty() {
+        crate::quota_run_history::record_capacity_events(&capacity_events, &snapshot);
+    }
     if capacity_events.is_empty() {
         return;
     }
