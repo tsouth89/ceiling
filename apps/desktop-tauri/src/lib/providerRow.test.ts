@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   hasMultipleAccounts,
+  orderFlyoutProviders,
   representativeForProvider,
   providerIdFromRowKey,
   providerRowKey,
   rowKeyIsProvider,
+  selectStripAccount,
 } from "./providerRow";
 
 const row = (providerId: string, accountId?: string) =>
   ({ providerId, accountId: accountId ?? null }) as never;
+
+const snap = (providerId: string, accountId: string | null, used: number) => ({
+  providerId,
+  accountId,
+  primary: { usedPercent: used },
+});
 
 describe("providerRowKey", () => {
   it("separates two accounts on one provider", () => {
@@ -60,12 +68,6 @@ describe("hasMultipleAccounts", () => {
 });
 
 describe("representativeForProvider", () => {
-  const snap = (providerId: string, accountId: string | null, used: number) => ({
-    providerId,
-    accountId,
-    primary: { usedPercent: used },
-  });
-
   it("picks the most-constrained account", () => {
     const rows = [
       snap("codex", "acct-personal", 12),
@@ -92,5 +94,49 @@ describe("representativeForProvider", () => {
     expect(
       representativeForProvider([snap("claude", null, 10)], "codex"),
     ).toBeNull();
+  });
+});
+
+describe("selectStripAccount", () => {
+  it("defaults to the hottest account", () => {
+    const rows = [
+      snap("codex", "personal", 20),
+      snap("codex", "work", 80),
+    ];
+    expect(selectStripAccount(rows)?.accountId).toBe("work");
+  });
+
+  it("honors an explicit pin when present", () => {
+    const rows = [
+      snap("codex", "personal", 20),
+      snap("codex", "work", 80),
+    ];
+    expect(selectStripAccount(rows, "personal")?.accountId).toBe("personal");
+  });
+
+  it("falls back to hottest when the pin is missing from cache", () => {
+    const rows = [
+      snap("codex", "personal", 20),
+      snap("codex", "work", 80),
+    ];
+    expect(selectStripAccount(rows, "gone")?.accountId).toBe("work");
+  });
+});
+
+describe("orderFlyoutProviders", () => {
+  it("puts the strip account first within a multi-account provider", () => {
+    const rows = [
+      snap("codex", "work", 80),
+      snap("codex", "personal", 20),
+      snap("claude", "only", 10),
+    ];
+    const ordered = orderFlyoutProviders(rows, ["codex", "claude"], {
+      codex: "personal",
+    });
+    expect(ordered.map((row) => row.accountId)).toEqual([
+      "personal",
+      "work",
+      "only",
+    ]);
   });
 });
