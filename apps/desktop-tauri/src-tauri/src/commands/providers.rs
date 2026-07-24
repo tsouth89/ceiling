@@ -46,6 +46,11 @@ pub(crate) fn build_fetch_context(
             "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
                 (SourceMode::OAuth, None)
             }
+            // Grok uses `~/.grok/auth.json` from `grok login` (and optional browser
+            // cookies). Do not force Cli when cookies are disabled/empty.
+            "off" if id == ProviderId::Grok && usage_source != SourceMode::Cli => {
+                (SourceMode::Auto, None)
+            }
             "off" if has_kimi_code_api_key && usage_source == SourceMode::Auto => {
                 (SourceMode::Auto, None)
             }
@@ -58,6 +63,9 @@ pub(crate) fn build_fetch_context(
                     SourceMode::Web
                 } else if id == ProviderId::Claude && usage_source != SourceMode::Cli {
                     SourceMode::OAuth
+                } else if id == ProviderId::Grok {
+                    // Local CLI auth file; provider also tries browser cookies.
+                    SourceMode::Auto
                 } else if id == ProviderId::Cursor {
                     // Provider resolves IDE disk session / browser cookies itself.
                     SourceMode::Web

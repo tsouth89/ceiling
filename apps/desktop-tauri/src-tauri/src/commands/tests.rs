@@ -317,6 +317,47 @@ fn fetch_context_claude_uses_oauth_without_manual_cookie() {
 }
 
 #[test]
+fn fetch_context_grok_uses_auto_without_manual_cookie() {
+    let settings = Settings::default();
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    // Default cookie source is Manual with no paste; Grok should fall back to
+    // local ~/.grok/auth.json via Auto (not Cli-only, which previously failed).
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
+fn fetch_context_grok_cookie_off_uses_auto() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Grok, "off");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
 fn fetch_context_claude_explicit_cli_source_still_uses_cli() {
     let mut settings = Settings::default();
     settings.set_usage_source(ProviderId::Claude, "cli");
