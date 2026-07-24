@@ -25,6 +25,9 @@ pub struct GrokUsageRecord {
     pub cache_read: u64,
     pub reasoning: u64,
     pub dedup_key: Option<String>,
+    /// True when tokens came from a fallback signal (e.g. subagent_finished)
+    /// because turn_completed omitted the full usage block.
+    pub partial: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,23 +90,31 @@ pub fn discover_grok_session_dirs(sessions_root: &Path) -> Vec<PathBuf> {
 pub fn load_session_meta(session_dir: &Path) -> SessionMeta {
     let summary_path = session_dir.join("summary.json");
     let Ok(raw) = fs::read_to_string(&summary_path) else {
-        return SessionMeta::default();
+        return SessionMeta {
+            project: project_from_session_path(session_dir),
+            ..SessionMeta::default()
+        };
     };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-        return SessionMeta::default();
+        return SessionMeta {
+            project: project_from_session_path(session_dir),
+            ..SessionMeta::default()
+        };
     };
     let cwd = value
         .pointer("/info/cwd")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let project = cwd.map(|path| {
-        Path::new(path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(path)
-            .to_string()
-    });
+    let project = cwd
+        .map(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path)
+                .to_string()
+        })
+        .or_else(|| project_from_session_path(session_dir));
     let effort = value
         .get("reasoning_effort")
         .and_then(Value::as_str)
@@ -123,7 +134,53 @@ pub fn load_session_meta(session_dir: &Path) -> SessionMeta {
     }
 }
 
-/// Parse turn_completed usage rows from one session's updates.jsonl.
+/// Project name from the URL-encoded parent folder Grok uses under `sessions/`.
+fn project_from_session_path(session_dir: &Path) -> Option<String> {
+    let encoded = session_dir.parent()?.file_name()?.to_string_lossy();
+    let decoded = percent_decode(&encoded);
+    let name = Path::new(&decoded)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())?;
+    Some(name.to_string())
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Parse one session's updates.jsonl into usage rows.
+///
+/// Prefer full `turn_completed.usage` blocks. Some Grok sessions (observed on
+/// multi-project workloads) emit turn_completed without usage at all; for those
+/// we fall back to weaker signals so the project still appears on charts:
+/// - `subagent_finished.tokens_used` (total only, no cache/reasoning split)
+/// - bare turn_completed counts as activity with zero tokens when nothing else
+///   is available (keeps the project visible rather than silently dropped).
 pub fn parse_grok_updates_file(
     path: &Path,
     meta: &SessionMeta,
@@ -133,29 +190,140 @@ pub fn parse_grok_updates_file(
         return Vec::new();
     };
     let reader = BufReader::new(file);
-    let mut records = Vec::new();
+    let mut usage_records = Vec::new();
+    let mut bare_turns: Vec<(Option<DateTime<Utc>>, Option<String>)> = Vec::new();
+    let mut subagent_tokens: u64 = 0;
+    let mut subagent_last_ts: Option<DateTime<Utc>> = None;
+    let mut subagent_keys: Vec<String> = Vec::new();
+
     for line in reader.lines().map_while(Result::ok) {
-        if !line.contains("turn_completed") {
+        // Cheap prefilter: most lines are tool chatter.
+        if !line.contains("turn_completed")
+            && !line.contains("subagent_finished")
+            && !line.contains("inputTokens")
+        {
             continue;
         }
         let Ok(event) = serde_json::from_str::<GrokUpdateEvent>(&line) else {
             continue;
         };
-        for record in records_from_event(&event, meta) {
-            if record.timestamp.is_some_and(|ts| ts < cutoff) {
-                continue;
+        let Some(update) = event.params.update.as_ref() else {
+            continue;
+        };
+        let kind = update.session_update.as_deref().unwrap_or("");
+        let timestamp = parse_timestamp(event.timestamp, event.params.meta.as_ref());
+        if timestamp.is_some_and(|ts| ts < cutoff) {
+            continue;
+        }
+
+        match kind {
+            "turn_completed" => {
+                let from_usage = records_from_turn_completed(&event, update, meta);
+                if from_usage.is_empty() {
+                    let dedup = event
+                        .params
+                        .meta
+                        .as_ref()
+                        .and_then(|m| m.event_id.clone())
+                        .or_else(|| {
+                            update.prompt_id.as_ref().map(|pid| {
+                                format!(
+                                    "bare-turn:{}:{}",
+                                    event.params.session_id.as_deref().unwrap_or(""),
+                                    pid
+                                )
+                            })
+                        });
+                    bare_turns.push((timestamp, dedup));
+                } else {
+                    usage_records.extend(from_usage);
+                }
             }
-            records.push(record);
+            "subagent_finished" => {
+                if let Some(tokens) = update.tokens_used.filter(|t| *t > 0) {
+                    subagent_tokens = subagent_tokens.saturating_add(tokens);
+                    if timestamp.is_some_and(|ts| subagent_last_ts.is_none_or(|prev| ts > prev)) {
+                        subagent_last_ts = timestamp;
+                    }
+                    if let Some(id) = event
+                        .params
+                        .meta
+                        .as_ref()
+                        .and_then(|m| m.event_id.clone())
+                        .or_else(|| update.subagent_id.clone())
+                    {
+                        subagent_keys.push(format!("subagent:{id}"));
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    records
+
+    if !usage_records.is_empty() {
+        return usage_records;
+    }
+
+    // No full usage telemetry in this session. Prefer subagent totals, else a
+    // zero-token activity row so the project still shows on Charts.
+    let model = meta
+        .model
+        .clone()
+        .unwrap_or_else(|| "grok".to_string());
+    let project = meta.project.clone();
+    let effort = meta.effort.clone();
+
+    if subagent_tokens > 0 {
+        let dedup = if subagent_keys.is_empty() {
+            Some(format!(
+                "subagent-sum:{}:{subagent_tokens}",
+                path.display()
+            ))
+        } else {
+            Some(subagent_keys.join("+"))
+        };
+        return vec![GrokUsageRecord {
+            timestamp: subagent_last_ts.or_else(|| bare_turns.last().and_then(|(ts, _)| *ts)),
+            model,
+            effort,
+            project,
+            input: subagent_tokens,
+            output: 0,
+            cache_read: 0,
+            reasoning: 0,
+            dedup_key: dedup,
+            partial: true,
+        }];
+    }
+
+    if bare_turns.is_empty() {
+        return Vec::new();
+    }
+
+    // Activity-only: one row per bare turn so session counts and project lists
+    // stay honest when Grok omits usage (token totals stay 0).
+    bare_turns
+        .into_iter()
+        .map(|(timestamp, dedup_key)| GrokUsageRecord {
+            timestamp,
+            model: model.clone(),
+            effort: effort.clone(),
+            project: project.clone(),
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            reasoning: 0,
+            dedup_key,
+            partial: true,
+        })
+        .collect()
 }
 
-fn records_from_event(event: &GrokUpdateEvent, meta: &SessionMeta) -> Vec<GrokUsageRecord> {
-    let update = match &event.params.update {
-        Some(u) if u.session_update.as_deref() == Some("turn_completed") => u,
-        _ => return Vec::new(),
-    };
+fn records_from_turn_completed(
+    event: &GrokUpdateEvent,
+    update: &GrokSessionUpdate,
+    meta: &SessionMeta,
+) -> Vec<GrokUsageRecord> {
     let usage = match &update.usage {
         Some(u) => u,
         None => return Vec::new(),
@@ -200,6 +368,7 @@ fn records_from_event(event: &GrokUpdateEvent, meta: &SessionMeta) -> Vec<GrokUs
                 cache_read: counts.cached_read_tokens.unwrap_or(0),
                 reasoning: counts.reasoning_tokens.unwrap_or(0),
                 dedup_key: dedup_key.as_ref().map(|key| format!("{key}:{model}")),
+                partial: false,
             })
             .filter(|r| r.input > 0 || r.output > 0 || r.cache_read > 0 || r.reasoning > 0)
             .collect();
@@ -215,6 +384,7 @@ fn records_from_event(event: &GrokUpdateEvent, meta: &SessionMeta) -> Vec<GrokUs
         cache_read: usage.cached_read_tokens.unwrap_or(0),
         reasoning: usage.reasoning_tokens.unwrap_or(0),
         dedup_key,
+        partial: false,
     };
     if record.input > 0 || record.output > 0 || record.cache_read > 0 || record.reasoning > 0 {
         vec![record]
@@ -298,6 +468,11 @@ struct GrokSessionUpdate {
     meta: Option<GrokUpdateMeta>,
     #[serde(default)]
     usage: Option<GrokUsageBlock>,
+    /// Present on `subagent_finished` (total tokens only).
+    #[serde(default)]
+    tokens_used: Option<u64>,
+    #[serde(default)]
+    subagent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -379,6 +554,7 @@ mod tests {
         assert_eq!(r.reasoning, 40);
         assert_eq!(r.effort.as_deref(), Some("high"));
         assert_eq!(r.project.as_deref(), Some("ceiling"));
+        assert!(!r.partial);
     }
 
     #[test]
@@ -394,6 +570,7 @@ mod tests {
             cache_read: 0,
             reasoning: 0,
             dedup_key: Some("e1:grok-4.5-build".into()),
+            partial: false,
         };
         let cutoff = Utc::now() - chrono::Duration::days(30);
         assert!(should_count_grok_record(&record, cutoff, &mut seen));
@@ -415,5 +592,81 @@ mod tests {
         fs::write(sessions.join("session_search.sqlite"), b"").unwrap();
         let found = discover_grok_session_dirs(&sessions);
         assert_eq!(found, vec![nested]);
+    }
+
+    #[test]
+    fn bare_turn_completed_without_usage_still_attributes_project() {
+        // Live toolport logs: turn_completed with only stop_reason, no usage.
+        let dir = tempdir().unwrap();
+        let session = dir
+            .path()
+            .join("C%3A%5Cprojects%5Cpersonal%5Ctoolport")
+            .join("sess");
+        let ts = Utc
+            .with_ymd_and_hms(2026, 7, 24, 12, 0, 0)
+            .unwrap()
+            .timestamp() as f64;
+        let ms = (ts * 1000.0) as i64;
+        let updates = format!(
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"bare1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn"}}}}}}
+{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"bare2","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p2","stop_reason":"end_turn"}}}}}}
+"#
+        );
+        let summary = r#"{
+          "info": {"id": "s1", "cwd": "C:\\projects\\personal\\toolport"},
+          "current_model_id": "grok-4.5",
+          "reasoning_effort": "high"
+        }"#;
+        write_session(&session, &updates, summary);
+        let meta = load_session_meta(&session);
+        assert_eq!(meta.project.as_deref(), Some("toolport"));
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff);
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.partial));
+        assert!(records.iter().all(|r| r.project.as_deref() == Some("toolport")));
+        assert_eq!(records.iter().map(|r| r.input + r.output).sum::<u64>(), 0);
+    }
+
+    #[test]
+    fn subagent_tokens_used_when_usage_block_missing() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("sess");
+        let ts = Utc
+            .with_ymd_and_hms(2026, 7, 24, 12, 0, 0)
+            .unwrap()
+            .timestamp() as f64;
+        let ms = (ts * 1000.0) as i64;
+        let updates = format!(
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"bare1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn"}}}}}}
+{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"sa1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"subagent_finished","subagent_id":"child-1","tokens_used":50000,"status":"ok"}}}}}}
+{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"sa2","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"subagent_finished","subagent_id":"child-2","tokens_used":25000,"status":"ok"}}}}}}
+"#
+        );
+        let summary = r#"{
+          "info": {"cwd": "C:\\projects\\personal\\toolport"},
+          "current_model_id": "grok-4.5",
+          "reasoning_effort": "high"
+        }"#;
+        write_session(&session, &updates, summary);
+        let meta = load_session_meta(&session);
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff);
+        assert_eq!(records.len(), 1);
+        assert!(records[0].partial);
+        assert_eq!(records[0].input, 75_000);
+        assert_eq!(records[0].project.as_deref(), Some("toolport"));
+    }
+
+    #[test]
+    fn project_name_from_encoded_session_path_when_summary_missing() {
+        let dir = tempdir().unwrap();
+        let session = dir
+            .path()
+            .join("C%3A%5Cprojects%5Cpersonal%5Ctoolport")
+            .join("sess");
+        fs::create_dir_all(&session).unwrap();
+        let meta = load_session_meta(&session);
+        assert_eq!(meta.project.as_deref(), Some("toolport"));
     }
 }
