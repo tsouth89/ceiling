@@ -1,5 +1,15 @@
 # Changelog
 
+## [Ceiling] 1.5.6 - 2026-07-24
+
+Signed draft of Grok charts polish since 1.5.5. Latest published remains 1.5.2 until this draft is published.
+
+### Added
+- Scan local Grok Build sessions under `~/.grok/sessions` for Charts: tokens over time, cache vs fresh input, reasoning tokens, reasoning-effort tiers, and project rollups (unpriced SuperGrok pool usage; no fabricated API dollars).
+
+### Fixed
+- Label Grok's weekly pool as Weekly on the taskbar strip and popout instead of Extra credits.
+
 ## [Ceiling] 1.5.5 - 2026-07-24
 
 Installable signed draft of the full first-class Grok story. Supersedes the unpublished 1.5.3 draft and the mis-pointed 1.5.4 tag (same product content, tagged from protected `main`).
