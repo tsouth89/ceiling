@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [Ceiling] 1.5.4 - 2026-07-24
+
+Supersedes the unpublished 1.5.3 draft so one signed build covers the full Grok first-class story.
 
 ### Added
 - Treat Grok as a first-class provider alongside Claude, Codex, and Cursor: default-enabled, early catalog order, dedicated data-source copy, and enforcement tracking for the weekly pool.
@@ -9,12 +11,12 @@
 - Refresh expired Grok OIDC access tokens from `~/.grok/auth.json` via auth.x.ai (same silent refresh pattern as Claude).
 
 ### Fixed
+- Make Grok usage tracking work with a normal `grok login`, the same way Claude and Codex pick up their local CLI sign-in. Empty cookie settings no longer force a "CLI not supported" path, and SuperGrok Heavy weekly pool responses that omit a zero percent reading show 0% with the correct weekly reset instead of failing to sync. The plan name (for example SuperGrok Heavy) is read from your Grok account when available.
 - Prefer `grok login` credentials over browser cookies, and surface clear re-login guidance when Grok auth fails.
 
 ## [Ceiling] 1.5.3 - 2026-07-24
 
-### Fixed
-- Make Grok usage tracking work with a normal `grok login`, the same way Claude and Codex pick up their local CLI sign-in. Empty cookie settings no longer force a "CLI not supported" path, and SuperGrok Heavy weekly pool responses that omit a zero percent reading show 0% with the correct weekly reset instead of failing to sync. The plan name (for example SuperGrok Heavy) is read from your Grok account when available.
+Draft-only tag; use 1.5.4 for installs.
 
 ## [Ceiling] 1.5.2 - 2026-07-23
 
