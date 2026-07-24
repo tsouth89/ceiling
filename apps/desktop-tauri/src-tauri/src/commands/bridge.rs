@@ -456,6 +456,21 @@ fn normalize_reset_description(desc: &str, lang: codexbar::settings::Language) -
 }
 
 pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
+    if id == ProviderId::Grok {
+        let trimmed = error.trim();
+        let lower = trimmed.to_lowercase();
+        if trimmed == "Authentication required"
+            || lower.contains("auth required")
+            || lower.contains("oauth")
+        {
+            return "Grok needs sign-in before Ceiling can read usage. Run `grok login`, then refresh Grok in Ceiling.".to_string();
+        }
+        if lower.contains("auth.json not found") || lower.contains("not installed") {
+            return "Grok CLI sign-in was not found. Install Grok Build, run `grok login`, then refresh.".to_string();
+        }
+        return error.to_string();
+    }
+
     if id != ProviderId::Claude {
         return error.to_string();
     }

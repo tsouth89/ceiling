@@ -886,6 +886,7 @@ locale_keys! {
     DataSourceCursor,
     DataSourceCopilot,
     DataSourceGemini,
+    DataSourceGrok,
     DataSourceGeneric,
 
     // First-run checklist (SOU-157)
