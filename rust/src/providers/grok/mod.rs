@@ -64,11 +64,15 @@ impl GrokProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Grok,
                 display_name: "Grok",
-                session_label: "Weekly pool",
-                weekly_label: "Extra credits",
+                // Primary meter is the shared SuperGrok / Grok Build weekly
+                // pool. Bridge uses weekly_label when window_minutes is weekly
+                // cadence (~7d), so both labels must read "Weekly" — not
+                // "Extra credits" (that was only meant for optional prepaid).
+                session_label: "Weekly",
+                weekly_label: "Weekly",
                 supports_opus: false,
-                // Extra-credit balance is parsed when the billing RPC includes
-                // prepaid fields; otherwise only the weekly pool is shown.
+                // Prepaid balance may surface later as a secondary meter; the
+                // main product surface is the weekly usage pool.
                 supports_credits: true,
                 default_enabled: true,
                 is_primary: true,
@@ -641,10 +645,11 @@ fn result_from_billing(
         billing.resets_at,
         None,
     ));
-    // When prepaid/extra credits are present, surface a second meter as used%
-    // of a synthetic window is not meaningful (balance is absolute). Show 0%
-    // used when balance > 0 so the bar reads as "have credits", matching other
-    // credit-balance providers that only know remaining funds.
+    // Optional prepaid balance (not yet decoded from the RPC). When present,
+    // surface it as a secondary meter. Absolute balances have no used%; show
+    // 0% used when balance > 0 so the bar reads as "have credits". The secondary
+    // UI label still comes from metadata.weekly_label ("Weekly") today — the
+    // dollar amount is carried in reset_description until prepaid is productized.
     if let Some(cents) = billing.prepaid_balance_cents.filter(|c| *c > 0) {
         let dollars = cents as f64 / 100.0;
         usage = usage.with_secondary(RateWindow::with_details(
@@ -1026,6 +1031,32 @@ mod tests {
             plan_name_from_subscriptions(&json).as_deref(),
             Some("SuperGrok Heavy")
         );
+    }
+
+    #[test]
+    fn metadata_labels_weekly_pool_as_weekly() {
+        let provider = GrokProvider::new();
+        assert_eq!(provider.metadata().session_label, "Weekly");
+        assert_eq!(provider.metadata().weekly_label, "Weekly");
+    }
+
+    #[test]
+    fn billing_snapshot_marks_primary_as_weekly_window() {
+        let result = result_from_billing(
+            GrokBillingSnapshot {
+                used_percent: 12.0,
+                resets_at: Some(Utc::now() + chrono::Duration::days(3)),
+                window_minutes: Some(WEEKLY_MINUTES),
+                prepaid_balance_cents: None,
+            },
+            "oidc",
+            None,
+            None,
+            Some("SuperGrok".into()),
+        );
+        assert_eq!(result.usage.primary.window_minutes, Some(WEEKLY_MINUTES));
+        assert!(result.usage.secondary.is_none());
+        assert!((result.usage.primary.used_percent - 12.0).abs() < f64::EPSILON);
     }
 
     fn write_key(buf: &mut Vec<u8>, field: u64, wire: u64) {
