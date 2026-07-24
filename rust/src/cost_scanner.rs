@@ -1497,6 +1497,15 @@ fn scan_codex_report(
 
 fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecord) {
     // No public SuperGrok API rate card — keep dollars unset, still track tokens.
+    if record.partial {
+        // Grok omitted the full usage block; totals may under-count main-agent
+        // work. Keep the model marked unknown so charts never invent a price.
+        tracing::trace!(
+            model = %record.model,
+            project = ?record.project,
+            "Grok local usage row is partial (fallback telemetry)"
+        );
+    }
     summary.unknown_models.insert(record.model.clone());
     summary.input_tokens += record.input;
     summary.output_tokens += record.output;
