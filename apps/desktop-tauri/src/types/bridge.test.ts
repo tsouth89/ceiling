@@ -88,6 +88,7 @@ describe("Language type", () => {
       floatBarContrast: "auto",
       floatBarClickThrough: false,
       floatBarProviderIds: [],
+    taskbarAccountByProvider: {},
       floatBarDarkText: false,
       floatBarShowResetInline: false,
       floatBarShowCost: false,

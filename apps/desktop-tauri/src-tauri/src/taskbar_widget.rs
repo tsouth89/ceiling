@@ -70,6 +70,42 @@ fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) 
     !taskbar_strip_provider_ids(settings).is_empty()
 }
 
+/// Pick the reading to show on a one-tile-per-provider strip.
+///
+/// When `preferred_account_id` is set and that account is in the cache, use it.
+/// Otherwise pick the account closest to its limit (stable across fetch order).
+fn select_strip_snapshot<'a, I>(
+    cache: I,
+    provider_id: &str,
+    preferred_account_id: Option<&str>,
+) -> Option<&'a crate::commands::ProviderUsageSnapshot>
+where
+    I: IntoIterator<Item = &'a crate::commands::ProviderUsageSnapshot>,
+{
+    let candidates: Vec<_> = cache
+        .into_iter()
+        .filter(|snapshot| snapshot.provider_id == provider_id)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    if let Some(want) = preferred_account_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        && let Some(hit) = candidates
+            .iter()
+            .find(|snapshot| snapshot.account_id.as_deref() == Some(want))
+    {
+        return Some(*hit);
+    }
+    candidates.into_iter().max_by(|a, b| {
+        a.primary
+            .used_percent
+            .total_cmp(&b.primary.used_percent)
+            .then_with(|| b.account_id.cmp(&a.account_id))
+    })
+}
+
 fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
     all_monitors || layout.primary
 }
@@ -547,20 +583,15 @@ mod windows_host {
         let providers = preferred_ids
             .into_iter()
             .map(|provider_id| {
-                // One tile per provider, showing the account closest to its
-                // limit. `.find` returned whichever account sat first in the
-                // cache, which changes as fetches finish in different orders,
-                // so the tile flipped between accounts between refreshes.
-                let snapshot = guard
-                    .provider_cache
-                    .iter()
-                    .filter(|snapshot| snapshot.provider_id == provider_id)
-                    .max_by(|a, b| {
-                        a.primary
-                            .used_percent
-                            .total_cmp(&b.primary.used_percent)
-                            .then_with(|| b.account_id.cmp(&a.account_id))
-                    });
+                // One tile per provider. Default picks the account closest to
+                // its limit (stable across fetch order). Users can pin a
+                // specific Codex/Claude account in Settings → Taskbar Usage.
+                let preferred = settings.taskbar_account_for(&provider_id);
+                let snapshot = super::select_strip_snapshot(
+                    guard.provider_cache.iter(),
+                    &provider_id,
+                    preferred,
+                );
                 let percent =
                     snapshot
                         .filter(|snapshot| snapshot.error.is_none())
@@ -1867,5 +1898,81 @@ mod tests {
 
         assert_eq!(placement.x, 454);
         assert_eq!(placement.width, 312);
+    }
+
+    fn snap(
+        provider_id: &str,
+        account_id: Option<&str>,
+        used: f64,
+    ) -> crate::commands::ProviderUsageSnapshot {
+        crate::commands::ProviderUsageSnapshot {
+            provider_id: provider_id.into(),
+            display_name: provider_id.into(),
+            primary: crate::commands::RateWindowSnapshot {
+                used_percent: used,
+                remaining_percent: 100.0 - used,
+                window_minutes: Some(300),
+                resets_at: None,
+                reset_description: None,
+                is_exhausted: false,
+                reserve_percent: None,
+                reserve_description: None,
+                reserve_will_last_to_reset: false,
+                reserve_eta_seconds: None,
+            },
+            primary_label: Some("Session".into()),
+            secondary: None,
+            secondary_label: None,
+            model_specific: None,
+            tertiary: None,
+            extra_rate_windows: Vec::new(),
+            inactive_rate_windows: Vec::new(),
+            promo_signals: Vec::new(),
+            reset_credits_available: None,
+            cost: None,
+            plan_name: None,
+            account_email: None,
+            source_label: "test".into(),
+            updated_at: String::new(),
+            error: None,
+            pace: None,
+            account_organization: None,
+            tray_status_label: None,
+            account_id: account_id.map(str::to_string),
+            account_label: account_id.map(str::to_string),
+            account_tint: None,
+            fetch_duration_ms: None,
+            wayfinder_usage: None,
+        }
+    }
+
+    #[test]
+    fn strip_snapshot_defaults_to_hottest_account() {
+        let cache = [
+            snap("codex", Some("personal"), 20.0),
+            snap("codex", Some("work"), 80.0),
+        ];
+        let picked = select_strip_snapshot(cache.iter(), "codex", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn strip_snapshot_respects_pinned_account() {
+        let cache = [
+            snap("codex", Some("personal"), 20.0),
+            snap("codex", Some("work"), 80.0),
+        ];
+        let picked = select_strip_snapshot(cache.iter(), "codex", Some("personal")).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("personal"));
+    }
+
+    #[test]
+    fn strip_snapshot_falls_back_to_hottest_when_pin_missing() {
+        let cache = [
+            snap("codex", Some("personal"), 20.0),
+            snap("codex", Some("work"), 80.0),
+        ];
+        let picked = select_strip_snapshot(cache.iter(), "codex", Some("gone")).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("work"));
     }
 }

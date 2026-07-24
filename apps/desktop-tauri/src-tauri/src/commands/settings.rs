@@ -66,6 +66,9 @@ pub struct SettingsUpdate {
     pub float_bar_contrast: Option<String>,
     pub float_bar_click_through: Option<bool>,
     pub float_bar_provider_ids: Option<Vec<String>>,
+    /// Provider CLI name → directory-account id. Pass `""` for a provider to
+    /// clear a pin and restore Auto (hottest).
+    pub taskbar_account_by_provider: Option<std::collections::HashMap<String, String>>,
     pub float_bar_dark_text: Option<bool>,
     pub float_bar_show_reset_inline: Option<bool>,
     pub float_bar_show_cost: Option<bool>,
@@ -317,6 +320,7 @@ impl SettingsUpdate {
             contrast: self.float_bar_contrast.clone(),
             click_through: self.float_bar_click_through,
             provider_ids: self.float_bar_provider_ids.clone(),
+            taskbar_account_by_provider: self.taskbar_account_by_provider.clone(),
             dark_text: self.float_bar_dark_text,
             show_reset_inline: self.float_bar_show_reset_inline,
             show_cost: self.float_bar_show_cost,

@@ -509,24 +509,47 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const filterIds = settings.floatBarProviderIds;
   const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
   const showResetInline = settings.floatBarShowResetInline || density === "detailed";
+  const pinnedAccounts = settings.taskbarAccountByProvider ?? {};
   const visible = useMemo(() => {
     const enabled = new Set(settings.enabledProviders);
-    let list = providers.filter((p) => enabled.has(p.providerId));
+    const eligible = providers.filter((p) => enabled.has(p.providerId));
+    // One pill per provider: pin wins, else hottest account.
+    const byProvider = new Map<string, typeof eligible>();
+    for (const row of eligible) {
+      const group = byProvider.get(row.providerId) ?? [];
+      group.push(row);
+      byProvider.set(row.providerId, group);
+    }
+    const pick = (providerId: string) => {
+      const group = byProvider.get(providerId) ?? [];
+      if (group.length === 0) return undefined;
+      const want = pinnedAccounts[providerId]?.trim();
+      if (want) {
+        const hit = group.find((row) => row.accountId === want);
+        if (hit) return hit;
+      }
+      return [...group].sort((a, b) => {
+        const delta =
+          floatBarWindow(b).window.usedPercent -
+          floatBarWindow(a).window.usedPercent;
+        if (delta !== 0) return delta;
+        return (b.accountId ?? "").localeCompare(a.accountId ?? "");
+      })[0];
+    };
     if (filterIds && filterIds.length > 0) {
-      // Explicit Display order from Settings → Taskbar Usage / Floating Bar.
-      const byId = new Map(list.map((p) => [p.providerId, p]));
-      list = filterIds
-        .map((id) => byId.get(id))
-        .filter((p): p is (typeof list)[number] => p !== undefined);
-    } else {
-      list = [...list].sort(
+      return filterIds
+        .map((id) => pick(id))
+        .filter((p): p is (typeof eligible)[number] => p !== undefined);
+    }
+    return [...byProvider.keys()]
+      .map((id) => pick(id))
+      .filter((p): p is (typeof eligible)[number] => p !== undefined)
+      .sort(
         (a, b) =>
           floatBarWindow(b).window.usedPercent -
           floatBarWindow(a).window.usedPercent,
       );
-    }
-    return list;
-  }, [providers, settings.enabledProviders, filterIds]);
+  }, [providers, settings.enabledProviders, filterIds, pinnedAccounts]);
 
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);
