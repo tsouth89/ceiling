@@ -111,6 +111,7 @@ pub struct SettingsPatch {
     pub contrast: Option<String>,
     pub click_through: Option<bool>,
     pub provider_ids: Option<Vec<String>>,
+    pub taskbar_account_by_provider: Option<std::collections::HashMap<String, String>>,
     pub dark_text: Option<bool>,
     pub show_reset_inline: Option<bool>,
     pub show_cost: Option<bool>,
@@ -131,6 +132,7 @@ impl SettingsPatch {
             && self.contrast.is_none()
             && self.click_through.is_none()
             && self.provider_ids.is_none()
+            && self.taskbar_account_by_provider.is_none()
             && self.dark_text.is_none()
             && self.show_reset_inline.is_none()
             && self.show_cost.is_none()
@@ -178,6 +180,22 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.provider_ids {
             settings.float_bar_provider_ids = v.clone();
+        }
+        if let Some(v) = &self.taskbar_account_by_provider {
+            // Merge keys so a partial update can clear one provider with "" and
+            // leave others alone when the client sends the full next map.
+            settings.taskbar_account_by_provider = v
+                .iter()
+                .filter_map(|(provider, account)| {
+                    let provider = provider.trim().to_ascii_lowercase();
+                    let account = account.trim();
+                    if provider.is_empty() || account.is_empty() {
+                        None
+                    } else {
+                        Some((provider, account.to_string()))
+                    }
+                })
+                .collect();
         }
         if let Some(v) = self.dark_text {
             settings.float_bar_dark_text = v;

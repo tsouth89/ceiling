@@ -160,6 +160,8 @@ pub(super) struct RawSettings {
     #[serde(default)]
     float_bar_provider_ids: Vec<String>,
     #[serde(default)]
+    taskbar_account_by_provider: std::collections::HashMap<String, String>,
+    #[serde(default)]
     float_bar_dark_text: bool,
     #[serde(default)]
     float_bar_show_reset_inline: bool,
@@ -257,6 +259,7 @@ impl Default for RawSettings {
             float_bar_contrast: s.float_bar_contrast,
             float_bar_click_through: s.float_bar_click_through,
             float_bar_provider_ids: s.float_bar_provider_ids,
+            taskbar_account_by_provider: s.taskbar_account_by_provider,
             float_bar_dark_text: s.float_bar_dark_text,
             float_bar_show_reset_inline: s.float_bar_show_reset_inline,
             float_bar_show_cost: s.float_bar_show_cost,
@@ -570,9 +573,29 @@ impl From<RawSettings> for Settings {
                 .map(|value| normalize_float_bar_contrast(&value)),
             float_bar_click_through: raw.float_bar_click_through,
             float_bar_provider_ids: raw.float_bar_provider_ids,
+            taskbar_account_by_provider: sanitize_taskbar_account_map(
+                raw.taskbar_account_by_provider,
+            ),
             float_bar_dark_text: raw.float_bar_dark_text,
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
             float_bar_show_cost: raw.float_bar_show_cost,
         }
     }
+}
+
+/// Drop empty keys/values so "Auto" stays represented by a missing map entry.
+fn sanitize_taskbar_account_map(
+    map: std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    map.into_iter()
+        .filter_map(|(provider, account)| {
+            let provider = provider.trim().to_ascii_lowercase();
+            let account = account.trim().to_string();
+            if provider.is_empty() || account.is_empty() {
+                None
+            } else {
+                Some((provider, account))
+            }
+        })
+        .collect()
 }

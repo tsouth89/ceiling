@@ -152,6 +152,7 @@ fn float_bar_defaults_are_safe() {
     assert_eq!(resolved_float_bar_contrast(&settings), "auto");
     assert!(!settings.float_bar_click_through);
     assert!(settings.float_bar_provider_ids.is_empty());
+    assert!(settings.taskbar_account_by_provider.is_empty());
     assert!(!settings.float_bar_dark_text);
     assert!(settings.float_bar_show_reset_inline);
     assert!(!settings.float_bar_show_cost);
@@ -307,6 +308,9 @@ fn float_bar_settings_round_trip_through_raw() {
         float_bar_contrast: Some("dark-text".to_string()),
         float_bar_click_through: true,
         float_bar_provider_ids: vec!["claude".into(), "codex".into()],
+        taskbar_account_by_provider: [("codex".into(), "work-id".into())]
+            .into_iter()
+            .collect(),
         float_bar_dark_text: true,
         float_bar_show_reset_inline: true,
         float_bar_show_cost: true,
@@ -328,6 +332,8 @@ fn float_bar_settings_round_trip_through_raw() {
     assert_eq!(resolved_float_bar_contrast(&back), "dark-text");
     assert!(back.float_bar_click_through);
     assert_eq!(back.float_bar_provider_ids, vec!["claude", "codex"]);
+    assert_eq!(back.taskbar_account_for("codex"), Some("work-id"));
+    assert_eq!(back.taskbar_account_for("claude"), None);
     assert!(back.float_bar_dark_text);
     assert!(back.float_bar_show_reset_inline);
     assert!(back.float_bar_show_cost);

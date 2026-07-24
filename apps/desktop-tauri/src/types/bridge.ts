@@ -278,6 +278,12 @@ export interface SettingsSnapshot {
   floatBarClickThrough: boolean;
   /** Empty array = show all enabled providers. */
   floatBarProviderIds: string[];
+  /**
+   * Provider CLI name → directory-account id for the compact taskbar/float
+   * strip. Missing provider = Auto (account closest to its limit). Does not
+   * change which account is active for CLI identity.
+   */
+  taskbarAccountByProvider: Record<string, string>;
   /** When true, render with dark text/glass for light desktops. */
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
@@ -346,6 +352,8 @@ export interface SettingsUpdate {
   floatBarContrast?: FloatBarContrast;
   floatBarClickThrough?: boolean;
   floatBarProviderIds?: string[];
+  /** Full next map of provider → account id. Omit a provider (or use "") for Auto. */
+  taskbarAccountByProvider?: Record<string, string>;
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
   floatBarShowCost?: boolean;

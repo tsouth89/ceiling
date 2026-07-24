@@ -602,6 +602,9 @@ pub struct SettingsSnapshot {
     float_bar_contrast: String,
     float_bar_click_through: bool,
     float_bar_provider_ids: Vec<String>,
+    /// Provider CLI name → directory-account id for the compact strip. Empty
+    /// map means Auto (hottest) for every provider.
+    taskbar_account_by_provider: std::collections::HashMap<String, String>,
     float_bar_dark_text: bool,
     float_bar_show_reset_inline: bool,
     float_bar_show_cost: bool,
@@ -707,6 +710,7 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_contrast,
             float_bar_click_through: settings.float_bar_click_through,
             float_bar_provider_ids: settings.float_bar_provider_ids,
+            taskbar_account_by_provider: settings.taskbar_account_by_provider,
             float_bar_dark_text: settings.float_bar_dark_text,
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
             float_bar_show_cost: settings.float_bar_show_cost,

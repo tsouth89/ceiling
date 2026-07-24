@@ -569,12 +569,19 @@ html {
 
 .taskbar-provider-picker__row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 6px 8px;
   border-radius: 8px;
   background: var(--surface-elevated, rgba(255, 255, 255, 0.04));
+}
+
+.taskbar-provider-picker__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .taskbar-provider-picker__label {
@@ -592,6 +599,23 @@ html {
   font-size: 11px;
   opacity: 0.65;
   font-variant-numeric: tabular-nums;
+}
+
+.taskbar-provider-picker__account {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 28px;
+}
+
+.taskbar-provider-picker__account-label {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.taskbar-provider-picker__account .select {
+  width: 100%;
+  max-width: 100%;
 }
 
 .settings-section__hint {

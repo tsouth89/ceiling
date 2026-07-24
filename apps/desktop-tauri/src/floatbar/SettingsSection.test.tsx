@@ -1,10 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingsSnapshot } from "../types/bridge";
 import FloatBarSettingsSection from "./SettingsSection";
 
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
+}));
+
+const getDirectoryAccounts = vi.fn();
+vi.mock("../lib/tauri", () => ({
+  getDirectoryAccounts: () => getDirectoryAccounts(),
 }));
 
 const settings = {
@@ -24,11 +29,16 @@ const settings = {
   floatBarDarkText: false,
   floatBarClickThrough: false,
   floatBarProviderIds: [],
+    taskbarAccountByProvider: {},
   enabledProviders: ["codex", "claude", "cursor", "grok"],
   providerOrder: ["codex", "claude", "cursor", "grok"],
 } as unknown as SettingsSnapshot;
 
 describe("FloatBar settings", () => {
+  beforeEach(() => {
+    getDirectoryAccounts.mockResolvedValue([]);
+  });
+
   it("does not offer the legacy API-equivalent cost toggle", () => {
     render(
       <FloatBarSettingsSection settings={settings} saving={false} set={vi.fn()} />,
@@ -126,5 +136,97 @@ describe("FloatBar settings", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Show on All Monitors" }));
     expect(set).toHaveBeenCalledWith({ taskbarWidgetAllMonitors: true });
+  });
+
+  it("lets multi-account Codex pin which seat the strip shows", async () => {
+    getDirectoryAccounts.mockResolvedValue([
+      {
+        providerId: "codex",
+        displayName: "Codex",
+        envVar: "CODEX_HOME",
+        activeIndex: 0,
+        followingCli: false,
+        ambientDir: "C:\\codex",
+        accounts: [
+          {
+            id: "personal-id",
+            label: "Personal",
+            configDir: "C:\\codex-personal",
+            tint: null,
+            isActive: true,
+            signedIn: true,
+            email: "me@home.test",
+            organization: null,
+            plan: "plus",
+            addedAt: "Jan 1, 2026",
+            lastUsed: null,
+          },
+          {
+            id: "work-id",
+            label: "Work",
+            configDir: "C:\\codex-work",
+            tint: null,
+            isActive: false,
+            signedIn: true,
+            email: "me@job.test",
+            organization: null,
+            plan: "team",
+            addedAt: "Jan 1, 2026",
+            lastUsed: null,
+          },
+        ],
+      },
+    ]);
+    const set = vi.fn();
+    render(
+      <FloatBarSettingsSection settings={settings} saving={false} set={set} />,
+    );
+
+    const select = await screen.findByRole("combobox", {
+      name: "Taskbar account for Codex",
+    });
+    fireEvent.change(select, { target: { value: "work-id" } });
+    expect(set).toHaveBeenCalledWith({
+      taskbarAccountByProvider: { codex: "work-id" },
+    });
+  });
+
+  it("does not show an account picker for single-account providers", async () => {
+    getDirectoryAccounts.mockResolvedValue([
+      {
+        providerId: "codex",
+        displayName: "Codex",
+        envVar: "CODEX_HOME",
+        activeIndex: 0,
+        followingCli: false,
+        ambientDir: "C:\\codex",
+        accounts: [
+          {
+            id: "only",
+            label: "Only",
+            configDir: "C:\\codex",
+            tint: null,
+            isActive: true,
+            signedIn: true,
+            email: null,
+            organization: null,
+            plan: null,
+            addedAt: "Jan 1, 2026",
+            lastUsed: null,
+          },
+        ],
+      },
+    ]);
+    render(
+      <FloatBarSettingsSection
+        settings={settings}
+        saving={false}
+        set={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(getDirectoryAccounts).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("combobox", { name: /Taskbar account/ }),
+    ).not.toBeInTheDocument();
   });
 });
