@@ -106,6 +106,9 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
     let gemini_ready = codexbar::host::session::gemini_cli_signed_in();
     let gemini_installed = codexbar::providers::gemini::cli_installed();
 
+    let grok_ready = codexbar::providers::grok::local_credentials_available();
+    let grok_installed = codexbar::providers::grok::cli_installed();
+
     vec![
         detected_account(
             "codex",
@@ -160,6 +163,18 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
                 DetectedAccountStatus::Unavailable
             },
             "Gemini CLI",
+        ),
+        detected_account(
+            "grok",
+            "Grok",
+            if grok_ready {
+                DetectedAccountStatus::Ready
+            } else if grok_installed {
+                DetectedAccountStatus::Installed
+            } else {
+                DetectedAccountStatus::Unavailable
+            },
+            "Grok Build",
         ),
     ]
 }
