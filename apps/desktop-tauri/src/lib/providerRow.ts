@@ -128,12 +128,16 @@ export function selectStripAccount<
  * Flyout list order: strip providers in strip order, and within each multi-
  * account provider put the strip account first so it matches the tile.
  */
-export function orderFlyoutProviders(
-  providers: ProviderUsageSnapshot[],
+export function orderFlyoutProviders<
+  T extends Pick<ProviderUsageSnapshot, "providerId" | "accountId"> & {
+    primary?: { usedPercent: number } | null;
+  },
+>(
+  providers: T[],
   stripProviderIds: string[],
   pinnedAccounts: Record<string, string>,
-): ProviderUsageSnapshot[] {
-  const byProvider = new Map<string, ProviderUsageSnapshot[]>();
+): T[] {
+  const byProvider = new Map<string, T[]>();
   for (const row of providers) {
     const group = byProvider.get(row.providerId) ?? [];
     group.push(row);
@@ -151,7 +155,7 @@ export function orderFlyoutProviders(
     if (!providerOrder.includes(id)) providerOrder.push(id);
   }
 
-  const result: ProviderUsageSnapshot[] = [];
+  const result: T[] = [];
   for (const providerId of providerOrder) {
     const group = byProvider.get(providerId) ?? [];
     const strip = selectStripAccount(group, pinnedAccounts[providerId]);
