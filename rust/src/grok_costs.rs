@@ -266,19 +266,13 @@ pub fn parse_grok_updates_file(
 
     // No full usage telemetry in this session. Prefer subagent totals, else a
     // zero-token activity row so the project still shows on Charts.
-    let model = meta
-        .model
-        .clone()
-        .unwrap_or_else(|| "grok".to_string());
+    let model = meta.model.clone().unwrap_or_else(|| "grok".to_string());
     let project = meta.project.clone();
     let effort = meta.effort.clone();
 
     if subagent_tokens > 0 {
         let dedup = if subagent_keys.is_empty() {
-            Some(format!(
-                "subagent-sum:{}:{subagent_tokens}",
-                path.display()
-            ))
+            Some(format!("subagent-sum:{}:{subagent_tokens}", path.display()))
         } else {
             Some(subagent_keys.join("+"))
         };
@@ -624,7 +618,11 @@ mod tests {
         let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff);
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.partial));
-        assert!(records.iter().all(|r| r.project.as_deref() == Some("toolport")));
+        assert!(
+            records
+                .iter()
+                .all(|r| r.project.as_deref() == Some("toolport"))
+        );
         assert_eq!(records.iter().map(|r| r.input + r.output).sum::<u64>(), 0);
     }
 
