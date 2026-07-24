@@ -61,6 +61,7 @@ commands.allow = [
   "get_app_info",
   "get_provider_chart_data",
   "get_quota_run_history",
+  "get_quota_run_efficiency",
   "get_provider_local_usage_summary",
   "get_local_api_value_totals",
   "get_cursor_model_activity",

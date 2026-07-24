@@ -3,6 +3,7 @@ import {
   exportCostCsv,
   getCursorModelActivity,
   getProviderChartData,
+  getQuotaRunEfficiency,
   getSettingsSnapshot,
 } from "../../../../../lib/tauri";
 import {
@@ -19,6 +20,7 @@ import type {
   LocalTokenBreakdown,
   ProviderChartData,
   ProviderUsageSnapshot,
+  QuotaRunEfficiency,
   SettingsSnapshot,
 } from "../../../../../types/bridge";
 import type { useLocale } from "../../../../../hooks/useLocale";
@@ -140,6 +142,71 @@ function pricingCoverageNote(
   if (total <= 0 || priced >= total) return null;
   const percent = Math.round((priced / total) * 100);
   return `${percent}% of tokens priced`;
+}
+
+function formatCompactTokens(value: number): string {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+function formatDeltaPercent(value: number): string {
+  const pct = Math.round(value * 100);
+  if (pct > 0) return `+${pct}% vs prior run`;
+  if (pct < 0) return `${pct}% vs prior run`;
+  return "Same as prior run";
+}
+
+function QuotaEfficiencyCard({ rows }: { rows: QuotaRunEfficiency[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="quota-efficiency" aria-label="Quota run efficiency">
+      <div className="quota-efficiency__header">
+        <span className="quota-efficiency__title">Quota run efficiency</span>
+        <span className="quota-efficiency__subtitle">Local observation · not a published allowance</span>
+      </div>
+      <div className="quota-efficiency__rows">
+        {rows.map((row) => (
+          <div className="quota-efficiency__row" key={row.run.id}>
+            <div className="quota-efficiency__row-head">
+              <strong>{row.run.windowLabel}</strong>
+              {!row.run.complete && <span className="quota-efficiency__badge">Partial</span>}
+            </div>
+            <div className="quota-efficiency__metrics">
+              {row.tokensPerPercent != null && (
+                <span>
+                  <small>Tokens / 1%</small>
+                  <strong>{formatCompactTokens(row.tokensPerPercent)}</strong>
+                </span>
+              )}
+              {row.cacheReadPercent != null && (
+                <span>
+                  <small>Cache read</small>
+                  <strong>{row.cacheReadPercent.toFixed(0)}%</strong>
+                </span>
+              )}
+              {row.projectedTokensAt100 != null && (
+                <span>
+                  <small>Projected @ 100%</small>
+                  <strong>{formatCompactTokens(row.projectedTokensAt100)}</strong>
+                </span>
+              )}
+              {row.vsPreviousTokensPerPercent != null && (
+                <span>
+                  <small>Run-over-run</small>
+                  <strong data-delta={row.vsPreviousTokensPerPercent < 0 ? "down" : "up"}>
+                    {formatDeltaPercent(row.vsPreviousTokensPerPercent)}
+                  </strong>
+                </span>
+              )}
+            </div>
+            <small className="quota-efficiency__note">{row.note}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Backend bucket for records whose rollout never declared a plan. */
@@ -409,12 +476,33 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const [enriching, setEnriching] = useState(false);
   const [failed, setFailed] = useState(false);
   const [cursorActivity, setCursorActivity] = useState<CursorModelActivity[] | null>(null);
+  const [efficiency, setEfficiency] = useState<QuotaRunEfficiency[]>([]);
   const usageWindows = providerLocalUsageWindows(providerSnapshot);
   const sourceLabel = providerSnapshot?.sourceLabel;
   const resetBoundaryUnavailable = providerHasUnavailableResetBoundary(providerSnapshot);
   const usageWindowsKey = usageWindows
     .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
     .join("|");
+
+  useEffect(() => {
+    let cancelled = false;
+    setEfficiency([]);
+    if (!providerSupportsChartData(providerId)) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    getQuotaRunEfficiency(providerId, accountEmail)
+      .then((rows) => {
+        if (!cancelled) setEfficiency(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setEfficiency([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, accountEmail]);
 
   useEffect(() => {
     let cancelled = false;
@@ -719,6 +807,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
             )}
             <span>Processed includes fresh input, output, cache reads, and cache writes.</span>
           </div>
+          <QuotaEfficiencyCard rows={efficiency} />
           {/* Local logs carry no account identity, so these totals cover every
               account that has used this machine. Disclose that rather than let
               the figures read as belonging to the signed-in account. */}

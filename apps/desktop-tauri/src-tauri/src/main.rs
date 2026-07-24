@@ -194,6 +194,7 @@ fn main() {
             commands::get_app_info,
             commands::get_provider_chart_data,
             commands::get_quota_run_history,
+            commands::get_quota_run_efficiency,
             commands::get_provider_local_usage_summary,
             commands::get_local_api_value_totals,
             commands::get_cursor_model_activity,

@@ -4,7 +4,7 @@
 //! after a prior reset) until a confirmed capacity reset ends it. Snapshots are
 //! local, bounded, and honest about partial observation (app restart / away).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::capacity_events::{CapacityEventKind, CapacityEventPayload};
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
 
-const STORE_VERSION: u8 = 1;
+const STORE_VERSION: u8 = 2;
 /// Keep enough history for run-over-run efficiency (SOU-299) without unbounded growth.
 const MAX_RUNS_PER_SCOPE: usize = 40;
 const RETENTION_DAYS: i64 = 120;
@@ -24,6 +24,10 @@ const MID_CYCLE_START_USED: f64 = 15.0;
 /// Used-percent drop that closes an open run even without a capacity event
 /// (defensive; capacity_events is the primary closer).
 const USED_DROP_CLOSE: f64 = 20.0;
+/// Need a real climb on the meter before tokens-per-1% is meaningful.
+const MIN_PEAK_FOR_TOKENS_PER_PERCENT: f64 = 5.0;
+/// Suppress wild extrapolations early in a run (SOU-299).
+const MIN_PEAK_FOR_PROJECTION: f64 = 25.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +89,42 @@ pub struct QuotaRunSnapshot {
     /// True when the open run was resumed after a process restart.
     #[serde(default)]
     pub interrupted: bool,
+    /// Best-effort local processed tokens for this window during the run.
+    /// Machine-wide when logs lack account identity (see Charts disclosure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+}
+
+/// Efficiency read derived from a completed run (SOU-299).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaRunEfficiency {
+    pub run: QuotaRunSnapshot,
+    /// Locally observed processed tokens per 1% of provider-reported used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_per_percent: Option<f64>,
+    /// Cache-read share of processed tokens during the run (0–100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_percent: Option<f64>,
+    /// Extrapolated processed tokens if the meter reached 100% at this rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projected_tokens_at_100: Option<u64>,
+    /// Relative change vs previous complete run on the same window
+    /// (`-0.2` = 20% fewer tokens per 1%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vs_previous_tokens_per_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_run_id: Option<String>,
+    /// Honesty label for the UI.
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +150,16 @@ struct OpenRun {
     /// Loaded from disk after a previous process exit.
     #[serde(default)]
     interrupted: bool,
+    #[serde(default)]
+    processed_tokens: Option<u64>,
+    #[serde(default)]
+    fresh_input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -166,24 +216,9 @@ pub fn record_snapshot(snapshot: &ProviderUsageSnapshot) {
                 push_run(&mut guard, &scope, finished);
                 guard.open.remove(&open_key);
                 // Start a new cycle from the low post-drop reading.
-                guard.open.insert(
-                    open_key,
-                    OpenRun {
-                        provider_id: snapshot.provider_id.clone(),
-                        display_name: snapshot.display_name.clone(),
-                        account_id: snapshot.account_id.clone(),
-                        account_email: snapshot.account_email.clone(),
-                        window_id: window.id.clone(),
-                        window_label: window.label.clone(),
-                        started_at: observed_at,
-                        last_observed_at: observed_at,
-                        peak_used_percent: window.used_percent,
-                        last_used_percent: window.used_percent,
-                        window_minutes: window.window_minutes,
-                        mid_cycle_start: window.used_percent > MID_CYCLE_START_USED,
-                        interrupted: false,
-                    },
-                );
+                let mut next = new_open(snapshot, &window, observed_at);
+                attach_local_tokens(&mut next);
+                guard.open.insert(open_key, next);
                 continue;
             }
             open.last_observed_at = observed_at;
@@ -201,25 +236,12 @@ pub fn record_snapshot(snapshot: &ProviderUsageSnapshot) {
             if open.account_email.is_none() {
                 open.account_email = snapshot.account_email.clone();
             }
+            // Keep last pre-reset local totals (post-reset windows read near 0).
+            attach_local_tokens(open);
         } else {
-            guard.open.insert(
-                open_key,
-                OpenRun {
-                    provider_id: snapshot.provider_id.clone(),
-                    display_name: snapshot.display_name.clone(),
-                    account_id: snapshot.account_id.clone(),
-                    account_email: snapshot.account_email.clone(),
-                    window_id: window.id.clone(),
-                    window_label: window.label.clone(),
-                    started_at: observed_at,
-                    last_observed_at: observed_at,
-                    peak_used_percent: window.used_percent,
-                    last_used_percent: window.used_percent,
-                    window_minutes: window.window_minutes,
-                    mid_cycle_start: window.used_percent > MID_CYCLE_START_USED,
-                    interrupted: false,
-                },
-            );
+            let mut open = new_open(snapshot, &window, observed_at);
+            attach_local_tokens(&mut open);
+            guard.open.insert(open_key, open);
         }
     }
     persist_store(&guard);
@@ -276,24 +298,9 @@ pub fn record_capacity_events(events: &[CapacityEventPayload], snapshot: &Provid
             let observed_at = DateTime::parse_from_rfc3339(&snapshot.updated_at)
                 .map(|value| value.with_timezone(&Utc))
                 .unwrap_or(ended_at);
-            guard.open.insert(
-                open_key,
-                OpenRun {
-                    provider_id: snapshot.provider_id.clone(),
-                    display_name: snapshot.display_name.clone(),
-                    account_id: snapshot.account_id.clone(),
-                    account_email: snapshot.account_email.clone(),
-                    window_id: window.id,
-                    window_label: window.label,
-                    started_at: observed_at,
-                    last_observed_at: observed_at,
-                    peak_used_percent: window.used_percent,
-                    last_used_percent: window.used_percent,
-                    window_minutes: window.window_minutes,
-                    mid_cycle_start: window.used_percent > MID_CYCLE_START_USED,
-                    interrupted: false,
-                },
-            );
+            let mut next = new_open(snapshot, &window, observed_at);
+            attach_local_tokens(&mut next);
+            guard.open.insert(open_key, next);
         }
     }
     if wrote {
@@ -301,7 +308,7 @@ pub fn record_capacity_events(events: &[CapacityEventPayload], snapshot: &Provid
     }
 }
 
-/// Completed runs for a provider/account, newest first.
+/// Completed runs for a provider/account, chronological (oldest first).
 pub fn list_runs(provider_id: &str, account_email: Option<&str>) -> Vec<QuotaRunSnapshot> {
     let Ok(guard) = store().lock() else {
         return Vec::new();
@@ -318,6 +325,125 @@ pub fn list_runs(provider_id: &str, account_email: Option<&str>) -> Vec<QuotaRun
         }
     }
     Vec::new()
+}
+
+/// Efficiency cards for Charts: latest complete runs per window, newest first.
+pub fn efficiency_for_provider(
+    provider_id: &str,
+    account_email: Option<&str>,
+) -> Vec<QuotaRunEfficiency> {
+    let runs = list_runs(provider_id, account_email);
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    // Index previous complete run per window for deltas.
+    let mut previous_complete: HashMap<String, &QuotaRunSnapshot> = HashMap::new();
+    let mut rows: Vec<QuotaRunEfficiency> = Vec::new();
+
+    for run in &runs {
+        let prev = previous_complete.get(&run.window_id).copied();
+        let row = efficiency_for_run(run, prev);
+        if run.complete {
+            previous_complete.insert(run.window_id.clone(), run);
+        }
+        // Surface complete runs, plus incomplete ones that still have tokens so
+        // the user sees something while history accumulates.
+        if run.complete || run.processed_tokens.is_some() {
+            rows.push(row);
+        }
+    }
+
+    // Newest first for the UI; keep one card per window (latest complete preferred).
+    rows.reverse();
+    let mut seen_windows = HashSet::new();
+    rows.retain(|row| {
+        if !row.run.complete && row.run.processed_tokens.is_none() {
+            return false;
+        }
+        // Prefer first occurrence after reverse = newest.
+        if seen_windows.contains(&row.run.window_id) {
+            return false;
+        }
+        seen_windows.insert(row.run.window_id.clone());
+        true
+    });
+    rows
+}
+
+fn efficiency_for_run(
+    run: &QuotaRunSnapshot,
+    previous: Option<&QuotaRunSnapshot>,
+) -> QuotaRunEfficiency {
+    let rate = tokens_per_percent(run.processed_tokens, run.peak_used_percent);
+    let cache_share = cache_read_percent(
+        run.processed_tokens,
+        run.cache_read_tokens,
+        run.fresh_input_tokens,
+        run.output_tokens,
+        run.cache_write_tokens,
+    );
+    let projected_tokens_at_100 = if run.peak_used_percent >= MIN_PEAK_FOR_PROJECTION {
+        rate.map(|value| (value * 100.0).round() as u64)
+    } else {
+        None
+    };
+
+    let mut vs_previous = None;
+    let mut previous_run_id = None;
+    if let (Some(rate), Some(prev)) = (rate, previous)
+        && let Some(prev_rate) = tokens_per_percent(prev.processed_tokens, prev.peak_used_percent)
+        && prev_rate > 0.0
+    {
+        vs_previous = Some((rate - prev_rate) / prev_rate);
+        previous_run_id = Some(prev.id.clone());
+    }
+
+    QuotaRunEfficiency {
+        run: run.clone(),
+        tokens_per_percent: rate,
+        cache_read_percent: cache_share,
+        projected_tokens_at_100,
+        vs_previous_tokens_per_percent: vs_previous,
+        previous_run_id,
+        note: efficiency_note(run),
+    }
+}
+
+fn tokens_per_percent(processed: Option<u64>, peak_used: f64) -> Option<f64> {
+    let tokens = processed.filter(|value| *value > 0)?;
+    if peak_used < MIN_PEAK_FOR_TOKENS_PER_PERCENT {
+        return None;
+    }
+    Some(tokens as f64 / peak_used)
+}
+
+fn cache_read_percent(
+    processed: Option<u64>,
+    cache_read: Option<u64>,
+    fresh: Option<u64>,
+    output: Option<u64>,
+    cache_write: Option<u64>,
+) -> Option<f64> {
+    let cache = cache_read.unwrap_or(0);
+    let total = processed.unwrap_or_else(|| {
+        fresh.unwrap_or(0) + output.unwrap_or(0) + cache + cache_write.unwrap_or(0)
+    });
+    if total == 0 {
+        return None;
+    }
+    Some((cache as f64 / total as f64) * 100.0)
+}
+
+fn efficiency_note(run: &QuotaRunSnapshot) -> String {
+    if run.processed_tokens.is_none() {
+        return "No local token sample was captured for this run yet.".into();
+    }
+    if !run.complete {
+        return "Partial observation · locally observed tokens vs this account's quota %. Not a published allowance.".into();
+    }
+    "Locally observed tokens vs this account's quota %. Not a published allowance or token cap."
+        .into()
 }
 
 #[cfg(test)]
@@ -363,6 +489,11 @@ fn finalize_open(
         complete,
         while_away,
         interrupted: open.interrupted,
+        processed_tokens: open.processed_tokens,
+        fresh_input_tokens: open.fresh_input_tokens,
+        output_tokens: open.output_tokens,
+        cache_read_tokens: open.cache_read_tokens,
+        cache_write_tokens: open.cache_write_tokens,
     }
 }
 
@@ -405,7 +536,78 @@ fn partial_from_event(
         complete: false,
         while_away: event.while_away,
         interrupted: true,
+        processed_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
     }
+}
+
+fn new_open(
+    snapshot: &ProviderUsageSnapshot,
+    window: &LiveWindow,
+    observed_at: DateTime<Utc>,
+) -> OpenRun {
+    OpenRun {
+        provider_id: snapshot.provider_id.clone(),
+        display_name: snapshot.display_name.clone(),
+        account_id: snapshot.account_id.clone(),
+        account_email: snapshot.account_email.clone(),
+        window_id: window.id.clone(),
+        window_label: window.label.clone(),
+        started_at: observed_at,
+        last_observed_at: observed_at,
+        peak_used_percent: window.used_percent,
+        last_used_percent: window.used_percent,
+        window_minutes: window.window_minutes,
+        mid_cycle_start: window.used_percent > MID_CYCLE_START_USED,
+        interrupted: false,
+        processed_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+    }
+}
+
+/// Capture local window tokens while the run is open (pre-reset).
+fn attach_local_tokens(open: &mut OpenRun) {
+    let Some(summary) = crate::commands::cached_provider_local_usage_summary(&open.provider_id)
+    else {
+        return;
+    };
+    for window in &summary.current_windows {
+        if !local_window_matches(open, window) {
+            continue;
+        }
+        // Prefer a non-zero sample; after reset the window restarts near 0.
+        if window.tokens == 0 && open.processed_tokens.is_some() {
+            return;
+        }
+        open.processed_tokens = Some(window.tokens);
+        open.fresh_input_tokens = Some(window.token_breakdown.fresh_input_tokens);
+        open.output_tokens = Some(window.token_breakdown.output_tokens);
+        open.cache_read_tokens = Some(window.token_breakdown.cache_read_tokens);
+        open.cache_write_tokens = Some(window.token_breakdown.cache_write_tokens);
+        return;
+    }
+}
+
+fn local_window_matches(open: &OpenRun, window: &crate::commands::LocalUsageWindowSummary) -> bool {
+    if window.id.eq_ignore_ascii_case(&open.window_id) {
+        return true;
+    }
+    let from_label = crate::capacity_events::semantic_window_id(&window.label, open.window_minutes);
+    if from_label == open.window_id {
+        return true;
+    }
+    let open_label =
+        crate::capacity_events::semantic_window_id(&open.window_label, open.window_minutes);
+    from_label == open_label
+        || window
+            .label
+            .eq_ignore_ascii_case(open.window_label.as_str())
 }
 
 fn push_run(store: &mut QuotaRunStore, scope: &str, run: QuotaRunSnapshot) {
@@ -820,5 +1022,58 @@ mod tests {
 
         assert_eq!(list_runs(provider, Some("me@job.test")).len(), 1);
         assert!(list_runs(provider, Some("other@home.test")).is_empty());
+    }
+
+    #[test]
+    fn tokens_per_percent_and_projection_require_enough_peak() {
+        assert!(tokens_per_percent(Some(1_000_000), 4.0).is_none());
+        let rate = tokens_per_percent(Some(9_500_000), 95.0).unwrap();
+        assert!((rate - 100_000.0).abs() < 0.01);
+        assert_eq!(
+            cache_read_percent(Some(100), Some(80), None, None, None),
+            Some(80.0)
+        );
+    }
+
+    #[test]
+    fn efficiency_compares_complete_runs_on_same_window() {
+        let prev = QuotaRunSnapshot {
+            id: "prev".into(),
+            provider_id: "codex".into(),
+            display_name: "Codex".into(),
+            account_id: None,
+            account_email: None,
+            window_id: "session".into(),
+            window_label: "Session".into(),
+            started_at: "2026-07-01T00:00:00Z".into(),
+            ended_at: "2026-07-01T05:00:00Z".into(),
+            peak_used_percent: 100.0,
+            end_used_percent: 100.0,
+            after_reset_used_percent: Some(0.0),
+            reset_kind: QuotaRunResetKind::Scheduled,
+            window_minutes: Some(300),
+            observed_duration_seconds: 18_000,
+            complete: true,
+            while_away: false,
+            interrupted: false,
+            processed_tokens: Some(20_000_000),
+            fresh_input_tokens: Some(2_000_000),
+            output_tokens: Some(1_000_000),
+            cache_read_tokens: Some(16_000_000),
+            cache_write_tokens: Some(1_000_000),
+        };
+        let next = QuotaRunSnapshot {
+            id: "next".into(),
+            processed_tokens: Some(10_000_000),
+            peak_used_percent: 100.0,
+            end_used_percent: 100.0,
+            ..prev.clone()
+        };
+        let eff = efficiency_for_run(&next, Some(&prev));
+        assert!((eff.tokens_per_percent.unwrap() - 100_000.0).abs() < 0.01);
+        assert!((eff.vs_previous_tokens_per_percent.unwrap() - (-0.5)).abs() < 0.001);
+        assert_eq!(eff.previous_run_id.as_deref(), Some("prev"));
+        assert_eq!(eff.projected_tokens_at_100, Some(10_000_000));
+        assert!(eff.note.contains("Locally observed"));
     }
 }

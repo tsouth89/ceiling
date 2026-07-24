@@ -349,13 +349,22 @@ struct PersistedChartCache {
     entries: HashMap<String, CachedProviderChartData>,
 }
 
-/// Completed quota-run snapshots for a provider/account (SOU-298), newest last.
+/// Completed quota-run snapshots for a provider/account (SOU-298), oldest first.
 #[tauri::command]
 pub fn get_quota_run_history(
     provider_id: String,
     account_email: Option<String>,
 ) -> Vec<crate::quota_run_history::QuotaRunSnapshot> {
     crate::quota_run_history::list_runs(&provider_id, account_email.as_deref())
+}
+
+/// Latest quota-run efficiency cards per window (SOU-299).
+#[tauri::command]
+pub fn get_quota_run_efficiency(
+    provider_id: String,
+    account_email: Option<String>,
+) -> Vec<crate::quota_run_history::QuotaRunEfficiency> {
+    crate::quota_run_history::efficiency_for_provider(&provider_id, account_email.as_deref())
 }
 
 #[tauri::command]
