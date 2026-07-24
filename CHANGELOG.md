@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Treat Grok as a first-class provider alongside Claude, Codex, and Cursor: default-enabled, early catalog order, dedicated data-source copy, and enforcement tracking for the weekly pool.
+- Show Grok on Charts (sampled weekly-pool history), raise the native taskbar strip to five providers so Grok can sit after Cursor, and add Settings → Display controls to pick and reorder strip providers.
+- Use the official Grok monogram for tray, overview, providers, charts, and the taskbar strip.
+- Refresh expired Grok OIDC access tokens from `~/.grok/auth.json` via auth.x.ai (same silent refresh pattern as Claude).
+
+### Fixed
+- Prefer `grok login` credentials over browser cookies, and surface clear re-login guidance when Grok auth fails.
+
 ## [Ceiling] 1.5.3 - 2026-07-24
 
 ### Fixed

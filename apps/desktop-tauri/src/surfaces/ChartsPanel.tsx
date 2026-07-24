@@ -16,11 +16,9 @@ const COMPARE_ID = "compare";
 /**
  * Charts tab: quota, local token, credits, and usage history per provider.
  *
- * Only a few providers report historical chart data (Codex, Claude, OpenAI),
- * so this shows a provider selector across the supported ones and reuses the
- * existing, tested ChartsSection (which owns the limits/credits/usage sub-tabs)
- * for the selected provider. Unlike the Activity timeline — built from the live
- * snapshot — this is genuine time-series history from the backend.
+ * Providers with chart history (Codex, Claude, Cursor, OpenAI, Grok, …) get a
+ * tab. Codex/Claude also scan local transcripts; others use snapshot samples
+ * Ceiling records while they are enabled. Reuses ChartsSection for the body.
  */
 export default function ChartsPanel({
   providers,
@@ -74,8 +72,8 @@ export default function ChartsPanel({
         <TotalApiValueCard />
         <div className="charts-empty">
           <strong>No charts yet</strong>
-          Limits and local usage history shows up here for providers that report it —
-          Codex, Claude, and OpenAI.
+          Limits and local usage history show up here for providers Ceiling can
+          chart — Codex, Claude, Cursor, OpenAI, and Grok (weekly pool samples).
         </div>
       </div>
     );

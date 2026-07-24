@@ -131,7 +131,9 @@ const MAX_CONTEXT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from
 
 pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std::time::Duration {
     let provider_timeout = match id {
-        ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot => SLOW_PROVIDER_FETCH_TIMEOUT,
+        ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot | ProviderId::Grok => {
+            SLOW_PROVIDER_FETCH_TIMEOUT
+        }
         _ => DEFAULT_PROVIDER_FETCH_TIMEOUT,
     };
     let context_timeout = std::time::Duration::from_secs(ctx.web_timeout.saturating_add(5));

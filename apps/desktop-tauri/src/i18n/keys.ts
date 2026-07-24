@@ -639,6 +639,7 @@ export const ALL_LOCALE_KEYS = [
   "DataSourceLearnMore",
   "DataSourceClaude",
   "DataSourceCodex",
+  "DataSourceGrok",
   "DataSourceCursor",
   "DataSourceCopilot",
   "DataSourceGemini",

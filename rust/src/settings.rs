@@ -505,9 +505,11 @@ pub fn normalize_spend_budget_usd(value: f64) -> f64 {
 impl Default for Settings {
     fn default() -> Self {
         let mut enabled = HashSet::new();
-        // Default enabled providers
+        // Default enabled providers (first-class local CLI companions)
         enabled.insert("claude".to_string());
         enabled.insert("codex".to_string());
+        enabled.insert("cursor".to_string());
+        enabled.insert("grok".to_string());
 
         Self {
             enabled_providers: enabled,

@@ -450,6 +450,35 @@ describe("FloatBar", () => {
     });
   });
 
+  it("keeps floatBarProviderIds order instead of sorting by usage", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 90),
+      snapshot("codex", "Codex", 10),
+      snapshot("grok", "Grok", 50),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({
+        enabledProviders: ["claude", "codex", "grok"],
+        floatBarProviderIds: ["grok", "codex", "claude"],
+      }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({
+        enabledProviders: ["claude", "codex", "grok"],
+        floatBarProviderIds: ["grok", "codex", "claude"],
+      }),
+    );
+    await waitFor(() => {
+      const titles = [...container.querySelectorAll(".floatbar__pill")].map((el) =>
+        el.getAttribute("title") ?? "",
+      );
+      expect(titles[0]).toMatch(/Grok/);
+      expect(titles[1]).toMatch(/Codex/);
+      expect(titles[2]).toMatch(/Claude/);
+    });
+  });
+
   it("does not show stale cached providers when all providers are disabled", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 30),

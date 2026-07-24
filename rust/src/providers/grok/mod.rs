@@ -25,13 +25,32 @@ const SUBSCRIPTIONS_ENDPOINT: &str = "https://grok.com/rest/subscriptions";
 const WEEKLY_MINUTES: u32 = 7 * 24 * 60;
 
 /// Whether a usable `~/.grok/auth.json` (or `$GROK_HOME/auth.json`) exists.
+/// True when an access token or refresh token is present (expired access is OK
+/// if we can refresh, same idea as Claude OAuth).
 pub fn local_credentials_available() -> bool {
-    GrokProvider::load_credentials().is_ok()
+    GrokCredentials::load_from_disk()
+        .map(|creds| !creds.access_token.is_empty() || creds.refresh_token.is_some())
+        .unwrap_or(false)
 }
 
-/// Whether the `grok` CLI appears on PATH.
+/// Whether the `grok` CLI appears on PATH or in known Windows install locations.
 pub fn cli_installed() -> bool {
-    which::which("grok").is_ok() || GrokProvider::detect_cli_version().is_some()
+    which::which("grok").is_ok()
+        || GrokProvider::detect_cli_version().is_some()
+        || dirs::data_local_dir().is_some_and(|base| {
+            base.join("Programs")
+                .join("grok")
+                .join("grok.exe")
+                .is_file()
+                || base.join("grok").join("grok.exe").is_file()
+        })
+        || std::env::var_os("USERPROFILE").is_some_and(|home| {
+            PathBuf::from(home)
+                .join(".grok")
+                .join("bin")
+                .join("grok.exe")
+                .is_file()
+        })
 }
 
 pub struct GrokProvider {
@@ -45,12 +64,14 @@ impl GrokProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Grok,
                 display_name: "Grok",
-                session_label: "Weekly",
+                session_label: "Weekly pool",
                 weekly_label: "Extra credits",
                 supports_opus: false,
+                // Extra-credit balance is parsed when the billing RPC includes
+                // prepaid fields; otherwise only the weekly pool is shown.
                 supports_credits: true,
-                default_enabled: false,
-                is_primary: false,
+                default_enabled: true,
+                is_primary: true,
                 dashboard_url: Some("https://grok.com/?_s=usage"),
                 status_page_url: Some("https://status.x.ai"),
             },
@@ -70,13 +91,90 @@ impl GrokProvider {
         dirs::home_dir().map(|home| home.join(".grok").join("auth.json"))
     }
 
-    fn load_credentials() -> Result<GrokCredentials, ProviderError> {
-        let path = Self::auth_file_path()
-            .ok_or_else(|| ProviderError::NotInstalled("Grok auth path not found".to_string()))?;
-        let text = std::fs::read_to_string(&path).map_err(|_| {
-            ProviderError::NotInstalled("Grok auth.json not found. Run `grok login`.".to_string())
-        })?;
-        GrokCredentials::parse(&text)
+    /// Load credentials and refresh the access token when expired (or about to).
+    async fn load_fresh_credentials(&self) -> Result<GrokCredentials, ProviderError> {
+        let mut credentials = GrokCredentials::load_from_disk()?;
+        if credentials.needs_refresh() {
+            credentials = self.refresh_and_persist(credentials).await?;
+        }
+        if credentials.access_token.is_empty() {
+            return Err(ProviderError::AuthRequired);
+        }
+        Ok(credentials)
+    }
+
+    async fn refresh_and_persist(
+        &self,
+        current: GrokCredentials,
+    ) -> Result<GrokCredentials, ProviderError> {
+        let Some(refresh_token) = current.refresh_token.as_deref().filter(|s| !s.is_empty()) else {
+            return Err(ProviderError::AuthRequired);
+        };
+        let client_id = current
+            .oidc_client_id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or(ProviderError::AuthRequired)?;
+        let token_url = current
+            .oidc_issuer
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|issuer| format!("{}/oauth2/token", issuer.trim_end_matches('/')))
+            .unwrap_or_else(|| "https://auth.x.ai/oauth2/token".to_string());
+
+        let response = self
+            .client
+            .post(token_url)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(format!(
+                "grant_type=refresh_token&refresh_token={}&client_id={}",
+                urlencoding_form(refresh_token),
+                urlencoding_form(&client_id),
+            ))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            tracing::warn!(
+                "Grok token refresh failed ({status}): {}",
+                text.chars().take(160).collect::<String>()
+            );
+            return Err(ProviderError::AuthRequired);
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Grok refresh response: {e}")))?;
+        let access_token = body
+            .get("access_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or(ProviderError::AuthRequired)?
+            .to_string();
+        let new_refresh = body
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| current.refresh_token.clone());
+        let ttl = body
+            .get("expires_in")
+            .and_then(Value::as_i64)
+            .filter(|v| *v > 0)
+            .unwrap_or(21_600);
+        let expires_at = Some(Utc::now() + chrono::Duration::seconds(ttl));
+        let mut next = current;
+        next.access_token = access_token;
+        next.refresh_token = new_refresh;
+        next.expires_at = expires_at;
+        if let Err(err) = next.persist_to_disk() {
+            tracing::warn!("Grok token refreshed but could not persist auth.json: {err}");
+        }
+        Ok(next)
     }
 
     async fn fetch_with_auth(
@@ -85,7 +183,27 @@ impl GrokProvider {
         source_label: &str,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let auth_header = format!("Bearer {}", credentials.access_token);
-        let billing = self.fetch_billing(Some(auth_header.clone()), None).await?;
+        let billing = match self.fetch_billing(Some(auth_header.clone()), None).await {
+            Ok(billing) => billing,
+            Err(ProviderError::AuthRequired) if credentials.refresh_token.is_some() => {
+                // Access token rejected; force one refresh and retry once.
+                let refreshed = self.refresh_and_persist(credentials.clone()).await?;
+                let retry_header = format!("Bearer {}", refreshed.access_token);
+                let billing = self.fetch_billing(Some(retry_header.clone()), None).await?;
+                let plan = self
+                    .fetch_plan_name(Some(retry_header), None)
+                    .await
+                    .or_else(|| refreshed.login_method());
+                return Ok(result_from_billing(
+                    billing,
+                    source_label,
+                    refreshed.email.clone(),
+                    refreshed.team_id.clone(),
+                    plan,
+                ));
+            }
+            Err(e) => return Err(e),
+        };
         let plan = self
             .fetch_plan_name(Some(auth_header), None)
             .await
@@ -186,13 +304,13 @@ impl GrokProvider {
         plan_name_from_subscriptions(&value)
     }
 
-    /// Local CLI auth file path (used when shell forces Cli/OAuth).
+    /// Local CLI auth (used for Auto fallback, Cli, and OAuth source modes).
     async fn fetch_local_cli_auth(&self) -> Result<ProviderFetchResult, ProviderError> {
-        let credentials = Self::load_credentials()?;
+        let credentials = self.load_fresh_credentials().await?;
         self.fetch_with_auth(&credentials, "cli").await
     }
 
-    /// Prefer an explicit cookie header, then browser cookies, then `grok login`.
+    /// Prefer `grok login` credentials (Claude/Codex-style), then cookies.
     async fn fetch_auto(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         if let Some(ref cookie_header) = ctx.manual_cookie_header {
             match self.fetch_with_cookie(cookie_header).await {
@@ -201,32 +319,67 @@ impl GrokProvider {
                 Err(e) => return Err(e),
             }
         }
-        match crate::providers::browser_cookie_header(&["grok.com"]) {
-            Ok(cookie_header) => match self.fetch_with_cookie(&cookie_header).await {
-                Ok(result) => return Ok(result),
-                Err(ProviderError::AuthRequired) => {}
-                Err(e) => return Err(e),
-            },
-            Err(ProviderError::NoCookies) => {}
+        match self.fetch_local_cli_auth().await {
+            Ok(result) => return Ok(result),
+            Err(ProviderError::AuthRequired) | Err(ProviderError::NotInstalled(_)) => {}
             Err(e) => return Err(e),
         }
-        self.fetch_local_cli_auth().await
+        match crate::providers::browser_cookie_header(&["grok.com"]) {
+            Ok(cookie_header) => self.fetch_with_cookie(&cookie_header).await,
+            Err(ProviderError::NoCookies) => Err(ProviderError::AuthRequired),
+            Err(e) => Err(e),
+        }
     }
 
     fn detect_cli_version() -> Option<String> {
-        let mut command = std::process::Command::new("grok");
-        command.arg("--version");
-        hide_windows_console(&mut command);
-        let output = command.output().ok()?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let trimmed = text
-            .lines()
-            .next()?
-            .trim()
-            .strip_prefix("grok ")
-            .unwrap_or(text.trim());
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
+        let mut candidates = vec![PathBuf::from("grok")];
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            candidates.push(
+                PathBuf::from(home)
+                    .join(".grok")
+                    .join("bin")
+                    .join("grok.exe"),
+            );
+        }
+        if let Some(base) = dirs::data_local_dir() {
+            candidates.push(base.join("Programs").join("grok").join("grok.exe"));
+            candidates.push(base.join("grok").join("grok.exe"));
+        }
+        for bin in candidates {
+            let mut command = std::process::Command::new(&bin);
+            command.arg("--version");
+            hide_windows_console(&mut command);
+            let Ok(output) = command.output() else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let trimmed = text
+                .lines()
+                .next()
+                .map(str::trim)
+                .unwrap_or("")
+                .strip_prefix("grok ")
+                .unwrap_or(text.trim());
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        None
     }
+}
+
+/// Minimal form-encoding for OAuth refresh (tokens are base64url-safe).
+fn urlencoding_form(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(windows)]
@@ -291,58 +444,121 @@ impl Provider for GrokProvider {
 
 #[derive(Debug, Clone)]
 struct GrokCredentials {
+    scope: String,
     access_token: String,
+    refresh_token: Option<String>,
     auth_mode: Option<String>,
     email: Option<String>,
     team_id: Option<String>,
     expires_at: Option<DateTime<Utc>>,
+    oidc_issuer: Option<String>,
+    oidc_client_id: Option<String>,
 }
 
 impl GrokCredentials {
+    fn load_from_disk() -> Result<Self, ProviderError> {
+        let path = GrokProvider::auth_file_path()
+            .ok_or_else(|| ProviderError::NotInstalled("Grok auth path not found".to_string()))?;
+        let text = std::fs::read_to_string(&path).map_err(|_| {
+            ProviderError::NotInstalled("Grok auth.json not found. Run `grok login`.".to_string())
+        })?;
+        Self::parse(&text)
+    }
+
     fn parse(text: &str) -> Result<Self, ProviderError> {
         let root: Value = serde_json::from_str(text)
             .map_err(|e| ProviderError::Parse(format!("Failed to decode Grok auth.json: {e}")))?;
         let map = root
             .as_object()
             .ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
-        let mut selected: Option<(&String, &Value)> = None;
+        let mut selected: Option<(String, &Value)> = None;
         for (scope, entry) in map {
-            if entry
+            let has_key = entry
                 .get("key")
                 .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty())
-                && (scope.starts_with("https://auth.x.ai::")
-                    || selected.is_none()
-                    || scope.contains("/sign-in"))
-            {
-                selected = Some((scope, entry));
+                .is_some_and(|s| !s.is_empty());
+            let has_refresh = entry
+                .get("refresh_token")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty());
+            if !(has_key || has_refresh) {
+                continue;
+            }
+            let prefer = scope.starts_with("https://auth.x.ai::")
+                || selected.is_none()
+                || scope.contains("/sign-in");
+            if prefer {
+                selected = Some((scope.clone(), entry));
                 if scope.starts_with("https://auth.x.ai::") {
                     break;
                 }
             }
         }
-        let (_, entry) = selected.ok_or(ProviderError::AuthRequired)?;
+        let (scope, entry) = selected.ok_or(ProviderError::AuthRequired)?;
         let access_token = entry
             .get("key")
             .and_then(Value::as_str)
+            .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or(ProviderError::AuthRequired)?
+            .unwrap_or("")
             .to_string();
+        let refresh_token = text_field(entry, "refresh_token");
+        if access_token.is_empty() && refresh_token.is_none() {
+            return Err(ProviderError::AuthRequired);
+        }
         let expires_at = entry
             .get("expires_at")
             .and_then(Value::as_str)
-            .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        if expires_at.is_some_and(|dt| dt <= Utc::now()) {
-            return Err(ProviderError::AuthRequired);
-        }
+            .and_then(parse_expires_at);
         Ok(Self {
+            scope,
             access_token,
+            refresh_token,
             auth_mode: text_field(entry, "auth_mode"),
             email: text_field(entry, "email"),
             team_id: text_field(entry, "team_id"),
             expires_at,
+            oidc_issuer: text_field(entry, "oidc_issuer"),
+            oidc_client_id: text_field(entry, "oidc_client_id"),
         })
+    }
+
+    fn needs_refresh(&self) -> bool {
+        if self.refresh_token.as_ref().is_none_or(|s| s.is_empty()) {
+            return false;
+        }
+        if self.access_token.is_empty() {
+            return true;
+        }
+        match self.expires_at {
+            Some(exp) => exp <= Utc::now() + chrono::Duration::minutes(2),
+            // Unknown expiry: still try refresh when billing returns 401.
+            None => false,
+        }
+    }
+
+    fn persist_to_disk(&self) -> Result<(), String> {
+        let path = GrokProvider::auth_file_path().ok_or_else(|| "no auth path".to_string())?;
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let mut root: Value =
+            serde_json::from_str(&text).map_err(|e| format!("decode auth.json: {e}"))?;
+        let entry = root
+            .as_object_mut()
+            .and_then(|map| map.get_mut(&self.scope))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "auth scope missing".to_string())?;
+        entry.insert("key".to_string(), Value::String(self.access_token.clone()));
+        if let Some(refresh) = &self.refresh_token {
+            entry.insert("refresh_token".to_string(), Value::String(refresh.clone()));
+        }
+        if let Some(exp) = self.expires_at {
+            entry.insert(
+                "expires_at".to_string(),
+                Value::String(exp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+            );
+        }
+        let encoded = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+        std::fs::write(&path, encoded).map_err(|e| e.to_string())
     }
 
     fn login_method(&self) -> Option<String> {
@@ -354,6 +570,18 @@ impl GrokCredentials {
             None => None,
         }
     }
+}
+
+fn parse_expires_at(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S"))
+                .ok()
+                .map(|naive| naive.and_utc())
+        })
 }
 
 fn text_field(value: &Value, key: &str) -> Option<String> {
@@ -396,6 +624,8 @@ struct GrokBillingSnapshot {
     used_percent: f64,
     resets_at: Option<DateTime<Utc>>,
     window_minutes: Option<u32>,
+    /// Extra usage credits remaining, when the RPC reports a prepaid balance.
+    prepaid_balance_cents: Option<u64>,
 }
 
 fn result_from_billing(
@@ -407,10 +637,23 @@ fn result_from_billing(
 ) -> ProviderFetchResult {
     let mut usage = UsageSnapshot::new(RateWindow::with_details(
         billing.used_percent,
-        billing.window_minutes,
+        billing.window_minutes.or(Some(WEEKLY_MINUTES)),
         billing.resets_at,
         None,
     ));
+    // When prepaid/extra credits are present, surface a second meter as used%
+    // of a synthetic window is not meaningful (balance is absolute). Show 0%
+    // used when balance > 0 so the bar reads as "have credits", matching other
+    // credit-balance providers that only know remaining funds.
+    if let Some(cents) = billing.prepaid_balance_cents.filter(|c| *c > 0) {
+        let dollars = cents as f64 / 100.0;
+        usage = usage.with_secondary(RateWindow::with_details(
+            0.0,
+            None,
+            None,
+            Some(format!("${dollars:.2} extra credits")),
+        ));
+    }
     usage.account_email = email;
     usage.account_organization = team_id;
     usage.login_method = login_method;
@@ -503,10 +746,16 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
         resets_at.map(|_| WEEKLY_MINUTES)
     };
 
+    // Prepaid/extra-credit balance is a nested Money `val` in the web client.
+    // Zero balances are omitted from the protobuf; non-zero shapes need a
+    // field-stable decode. Leave empty rather than guessing from stray varints.
+    let prepaid_balance_cents = None;
+
     Ok(GrokBillingSnapshot {
         used_percent,
         resets_at,
         window_minutes,
+        prepaid_balance_cents,
     })
 }
 
@@ -654,11 +903,34 @@ mod tests {
     fn parses_auth_file_prefer_oidc() {
         let auth = r#"{
           "https://accounts.x.ai/sign-in": {"key": "legacy"},
-          "https://auth.x.ai::abc": {"key": "oidc", "auth_mode": "oidc", "email": "u@example.com"}
+          "https://auth.x.ai::abc": {
+            "key": "oidc",
+            "auth_mode": "oidc",
+            "email": "u@example.com",
+            "refresh_token": "refresh",
+            "oidc_client_id": "client",
+            "oidc_issuer": "https://auth.x.ai"
+          }
         }"#;
         let parsed = GrokCredentials::parse(auth).unwrap();
         assert_eq!(parsed.access_token, "oidc");
+        assert_eq!(parsed.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(parsed.login_method().as_deref(), Some("SuperGrok"));
+        assert!(!parsed.needs_refresh());
+    }
+
+    #[test]
+    fn expired_token_with_refresh_is_not_hard_fail() {
+        let auth = r#"{
+          "https://auth.x.ai::abc": {
+            "key": "old",
+            "refresh_token": "refresh",
+            "oidc_client_id": "client",
+            "expires_at": "2020-01-01T00:00:00.000Z"
+          }
+        }"#;
+        let parsed = GrokCredentials::parse(auth).unwrap();
+        assert!(parsed.needs_refresh());
     }
 
     #[test]

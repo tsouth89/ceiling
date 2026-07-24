@@ -4,7 +4,16 @@ import type {
   RateWindowSnapshot,
 } from "../types/bridge";
 
-const PROVIDER_CHART_DATA_IDS = new Set(["claude", "codex", "cursor", "openai"]);
+// Providers whose live snapshots are sampled into local quota history, and/or
+// that have transcript/cost scanners. Grok has no local CLI transcripts, but
+// Ceiling records its weekly-pool snapshots so the Limits chart still grows.
+const PROVIDER_CHART_DATA_IDS = new Set([
+  "claude",
+  "codex",
+  "cursor",
+  "openai",
+  "grok",
+]);
 const RESET_BOUNDARY_PRECISION_MS = 1_000;
 
 export function providerSupportsChartData(providerId: string): boolean {
