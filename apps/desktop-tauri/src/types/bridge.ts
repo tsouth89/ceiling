@@ -762,6 +762,8 @@ export interface LocalTokenBreakdown {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Present when the provider reports reasoning tokens (e.g. Grok). */
+  reasoningTokens?: number;
 }
 
 export interface ProviderChartData {

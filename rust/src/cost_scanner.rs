@@ -1,4 +1,4 @@
-//! Local cost-usage scanner for Codex and Claude
+//! Local cost-usage scanner for Codex, Claude, and Grok Build
 //!
 //! Scans local JSONL log files to aggregate token usage and calculate costs
 
@@ -14,10 +14,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::codex_costs::scan_codex_file_cost;
 use crate::codex_costs::{
     add_codex_record_to_summary, add_codex_records_to_summary, codex_period_start,
-    codex_scan_dates, scan_codex_file_cost_for_range,
+    codex_scan_dates, project_bucket, scan_codex_file_cost_for_range,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
+use crate::grok_costs::{
+    discover_grok_session_dirs, grok_sessions_dir, load_session_meta, parse_grok_updates_file,
+    should_count_grok_record, GrokUsageRecord,
+};
 use crate::settings::Settings;
 
 /// Cost summary from scanning local logs
@@ -35,6 +39,9 @@ pub struct CostSummary {
     pub cache_read_tokens: u64,
     /// Input tokens written into a provider cache.
     pub cache_write_tokens: u64,
+    /// Reasoning / thinking tokens reported by the provider (display-only;
+    /// often a subset of output, so not added into processed totals).
+    pub reasoning_tokens: u64,
     /// Number of sessions/conversations scanned
     pub sessions_count: u32,
     /// Cost breakdown by model
@@ -110,7 +117,11 @@ pub struct ModelTokenCounts {
 /// adds the cache bucket to a Codex input count therefore counts those tokens
 /// twice.
 pub fn provider_folds_cache_into_input(provider_id: &str) -> bool {
-    provider_id.eq_ignore_ascii_case("codex")
+    // Codex and Grok report cache-read tokens inside the input total.
+    matches!(
+        provider_id.to_ascii_lowercase().as_str(),
+        "codex" | "grok"
+    )
 }
 
 /// Token buckets with each token counted exactly once, whatever the provider's
@@ -1109,6 +1120,7 @@ pub fn has_cost_usage_sources() -> bool {
         .iter()
         .any(|dir| dir.exists())
         || scanner.get_claude_projects_dir().exists()
+        || grok_sessions_dir(None).is_some_and(|dir| dir.exists())
 }
 
 /// Build chart history and period summaries with one transcript pass.
@@ -1146,6 +1158,7 @@ pub fn get_cost_usage_report_scoped(
     match provider {
         "codex" => Some(scan_codex_report(&scanner, days, current_windows)),
         "claude" => Some(scan_claude_report(&scanner, days, current_windows)),
+        "grok" => Some(scan_grok_report(&scanner, days, current_windows)),
         _ => None,
     }
 }
@@ -1195,6 +1208,7 @@ fn merge_summary(target: &mut CostSummary, source: &CostSummary) {
     target.cached_tokens += source.cached_tokens;
     target.cache_read_tokens += source.cache_read_tokens;
     target.cache_write_tokens += source.cache_write_tokens;
+    target.reasoning_tokens += source.reasoning_tokens;
     target.sessions_count += source.sessions_count;
     for (model, cost) in &source.by_model {
         *target.by_model.entry(model.clone()).or_insert(0.0) += cost;
@@ -1482,6 +1496,146 @@ fn scan_codex_report(
     }
 
     rollups.finish(days)
+}
+
+fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecord) {
+    // No public SuperGrok API rate card — keep dollars unset, still track tokens.
+    summary.unknown_models.insert(record.model.clone());
+    summary.input_tokens += record.input;
+    summary.output_tokens += record.output;
+    summary.cached_tokens += record.cache_read;
+    summary.cache_read_tokens += record.cache_read;
+    summary.reasoning_tokens += record.reasoning;
+
+    let model_tokens = summary
+        .by_model_tokens
+        .entry(record.model.clone())
+        .or_default();
+    model_tokens.input_tokens += record.input;
+    model_tokens.output_tokens += record.output;
+    model_tokens.cached_tokens += record.cache_read;
+    model_tokens.cache_read_tokens += record.cache_read;
+    model_tokens.calls += 1;
+
+    let effort = match record
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    {
+        Some(effort) => effort.to_ascii_lowercase(),
+        None => "unknown".to_string(),
+    };
+    let effort_tokens = summary.by_effort_tokens.entry(effort).or_default();
+    effort_tokens.input_tokens += record.input;
+    effort_tokens.output_tokens += record.output;
+    effort_tokens.cached_tokens += record.cache_read;
+    effort_tokens.cache_read_tokens += record.cache_read;
+    effort_tokens.calls += 1;
+
+    let project = project_bucket(record.project.as_deref());
+    let project_tokens = summary.by_project_tokens.entry(project).or_default();
+    project_tokens.input_tokens += record.input;
+    project_tokens.output_tokens += record.output;
+    project_tokens.cached_tokens += record.cache_read;
+    project_tokens.cache_read_tokens += record.cache_read;
+    project_tokens.calls += 1;
+}
+
+fn scan_grok_report(
+    scanner: &CostScanner,
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> CostUsageReport {
+    let _ = scanner;
+    let mut daily = empty_daily_summaries(days);
+    let mut current_windows = empty_current_window_summaries(windows);
+    let Some(sessions_root) = grok_sessions_dir(None) else {
+        return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
+    };
+    if !sessions_root.exists() {
+        return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
+    }
+
+    let today = Local::now().date_naive();
+    let seven_day_start = today - Duration::days(6);
+    let cutoff = Utc::now() - Duration::days(days as i64);
+    let mut seen = HashSet::new();
+    let mut undated = CostSummary::default();
+    let mut latest: Option<(DateTime<Utc>, CostSummary)> = None;
+    let mut today_sessions = 0;
+    let mut seven_day_sessions = 0;
+    let mut period_sessions = 0;
+
+    for session_dir in discover_grok_session_dirs(&sessions_root) {
+        let meta = load_session_meta(&session_dir);
+        let updates = session_dir.join("updates.jsonl");
+        let records = parse_grok_updates_file(&updates, &meta, cutoff);
+        if records.is_empty() {
+            continue;
+        }
+
+        let mut file_summary = CostSummary::default();
+        let mut latest_recorded_at: Option<DateTime<Utc>> = None;
+        let mut contributed_today = false;
+        let mut contributed_seven_days = false;
+        let mut counted = 0u32;
+
+        for record in &records {
+            if !should_count_grok_record(record, cutoff, &mut seen) {
+                continue;
+            }
+            counted += 1;
+            add_grok_record_to_summary(&mut file_summary, record);
+            add_to_current_windows(&mut current_windows, windows, record.timestamp, |summary| {
+                add_grok_record_to_summary(summary, record)
+            });
+            if let Some(timestamp) = record.timestamp {
+                let date = timestamp.with_timezone(&Local).date_naive();
+                let day = date.format("%Y-%m-%d").to_string();
+                if let Some(day_summary) = daily.get_mut(&day) {
+                    add_grok_record_to_summary(day_summary, record);
+                }
+                contributed_today |= date == today;
+                contributed_seven_days |= date >= seven_day_start;
+                if latest_recorded_at.is_none_or(|seen_at| timestamp > seen_at) {
+                    latest_recorded_at = Some(timestamp);
+                }
+            } else {
+                add_grok_record_to_summary(&mut undated, record);
+            }
+        }
+
+        if counted == 0 {
+            continue;
+        }
+        file_summary.sessions_count = 1;
+        period_sessions += 1;
+        today_sessions += u32::from(contributed_today);
+        seven_day_sessions += u32::from(contributed_seven_days);
+
+        let fallback_modified = fs::metadata(&updates)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .map(DateTime::<Utc>::from)
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+        let recorded_at = latest_recorded_at.unwrap_or(fallback_modified);
+        if latest
+            .as_ref()
+            .is_none_or(|(seen_at, _)| recorded_at > *seen_at)
+        {
+            latest = Some((recorded_at, file_summary));
+        }
+    }
+
+    finish_report(
+        daily,
+        days,
+        latest.map(|(_, summary)| summary),
+        (today_sessions, seven_day_sessions, period_sessions),
+        Some(&undated),
+        current_windows,
+    )
 }
 
 fn scan_claude_report(
@@ -2227,5 +2381,58 @@ mod tests {
 
         let _ = std::fs::remove_file(&file_a);
         let _ = std::fs::remove_file(&file_b);
+    }
+
+    #[test]
+    fn grok_report_rolls_up_tokens_cache_effort_and_project() {
+        let home = tempfile::tempdir().unwrap();
+        let session = home
+            .path()
+            .join("sessions")
+            .join("proj")
+            .join("019f-session");
+        std::fs::create_dir_all(&session).unwrap();
+        let now = Utc::now();
+        let ts = now.timestamp() as f64;
+        let ms = now.timestamp_millis();
+        let updates = format!(
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40}}}}}}}}}}}}"#
+        );
+        std::fs::write(session.join("updates.jsonl"), updates).unwrap();
+        std::fs::write(
+            session.join("summary.json"),
+            r#"{"info":{"cwd":"C:\\projects\\personal\\ceiling"},"reasoning_effort":"high","current_model_id":"grok-4.5"}"#,
+        )
+        .unwrap();
+
+        // SAFETY: test-only env override; restored after the scan.
+        let prev = std::env::var_os("GROK_HOME");
+        // SAFETY: single-threaded test isolation for GROK_HOME.
+        unsafe {
+            std::env::set_var("GROK_HOME", home.path());
+        }
+        let report = scan_grok_report(&CostScanner::new(7), 7, &[]);
+        match prev {
+            Some(value) => unsafe { std::env::set_var("GROK_HOME", value) },
+            None => unsafe { std::env::remove_var("GROK_HOME") },
+        }
+
+        assert_eq!(report.thirty_days.sessions_count, 1);
+        assert_eq!(report.thirty_days.input_tokens, 1000);
+        assert_eq!(report.thirty_days.output_tokens, 100);
+        assert_eq!(report.thirty_days.cache_read_tokens, 800);
+        assert_eq!(report.thirty_days.reasoning_tokens, 40);
+        assert!(report.thirty_days.by_effort_tokens.contains_key("high"));
+        assert!(report.thirty_days.by_project_tokens.contains_key("ceiling"));
+        assert!(
+            report
+                .thirty_days
+                .by_model_tokens
+                .contains_key("grok-4.5-build")
+        );
+        assert_eq!(report.thirty_days.total_cost_usd, 0.0);
+        let normalized = report.thirty_days.normalized_tokens("grok");
+        assert_eq!(normalized.fresh_input_tokens, 200);
+        assert_eq!(normalized.cache_read_tokens, 800);
     }
 }

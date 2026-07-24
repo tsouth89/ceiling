@@ -35,7 +35,7 @@ App-Bound Encryption details.
 | **Cursor** | Your signed-in Cursor IDE session (`state.vscdb`), or cursor.com cookies you provide | cursor.com |
 | **GitHub Copilot** | Your GitHub CLI / Git Credential Manager token (or a device-flow sign-in) | api.github.com, or your GitHub Enterprise host |
 | **Gemini** | The OAuth token from the Gemini CLI (`~/.gemini/oauth_creds.json`) | Google Code Assist and OAuth endpoints |
-| **Grok** | The OIDC session from Grok Build (`~/.grok/auth.json` via `grok login`), or grok.com cookies you provide; tokens refresh via auth.x.ai | grok.com, auth.x.ai |
+| **Grok** | The OIDC session from Grok Build (`~/.grok/auth.json` via `grok login`), or grok.com cookies you provide; tokens refresh via auth.x.ai; plus local `~/.grok/sessions` logs for tokens / cache / effort / projects | grok.com, auth.x.ai |
 | Other providers | A local session or token on this PC, or the provider's own usage endpoint | The provider's own domain only |
 
 ## Network policy

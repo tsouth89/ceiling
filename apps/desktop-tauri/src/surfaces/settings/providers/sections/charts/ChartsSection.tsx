@@ -87,12 +87,17 @@ function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
   const cacheShare = breakdown.processedTokens > 0
     ? (cachedTokens / breakdown.processedTokens) * 100
     : 0;
-  const items = [
+  const items: Array<[string, number]> = [
     ["Fresh input", breakdown.freshInputTokens],
     ["Output", breakdown.outputTokens],
     ["Cache read", breakdown.cacheReadTokens],
     ["Cache write", breakdown.cacheWriteTokens],
-  ] as const;
+  ];
+  // Reasoning is often already inside output; show it as a separate metric,
+  // not as an extra bucket that would inflate processed totals.
+  if ((breakdown.reasoningTokens ?? 0) > 0) {
+    items.push(["Reasoning", breakdown.reasoningTokens ?? 0]);
+  }
   return (
     <div className="usage-token-mix" aria-label="Last 7 days token breakdown">
       <div className="usage-token-mix__header">
@@ -404,7 +409,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     setEnriching(
       cached !== null &&
       !cached.localUsage &&
-      ["codex", "claude"].includes(providerId.toLowerCase()),
+      ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
     );
     setFailed(false);
     if (!providerSupportsChartData(providerId)) {
@@ -425,7 +430,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           chartDataCache.set(cacheKey, d);
           setData(d);
           setEnriching(
-            !d.localUsage && ["codex", "claude"].includes(providerId.toLowerCase()),
+            !d.localUsage && ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
           );
           setLoading(false);
         }
@@ -485,9 +490,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     if (
       !data ||
       data.localUsage ||
-      !["codex", "claude"].includes(providerId.toLowerCase())
+      !["codex", "claude", "grok"].includes(providerId.toLowerCase())
     ) {
-      if (data?.localUsage || !["codex", "claude"].includes(providerId.toLowerCase())) {
+      if (data?.localUsage || !["codex", "claude", "grok"].includes(providerId.toLowerCase())) {
         setEnriching(false);
       }
       return;
