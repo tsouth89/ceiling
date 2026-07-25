@@ -6,7 +6,7 @@ import type {
 
 // Providers whose live snapshots are sampled into local quota history, and/or
 // that have transcript/cost scanners. Grok also has local session logs under
-// ~/.grok/sessions (tokens, cache, effort, projects).
+// ~/.grok/sessions (tokens, cache, effort, projects, API-equivalent $).
 const PROVIDER_CHART_DATA_IDS = new Set([
   "claude",
   "codex",

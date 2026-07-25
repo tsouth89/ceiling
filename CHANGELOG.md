@@ -4,6 +4,9 @@
 
 Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, and flyout alignment. Supersedes draft tags **1.5.7**–**1.5.9** (1.5.9 was tagged off main and cannot be moved).
 
+### Added
+- Price Grok Charts from local session `costUsdTicks` (same API-equivalent Cost as Grok Build `/usage`). Token/cache/effort/project rollups still apply; partial sessions without ticks stay unpriced with coverage disclosure.
+
 ### Fixed
 - Taskbar flyout **On strip** row no longer shifts left of the other providers. The strip seat keeps the brand tint without rewriting margin/padding, so icons and meters share one left edge.
 

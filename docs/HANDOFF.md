@@ -20,8 +20,8 @@ Ceiling is a local-first Windows companion for AI-subscription capacity. First-c
 - Concurrent multi-account for Codex/Claude (and other multi-seat providers): cache and UI keyed by `(provider, account)`, not switch-active-only.
 - Compact taskbar-adjacent floating bar **and** native taskbar strip widget, plus tray/dashboard views.
 - Taskbar strip can pin which account drives a multi-account provider tile; flyout marks that seat **On strip**.
-- Grok: SuperGrok weekly pool meter, plan detection from `~/.grok/auth.json` / cookies, local session token analytics on Charts (cache mix, reasoning/effort, projects).
-- Persistent local quota history and processed-token summaries from local logs (Codex/Claude dollars; Grok tokens; unpriced models stay excluded from $ totals with coverage disclosure).
+- Grok: SuperGrok weekly pool meter, plan detection from `~/.grok/auth.json` / cookies, local session analytics on Charts (tokens, cache mix, reasoning/effort, projects, API-equivalent $ from `costUsdTicks`).
+- Persistent local quota history and processed-token summaries from local logs (Codex/Claude dollars; Grok API-equivalent $ from session ticks when present; unpriced/partial rows stay excluded from $ totals with coverage disclosure).
 - Credential discovery and setup paths for the focused providers.
 - A persistent capacity-event observer keyed by provider, account, source, and semantic window identity (including resets that happened while closed).
 - Startup re-baselining, confirmation for surprising changes, alert de-duplication, and a toast burst circuit breaker.
