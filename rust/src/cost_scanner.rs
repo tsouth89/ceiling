@@ -1,4 +1,7 @@
-//! Local cost-usage scanner for Codex, Claude, and Grok Build
+//! Local cost-usage scanner for Codex, Claude, and Grok Build.
+//!
+//! Grok dollars come from session `costUsdTicks` (API-equivalent), not a
+//! fabricated SuperGrok rate card.
 //!
 //! Scans local JSONL log files to aggregate token usage and calculate costs
 
@@ -1496,22 +1499,32 @@ fn scan_codex_report(
 }
 
 fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecord) {
-    // No public SuperGrok API rate card — keep dollars unset, still track tokens.
+    // Prefer Grok's logged costUsdTicks (API-equivalent $). Partial / bare
+    // fallback rows have no ticks and stay unpriced — never invent a rate.
     if record.partial {
-        // Grok omitted the full usage block; totals may under-count main-agent
-        // work. Keep the model marked unknown so charts never invent a price.
         tracing::trace!(
             model = %record.model,
             project = ?record.project,
             "Grok local usage row is partial (fallback telemetry)"
         );
     }
-    summary.unknown_models.insert(record.model.clone());
+
     summary.input_tokens += record.input;
     summary.output_tokens += record.output;
     summary.cached_tokens += record.cache_read;
     summary.cache_read_tokens += record.cache_read;
     summary.reasoning_tokens += record.reasoning;
+
+    // modelCalls when present; else one call per usage row with tokens so
+    // cost-per-call averages stay defined for older logs.
+    let calls = if record.model_calls > 0 {
+        record.model_calls
+    } else if record.input > 0 || record.output > 0 || record.cache_read > 0 || record.reasoning > 0
+    {
+        1
+    } else {
+        0
+    };
 
     let model_tokens = summary
         .by_model_tokens
@@ -1521,7 +1534,7 @@ fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecor
     model_tokens.output_tokens += record.output;
     model_tokens.cached_tokens += record.cache_read;
     model_tokens.cache_read_tokens += record.cache_read;
-    model_tokens.calls += 1;
+    model_tokens.calls += calls;
 
     let effort = match record
         .effort
@@ -1532,20 +1545,37 @@ fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecor
         Some(effort) => effort.to_ascii_lowercase(),
         None => "unknown".to_string(),
     };
-    let effort_tokens = summary.by_effort_tokens.entry(effort).or_default();
+    let effort_tokens = summary.by_effort_tokens.entry(effort.clone()).or_default();
     effort_tokens.input_tokens += record.input;
     effort_tokens.output_tokens += record.output;
     effort_tokens.cached_tokens += record.cache_read;
     effort_tokens.cache_read_tokens += record.cache_read;
-    effort_tokens.calls += 1;
+    effort_tokens.calls += calls;
 
     let project = project_bucket(record.project.as_deref());
-    let project_tokens = summary.by_project_tokens.entry(project).or_default();
+    let project_tokens = summary
+        .by_project_tokens
+        .entry(project.clone())
+        .or_default();
     project_tokens.input_tokens += record.input;
     project_tokens.output_tokens += record.output;
     project_tokens.cached_tokens += record.cache_read;
     project_tokens.cache_read_tokens += record.cache_read;
-    project_tokens.calls += 1;
+    project_tokens.calls += calls;
+
+    if let Some(cost) = record.cost_usd.filter(|c| *c > 0.0) {
+        summary.total_cost_usd += cost;
+        *summary.by_model.entry(record.model.clone()).or_insert(0.0) += cost;
+        *summary.by_effort.entry(effort).or_insert(0.0) += cost;
+        *summary.by_project.entry(project).or_insert(0.0) += cost;
+        // A later priced row for the same model clears any earlier unpriced flag
+        // so coverage does not treat the whole model as unpriced when ticks exist.
+        summary.unknown_models.remove(&record.model);
+    } else if !summary.by_model.contains_key(&record.model) {
+        // No ticks (or partial fallback): tokens still count toward coverage.
+        // Skip if this model already has logged dollars from another row.
+        summary.unknown_models.insert(record.model.clone());
+    }
 }
 
 fn scan_grok_report(
@@ -2401,8 +2431,9 @@ mod tests {
         let now = Utc::now();
         let ts = now.timestamp() as f64;
         let ms = now.timestamp_millis();
+        // 5_912_850_000 ticks = $0.591285
         let updates = format!(
-            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40}}}}}}}}}}}}"#
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelCalls":17,"costUsdTicks":5912850000,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelCalls":17,"costUsdTicks":5912850000}}}}}}}}}}}}"#
         );
         std::fs::write(session.join("updates.jsonl"), updates).unwrap();
         std::fs::write(
@@ -2436,9 +2467,63 @@ mod tests {
                 .by_model_tokens
                 .contains_key("grok-4.5-build")
         );
-        assert_eq!(report.thirty_days.total_cost_usd, 0.0);
+        assert!(
+            (report.thirty_days.total_cost_usd - 0.591285).abs() < 1e-9,
+            "expected API-equivalent $ from costUsdTicks, got {}",
+            report.thirty_days.total_cost_usd
+        );
+        assert!(
+            !report.thirty_days.unknown_models.contains("grok-4.5-build"),
+            "priced Grok rows must not count as unpriced coverage"
+        );
+        assert!((report.thirty_days.by_model["grok-4.5-build"] - 0.591285).abs() < 1e-9);
+        assert!((report.thirty_days.by_effort["high"] - 0.591285).abs() < 1e-9);
+        assert!((report.thirty_days.by_project["ceiling"] - 0.591285).abs() < 1e-9);
+        assert_eq!(
+            report.thirty_days.by_model_tokens["grok-4.5-build"].calls,
+            17
+        );
         let normalized = report.thirty_days.normalized_tokens("grok");
         assert_eq!(normalized.fresh_input_tokens, 200);
         assert_eq!(normalized.cache_read_tokens, 800);
+
+        // Same GROK_HOME: partial session without ticks must not invent dollars
+        // and must keep those tokens in the unpriced coverage set.
+        let partial = home
+            .path()
+            .join("sessions")
+            .join("proj")
+            .join("019f-partial");
+        std::fs::create_dir_all(&partial).unwrap();
+        let bare = format!(
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s2","_meta":{{"eventId":"bare","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p2","stop_reason":"end_turn"}}}}}}
+{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s2","_meta":{{"eventId":"sa","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"subagent_finished","subagent_id":"c1","tokens_used":50000,"status":"ok"}}}}}}
+"#
+        );
+        std::fs::write(partial.join("updates.jsonl"), bare).unwrap();
+        std::fs::write(
+            partial.join("summary.json"),
+            r#"{"info":{"cwd":"C:\\projects\\personal\\toolport"},"current_model_id":"grok-4.5"}"#,
+        )
+        .unwrap();
+
+        // SAFETY: same test-only GROK_HOME isolation as above.
+        let prev = std::env::var_os("GROK_HOME");
+        unsafe {
+            std::env::set_var("GROK_HOME", home.path());
+        }
+        let mixed = scan_grok_report(&CostScanner::new(7), 7, &[]);
+        match prev {
+            Some(value) => unsafe { std::env::set_var("GROK_HOME", value) },
+            None => unsafe { std::env::remove_var("GROK_HOME") },
+        }
+
+        assert_eq!(mixed.thirty_days.input_tokens, 51_000);
+        // Only the priced turn contributes dollars.
+        assert!((mixed.thirty_days.total_cost_usd - 0.591285).abs() < 1e-9);
+        // Partial model id from summary is unpriced.
+        assert!(mixed.thirty_days.unknown_models.contains("grok-4.5"));
+        // Priced model remains priced / not unknown.
+        assert!(!mixed.thirty_days.unknown_models.contains("grok-4.5-build"));
     }
 }

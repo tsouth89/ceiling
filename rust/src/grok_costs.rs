@@ -1,9 +1,12 @@
 //! Local Grok Build session usage scanner.
 //!
 //! Reads `~/.grok/sessions/<project>/<session-id>/updates.jsonl` turn_completed
-//! records (plus sibling `summary.json` for project + reasoning effort). Grok
-//! does not publish per-token API rates for SuperGrok pool usage, so costs stay
-//! unpriced; token / cache / effort / project rollups still feed charts.
+//! records (plus sibling `summary.json` for project + reasoning effort).
+//!
+//! When present, `usage.costUsdTicks` is Grok's API-equivalent dollar estimate
+//! (same figure `/usage` shows). Scale: USD = ticks / 10^10. SuperGrok weekly
+//! pool % is still a separate subscription meter — these dollars are not cash
+//! billed against the pool. Rows without ticks stay unpriced.
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
@@ -12,6 +15,15 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+
+/// Grok logs store USD cost as integer ticks: `usd = ticks / COST_USD_TICKS_PER_DOLLAR`.
+pub const COST_USD_TICKS_PER_DOLLAR: u64 = 10_000_000_000;
+
+/// Convert Grok `costUsdTicks` to USD. Returns `None` when ticks are zero/absent.
+pub fn cost_usd_from_ticks(ticks: Option<u64>) -> Option<f64> {
+    let ticks = ticks.filter(|t| *t > 0)?;
+    Some(ticks as f64 / COST_USD_TICKS_PER_DOLLAR as f64)
+}
 
 /// One turn-level usage row from a Grok session log.
 #[derive(Debug, Clone)]
@@ -24,6 +36,10 @@ pub struct GrokUsageRecord {
     pub output: u64,
     pub cache_read: u64,
     pub reasoning: u64,
+    /// API-equivalent USD from `costUsdTicks` when the log provides it.
+    pub cost_usd: Option<f64>,
+    /// Provider `modelCalls` for this row (0 when unknown / partial).
+    pub model_calls: u64,
     pub dedup_key: Option<String>,
     /// True when tokens came from a fallback signal (e.g. subagent_finished)
     /// because turn_completed omitted the full usage block.
@@ -285,6 +301,8 @@ pub fn parse_grok_updates_file(
             output: 0,
             cache_read: 0,
             reasoning: 0,
+            cost_usd: None,
+            model_calls: 0,
             dedup_key: dedup,
             partial: true,
         }];
@@ -307,6 +325,8 @@ pub fn parse_grok_updates_file(
             output: 0,
             cache_read: 0,
             reasoning: 0,
+            cost_usd: None,
+            model_calls: 0,
             dedup_key,
             partial: true,
         })
@@ -350,21 +370,55 @@ fn records_from_turn_completed(
     if let Some(model_usage) = usage.model_usage.as_ref()
         && !model_usage.is_empty()
     {
+        let single_model = model_usage.len() == 1;
+        let top_level_cost = cost_usd_from_ticks(usage.cost_usd_ticks);
+        let top_level_calls = usage.model_calls.unwrap_or(0);
         return model_usage
             .iter()
-            .map(|(model, counts)| GrokUsageRecord {
-                timestamp,
-                model: model.clone(),
-                effort: effort.clone(),
-                project: project.clone(),
-                input: counts.input_tokens.unwrap_or(0),
-                output: counts.output_tokens.unwrap_or(0),
-                cache_read: counts.cached_read_tokens.unwrap_or(0),
-                reasoning: counts.reasoning_tokens.unwrap_or(0),
-                dedup_key: dedup_key.as_ref().map(|key| format!("{key}:{model}")),
-                partial: false,
+            .map(|(model, counts)| {
+                // Live logs put ticks on both levels for a single model;
+                // fall back to the top-level total when the model row omits it.
+                let cost_usd = cost_usd_from_ticks(counts.cost_usd_ticks).or(if single_model {
+                    top_level_cost
+                } else {
+                    None
+                });
+                let model_calls = counts
+                    .model_calls
+                    .or(if single_model {
+                        usage.model_calls
+                    } else {
+                        None
+                    })
+                    .unwrap_or(0);
+                GrokUsageRecord {
+                    timestamp,
+                    model: model.clone(),
+                    effort: effort.clone(),
+                    project: project.clone(),
+                    input: counts.input_tokens.unwrap_or(0),
+                    output: counts.output_tokens.unwrap_or(0),
+                    cache_read: counts.cached_read_tokens.unwrap_or(0),
+                    reasoning: counts.reasoning_tokens.unwrap_or(0),
+                    cost_usd,
+                    model_calls: if model_calls > 0 {
+                        model_calls
+                    } else if single_model {
+                        top_level_calls
+                    } else {
+                        0
+                    },
+                    dedup_key: dedup_key.as_ref().map(|key| format!("{key}:{model}")),
+                    partial: false,
+                }
             })
-            .filter(|r| r.input > 0 || r.output > 0 || r.cache_read > 0 || r.reasoning > 0)
+            .filter(|r| {
+                r.input > 0
+                    || r.output > 0
+                    || r.cache_read > 0
+                    || r.reasoning > 0
+                    || r.cost_usd.is_some()
+            })
             .collect();
     }
 
@@ -377,10 +431,17 @@ fn records_from_turn_completed(
         output: usage.output_tokens.unwrap_or(0),
         cache_read: usage.cached_read_tokens.unwrap_or(0),
         reasoning: usage.reasoning_tokens.unwrap_or(0),
+        cost_usd: cost_usd_from_ticks(usage.cost_usd_ticks),
+        model_calls: usage.model_calls.unwrap_or(0),
         dedup_key,
         partial: false,
     };
-    if record.input > 0 || record.output > 0 || record.cache_read > 0 || record.reasoning > 0 {
+    if record.input > 0
+        || record.output > 0
+        || record.cache_read > 0
+        || record.reasoning > 0
+        || record.cost_usd.is_some()
+    {
         vec![record]
     } else {
         Vec::new()
@@ -485,6 +546,11 @@ struct GrokUsageBlock {
     cached_read_tokens: Option<u64>,
     #[serde(default, rename = "reasoningTokens")]
     reasoning_tokens: Option<u64>,
+    /// API-equivalent USD × 10^10 (same units `/usage` displays as Cost).
+    #[serde(default, rename = "costUsdTicks")]
+    cost_usd_ticks: Option<u64>,
+    #[serde(default, rename = "modelCalls")]
+    model_calls: Option<u64>,
     #[serde(default, rename = "modelUsage")]
     model_usage: Option<std::collections::HashMap<String, GrokModelUsageCounts>>,
 }
@@ -499,6 +565,10 @@ struct GrokModelUsageCounts {
     cached_read_tokens: Option<u64>,
     #[serde(default, rename = "reasoningTokens")]
     reasoning_tokens: Option<u64>,
+    #[serde(default, rename = "costUsdTicks")]
+    cost_usd_ticks: Option<u64>,
+    #[serde(default, rename = "modelCalls")]
+    model_calls: Option<u64>,
 }
 
 #[cfg(test)]
@@ -523,8 +593,9 @@ mod tests {
             .unwrap()
             .timestamp() as f64;
         let ms = (ts * 1000.0) as i64;
+        // 591284544000 ticks = $59.1284544 (matches live /usage scale).
         let updates = format!(
-            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"totalTokens":1100,"cachedReadTokens":800,"reasoningTokens":40,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40}}}}}}}}}}}}"#
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"totalTokens":1100,"cachedReadTokens":800,"reasoningTokens":40,"modelCalls":17,"costUsdTicks":5912850000,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelCalls":17,"costUsdTicks":5912850000}}}}}}}}}}}}"#
         );
         let summary = r#"{
           "info": {"id": "s1", "cwd": "C:\\projects\\personal\\ceiling"},
@@ -546,9 +617,21 @@ mod tests {
         assert_eq!(r.output, 100);
         assert_eq!(r.cache_read, 800);
         assert_eq!(r.reasoning, 40);
+        assert_eq!(r.model_calls, 17);
         assert_eq!(r.effort.as_deref(), Some("high"));
         assert_eq!(r.project.as_deref(), Some("ceiling"));
         assert!(!r.partial);
+        let cost = r.cost_usd.expect("costUsdTicks should price the row");
+        assert!((cost - 0.591285).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cost_usd_from_ticks_matches_usage_scale() {
+        // Live toolport session: sum(costUsdTicks) / 1e10 == $59.1285
+        assert_eq!(cost_usd_from_ticks(None), None);
+        assert_eq!(cost_usd_from_ticks(Some(0)), None);
+        let cost = cost_usd_from_ticks(Some(591_285_440_000)).unwrap();
+        assert!((cost - 59.128544).abs() < 1e-9);
     }
 
     #[test]
@@ -563,6 +646,8 @@ mod tests {
             output: 1,
             cache_read: 0,
             reasoning: 0,
+            cost_usd: Some(0.01),
+            model_calls: 1,
             dedup_key: Some("e1:grok-4.5-build".into()),
             partial: false,
         };

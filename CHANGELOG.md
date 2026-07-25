@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Price Grok Charts from local session `costUsdTicks` (same API-equivalent Cost as Grok Build `/usage`), including the Estimated API value card. Token/cache/effort/project rollups still apply; partial sessions without ticks stay unpriced with coverage disclosure.
+
 ## [Ceiling] 1.5.10 - 2026-07-25
 
 Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, and flyout alignment. Supersedes draft tags **1.5.7**–**1.5.9** (1.5.9 was tagged off main and cannot be moved).
