@@ -1,12 +1,20 @@
 # Changelog
 
+## [Ceiling] 1.5.8 - 2026-07-25
+
+Patch after the 1.5.7 draft: strip tile density and flyout chip hierarchy.
+
+### Fixed
+- Native strip detail line is window label only (Weekly / 5h) plus optional reset. Long account names no longer run into the next provider tile; seat identity stays in the flyout (**On strip** + account line).
+- Flyout **On strip** chip is quieter and smaller; banked-resets chip is slightly larger so the hierarchy is clear.
+
 ## [Ceiling] 1.5.7 - 2026-07-25
 
-Patch after 1.5.6: multi-account strip controls, Charts trust, and quota-run efficiency.
+Patch after 1.5.6: multi-account strip controls, Charts trust, and quota-run efficiency. Draft only; use **1.5.8** for installs that include the strip polish.
 
 ### Added
 - Pin which multi-account seat drives each taskbar strip tile (Settings → Taskbar). The strip no longer always picks the hottest account when you care about a specific Codex or Claude seat.
-- Mark the strip account in the taskbar flyout (**On strip**) and list it first within each multi-account provider. The native strip detail line shows a short account tag when a provider has more than one reading.
+- Mark the strip account in the taskbar flyout (**On strip**) and list it first within each multi-account provider.
 - Persist completed quota runs when a reset is confirmed, and show a **Quota run efficiency** card on Charts: tokens per 1% used, cache-read share during that run, projected tokens at 100% (once the run has enough peak), and run-over-run change vs the previous complete run on the same window. Labeled as local observation, not a published allowance.
 
 ### Fixed
