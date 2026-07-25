@@ -70,10 +70,93 @@ fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) 
     !taskbar_strip_provider_ids(settings).is_empty()
 }
 
+/// The rate window that actually constrains a provider right now.
+///
+/// Mirrors `constrainingWindow` in `capacityPresentation.ts` (SOU-288): an
+/// exhausted/maxed lane outranks everything else, then highest used percent,
+/// then soonest reset. The native taskbar is a one-number surface, so showing
+/// a freshly-reset 5h session while weekly is at 100% is actively misleading.
+#[derive(Debug, Clone, Copy)]
+struct ConstrainingReadout<'a> {
+    label: Option<&'a str>,
+    window: &'a crate::commands::RateWindowSnapshot,
+}
+
+fn is_blocking_window(window: &crate::commands::RateWindowSnapshot) -> bool {
+    window.is_exhausted || window.used_percent >= 100.0
+}
+
+fn reset_at_rank(window: &crate::commands::RateWindowSnapshot) -> i64 {
+    window
+        .resets_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(i64::MAX)
+}
+
+/// Whether `candidate` should replace `best` as the constraining window.
+fn outranks_window(
+    candidate: &crate::commands::RateWindowSnapshot,
+    best: &crate::commands::RateWindowSnapshot,
+) -> bool {
+    let candidate_blocking = is_blocking_window(candidate);
+    let best_blocking = is_blocking_window(best);
+    if candidate_blocking != best_blocking {
+        return candidate_blocking;
+    }
+    match candidate
+        .used_percent
+        .total_cmp(&best.used_percent)
+    {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => reset_at_rank(candidate) < reset_at_rank(best),
+    }
+}
+
+fn constraining_readout(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> ConstrainingReadout<'_> {
+    let mut best = ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+    };
+
+    let candidates: Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> = {
+        let mut out = Vec::new();
+        if let Some(window) = snapshot.secondary.as_ref() {
+            out.push((snapshot.secondary_label.as_deref(), window));
+        }
+        if let Some(window) = snapshot.model_specific.as_ref() {
+            out.push((Some("Model"), window));
+        }
+        if let Some(window) = snapshot.tertiary.as_ref() {
+            out.push((Some("Extra"), window));
+        }
+        for extra in &snapshot.extra_rate_windows {
+            if extra.id == "reset-credits" {
+                continue;
+            }
+            out.push((Some(extra.title.as_str()), &extra.window));
+        }
+        out
+    };
+
+    for (label, window) in candidates {
+        if outranks_window(window, best.window) {
+            best = ConstrainingReadout { label, window };
+        }
+    }
+
+    best
+}
+
 /// Pick the reading to show on a one-tile-per-provider strip.
 ///
 /// When `preferred_account_id` is set and that account is in the cache, use it.
-/// Otherwise pick the account closest to its limit (stable across fetch order).
+/// Otherwise pick the account closest to its constraining limit (stable across
+/// fetch order).
 fn select_strip_snapshot<'a, I>(
     cache: I,
     provider_id: &str,
@@ -99,9 +182,10 @@ where
         return Some(*hit);
     }
     candidates.into_iter().max_by(|a, b| {
-        a.primary
+        constraining_readout(a)
+            .window
             .used_percent
-            .total_cmp(&b.primary.used_percent)
+            .total_cmp(&constraining_readout(b).window.used_percent)
             .then_with(|| b.account_id.cmp(&a.account_id))
     })
 }
@@ -592,17 +676,20 @@ mod windows_host {
                     &provider_id,
                     preferred,
                 );
-                let percent =
-                    snapshot
-                        .filter(|snapshot| snapshot.error.is_none())
-                        .map(|snapshot| {
-                            let value = if settings.show_as_used {
-                                snapshot.primary.used_percent
-                            } else {
-                                snapshot.primary.remaining_percent
-                            };
-                            value.clamp(0.0, 100.0).round() as u8
-                        });
+                // One-number strip: surface the constraining window, not always
+                // the primary session. Claude weekly at 100% with a fresh 5h
+                // session must read as Weekly / 100%, not 5h / 0%.
+                let constraining = snapshot
+                    .filter(|snapshot| snapshot.error.is_none())
+                    .map(super::constraining_readout);
+                let percent = constraining.map(|readout| {
+                    let value = if settings.show_as_used {
+                        readout.window.used_percent
+                    } else {
+                        readout.window.remaining_percent
+                    };
+                    value.clamp(0.0, 100.0).round() as u8
+                });
                 ProviderReadout {
                     provider_id,
                     percent,
@@ -610,16 +697,22 @@ mod windows_host {
                     // the flyout (On strip + account line); long tags collide
                     // with the next tile on the compact strip.
                     window_label: compact_window_label(
-                        snapshot.and_then(|snapshot| snapshot.primary_label.as_deref()),
-                        snapshot.and_then(|snapshot| snapshot.primary.window_minutes),
+                        constraining.and_then(|readout| readout.label).or_else(|| {
+                            snapshot.and_then(|snapshot| snapshot.primary_label.as_deref())
+                        }),
+                        constraining
+                            .map(|readout| readout.window.window_minutes)
+                            .unwrap_or_else(|| {
+                                snapshot.and_then(|snapshot| snapshot.primary.window_minutes)
+                            }),
                     ),
                     reset: settings
                         .float_bar_show_reset_inline
                         .then(|| {
-                            snapshot.and_then(|snapshot| {
+                            constraining.and_then(|readout| {
                                 crate::tray_bridge::tooltip_short_reset(
-                                    snapshot.primary.resets_at.as_deref(),
-                                    snapshot.primary.reset_description.as_deref(),
+                                    readout.window.resets_at.as_deref(),
+                                    readout.window.reset_description.as_deref(),
                                 )
                             })
                         })
@@ -1905,6 +1998,21 @@ mod tests {
         assert_eq!(placement.width, 312);
     }
 
+    fn rate_window(used: f64, minutes: Option<u32>) -> crate::commands::RateWindowSnapshot {
+        crate::commands::RateWindowSnapshot {
+            used_percent: used,
+            remaining_percent: 100.0 - used,
+            window_minutes: minutes,
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: used >= 100.0,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+        }
+    }
+
     fn snap(
         provider_id: &str,
         account_id: Option<&str>,
@@ -1913,18 +2021,7 @@ mod tests {
         crate::commands::ProviderUsageSnapshot {
             provider_id: provider_id.into(),
             display_name: provider_id.into(),
-            primary: crate::commands::RateWindowSnapshot {
-                used_percent: used,
-                remaining_percent: 100.0 - used,
-                window_minutes: Some(300),
-                resets_at: None,
-                reset_description: None,
-                is_exhausted: false,
-                reserve_percent: None,
-                reserve_description: None,
-                reserve_will_last_to_reset: false,
-                reserve_eta_seconds: None,
-            },
+            primary: rate_window(used, Some(300)),
             primary_label: Some("Session".into()),
             secondary: None,
             secondary_label: None,
@@ -1979,5 +2076,48 @@ mod tests {
         ];
         let picked = select_strip_snapshot(cache.iter(), "codex", Some("gone")).unwrap();
         assert_eq!(picked.account_id.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn constraining_readout_surfaces_hot_weekly_over_fresh_session() {
+        // SOU-288 / taskbar: Claude session at 0% used must not hide a maxed weekly.
+        let mut snapshot = snap("claude", None, 0.0);
+        snapshot.primary_label = Some("Session (5h)".into());
+        snapshot.secondary = Some(rate_window(100.0, Some(10_080)));
+        snapshot.secondary_label = Some("Weekly".into());
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Weekly"));
+        assert_eq!(readout.window.used_percent, 100.0);
+        assert_eq!(readout.window.window_minutes, Some(10_080));
+    }
+
+    #[test]
+    fn constraining_readout_keeps_session_when_it_is_hotter() {
+        let mut snapshot = snap("claude", None, 92.0);
+        snapshot.primary_label = Some("Session (5h)".into());
+        snapshot.secondary = Some(rate_window(40.0, Some(10_080)));
+        snapshot.secondary_label = Some("Weekly".into());
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Session (5h)"));
+        assert_eq!(readout.window.used_percent, 92.0);
+    }
+
+    #[test]
+    fn strip_snapshot_ranks_accounts_by_constraining_window() {
+        // Account A: calm primary, maxed weekly. Account B: busy primary, calm weekly.
+        // Strip should pick A because weekly is the real constraint.
+        let mut calm_session = snap("claude", Some("a"), 5.0);
+        calm_session.secondary = Some(rate_window(100.0, Some(10_080)));
+        calm_session.secondary_label = Some("Weekly".into());
+
+        let mut busy_session = snap("claude", Some("b"), 70.0);
+        busy_session.secondary = Some(rate_window(20.0, Some(10_080)));
+        busy_session.secondary_label = Some("Weekly".into());
+
+        let cache = [calm_session, busy_session];
+        let picked = select_strip_snapshot(cache.iter(), "claude", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("a"));
     }
 }
