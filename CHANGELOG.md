@@ -1,8 +1,21 @@
 # Changelog
 
+## [Ceiling] 1.5.7 - 2026-07-25
+
+Patch after 1.5.6: multi-account strip controls, Charts trust, and quota-run efficiency.
+
+### Added
+- Pin which multi-account seat drives each taskbar strip tile (Settings → Taskbar). The strip no longer always picks the hottest account when you care about a specific Codex or Claude seat.
+- Mark the strip account in the taskbar flyout (**On strip**) and list it first within each multi-account provider. The native strip detail line shows a short account tag when a provider has more than one reading.
+- Persist completed quota runs when a reset is confirmed, and show a **Quota run efficiency** card on Charts: tokens per 1% used, cache-read share during that run, projected tokens at 100% (once the run has enough peak), and run-over-run change vs the previous complete run on the same window. Labeled as local observation, not a published allowance.
+
+### Fixed
+- Include multi-project and partial Grok local session usage on Charts so toolport/multi-cwd work is not missing from project rollups.
+- Show **N% of tokens priced** on reset-window and calendar period cards when unpriced models shrink the dollar total, matching the Estimated API value card. Fully priced windows stay quiet.
+
 ## [Ceiling] 1.5.6 - 2026-07-24
 
-Signed draft of Grok charts polish since 1.5.5. Latest published remains 1.5.2 until this draft is published.
+Signed release of Grok charts polish since 1.5.5.
 
 ### Added
 - Scan local Grok Build sessions under `~/.grok/sessions` for Charts: tokens over time, cache vs fresh input, reasoning tokens, reasoning-effort tiers, and project rollups (unpriced SuperGrok pool usage; no fabricated API dollars).
