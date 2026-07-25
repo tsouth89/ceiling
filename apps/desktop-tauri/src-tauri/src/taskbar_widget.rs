@@ -105,10 +105,7 @@ fn outranks_window(
     if candidate_blocking != best_blocking {
         return candidate_blocking;
     }
-    match candidate
-        .used_percent
-        .total_cmp(&best.used_percent)
-    {
+    match candidate.used_percent.total_cmp(&best.used_percent) {
         std::cmp::Ordering::Greater => true,
         std::cmp::Ordering::Less => false,
         std::cmp::Ordering::Equal => reset_at_rank(candidate) < reset_at_rank(best),
