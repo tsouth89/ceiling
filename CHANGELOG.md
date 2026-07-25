@@ -1,8 +1,15 @@
 # Changelog
 
+## [Ceiling] 1.5.9 - 2026-07-25
+
+Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, and flyout alignment. Supersedes draft tags **1.5.7** and **1.5.8**.
+
+### Fixed
+- Taskbar flyout **On strip** row no longer shifts left of the other providers. The strip seat keeps the brand tint without rewriting margin/padding, so icons and meters share one left edge.
+
 ## [Ceiling] 1.5.8 - 2026-07-25
 
-Patch after the 1.5.7 draft: strip tile density and flyout chip hierarchy.
+Draft-only tag; use **1.5.9** for installs. Strip tile density and flyout chip hierarchy (included in 1.5.9).
 
 ### Fixed
 - Native strip detail line is window label only (Weekly / 5h) plus optional reset. Long account names no longer run into the next provider tile; seat identity stays in the flyout (**On strip** + account line).
@@ -10,7 +17,7 @@ Patch after the 1.5.7 draft: strip tile density and flyout chip hierarchy.
 
 ## [Ceiling] 1.5.7 - 2026-07-25
 
-Patch after 1.5.6: multi-account strip controls, Charts trust, and quota-run efficiency. Draft only; use **1.5.8** for installs that include the strip polish.
+Draft-only tag; use **1.5.9** for installs. Multi-account strip controls, Charts trust, and quota-run efficiency (included in 1.5.9).
 
 ### Added
 - Pin which multi-account seat drives each taskbar strip tile (Settings → Taskbar). The strip no longer always picks the hottest account when you care about a specific Codex or Claude seat.
