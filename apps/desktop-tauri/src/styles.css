@@ -7883,6 +7883,89 @@ body:has(.dashboard-shell) #root {
   font-size: 10.5px;
   flex-wrap: wrap;
 }
+/* SOU-299: tokens per 1% and run-over-run efficiency for completed quota runs. */
+.quota-efficiency {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 80%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.quota-efficiency__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+.quota-efficiency__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.quota-efficiency__subtitle {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+.quota-efficiency__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.quota-efficiency__row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.quota-efficiency__badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  border: 1px solid color-mix(in srgb, var(--text-secondary) 35%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.quota-efficiency__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.quota-efficiency__metrics span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.quota-efficiency__metrics small {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+.quota-efficiency__metrics strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.quota-efficiency__metrics strong[data-delta="down"] {
+  color: color-mix(in srgb, var(--usage-bar-high) 85%, white);
+}
+.quota-efficiency__metrics strong[data-delta="up"] {
+  color: color-mix(in srgb, var(--ceiling-cyan) 80%, white);
+}
+.quota-efficiency__note {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
 /* A caveat, not decoration: the totals beside it are not account-scoped. */
 .usage-periods__note--warn {
   margin: 8px 0 0;

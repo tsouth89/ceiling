@@ -786,6 +786,44 @@ export interface LocalTokenBreakdown {
   reasoningTokens?: number;
 }
 
+/** Completed rate-window run (SOU-298). */
+export interface QuotaRunSnapshot {
+  id: string;
+  providerId: string;
+  displayName: string;
+  accountId?: string | null;
+  accountEmail?: string | null;
+  windowId: string;
+  windowLabel: string;
+  startedAt: string;
+  endedAt: string;
+  peakUsedPercent: number;
+  endUsedPercent: number;
+  afterResetUsedPercent?: number | null;
+  resetKind: "scheduled" | "surprise" | "partial" | "observedDrop";
+  windowMinutes?: number | null;
+  observedDurationSeconds: number;
+  complete: boolean;
+  whileAway?: boolean;
+  interrupted?: boolean;
+  processedTokens?: number | null;
+  freshInputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+}
+
+/** Efficiency card derived from a run (SOU-299). */
+export interface QuotaRunEfficiency {
+  run: QuotaRunSnapshot;
+  tokensPerPercent?: number | null;
+  cacheReadPercent?: number | null;
+  projectedTokensAt100?: number | null;
+  vsPreviousTokensPerPercent?: number | null;
+  previousRunId?: string | null;
+  note: string;
+}
+
 export interface ProviderChartData {
   providerId: string;
   costHistory: DailyCostPoint[];

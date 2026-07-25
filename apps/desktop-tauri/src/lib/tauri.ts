@@ -285,6 +285,17 @@ export function exportCostCsv(providerId: string): Promise<string> {
   return invoke<string>("export_cost_csv", { providerId });
 }
 
+/** Latest quota-run efficiency cards per window (SOU-299). */
+export function getQuotaRunEfficiency(
+  providerId: string,
+  accountEmail?: string | null,
+): Promise<import("../types/bridge").QuotaRunEfficiency[]> {
+  return invoke("get_quota_run_efficiency", {
+    providerId,
+    accountEmail: accountEmail ?? null,
+  });
+}
+
 // ── Token account bridge ─────────────────────────────────────────────
 
 export function getDirectoryAccounts(): Promise<ProviderAccountsBridge[]> {
