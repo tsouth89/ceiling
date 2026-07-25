@@ -1,24 +1,27 @@
 # Changelog
 
-## Unreleased
+## [Ceiling] 1.5.11 - 2026-07-25
+
+Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, flyout alignment, constraining-window taskbar meters, and Grok API-equivalent dollar charts. Supersedes draft tags **1.5.7**–**1.5.10**.
 
 ### Added
 - Price Grok Charts from local session `costUsdTicks` (same API-equivalent Cost as Grok Build `/usage`), including the Estimated API value card. Token/cache/effort/project rollups still apply; partial sessions without ticks stay unpriced with coverage disclosure.
 
+### Fixed
+- Native taskbar tiles use the constraining usage window (session vs weekly) instead of always showing the primary window, so a maxed weekly pool no longer reads as a free 5h bar.
+- Taskbar flyout **On strip** row no longer shifts left of the other providers. The strip seat keeps the brand tint without rewriting margin/padding, so icons and meters share one left edge.
+
 ## [Ceiling] 1.5.10 - 2026-07-25
 
-Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, and flyout alignment. Supersedes draft tags **1.5.7**–**1.5.9** (1.5.9 was tagged off main and cannot be moved).
-
-### Fixed
-- Taskbar flyout **On strip** row no longer shifts left of the other providers. The strip seat keeps the brand tint without rewriting margin/padding, so icons and meters share one left edge.
+Draft-only tag; use **1.5.11** for installs. On-strip flyout alignment (included in 1.5.11).
 
 ## [Ceiling] 1.5.9 - 2026-07-25
 
-Tag exists but does not satisfy release validation (not on protected main). Use **1.5.10** for installs.
+Tag exists but does not satisfy release validation (not on protected main). Use **1.5.11** for installs.
 
 ## [Ceiling] 1.5.8 - 2026-07-25
 
-Draft-only tag; use **1.5.10** for installs. Strip tile density and flyout chip hierarchy (included in 1.5.10).
+Draft-only tag; use **1.5.11** for installs. Strip tile density and flyout chip hierarchy (included in 1.5.11).
 
 ### Fixed
 - Native strip detail line is window label only (Weekly / 5h) plus optional reset. Long account names no longer run into the next provider tile; seat identity stays in the flyout (**On strip** + account line).
@@ -26,7 +29,7 @@ Draft-only tag; use **1.5.10** for installs. Strip tile density and flyout chip 
 
 ## [Ceiling] 1.5.7 - 2026-07-25
 
-Draft-only tag; use **1.5.10** for installs. Multi-account strip controls, Charts trust, and quota-run efficiency (included in 1.5.10).
+Draft-only tag; use **1.5.11** for installs. Multi-account strip controls, Charts trust, and quota-run efficiency (included in 1.5.11).
 
 ### Added
 - Pin which multi-account seat drives each taskbar strip tile (Settings → Taskbar). The strip no longer always picks the hottest account when you care about a specific Codex or Claude seat.
