@@ -1980,5 +1980,4 @@ mod tests {
         let picked = select_strip_snapshot(cache.iter(), "codex", Some("gone")).unwrap();
         assert_eq!(picked.account_id.as_deref(), Some("work"));
     }
-
 }
