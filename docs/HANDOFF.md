@@ -6,7 +6,7 @@ Use this as the implementation starting point. When it disagrees with the app, t
 
 - Repository: `C:\projects\personal\ceiling`
 - Trunk: protected `main`; create short-lived feature branches for new work. PRs squash-merge.
-- Public release: [Ceiling 1.5.6](https://github.com/tsouth89/ceiling/releases/tag/v1.5.6). Package / next draft: **1.5.9** (everything since 1.5.6: multi-account strip pin, Charts trust/efficiency, strip polish, on-strip flyout alignment).
+- Public release: [Ceiling 1.5.6](https://github.com/tsouth89/ceiling/releases/tag/v1.5.6). Package / next draft: **1.5.10** (everything since 1.5.6: multi-account strip pin, Charts trust/efficiency, strip polish, on-strip flyout alignment).
 - Website: [ceiling.win](https://ceiling.win).
 - Tracker: [Ceiling in Linear](https://linear.app/southforge-ai/project/ceiling-6615aa2c9e6b).
 
