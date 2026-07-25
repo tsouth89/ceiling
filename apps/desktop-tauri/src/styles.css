@@ -1359,18 +1359,19 @@ body:has(.taskbar-flyout-frame) #root {
   white-space: nowrap;
 }
 
+/* Secondary to banked-resets: identity cue only, keep it quieter and smaller. */
 .taskbar-flyout__on-strip {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--provider-brand, #6ea8fe) 90%, white);
-  background: color-mix(in srgb, var(--provider-brand, #6ea8fe) 24%, transparent);
-  border: 1px solid color-mix(in srgb, var(--provider-brand, #6ea8fe) 42%, transparent);
+  color: color-mix(in srgb, var(--provider-brand, #6ea8fe) 78%, white);
+  background: color-mix(in srgb, var(--provider-brand, #6ea8fe) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--provider-brand, #6ea8fe) 30%, transparent);
   border-radius: 999px;
-  padding: 1px 7px;
-  line-height: 1.4;
+  padding: 0 5px;
+  line-height: 1.35;
 }
 
 .taskbar-flyout__provider--on-strip {
@@ -1386,16 +1387,17 @@ body:has(.taskbar-flyout-frame) #root {
   font-weight: 600;
 }
 
+/* Primary action cue: slightly larger than the On strip marker. */
 .taskbar-flyout__reset-credit {
   flex-shrink: 0;
-  padding: 2px 7px;
-  border: 1px solid rgba(128, 221, 255, 0.25);
+  padding: 2px 8px;
+  border: 1px solid rgba(128, 221, 255, 0.28);
   border-radius: 999px;
-  background: rgba(91, 201, 238, 0.1);
-  color: rgba(224, 247, 255, 0.9);
-  font-size: 10px;
+  background: rgba(91, 201, 238, 0.12);
+  color: rgba(224, 247, 255, 0.94);
+  font-size: 11px;
   font-weight: 600;
-  line-height: 14px;
+  line-height: 15px;
 }
 
 /* No banked resets: keep the indicator visible but quiet — nothing to act on. */
