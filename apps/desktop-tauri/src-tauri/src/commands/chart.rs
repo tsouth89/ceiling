@@ -587,7 +587,8 @@ fn persist_chart_cache(cache: &PersistedChartCache) {
 
 /// Providers that expose token-derived local usage for the aggregate card.
 /// Inclusion is by capability, not by merely having some other dollar balance.
-const API_VALUE_PROVIDERS: [&str; 2] = ["codex", "claude"];
+// Grok dollars come from session costUsdTicks (API-equivalent), same as provider Charts.
+const API_VALUE_PROVIDERS: [&str; 3] = ["codex", "claude", "grok"];
 
 /// Priced vs total model-token counts for pricing-coverage disclosure.
 ///

@@ -1568,8 +1568,12 @@ fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecor
         *summary.by_model.entry(record.model.clone()).or_insert(0.0) += cost;
         *summary.by_effort.entry(effort).or_insert(0.0) += cost;
         *summary.by_project.entry(project).or_insert(0.0) += cost;
-    } else {
+        // A later priced row for the same model clears any earlier unpriced flag
+        // so coverage does not treat the whole model as unpriced when ticks exist.
+        summary.unknown_models.remove(&record.model);
+    } else if !summary.by_model.contains_key(&record.model) {
         // No ticks (or partial fallback): tokens still count toward coverage.
+        // Skip if this model already has logged dollars from another row.
         summary.unknown_models.insert(record.model.clone());
     }
 }

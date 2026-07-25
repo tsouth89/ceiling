@@ -376,10 +376,12 @@ fn records_from_turn_completed(
         return model_usage
             .iter()
             .map(|(model, counts)| {
-                let cost_usd = cost_usd_from_ticks(counts.cost_usd_ticks).or_else(|| {
-                    // Live logs put ticks on both levels for a single model;
-                    // fall back to the top-level total when the model row omits it.
-                    if single_model { top_level_cost } else { None }
+                // Live logs put ticks on both levels for a single model;
+                // fall back to the top-level total when the model row omits it.
+                let cost_usd = cost_usd_from_ticks(counts.cost_usd_ticks).or(if single_model {
+                    top_level_cost
+                } else {
+                    None
                 });
                 let model_calls = counts
                     .model_calls

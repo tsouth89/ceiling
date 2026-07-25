@@ -610,7 +610,7 @@ DataSourceCodex = Uses the OAuth token from your Codex CLI (~/.codex) plus local
 DataSourceCursor = Uses your signed-in Cursor IDE session, or cursor.com cookies you provide. Talks only to cursor.com.
 DataSourceCopilot = Uses your GitHub CLI or Git Credential Manager token, or a device-flow sign-in. Talks only to api.github.com, or your configured GitHub Enterprise host.
 DataSourceGemini = Reads the OAuth token from the Gemini CLI (~/.gemini). Talks only to Google's Code Assist and OAuth endpoints.
-DataSourceGrok = Uses ~/.grok/auth.json from `grok login` (Grok Build / SuperGrok), or grok.com browser cookies you provide. Talks only to grok.com and auth.x.ai. Weekly pool percent is sampled into local charts. Local Grok Build sessions under ~/.grok/sessions supply token, cache, reasoning, project, and API-equivalent dollar breakdowns (from session costUsdTicks — not SuperGrok pool billing).
+DataSourceGrok = Uses ~/.grok/auth.json from `grok login` (Grok Build / SuperGrok), or grok.com browser cookies you provide. Talks only to grok.com and auth.x.ai. Weekly pool percent is sampled into local charts. Local Grok Build sessions under ~/.grok/sessions supply token, cache, reasoning, project, and API-equivalent dollar breakdowns (from session costUsdTicks, not SuperGrok pool billing).
 DataSourceGeneric = Reads this provider's usage from a local session or token on this PC, or by calling the provider's own usage endpoint. Your credentials are stored only on this PC and are never sent to Ceiling-operated servers; usage requests go only to that provider (or, for Wayfinder, your configured gateway).
 
 # First-run checklist (SOU-157)
