@@ -1,3 +1,4 @@
+import { constrainingWindow } from "./capacityPresentation";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 
 /**
@@ -97,16 +98,48 @@ export function representativeForProvider<
 }
 
 /**
+ * How hot an account reads on a one-tile-per-provider strip.
+ *
+ * The strip shows the *constraining* window, so ranking accounts by their
+ * primary window disagreed with it: a Claude seat whose 5h session is fresh but
+ * whose weekly is maxed ranks last on primary and first on the strip. That is
+ * what made the flyout badge "On strip" the wrong account while the tile showed
+ * the right one.
+ *
+ * Mirrors `select_strip_snapshot` in `taskbar_widget.rs`.
+ */
+function stripHeat(provider: Pick<ProviderUsageSnapshot, "primary">): number {
+  if (!provider.primary) return -1;
+  return constrainingWindow(provider as ProviderUsageSnapshot).window.usedPercent;
+}
+
+/**
+ * Account-id order, matching Rust's `String: Ord` so the strip tie-break lands
+ * on the same seat as the native one.
+ *
+ * Deliberately not `localeCompare`: collation sorts "a" before "B" where a byte
+ * comparison does the reverse, so a mixed-case id could tie-break one way in
+ * the flyout and the other way on the tile.
+ */
+export function compareAccountIds(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const left = a ?? "";
+  const right = b ?? "";
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/**
  * Which account the compact taskbar/float strip should show for a provider.
  *
  * Matches the native strip: an explicit pin wins when that account is present,
- * otherwise the hottest primary window (stable account-id tiebreak).
+ * otherwise the account closest to its constraining limit. Ties resolve on the
+ * lowest account id so the choice is stable between refreshes rather than
+ * flickering with fetch order.
  */
-export function selectStripAccount<
-  T extends Pick<ProviderUsageSnapshot, "accountId"> & {
-    primary?: { usedPercent: number } | null;
-  },
->(
+export function selectStripAccount<T extends ProviderUsageSnapshot>(
   candidates: T[],
   preferredAccountId?: string | null,
 ): T | undefined {
@@ -117,10 +150,9 @@ export function selectStripAccount<
     if (hit) return hit;
   }
   return [...candidates].sort((a, b) => {
-    const delta =
-      (b.primary?.usedPercent ?? -1) - (a.primary?.usedPercent ?? -1);
+    const delta = stripHeat(b) - stripHeat(a);
     if (delta !== 0) return delta;
-    return (b.accountId ?? "").localeCompare(a.accountId ?? "");
+    return compareAccountIds(a.accountId, b.accountId);
   })[0];
 }
 
@@ -128,11 +160,7 @@ export function selectStripAccount<
  * Flyout list order: strip providers in strip order, and within each multi-
  * account provider put the strip account first so it matches the tile.
  */
-export function orderFlyoutProviders<
-  T extends Pick<ProviderUsageSnapshot, "providerId" | "accountId"> & {
-    primary?: { usedPercent: number } | null;
-  },
->(
+export function orderFlyoutProviders<T extends ProviderUsageSnapshot>(
   providers: T[],
   stripProviderIds: string[],
   pinnedAccounts: Record<string, string>,
@@ -164,10 +192,9 @@ export function orderFlyoutProviders<
     const rest = group
       .filter((row) => providerRowKey(row) !== providerRowKey(strip))
       .sort((a, b) => {
-        const delta =
-          (b.primary?.usedPercent ?? -1) - (a.primary?.usedPercent ?? -1);
+        const delta = stripHeat(b) - stripHeat(a);
         if (delta !== 0) return delta;
-        return (a.accountId ?? "").localeCompare(b.accountId ?? "");
+        return compareAccountIds(a.accountId, b.accountId);
       });
     result.push(...rest);
   }

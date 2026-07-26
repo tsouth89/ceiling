@@ -58,6 +58,10 @@ struct OAuthData {
     scopes: Option<Vec<String>>,
     #[serde(rename = "rateLimitTier")]
     rate_limit_tier: Option<String>,
+    /// "pro" / "max" / "free". The only signal that separates a Pro seat from a
+    /// Free one, since both report the same `rateLimitTier`.
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
 }
 
 fn refreshed_cache() -> &'static Mutex<HashMap<CredentialSource, ClaudeOAuthCredentials>> {
@@ -155,6 +159,7 @@ fn load_from_environment() -> Option<ClaudeOAuthCredentials> {
         expires_at: None, // Environment tokens don't expire
         scopes,
         rate_limit_tier: None,
+        subscription_type: None,
     })
 }
 
@@ -304,6 +309,7 @@ fn credentials_from_oauth_data(oauth: OAuthData) -> Result<ClaudeOAuthCredential
         expires_at,
         scopes: oauth.scopes.unwrap_or_default(),
         rate_limit_tier: oauth.rate_limit_tier,
+        subscription_type: oauth.subscription_type,
     })
 }
 
@@ -633,6 +639,25 @@ mod tests {
     }
 
     #[test]
+    fn reads_subscription_type_from_claude_code_credentials() {
+        // A Pro seat shares `default_claude_ai` with Free, so `subscriptionType`
+        // is the only thing that says which plan it is.
+        let credentials = parse_credentials_json(
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "scopes": ["user:profile"],
+                    "rateLimitTier": "default_claude_ai",
+                    "subscriptionType": "pro"
+                }
+            }"#,
+        )
+        .expect("Claude Code credential payload should parse");
+
+        assert_eq!(credentials.subscription_type.as_deref(), Some("pro"));
+    }
+
+    #[test]
     fn parses_direct_oauth_credentials_payload() {
         let credentials = parse_credentials_json(
             r#"{
@@ -687,6 +712,7 @@ mod tests {
             expires_at: chrono::DateTime::from_timestamp(2_000, 0),
             scopes: vec!["user:profile".to_string(), "user:inference".to_string()],
             rate_limit_tier: None,
+            subscription_type: None,
         };
 
         apply_refresh_to_credentials_json(&mut root, &creds).unwrap();
@@ -725,6 +751,7 @@ mod tests {
             expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
             scopes: vec!["user:profile".to_string()],
             rate_limit_tier: None,
+            subscription_type: None,
         };
         store_refreshed(&file_source, &file_cached_creds);
 
@@ -734,6 +761,7 @@ mod tests {
             expires_at: None,
             scopes: vec!["user:profile".to_string()],
             rate_limit_tier: None,
+            subscription_type: None,
         };
 
         // Looking up under the Environment source must not see the File
@@ -752,6 +780,7 @@ mod tests {
             expires_at: None,
             scopes: vec!["user:profile".to_string()],
             rate_limit_tier: None,
+            subscription_type: None,
         };
         let same_source_result = cached_refreshed_if_fresher(&file_source, &file_disk_creds);
         assert_eq!(
