@@ -496,6 +496,41 @@ describe("FloatBar", () => {
     });
   });
 
+  it("hides enabled providers that have never successfully authenticated", async () => {
+    // Repro: enable Antigravity without the IDE/CLI installed. The refresh
+    // lands an error placeholder whose session_label is "Claude", which used
+    // to mint a blank "—" / Claude pill on the strip.
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 36),
+      {
+        ...snapshot("antigravity", "Antigravity", 0, {
+          error:
+            "Provider not installed: Antigravity language server not running.",
+        }),
+        primaryLabel: "Claude",
+      },
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["codex", "antigravity"] }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["codex", "antigravity"] }),
+    );
+
+    await waitFor(() => {
+      const pills = [...container.querySelectorAll(".floatbar__pill")];
+      expect(pills).toHaveLength(1);
+      expect(pills[0].getAttribute("title")).toMatch(/Codex/);
+      expect(pills.some((p) => (p.getAttribute("title") ?? "").includes("Claude"))).toBe(
+        false,
+      );
+      expect(
+        pills.some((p) => (p.getAttribute("title") ?? "").includes("Antigravity")),
+      ).toBe(false);
+    });
+  });
+
   it("shows an empty state when no providers match", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());

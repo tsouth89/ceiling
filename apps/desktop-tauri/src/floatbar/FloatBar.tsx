@@ -87,6 +87,26 @@ function providerKey(provider: ProviderUsageSnapshot): string {
 }
 
 /**
+ * Whether a reading belongs on the always-visible capacity strip.
+ *
+ * Enabling a provider in Settings does not mean it has capacity yet. Until the
+ * first successful fetch, the cache holds an error placeholder (CLI missing,
+ * language server not running, sign-in needed). Those belong on Overview and
+ * Settings so the user can finish setup — not as a "—" pill that steals space
+ * and, for providers whose session window is named after a model family
+ * (Antigravity's primary label is "Claude"), mislabels the seat entirely.
+ *
+ * Matches widget-snapshot / tray policy: only error-free readings are
+ * capacity-ready.
+ */
+export function isFloatBarEligible(
+  provider: Pick<ProviderUsageSnapshot, "error">,
+): boolean {
+  const error = provider.error?.trim();
+  return error == null || error.length === 0;
+}
+
+/**
  * Cursor exposes a total plan meter alongside Auto/API lanes. The compact
  * strip should headline that account-wide total; the tray detail remains the
  * place to compare the individual lanes.
@@ -512,7 +532,12 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const pinnedAccounts = settings.taskbarAccountByProvider ?? {};
   const visible = useMemo(() => {
     const enabled = new Set(settings.enabledProviders);
-    const eligible = providers.filter((p) => enabled.has(p.providerId));
+    // Enabled alone is not enough: skip not-yet-ready error placeholders so
+    // turning on Antigravity without the app installed does not mint a blank
+    // "Claude" pill on the taskbar.
+    const eligible = providers.filter(
+      (p) => enabled.has(p.providerId) && isFloatBarEligible(p),
+    );
     // One pill per provider: pin wins, else hottest account.
     const byProvider = new Map<string, typeof eligible>();
     for (const row of eligible) {

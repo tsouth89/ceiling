@@ -335,8 +335,12 @@ impl ProviderUsageSnapshot {
         }
     }
 
-    pub(super) fn from_error(id: ProviderId, metadata: &ProviderMetadata, error: String) -> Self {
+    pub(super) fn from_error(id: ProviderId, _metadata: &ProviderMetadata, error: String) -> Self {
         let error = friendly_provider_error(id, &error);
+        // Deliberately no primary_label: session_label names a usage *window*
+        // (Antigravity's is "Claude"), not the provider. On a failed fetch
+        // there is no window to label, and leaking "Claude" onto an
+        // Antigravity error pill misidentified the seat on the taskbar.
         Self {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
@@ -352,7 +356,7 @@ impl ProviderUsageSnapshot {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             },
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: None,
             secondary: None,
             secondary_label: None,
             model_specific: None,
