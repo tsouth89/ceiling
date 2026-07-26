@@ -2277,6 +2277,80 @@ mod tests {
     }
 
     #[test]
+    fn codex_report_applies_cost_speed_to_reset_windows() {
+        // Weekly/reset windows must use the same speed tier as calendar totals.
+        // A post-pass that only multiplies today/7d/30d left Weekly at standard
+        // while the API-value ring (fresh scan) showed priority/fast 2x.
+        let tmp = tempfile::tempdir().unwrap();
+        let event_at = Utc::now() - Duration::minutes(10);
+        let local_day = event_at.with_timezone(&Local).date_naive();
+        let day_dir = tmp
+            .path()
+            .join("sessions")
+            .join(local_day.format("%Y").to_string())
+            .join(local_day.format("%m").to_string())
+            .join(local_day.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let ts = event_at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let line = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5.6-sol","total_token_usage":{{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":100}}}}}}}}"#
+        );
+        std::fs::write(
+            day_dir.join(format!(
+                "rollout-{}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl",
+                local_day.format("%Y-%m-%d")
+            )),
+            line,
+        )
+        .unwrap();
+
+        let _guard = codex_home_lock().lock().expect("codex home lock");
+        let previous = std::env::var("CODEX_HOME").ok();
+        // SAFETY: serialized by `codex_home_lock`, and restored below.
+        unsafe { std::env::set_var("CODEX_HOME", tmp.path()) };
+
+        let starts_at = Utc::now() - Duration::hours(1);
+        let ends_at = Utc::now() + Duration::hours(1);
+        let windows = [CurrentUsageWindow {
+            id: "primary".into(),
+            starts_at,
+            ends_at,
+        }];
+
+        let standard = CostScanner::with_codex_speed(2, Some("standard"));
+        let fast = CostScanner::with_codex_speed(2, Some("fast"));
+        let std_report = scan_codex_report(&standard, 2, &windows);
+        let fast_report = scan_codex_report(&fast, 2, &windows);
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
+
+        let std_window = std_report
+            .current_windows
+            .get("primary")
+            .expect("primary window");
+        let fast_window = fast_report
+            .current_windows
+            .get("primary")
+            .expect("primary window");
+        assert!(
+            std_window.total_cost_usd > 0.0,
+            "window should price sol usage"
+        );
+        assert!(
+            (fast_window.total_cost_usd - std_window.total_cost_usd * 2.0).abs() < 1e-9,
+            "fast window must be 2x standard (got fast={} std={})",
+            fast_window.total_cost_usd,
+            std_window.total_cost_usd
+        );
+        assert_eq!(fast_window.codex_cost_speed.as_deref(), Some("fast"));
+    }
+
+    #[test]
     fn parses_current_codex_payload_token_count_events() {
         let path = std::env::temp_dir().join(format!(
             "codexbar-current-codex-token-count-{}.jsonl",

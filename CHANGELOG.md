@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Invalidate persisted chart cache after Codex priority/fast pricing so the Weekly window card no longer keeps pre-2x standard dollars while the API-value ring shows the correct doubled amount.
+
 ## [Ceiling] 1.5.13 - 2026-07-26
 
 Patch for local cost accuracy vs ccusage (Codex priority/fast tiers and Claude day windows).

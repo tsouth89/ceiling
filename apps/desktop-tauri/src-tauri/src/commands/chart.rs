@@ -24,9 +24,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-// Version 6 restores the rolling comparison periods Compare needs; entries
-// cached at version 5 hold an empty list that would leave the tab stuck.
-const CHART_CACHE_VERSION: u8 = 6;
+// Version 7: Codex priority/fast (2x) pricing for local cost. Entries cached at
+// version 6 still hold pre-2x standard dollars for reset windows, so the
+// Weekly window card could show ~half of the API-value ring after 1.5.13.
+const CHART_CACHE_VERSION: u8 = 7;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
