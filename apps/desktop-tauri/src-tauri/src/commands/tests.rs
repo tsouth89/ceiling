@@ -7,8 +7,8 @@ use super::{
 use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 use codexbar::core::{
-    FetchContext, ProviderAccountData, ProviderFetchResult, ProviderId, SourceMode, TokenAccount,
-    instantiate_provider,
+    ConfiguredAccounts, FetchContext, ProviderAccountData, ProviderFetchResult, ProviderId,
+    SourceMode, TokenAccount, instantiate_provider,
 };
 use codexbar::host::session::launch_block_reason;
 use codexbar::settings::{ApiKeys, Language, ManualCookies, Settings};
@@ -857,6 +857,124 @@ fn provider_cache_still_replaces_the_same_account() {
     // A refresh of the same account updates in place; it does not accumulate.
     assert_eq!(cache.len(), 1);
     assert_eq!(cache[0].error.as_deref(), Some("new"));
+}
+
+/// The reported failure (#155): first refresh follows the CLI (`account_id =
+/// None`). Opening Accounts registers the ambient directory as a real entry,
+/// so the next refresh stamps a UUID. Without pruning, both rows stay in the
+/// cache and the overview shows two identical Codex cards with no way to
+/// remove the ghost (Accounts only lists the registered entry).
+#[test]
+fn pruning_drops_ambient_ghost_after_directory_account_is_registered() {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(0.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "oauth".to_string(),
+    };
+    let mut ambient =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
+    ambient.account_id = None;
+    ambient.account_email = Some("insan@example.com".into());
+
+    let mut registered = ambient.clone();
+    registered.account_id = Some("11111111-2222-3333-4444-555555555555".into());
+    registered.account_label = Some("prolite".into());
+
+    let mut cache = vec![ambient, registered.clone()];
+    let expected: std::collections::HashSet<_> = [(
+        "codex".to_string(),
+        Some("11111111-2222-3333-4444-555555555555".to_string()),
+    )]
+    .into_iter()
+    .collect();
+
+    super::prune_stale_provider_readings(&mut cache, &expected, &[ProviderId::Codex]);
+
+    assert_eq!(cache.len(), 1, "ambient ghost must be dropped");
+    assert_eq!(
+        cache[0].account_id.as_deref(),
+        Some("11111111-2222-3333-4444-555555555555")
+    );
+}
+
+#[test]
+fn pruning_keeps_every_configured_account() {
+    let personal = account_snapshot("acct-personal", 12.0);
+    let work = account_snapshot("acct-work", 88.0);
+    let mut cache = vec![personal, work];
+    let expected: std::collections::HashSet<_> = [
+        ("codex".to_string(), Some("acct-personal".to_string())),
+        ("codex".to_string(), Some("acct-work".to_string())),
+    ]
+    .into_iter()
+    .collect();
+
+    super::prune_stale_provider_readings(&mut cache, &expected, &[ProviderId::Codex]);
+
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
+fn pruning_drops_disabled_providers() {
+    let codex = account_snapshot("acct-codex", 10.0);
+    let mut claude = account_snapshot("acct-claude", 20.0);
+    claude.provider_id = "claude".to_string();
+    let mut cache = vec![codex, claude];
+    let expected: std::collections::HashSet<_> =
+        [("codex".to_string(), Some("acct-codex".to_string()))]
+            .into_iter()
+            .collect();
+
+    super::prune_stale_provider_readings(&mut cache, &expected, &[ProviderId::Codex]);
+
+    assert_eq!(cache.len(), 1);
+    assert_eq!(cache[0].provider_id, "codex");
+}
+
+#[test]
+fn expected_keys_are_ambient_when_nothing_is_configured() {
+    let accounts = ConfiguredAccounts::default();
+    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts);
+
+    assert_eq!(keys.len(), 1);
+    assert!(keys.contains(&("codex".to_string(), None)));
+}
+
+#[test]
+fn expected_keys_list_every_configured_directory_account() {
+    let mut accounts = ConfiguredAccounts::default();
+    accounts
+        .codex
+        .add_account(codexbar::core::DirectoryAccount::<
+            codexbar::core::CodexIdentity,
+        >::new(
+            Some("personal".into()),
+            std::path::PathBuf::from("/homes/personal"),
+        ));
+    accounts
+        .codex
+        .add_account(codexbar::core::DirectoryAccount::<
+            codexbar::core::CodexIdentity,
+        >::new(
+            Some("work".into()),
+            std::path::PathBuf::from("/homes/work"),
+        ));
+
+    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts);
+    let targets = accounts.targets_for(ProviderId::Codex);
+
+    assert_eq!(keys.len(), 2);
+    for target in targets {
+        assert!(
+            keys.contains(&("codex".to_string(), Some(target.id.clone()))),
+            "missing target {}",
+            target.id
+        );
+    }
+    // Ambient None must not coexist with configured ids.
+    assert!(!keys.contains(&("codex".to_string(), None)));
 }
 
 #[test]

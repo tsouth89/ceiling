@@ -21,14 +21,19 @@ export function ProviderIcon({
   const entry = getProviderIcon(providerId);
   const dims = { width: size, height: size };
 
+  // Set both the CSS var and `color` so fill="currentColor" glyphs stay brand-
+  // tinted even when a parent theme only forwards --brand.
+  const brandStyle = {
+    ...dims,
+    color: entry.brandColor,
+    ["--provider-brand" as string]: entry.brandColor,
+  };
+
   if (entry.svgPath) {
     return (
       <span
         className={`provider-icon provider-icon--svg${className ? " " + className : ""}`}
-        style={{
-          ...dims,
-          ["--provider-brand" as string]: entry.brandColor,
-        }}
+        style={brandStyle}
         title={title}
         aria-hidden={title ? undefined : true}
         // eslint-disable-next-line react/no-danger -- SVGs are bundled locally, no user input.
@@ -40,10 +45,7 @@ export function ProviderIcon({
   return (
     <span
       className={`provider-icon provider-icon--letter${className ? " " + className : ""}`}
-      style={{
-        ...dims,
-        ["--provider-brand" as string]: entry.brandColor,
-      }}
+      style={brandStyle}
       title={title}
       aria-hidden={title ? undefined : true}
     >

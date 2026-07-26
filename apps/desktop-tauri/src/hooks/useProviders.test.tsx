@@ -174,29 +174,61 @@ describe("useProviders", () => {
   });
 
   it("can subscribe to cached data and events without refreshing on mount", async () => {
-    tauriMocks.getCachedProviders.mockResolvedValue([provider("cached", 15)]);
+    vi.useFakeTimers();
+    try {
+      tauriMocks.getCachedProviders.mockResolvedValue([provider("cached", 15)]);
 
-    const { result } = renderHook(() => useProviders({ refreshOnMount: false }));
+      const { result } = renderHook(() => useProviders({ refreshOnMount: false }));
 
-    await waitFor(() => {
+      await act(async () => {
+        await Promise.resolve();
+      });
       expect(result.current.providers.map((snapshot) => snapshot.providerId)).toEqual([
         "cached",
       ]);
-    });
-    expect(tauriMocks.refreshProvidersIfStale).not.toHaveBeenCalled();
+      expect(tauriMocks.refreshProvidersIfStale).not.toHaveBeenCalled();
 
-    act(() => {
-      emitProviderEvent("provider-updated", provider("live", 30));
+      act(() => {
+        emitProviderEvent("provider-updated", provider("live", 30));
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(result.current.providers.map((snapshot) => snapshot.providerId)).toEqual([
+        "cached",
+        "live",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resyncs authoritatively after refresh-complete so pruned ghosts leave the UI", async () => {
+    const ambient = { ...provider("codex", 0), accountId: null };
+    const registered = {
+      ...provider("codex", 0),
+      accountId: "11111111-2222-3333-4444-555555555555",
+    };
+    // Initial paint: both the ambient ghost and the registered seat.
+    tauriMocks.getCachedProviders.mockResolvedValueOnce([ambient, registered]);
+
+    const { result } = renderHook(() => useProviders({ refreshOnMount: false }));
+    await waitFor(() => expect(result.current.providers).toHaveLength(2));
+
+    // Backend pruned ambient; refresh-complete re-reads the authoritative cache.
+    tauriMocks.getCachedProviders.mockResolvedValueOnce([registered]);
+    await act(async () => {
       emitProviderEvent("refresh-complete", {
         providerCount: 1,
         errorCount: 0,
       });
     });
 
-    expect(result.current.providers.map((snapshot) => snapshot.providerId)).toEqual([
-      "cached",
-      "live",
-    ]);
+    await waitFor(() => {
+      expect(result.current.providers).toHaveLength(1);
+      expect(result.current.providers[0]?.accountId).toBe(
+        "11111111-2222-3333-4444-555555555555",
+      );
+    });
   });
 
   it("reloads cached provider presentation when settings change", async () => {
@@ -435,16 +467,18 @@ describe("useProviders", () => {
       expect(result.current.hasLoadedCache).toBe(true);
     });
 
+    // Authoritative resync after complete should match the backend cache.
+    tauriMocks.getCachedProviders.mockResolvedValue([provider("codex", 10)]);
+
     vi.useFakeTimers();
     try {
-      act(() => {
+      await act(async () => {
         emitProviderEvent("refresh-started", { providerIds: ["codex"] });
         emitProviderEvent("provider-updated", provider("codex", 10));
         emitProviderEvent("refresh-complete", {
           providerCount: 1,
           errorCount: 0,
         });
-
       });
 
       expect(result.current.providers.map((snapshot) => snapshot.providerId)).toEqual([

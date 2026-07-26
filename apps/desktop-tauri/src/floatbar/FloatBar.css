@@ -793,11 +793,17 @@ body.floatbar-window #root {
   background: rgba(15, 23, 42, 0.035) !important;
 }
 
-/* Provider marks get a restrained brand tint without turning each segment
-   into a separate colored theme. */
+/* Provider marks keep a restrained badge but must stay brand-colored enough
+   to read at strip size. Gemini used to look like an empty ring when the
+   glyph washed out against the glass capsule. */
 .floatbar__bar .floatbar__provider-icon .provider-icon {
-  background: color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 13%, transparent) !important;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 16%, transparent) !important;
+  background: color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 18%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, var(--ceiling-accent, #26b5ce)) 28%, transparent) !important;
+  color: var(--brand, var(--ceiling-accent, #26b5ce)) !important;
+}
+.floatbar__bar .floatbar__provider-icon .provider-icon--svg svg {
+  width: 90%;
+  height: 90%;
 }
 .floatbar__bar .floatbar__pct {
   text-shadow: 0 0 10px color-mix(in srgb, var(--tone) 18%, transparent);
