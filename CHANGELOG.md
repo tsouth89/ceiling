@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Codex local cost now matches ccusage speed tiers: `service_tier = "priority"` in `~/.codex/config.toml` prices at the fast (2×) rate, with `codexbar cost --codex-speed auto|standard|fast` and JSON `cost.codex_speed` / `cost.codex_service_tier` for fair A/B compares.
+- Claude local cost `--days N` uses the same inclusive local calendar window as Codex (and ccusage), instead of a rolling UTC duration that labeled N+1 calendar days.
+
 ## [Ceiling] 1.5.12 - 2026-07-26
 
 Patch release for reported Antigravity and multi-account bugs, plus a taskbar strip hygiene fix for providers that are enabled but not yet ready.
