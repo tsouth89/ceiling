@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.13 - 2026-07-26
+
+Patch for local cost accuracy vs ccusage (Codex priority/fast tiers and Claude day windows).
+
 ### Fixed
-- Codex local cost now matches ccusage speed tiers: `service_tier = "priority"` in `~/.codex/config.toml` prices at the fast (2×) rate, with `codexbar cost --codex-speed auto|standard|fast` and JSON `cost.codex_speed` / `cost.codex_service_tier` for fair A/B compares.
-- Claude local cost `--days N` uses the same inclusive local calendar window as Codex (and ccusage), instead of a rolling UTC duration that labeled N+1 calendar days.
+- Codex local cost now matches ccusage speed tiers: `service_tier = "priority"` in `~/.codex/config.toml` prices at the fast (2×) rate, with `codexbar cost --codex-speed auto|standard|fast` and JSON `cost.codex_speed` / `cost.codex_service_tier` for fair A/B compares. (#158)
+- Claude local cost `--days N` uses the same inclusive local calendar window as Codex (and ccusage), instead of a rolling UTC duration that labeled N+1 calendar days. (#158)
 
 ## [Ceiling] 1.5.12 - 2026-07-26
 
