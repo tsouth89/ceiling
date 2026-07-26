@@ -149,14 +149,14 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
 
             // Codex speed tier (ccusage --speed parity) so Reddit/A-B compares
             // can say whether dollars are standard list or priority/fast 2×.
-            if result.provider == "codex" {
-                if let Some(speed) = result.summary.codex_cost_speed.as_deref() {
-                    match result.summary.codex_service_tier.as_deref() {
-                        Some(tier) => {
-                            println!("  Speed:    {} (config service_tier={})", speed, tier)
-                        }
-                        None => println!("  Speed:    {}", speed),
+            if result.provider == "codex"
+                && let Some(speed) = result.summary.codex_cost_speed.as_deref()
+            {
+                match result.summary.codex_service_tier.as_deref() {
+                    Some(tier) => {
+                        println!("  Speed:    {} (config service_tier={})", speed, tier)
                     }
+                    None => println!("  Speed:    {}", speed),
                 }
             }
 
