@@ -53,13 +53,14 @@ impl AntigravityProvider {
 
         let mut cmd = Command::new("powershell.exe");
         cmd.args([
-                "-ExecutionPolicy", "Bypass",
-                "-Command",
-                // Match by image name only where possible. Scanning every CommandLine for
-                // "agy" also matched the PowerShell detector itself (and other shells that
-                // mention the binary in a script), which then had no listening ports.
-                // node + antigravity-cli package is the only CommandLine-based case.
-                "Get-CimInstance Win32_Process | Where-Object { \
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            // Match by image name only where possible. Scanning every CommandLine for
+            // "agy" also matched the PowerShell detector itself (and other shells that
+            // mention the binary in a script), which then had no listening ports.
+            // node + antigravity-cli package is the only CommandLine-based case.
+            "Get-CimInstance Win32_Process | Where-Object { \
                     $_.Name -like '*language_server_windows*' -or \
                     $_.Name -like 'language_server.exe' -or \
                     $_.Name -eq 'agy.exe' -or \
@@ -67,8 +68,8 @@ impl AntigravityProvider {
                     $_.Name -like '*antigravity_cli*' -or \
                     ($_.Name -eq 'node.exe' -and $_.CommandLine -and \
                         $_.CommandLine -match '(?i)antigravity[-_]cli') \
-                } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
-            ]);
+                } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
+        ]);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -902,7 +903,8 @@ mod tests {
 
     #[test]
     fn parses_antigravity_cli_package_name() {
-        let output = r"77	node C:\Users\test\AppData\Roaming\npm\node_modules\antigravity-cli\bin\cli.js";
+        let output =
+            r"77	node C:\Users\test\AppData\Roaming\npm\node_modules\antigravity-cli\bin\cli.js";
 
         let process =
             AntigravityProvider::parse_process_info(output).expect("antigravity-cli package");
@@ -914,14 +916,14 @@ mod tests {
     #[test]
     fn rejects_false_positive_agy_substrings() {
         // Path-anchored matcher must not treat "legacy" / "imagymagic" as agy.
-        assert!(AntigravityProvider::parse_process_info(
-            r"1	C:\tools\legacy.exe --https_server_port 0"
-        )
-        .is_none());
-        assert!(AntigravityProvider::parse_process_info(
-            r"2	C:\tools\imagymagic.exe --something"
-        )
-        .is_none());
+        assert!(
+            AntigravityProvider::parse_process_info(r"1	C:\tools\legacy.exe --https_server_port 0")
+                .is_none()
+        );
+        assert!(
+            AntigravityProvider::parse_process_info(r"2	C:\tools\imagymagic.exe --something")
+                .is_none()
+        );
     }
 
     #[test]
