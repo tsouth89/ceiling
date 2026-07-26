@@ -73,17 +73,25 @@ impl AntigravityProvider {
     }
 
     fn parse_process_info(stdout: &str) -> Option<ProcessInfo> {
-        // Parse command line for CSRF token and port — compiled once
+        // Parse command line for CSRF token and port — compiled once.
+        // Antigravity 2.3+ may omit `--extension_server_port` entirely and instead
+        // advertise `--https_server_port 0` (OS-assigned). Discovery then depends on
+        // the process PID + listening-port enumeration, not a fixed advertised port.
         static CSRF_RE: OnceLock<Regex> = OnceLock::new();
         static EXT_CSRF_RE: OnceLock<Regex> = OnceLock::new();
-        static PORT_RE: OnceLock<Regex> = OnceLock::new();
+        static EXT_PORT_RE: OnceLock<Regex> = OnceLock::new();
+        static HTTPS_PORT_RE: OnceLock<Regex> = OnceLock::new();
+        // Accept both `--flag value` and `--flag=value` forms.
         let csrf_regex = CSRF_RE
-            .get_or_init(|| Regex::new(r"--csrf_token\s+([a-f0-9-]+)").expect("valid regex"));
+            .get_or_init(|| Regex::new(r"--csrf_token(?:=|\s+)([a-f0-9-]+)").expect("valid regex"));
         let ext_csrf_regex = EXT_CSRF_RE.get_or_init(|| {
-            Regex::new(r"--extension_server_csrf_token\s+([a-f0-9-]+)").expect("valid regex")
+            Regex::new(r"--extension_server_csrf_token(?:=|\s+)([a-f0-9-]+)").expect("valid regex")
         });
-        let port_regex = PORT_RE
-            .get_or_init(|| Regex::new(r"--extension_server_port\s+(\d+)").expect("valid regex"));
+        let ext_port_regex = EXT_PORT_RE.get_or_init(|| {
+            Regex::new(r"--extension_server_port(?:=|\s+)(\d+)").expect("valid regex")
+        });
+        let https_port_regex = HTTPS_PORT_RE
+            .get_or_init(|| Regex::new(r"--https_server_port(?:=|\s+)(\d+)").expect("valid regex"));
 
         for line in stdout.lines() {
             if line.contains("--csrf_token") {
@@ -104,18 +112,40 @@ impl AntigravityProvider {
                     .and_then(|c| c.get(1))
                     .map(|m| m.as_str().to_string());
 
-                let port = port_regex
+                let extension_port = ext_port_regex
                     .captures(line)
                     .and_then(|c| c.get(1))
                     .and_then(|m| m.as_str().parse::<u16>().ok());
 
-                if let (Some(token), Some(p)) = (csrf_token, port) {
-                    return Some(ProcessInfo {
-                        csrf_token: token,
-                        extension_server_csrf_token: ext_csrf_token,
-                        extension_port: p,
-                        pid,
-                    });
+                let https_port = https_port_regex
+                    .captures(line)
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<u16>().ok());
+
+                // Prefer the explicit extension server port when present and non-zero.
+                // A zero HTTPS port means "OS assigns the real port" and is not a probe
+                // target; keep 0 so find_api_port relies on PID enumeration instead.
+                let port = match extension_port {
+                    Some(p) if p > 0 => p,
+                    _ => match https_port {
+                        Some(p) if p > 0 => p,
+                        _ => 0,
+                    },
+                };
+
+                // Accept a process when we have a CSRF token and either a real advertised
+                // port or a PID we can enumerate listening ports for. Requiring
+                // `--extension_server_port` alone fails on modern Antigravity builds that
+                // only expose `--https_server_port 0`.
+                if let Some(token) = csrf_token {
+                    if port > 0 || pid.is_some() {
+                        return Some(ProcessInfo {
+                            csrf_token: token,
+                            extension_server_csrf_token: ext_csrf_token,
+                            extension_port: port,
+                            pid,
+                        });
+                    }
                 }
             }
         }
@@ -143,19 +173,22 @@ impl AntigravityProvider {
             .map_err(|e| ProviderError::Other(e.to_string()))?;
 
         // Ordered candidate ports: the process's real listening ports first (Windows
-        // equivalent of `lsof`), then the heuristic window above the extension port, then a
-        // few known ports as a last resort.
+        // equivalent of `lsof`), then the heuristic window above a real advertised port,
+        // then a few known ports as a last resort. Skip the heuristic when the advertised
+        // port is 0 (OS-assigned / unknown) so we do not probe 0..19.
         let mut candidates: Vec<u16> = Vec::new();
         if let Some(pid) = pid {
             candidates.extend(Self::listening_ports_for_pid(pid));
         }
-        candidates.extend((0..20u16).map(|offset| extension_port.saturating_add(offset)));
+        if extension_port > 0 {
+            candidates.extend((0..20u16).map(|offset| extension_port.saturating_add(offset)));
+        }
         candidates.extend([53835, 53836, 53837, 53838, 53845, 53849]);
 
         let mut probed: Vec<u16> = Vec::new();
         for port in candidates {
-            if probed.contains(&port) {
-                continue; // probe each port at most once
+            if port == 0 || probed.contains(&port) {
+                continue; // never probe port 0; probe each real port at most once
             }
             probed.push(port);
             if Self::probe_api_port(&client, port).await {
@@ -704,6 +737,56 @@ mod tests {
         assert_eq!(process.pid, Some(4242));
         assert_eq!(process.extension_port, 54123);
         assert_eq!(process.csrf_token, "11111111-2222-3333-4444-555555555555");
+    }
+
+    /// Antigravity 2.3+ on Windows no longer advertises `--extension_server_port`.
+    /// It launches with `--https_server_port 0` (OS-assigned) and a CSRF token.
+    /// Detection must still succeed so PID port enumeration can find the API.
+    #[test]
+    fn parses_language_server_with_https_server_port_zero() {
+        let output = r#"8844	C:\Users\test\AppData\Local\Programs\Antigravity\resources\bin\language_server.exe --standalone --override_ide_name antigravity --https_server_port 0 --csrf_token aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --app_data_dir antigravity"#;
+
+        let process = AntigravityProvider::parse_process_info(output).expect(
+            "https_server_port 0 without extension_server_port must still detect the process",
+        );
+
+        assert_eq!(process.pid, Some(8844));
+        assert_eq!(
+            process.csrf_token, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "csrf token must be captured"
+        );
+        assert_eq!(
+            process.extension_port, 0,
+            "zero means discover via PID listening ports, not a fixed probe base"
+        );
+    }
+
+    #[test]
+    fn parses_equals_form_flags() {
+        let output = r"1001	language_server.exe --csrf_token=11111111-2222-3333-4444-555555555555 --https_server_port=0";
+
+        let process = AntigravityProvider::parse_process_info(output).expect("equals-form flags");
+
+        assert_eq!(process.pid, Some(1001));
+        assert_eq!(process.csrf_token, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(process.extension_port, 0);
+    }
+
+    #[test]
+    fn prefers_extension_server_port_over_https_port() {
+        let output = r"55	language_server.exe --csrf_token 11111111-2222-3333-4444-555555555555 --https_server_port 0 --extension_server_port 54123";
+
+        let process = AntigravityProvider::parse_process_info(output).expect("process info");
+
+        assert_eq!(process.extension_port, 54123);
+    }
+
+    #[test]
+    fn rejects_csrf_without_port_or_pid() {
+        // No PID prefix and no usable port: cannot discover the API endpoint.
+        let output = "language_server.exe --csrf_token 11111111-2222-3333-4444-555555555555 --https_server_port 0";
+
+        assert!(AntigravityProvider::parse_process_info(output).is_none());
     }
 
     fn make_response(models: Vec<(&str, f64)>) -> UserStatusResponse {

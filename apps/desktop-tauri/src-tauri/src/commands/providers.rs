@@ -165,6 +165,51 @@ pub(crate) fn upsert_provider_cache(
     }
 }
 
+/// One cache row identity: provider CLI name + optional configured-account id.
+type ProviderCacheKey = (String, Option<String>);
+
+/// The set of readings a refresh cycle will (or did) produce.
+///
+/// Empty targets means a single ambient fetch with `account_id = None`.
+/// Configured directories each produce one reading stamped with their id.
+pub(crate) fn expected_cache_keys(
+    enabled_ids: &[ProviderId],
+    account_dirs: &ConfiguredAccounts,
+) -> HashSet<ProviderCacheKey> {
+    let mut keys = HashSet::new();
+    for id in enabled_ids {
+        let targets = account_dirs.targets_for(*id);
+        if targets.is_empty() {
+            keys.insert((id.cli_name().to_string(), None));
+        } else {
+            for target in targets {
+                keys.insert((id.cli_name().to_string(), Some(target.id)));
+            }
+        }
+    }
+    keys
+}
+
+/// Drop cache rows that do not belong to this cycle's expected set.
+///
+/// Upsert alone cannot remove a row whose key changed: an ambient reading
+/// (`account_id = None`) and a later registered-account reading (`Some(uuid)`)
+/// are different keys, so both stay unless pruned. Disabled providers are
+/// dropped entirely so a disabled seat cannot linger on the overview.
+pub(crate) fn prune_stale_provider_readings(
+    cache: &mut Vec<ProviderUsageSnapshot>,
+    expected: &HashSet<ProviderCacheKey>,
+    enabled_ids: &[ProviderId],
+) {
+    let enabled: HashSet<&str> = enabled_ids.iter().map(|id| id.cli_name()).collect();
+    cache.retain(|snap| {
+        if !enabled.contains(snap.provider_id.as_str()) {
+            return false;
+        }
+        expected.contains(&(snap.provider_id.clone(), snap.account_id.clone()))
+    });
+}
+
 /// Core refresh logic, usable from both the Tauri command and tray menu actions.
 pub(crate) async fn do_refresh_providers(app: &tauri::AppHandle) -> Result<(), String> {
     do_refresh_providers_with_policy(app, true).await
@@ -197,6 +242,15 @@ async fn do_refresh_providers_with_policy(
 
     let handles = spawn_provider_refreshes(app, &inputs);
     await_provider_refreshes(handles).await;
+
+    // After every fetch has landed, drop readings this cycle did not own.
+    // Without this, ambient (`account_id = None`) rows survive next to the
+    // registered UUID reading once Accounts auto-registers the signed-in
+    // directory — two identical cards for one account (issue #155).
+    let expected = expected_cache_keys(&inputs.enabled_ids, &inputs.account_dirs);
+    if let Ok(mut guard) = state.lock() {
+        prune_stale_provider_readings(&mut guard.provider_cache, &expected, &inputs.enabled_ids);
+    }
 
     let error_count = finish_provider_refresh(&state)?;
     update_tray_and_notifications(app, &state, &inputs.settings, &inputs.token_accounts)?;
