@@ -150,6 +150,51 @@ describe("TaskbarFlyout", () => {
     expect(accounts[1].textContent).toContain("me@job.test");
   });
 
+  it("badges the seat the strip actually shows, not the hottest session", async () => {
+    // Reported bug: on "auto (closest to limit)" the tile showed the maxed
+    // weekly seat while the flyout badged the other one, because the flyout
+    // ranked accounts on the 5h session and both read 0%.
+    const maxedWeekly = provider("claude", "Claude", 0, 300, "Session (5h)");
+    maxedWeekly.accountId = "acct-work";
+    maxedWeekly.accountEmail = "me@job.test";
+    maxedWeekly.secondary = {
+      ...maxedWeekly.primary,
+      usedPercent: 100,
+      remainingPercent: 0,
+      windowMinutes: 10_080,
+    };
+    maxedWeekly.secondaryLabel = "Weekly";
+    const fresh = provider("claude", "Claude", 0, 295, "Session (5h)");
+    fresh.accountId = "acct-zpersonal";
+    fresh.accountEmail = "me@home.test";
+    fresh.secondary = {
+      ...fresh.primary,
+      usedPercent: 0,
+      remainingPercent: 100,
+      windowMinutes: 10_080,
+    };
+    fresh.secondaryLabel = "Weekly";
+    providerState.providers = [maxedWeekly, fresh];
+    const autoState = {
+      ...state,
+      settings: {
+        ...state.settings,
+        floatBarProviderIds: ["claude"],
+        taskbarAccountByProvider: {},
+      },
+    } as BootstrapState;
+
+    render(<TaskbarFlyout state={autoState} />);
+
+    await screen.findByText("On strip");
+    const accounts = screen.getAllByText(/me@/);
+    expect(accounts[0].textContent).toContain("me@job.test");
+    // The badge sits in the same row as the maxed-weekly seat.
+    const badgedRow = screen.getByText("On strip").closest(".taskbar-flyout__provider");
+    expect(badgedRow?.textContent).toContain("me@job.test");
+    expect(badgedRow?.textContent).not.toContain("me@home.test");
+  });
+
   it("shows at-a-glance usage and the soonest provider reset", async () => {
     providerState.providers[0].resetCreditsAvailable = 1;
     render(<TaskbarFlyout state={state} />);

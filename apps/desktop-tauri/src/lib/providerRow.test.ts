@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ProviderUsageSnapshot } from "../types/bridge";
 import {
   hasMultipleAccounts,
   orderFlyoutProviders,
@@ -12,11 +13,20 @@ import {
 const row = (providerId: string, accountId?: string) =>
   ({ providerId, accountId: accountId ?? null }) as never;
 
-const snap = (providerId: string, accountId: string | null, used: number) => ({
-  providerId,
-  accountId,
-  primary: { usedPercent: used },
-});
+const snap = (
+  providerId: string,
+  accountId: string | null,
+  used: number,
+  // Second lane, e.g. Claude's weekly beside its 5h session.
+  secondaryUsed?: number,
+) =>
+  ({
+    providerId,
+    accountId,
+    primary: { usedPercent: used },
+    secondary:
+      secondaryUsed === undefined ? null : { usedPercent: secondaryUsed },
+  }) as unknown as ProviderUsageSnapshot;
 
 describe("providerRowKey", () => {
   it("separates two accounts on one provider", () => {
@@ -120,6 +130,25 @@ describe("selectStripAccount", () => {
       snap("codex", "work", 80),
     ];
     expect(selectStripAccount(rows, "gone")?.accountId).toBe("work");
+  });
+
+  it("ranks on the constraining window, not the primary one", () => {
+    // The strip tile shows the constraining window, so ranking seats by their
+    // primary made the flyout badge "On strip" the account the tile was not
+    // showing: a maxed weekly outranks a freshly reset 5h session.
+    const rows = [
+      snap("claude", "maxed-weekly", 0, 100),
+      snap("claude", "busy-session", 40, 0),
+    ];
+    expect(selectStripAccount(rows)?.accountId).toBe("maxed-weekly");
+  });
+
+  it("breaks ties on the lowest account id, as the native strip does", () => {
+    const forward = [snap("codex", "a", 50), snap("codex", "z", 50)];
+    const reversed = [snap("codex", "z", 50), snap("codex", "a", 50)];
+
+    expect(selectStripAccount(forward)?.accountId).toBe("a");
+    expect(selectStripAccount(reversed)?.accountId).toBe("a");
   });
 });
 

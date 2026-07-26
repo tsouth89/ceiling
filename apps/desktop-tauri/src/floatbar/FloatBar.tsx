@@ -558,7 +558,9 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
           floatBarWindow(b).window.usedPercent -
           floatBarWindow(a).window.usedPercent;
         if (delta !== 0) return delta;
-        return (b.accountId ?? "").localeCompare(a.accountId ?? "");
+        // Lowest account id, matching the native strip and the flyout so all
+        // three name the same seat when two accounts read the same pressure.
+        return (a.accountId ?? "").localeCompare(b.accountId ?? "");
       })[0];
     };
     if (filterIds && filterIds.length > 0) {
