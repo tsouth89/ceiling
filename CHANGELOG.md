@@ -1,5 +1,14 @@
 # Changelog
 
+## [Ceiling] 1.5.12 - 2026-07-26
+
+Patch release for reported Antigravity and multi-account bugs, plus a taskbar strip hygiene fix for providers that are enabled but not yet ready.
+
+### Fixed
+- Detect Antigravity on Windows when the language server uses `--https_server_port 0` and omits `--extension_server_port` (modern Antigravity 2.3+). (#153)
+- Drop ambient ghost Codex/Claude readings after Accounts registers the signed-in directory, so Overview no longer shows two identical cards for one seat. (#155)
+- Keep unauthenticated / not-installed providers off the always-visible taskbar strip (they still show on Overview and Settings for setup). Antigravity error placeholders no longer surface as a blank "Claude" pill.
+
 ## [Ceiling] 1.5.11 - 2026-07-25
 
 Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, flyout alignment, constraining-window taskbar meters, and Grok API-equivalent dollar charts. Supersedes draft tags **1.5.7**–**1.5.10**.
