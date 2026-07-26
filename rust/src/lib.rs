@@ -9,6 +9,7 @@ pub mod cli;
 pub mod core;
 pub mod cost_scanner;
 pub mod cursor_activity;
+mod codex_cost_speed;
 mod grok_costs;
 pub mod host;
 pub mod locale;

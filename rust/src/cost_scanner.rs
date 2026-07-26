@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
+use crate::codex_cost_speed::{self, CodexCostSpeed};
 use crate::codex_costs::{
     add_codex_record_to_summary, add_codex_records_to_summary, codex_period_start,
     codex_scan_dates, project_bucket, scan_codex_file_cost_for_range,
@@ -72,6 +73,11 @@ pub struct CostSummary {
     pub period_start: Option<NaiveDate>,
     /// Period end date
     pub period_end: Option<NaiveDate>,
+    /// Codex cost speed tier applied to dollar fields (`standard` / `fast`).
+    /// `None` for non-Codex summaries.
+    pub codex_cost_speed: Option<String>,
+    /// Raw `service_tier` from Codex config when discovered (e.g. `priority`).
+    pub codex_service_tier: Option<String>,
 }
 
 /// Cost and token usage assembled from one pass over a provider's local logs.
@@ -344,6 +350,28 @@ fn is_drive_root(segment: &str) -> bool {
     bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
+/// Midnight at the start of `day` in the local timezone, as UTC.
+///
+/// Used so Claude `--days N` is an inclusive local calendar window (matching
+/// Codex / ccusage) instead of a rolling UTC duration.
+fn local_day_start_utc(day: NaiveDate) -> DateTime<Utc> {
+    day.and_hms_opt(0, 0, 0)
+        .expect("valid midnight")
+        .and_local_timezone(Local)
+        .earliest()
+        .or_else(|| {
+            day.and_hms_opt(0, 0, 0)
+                .expect("valid midnight")
+                .and_local_timezone(Local)
+                .latest()
+        })
+        .map(|local| local.with_timezone(&Utc))
+        .unwrap_or_else(|| DateTime::<Utc>::from_naive_utc_and_offset(
+            day.and_hms_opt(0, 0, 0).expect("valid midnight"),
+            Utc,
+        ))
+}
+
 /// Cheap date gate for the flat archived dir: files are `rollout-YYYY-MM-DD…`.
 /// An unrecognized name falls through to the parser's own timestamp filter.
 fn archived_rollout_day_in_range(name: &str, range: &CostUsageDayRange) -> bool {
@@ -541,14 +569,29 @@ pub struct CostScanner {
     /// every candidate home. This is what makes one account's charts distinct
     /// from another's: each account is its own directory.
     scoped_home: Option<PathBuf>,
+    /// Codex list-rate vs priority/fast pricing (ccusage `--speed` parity).
+    codex_speed: CodexCostSpeed,
 }
 
 impl CostScanner {
-    /// Create a new scanner for the last N days
+    /// Create a new scanner for the last N days.
+    ///
+    /// Codex dollars follow ccusage auto speed: `service_tier = "priority"` in
+    /// `~/.codex/config.toml` prices at the fast (2×) tier.
     pub fn new(days: u32) -> Self {
         Self {
             days,
             scoped_home: None,
+            codex_speed: CodexCostSpeed::resolve(None),
+        }
+    }
+
+    /// Scanner with an explicit Codex cost speed (`standard` / `fast` / `auto`).
+    pub fn with_codex_speed(days: u32, speed_override: Option<&str>) -> Self {
+        Self {
+            days,
+            scoped_home: None,
+            codex_speed: CodexCostSpeed::resolve(speed_override),
         }
     }
 
@@ -557,7 +600,13 @@ impl CostScanner {
         Self {
             days,
             scoped_home: Some(home),
+            codex_speed: CodexCostSpeed::resolve(None),
         }
+    }
+
+    /// Codex cost speed tier this scanner applies to dollar totals.
+    pub fn codex_speed(&self) -> CodexCostSpeed {
+        self.codex_speed
     }
 
     /// Scan Codex local logs
@@ -608,6 +657,7 @@ impl CostScanner {
             }
         }
 
+        codex_cost_speed::apply_speed_to_summary(&mut summary, self.codex_speed);
         summary
     }
 
@@ -624,9 +674,11 @@ impl CostScanner {
         }
 
         let mut summary = CostSummary::default();
-        let today = Utc::now().date_naive();
-        let start_date = today - Duration::days(self.days as i64);
-        let cutoff = Utc::now() - Duration::days(self.days as i64);
+        // Inclusive local calendar window — same semantics as Codex `--days N`
+        // and ccusage `--since`/`--until` on the local machine.
+        let today = Local::now().date_naive();
+        let start_date = codex_period_start(today, self.days);
+        let cutoff = local_day_start_utc(start_date);
 
         summary.period_start = Some(start_date);
         summary.period_end = Some(today);
@@ -997,9 +1049,11 @@ fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageReco
 
     let cache_create_1h = usage.one_hour_cache_creation_tokens(cache_create);
     let timestamp = event.parsed_timestamp();
+    // Price with the local calendar day so date-aware rates match the same
+    // window the scanner uses for inclusion (not the UTC date alone).
     let usage_date = timestamp
-        .map(|recorded_at| recorded_at.date_naive())
-        .unwrap_or_else(|| Utc::now().date_naive());
+        .map(|recorded_at| recorded_at.with_timezone(&Local).date_naive())
+        .unwrap_or_else(|| Local::now().date_naive());
     let cost = ClaudePricing::cost_usd_with_cache_ttl_on_date(
         model,
         input,
@@ -1495,7 +1549,21 @@ fn scan_codex_report(
         }
     }
 
-    rollups.finish(days)
+    let mut report = rollups.finish(days);
+    // Apply ccusage-compatible priority/fast multiplier to every Codex window.
+    codex_cost_speed::apply_speed_to_summary(&mut report.today, scanner.codex_speed);
+    codex_cost_speed::apply_speed_to_summary(&mut report.seven_days, scanner.codex_speed);
+    codex_cost_speed::apply_speed_to_summary(&mut report.thirty_days, scanner.codex_speed);
+    if let Some(latest) = report.latest_session.as_mut() {
+        codex_cost_speed::apply_speed_to_summary(latest, scanner.codex_speed);
+    }
+    for summary in report.current_windows.values_mut() {
+        codex_cost_speed::apply_speed_to_summary(summary, scanner.codex_speed);
+    }
+    for (_day, cost) in report.daily_costs.iter_mut() {
+        *cost *= scanner.codex_speed.multiplier();
+    }
+    report
 }
 
 fn add_grok_record_to_summary(summary: &mut CostSummary, record: &GrokUsageRecord) {
@@ -1688,7 +1756,9 @@ fn scan_claude_report(
 
     let today = Local::now().date_naive();
     let seven_day_start = today - Duration::days(6);
-    let cutoff = Utc::now() - Duration::days(days as i64);
+    // Inclusive local calendar window (matches CLI cost + Codex + ccusage).
+    let period_start = codex_period_start(today, days);
+    let cutoff = local_day_start_utc(period_start);
     let mut seen = HashSet::new();
     let mut undated = CostSummary::default();
     let mut latest: Option<(DateTime<Utc>, CostSummary)> = None;
@@ -1776,6 +1846,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
         "codex" => {
             // Scan Codex logs by day across Windows and WSL session roots.
             let sessions_dirs = scanner.get_codex_sessions_dirs();
+            let speed_mult = scanner.codex_speed.multiplier();
             for days_ago in 0..days {
                 let date = today - Duration::days(days_ago as i64);
                 let date_str = date.format("%Y-%m-%d").to_string();
@@ -1801,7 +1872,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                         }
                     }
                 }
-                daily_costs.insert(date_str, day_cost);
+                daily_costs.insert(date_str, day_cost * speed_mult);
             }
         }
         "claude" => {
@@ -1809,7 +1880,8 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
             // de-duplicating records across files.
             let projects_dir = scanner.get_claude_projects_dir();
             if projects_dir.exists() {
-                let cutoff = Utc::now() - Duration::days(days as i64);
+                let period_start = codex_period_start(today, days);
+                let cutoff = local_day_start_utc(period_start);
                 let mut seen = HashSet::new();
                 let mut handle_file = |path: &Path| {
                     for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
