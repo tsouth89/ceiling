@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.14 - 2026-07-26
+
+Patch so Weekly window API-equivalent dollars match priority/fast pricing after 1.5.13.
+
 ### Fixed
-- Invalidate persisted chart cache after Codex priority/fast pricing so the Weekly window card no longer keeps pre-2x standard dollars while the API-value ring shows the correct doubled amount.
+- Invalidate persisted chart cache after Codex priority/fast pricing so the Weekly window card no longer keeps pre-2x standard dollars while the API-value ring shows the correct doubled amount. (#161)
 
 ## [Ceiling] 1.5.13 - 2026-07-26
 
