@@ -1246,12 +1246,25 @@ mod windows_host {
             0x0000, 0x0000, 0x47c0, 0x27f0, 0x3038, 0x3818, 0x340c, 0x320c, 0x310c, 0x300c, 0x3018,
             0x1818, 0x0fec, 0x07e4, 0x0000, 0x0000,
         ];
+        // 16x16 four-point star approximating ProviderIcon-gemini.svg (was falling
+        // through to a hollow ring, so Gemini looked like a blank circle on the strip).
+        const GEMINI: [u16; 16] = [
+            0x01c0, 0x03e0, 0x03e0, 0x03e0, 0x03e0, 0x3dde, 0x7ebf, 0x7fff, 0x7ebf, 0x3dde, 0x03e0,
+            0x03e0, 0x03e0, 0x03e0, 0x01c0, 0x0000,
+        ];
+        // Compact Antigravity mark: two upper lobes over a center stem.
+        const ANTIGRAVITY: [u16; 16] = [
+            0x03c0, 0x07e0, 0x03e0, 0x07f0, 0x0f78, 0x1e3c, 0x3ff8, 0x1ff0, 0x0fe0, 0x07c0, 0x03c0,
+            0x03c0, 0x03c0, 0x03c0, 0x0000, 0x0000,
+        ];
 
         let mask = match provider_id {
             "codex" => Some(&CODEX),
             "claude" => Some(&CLAUDE),
             "cursor" => Some(&CURSOR),
             "grok" => Some(&GROK),
+            "gemini" => Some(&GEMINI),
+            "antigravity" | "agy" => Some(&ANTIGRAVITY),
             _ => None,
         };
         if let Some(mask) = mask {
@@ -1259,38 +1272,15 @@ mod windows_host {
             return;
         }
 
-        let pen = unsafe { CreatePen(PS_SOLID, 2, color) };
+        // Unknown providers: solid disc so they still read as a mark, not an empty ring.
+        let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
+        let brush = unsafe { CreateSolidBrush(color) };
         let old_pen = unsafe { SelectObject(hdc, pen) };
-        match provider_id {
-            "claude" => {
-                for (dx, dy) in [(0, 7), (5, 5), (7, 0), (5, -5)] {
-                    unsafe {
-                        MoveToEx(hdc, x - dx, y - dy, std::ptr::null_mut());
-                        LineTo(hdc, x + dx, y + dy);
-                    }
-                }
-            }
-            "cursor" => {
-                let brush = unsafe { CreateSolidBrush(color) };
-                let old_brush = unsafe { SelectObject(hdc, brush) };
-                let points = [
-                    WinPoint { x, y: y - 8 },
-                    WinPoint { x: x + 8, y },
-                    WinPoint { x, y: y + 8 },
-                    WinPoint { x: x - 8, y },
-                ];
-                unsafe {
-                    Polygon(hdc, points.as_ptr(), points.len() as i32);
-                    SelectObject(hdc, old_brush);
-                    DeleteObject(brush);
-                }
-            }
-            _ => unsafe {
-                Ellipse(hdc, x - 8, y - 8, x + 8, y + 8);
-                Ellipse(hdc, x - 4, y - 4, x + 4, y + 4);
-            },
-        }
+        let old_brush = unsafe { SelectObject(hdc, brush) };
         unsafe {
+            Ellipse(hdc, x - 6, y - 6, x + 6, y + 6);
+            SelectObject(hdc, old_brush);
+            DeleteObject(brush);
             SelectObject(hdc, old_pen);
             DeleteObject(pen);
         }
@@ -1313,6 +1303,10 @@ mod windows_host {
             "codex" => rgb(64, 196, 222),
             // xAI / Grok monogram is monochrome; light silver for dark taskbar chrome.
             "grok" => rgb(231, 233, 234),
+            // Match the web registry brand colors so strip and dashboard agree.
+            "gemini" => rgb(171, 135, 234),
+            "antigravity" | "agy" => rgb(96, 186, 126),
+            "copilot" => rgb(168, 85, 247),
             _ => rgb(204, 211, 220),
         }
     }
@@ -1506,7 +1500,6 @@ mod windows_host {
         fn TextOutW(hdc: isize, x: i32, y: i32, text: *const u16, count: i32) -> i32;
         fn MoveToEx(hdc: isize, x: i32, y: i32, previous: *mut WinPoint) -> i32;
         fn LineTo(hdc: isize, x: i32, y: i32) -> i32;
-        fn Polygon(hdc: isize, points: *const WinPoint, count: i32) -> i32;
         fn Ellipse(hdc: isize, left: i32, top: i32, right: i32, bottom: i32) -> i32;
         fn SetPixelV(hdc: isize, x: i32, y: i32, color: u32) -> i32;
     }

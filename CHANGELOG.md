@@ -6,8 +6,10 @@ Patch release for reported Antigravity and multi-account bugs, plus a taskbar st
 
 ### Fixed
 - Detect Antigravity on Windows when the language server uses `--https_server_port 0` and omits `--extension_server_port` (modern Antigravity 2.3+). (#153)
+- Detect Antigravity **CLI** (`agy` / `antigravity-cli`) as well as the IDE language server. The CLI hosts the same local quota API without a CSRF token; Ceiling now probes it when `agy` is running and signed in.
 - Drop ambient ghost Codex/Claude readings after Accounts registers the signed-in directory, so Overview no longer shows two identical cards for one seat. (#155)
 - Keep unauthenticated / not-installed providers off the always-visible taskbar strip (they still show on Overview and Settings for setup). Antigravity error placeholders no longer surface as a blank "Claude" pill.
+- Give Gemini (and Antigravity) a real native taskbar glyph instead of the hollow-ring fallback, and keep strip SVG marks brand-colored so first-class seats stay identifiable.
 
 ## [Ceiling] 1.5.11 - 2026-07-25
 
