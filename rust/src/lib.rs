@@ -6,10 +6,10 @@
 pub mod agent_sessions;
 pub mod browser;
 pub mod cli;
+mod codex_cost_speed;
 pub mod core;
 pub mod cost_scanner;
 pub mod cursor_activity;
-mod codex_cost_speed;
 mod grok_costs;
 pub mod host;
 pub mod locale;

@@ -140,7 +140,10 @@ fn parse_service_tier_from_toml(content: &str) -> Option<String> {
 }
 
 /// Apply the speed multiplier to every dollar field on a cost summary.
-pub fn apply_speed_to_summary(summary: &mut crate::cost_scanner::CostSummary, speed: CodexCostSpeed) {
+pub fn apply_speed_to_summary(
+    summary: &mut crate::cost_scanner::CostSummary,
+    speed: CodexCostSpeed,
+) {
     summary.codex_cost_speed = Some(speed.as_str().to_string());
     if let Some(tier) = read_codex_service_tier() {
         summary.codex_service_tier = Some(tier);

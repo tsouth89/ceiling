@@ -13,9 +13,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::codex_cost_speed::{self, CodexCostSpeed};
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
-use crate::codex_cost_speed::{self, CodexCostSpeed};
 use crate::codex_costs::{
     add_codex_record_to_summary, add_codex_records_to_summary, codex_period_start,
     codex_scan_dates, project_bucket, scan_codex_file_cost_for_range,
@@ -366,10 +366,12 @@ fn local_day_start_utc(day: NaiveDate) -> DateTime<Utc> {
                 .latest()
         })
         .map(|local| local.with_timezone(&Utc))
-        .unwrap_or_else(|| DateTime::<Utc>::from_naive_utc_and_offset(
-            day.and_hms_opt(0, 0, 0).expect("valid midnight"),
-            Utc,
-        ))
+        .unwrap_or_else(|| {
+            DateTime::<Utc>::from_naive_utc_and_offset(
+                day.and_hms_opt(0, 0, 0).expect("valid midnight"),
+                Utc,
+            )
+        })
 }
 
 /// Cheap date gate for the flat archived dir: files are `rollout-YYYY-MM-DD…`.
