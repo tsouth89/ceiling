@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import {
+  compareAccountIds,
   hasMultipleAccounts,
   orderFlyoutProviders,
   representativeForProvider,
@@ -149,6 +150,27 @@ describe("selectStripAccount", () => {
 
     expect(selectStripAccount(forward)?.accountId).toBe("a");
     expect(selectStripAccount(reversed)?.accountId).toBe("a");
+  });
+
+  it("breaks ties by byte order, so mixed case matches the native strip", () => {
+    // Rust compares account ids as bytes, where "B" sorts before "a".
+    // `localeCompare` reverses that, which would badge a different seat than
+    // the tile shows.
+    const rows = [snap("codex", "apex", 50), snap("codex", "Beta", 50)];
+    expect(selectStripAccount(rows)?.accountId).toBe("Beta");
+  });
+});
+
+describe("compareAccountIds", () => {
+  it("orders by code unit, not locale collation", () => {
+    expect(compareAccountIds("Beta", "apex")).toBeLessThan(0);
+    expect(compareAccountIds("apex", "Beta")).toBeGreaterThan(0);
+    expect(compareAccountIds("same", "same")).toBe(0);
+  });
+
+  it("treats a missing id as empty, so it sorts first", () => {
+    expect(compareAccountIds(null, "a")).toBeLessThan(0);
+    expect(compareAccountIds(undefined, null)).toBe(0);
   });
 });
 

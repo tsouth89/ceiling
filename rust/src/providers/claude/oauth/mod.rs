@@ -604,6 +604,24 @@ mod tests {
         assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
     }
 
+    /// End to end for the reported bug: a Pro seat's credentials must reach the
+    /// snapshot as "Claude Pro", not the raw shared tier.
+    #[test]
+    fn a_pro_seat_reaches_the_snapshot_as_claude_pro() {
+        let response: OAuthUsageResponse =
+            serde_json::from_str(r#"{"five_hour": {"utilization": 0}}"#).expect("response parses");
+
+        let mut credentials = test_credentials();
+        credentials.subscription_type = Some("pro".to_string());
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
+        assert_eq!(usage.login_method.as_deref(), Some("Claude Pro"));
+
+        // Without the subscription type the shared tier still reads as the
+        // product rather than leaking `default_claude_ai` to the UI.
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+        assert_eq!(usage.login_method.as_deref(), Some("Claude AI"));
+    }
+
     /// SOU-286: a freshly reset window reports `1` (1% used). Read per value it
     /// resolved to 100%, which also fired a false "limit reached" notification.
     #[test]

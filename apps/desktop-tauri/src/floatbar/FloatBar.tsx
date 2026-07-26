@@ -41,6 +41,7 @@ import {
   type CapacityFreshness,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
+import { compareAccountIds } from "../lib/providerRow";
 import type { FloatBarInformationMode } from "../types/bridge";
 import "./FloatBar.css";
 
@@ -560,7 +561,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
         if (delta !== 0) return delta;
         // Lowest account id, matching the native strip and the flyout so all
         // three name the same seat when two accounts read the same pressure.
-        return (a.accountId ?? "").localeCompare(b.accountId ?? "");
+        return compareAccountIds(a.accountId, b.accountId);
       })[0];
     };
     if (filterIds && filterIds.length > 0) {

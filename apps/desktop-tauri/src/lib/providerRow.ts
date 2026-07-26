@@ -114,6 +114,24 @@ function stripHeat(provider: Pick<ProviderUsageSnapshot, "primary">): number {
 }
 
 /**
+ * Account-id order, matching Rust's `String: Ord` so the strip tie-break lands
+ * on the same seat as the native one.
+ *
+ * Deliberately not `localeCompare`: collation sorts "a" before "B" where a byte
+ * comparison does the reverse, so a mixed-case id could tie-break one way in
+ * the flyout and the other way on the tile.
+ */
+export function compareAccountIds(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const left = a ?? "";
+  const right = b ?? "";
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/**
  * Which account the compact taskbar/float strip should show for a provider.
  *
  * Matches the native strip: an explicit pin wins when that account is present,
@@ -134,7 +152,7 @@ export function selectStripAccount<T extends ProviderUsageSnapshot>(
   return [...candidates].sort((a, b) => {
     const delta = stripHeat(b) - stripHeat(a);
     if (delta !== 0) return delta;
-    return (a.accountId ?? "").localeCompare(b.accountId ?? "");
+    return compareAccountIds(a.accountId, b.accountId);
   })[0];
 }
 
@@ -176,7 +194,7 @@ export function orderFlyoutProviders<T extends ProviderUsageSnapshot>(
       .sort((a, b) => {
         const delta = stripHeat(b) - stripHeat(a);
         if (delta !== 0) return delta;
-        return (a.accountId ?? "").localeCompare(b.accountId ?? "");
+        return compareAccountIds(a.accountId, b.accountId);
       });
     result.push(...rest);
   }
