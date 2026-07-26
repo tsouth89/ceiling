@@ -102,6 +102,7 @@ pub(super) async fn refresh_access_token(
         expires_at,
         scopes,
         rate_limit_tier: current.rate_limit_tier.clone(),
+        subscription_type: current.subscription_type.clone(),
     })
 }
 

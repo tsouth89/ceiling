@@ -115,20 +115,64 @@ impl UtilizationScale {
 }
 
 fn claude_plan_label(tier: &str) -> String {
+    claude_plan_label_opt(tier).unwrap_or_else(|| claude_plan_label_from_unknown(tier))
+}
+
+/// The plan a rate limit tier names, or `None` when the tier does not name one.
+///
+/// Anthropic bills Pro and Free against the same shared `default_claude_ai`
+/// tier, so that value says "claude.ai limits" and nothing about the plan — it
+/// is not an unrecognised tier to be echoed raw.
+fn claude_plan_label_opt(tier: &str) -> Option<String> {
     let normalized = tier.to_lowercase();
     if normalized.contains("claude_max_5x") || normalized.contains("claude_max_5") {
-        "Claude Max 5x".to_string()
-    } else if normalized.contains("claude_max_20x") || normalized.contains("claude_max_20") {
-        "Claude Max 20x".to_string()
+        return Some("Claude Max 5x".to_string());
+    }
+    if normalized.contains("claude_max_20x") || normalized.contains("claude_max_20") {
+        return Some("Claude Max 20x".to_string());
+    }
+    match normalized.as_str() {
+        "free" | "claude_free" => Some("Claude Free".to_string()),
+        "pro" | "claude_pro" => Some("Claude Pro".to_string()),
+        "max" | "claude_max" => Some("Claude Max".to_string()),
+        "team" | "claude_team" => Some("Claude Team".to_string()),
+        "enterprise" | "claude_enterprise" => Some("Claude Enterprise".to_string()),
+        _ => None,
+    }
+}
+
+/// The plan label for an account, reading the subscription type when the rate
+/// limit tier is not plan-specific.
+///
+/// A $20 Pro seat reports `rateLimitTier: "default_claude_ai"` alongside
+/// `subscriptionType: "pro"`, so tier alone rendered it as the raw
+/// "Claude (default_claude_ai)". The tier still wins when it *is* specific: it
+/// distinguishes Max 5x from Max 20x, which `subscriptionType: "max"` cannot.
+fn claude_plan_label_with_subscription(
+    tier: Option<&str>,
+    subscription_type: Option<&str>,
+) -> Option<String> {
+    let tier = tier.map(str::trim).filter(|value| !value.is_empty());
+    let subscription = subscription_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    tier.and_then(claude_plan_label_opt)
+        .or_else(|| subscription.and_then(claude_plan_label_opt))
+        // A tier we have never seen is still worth showing verbatim; a known
+        // non-specific one (`default_claude_ai`) reads better as its brand name.
+        .or_else(|| tier.map(claude_plan_label_from_unknown))
+        .or_else(|| subscription.map(|value| format!("Claude ({})", value)))
+}
+
+/// Label for a tier that named no plan: the claude.ai default reads as the
+/// product, anything genuinely unrecognised is echoed so it can be reported.
+fn claude_plan_label_from_unknown(tier: &str) -> String {
+    let normalized = tier.to_lowercase();
+    if normalized == "default_claude_ai" || normalized == "claude_ai" {
+        "Claude AI".to_string()
     } else {
-        match normalized.as_str() {
-            "free" => "Claude Free".to_string(),
-            "pro" | "claude_pro" => "Claude Pro".to_string(),
-            "max" => "Claude Max".to_string(),
-            "team" => "Claude Team".to_string(),
-            "enterprise" => "Claude Enterprise".to_string(),
-            _ => format!("Claude ({})", tier),
-        }
+        format!("Claude ({})", tier)
     }
 }
 
@@ -971,6 +1015,47 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
+
+    #[test]
+    fn names_a_pro_seat_from_its_subscription_type() {
+        // Pro and Free share `default_claude_ai`, which used to render raw as
+        // "Claude (default_claude_ai)" on every card and the taskbar flyout.
+        assert_eq!(
+            claude_plan_label_with_subscription(Some("default_claude_ai"), Some("pro")).as_deref(),
+            Some("Claude Pro")
+        );
+        assert_eq!(
+            claude_plan_label_with_subscription(Some("default_claude_ai"), Some("free")).as_deref(),
+            Some("Claude Free")
+        );
+    }
+
+    #[test]
+    fn a_specific_tier_outranks_the_subscription_type() {
+        // `subscriptionType: "max"` cannot tell 5x from 20x; the tier can.
+        assert_eq!(
+            claude_plan_label_with_subscription(Some("default_claude_max_20x"), Some("max"))
+                .as_deref(),
+            Some("Claude Max 20x")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_brand_name_without_a_subscription_type() {
+        assert_eq!(
+            claude_plan_label_with_subscription(Some("default_claude_ai"), None).as_deref(),
+            Some("Claude AI")
+        );
+        assert_eq!(claude_plan_label_with_subscription(None, None), None);
+    }
+
+    #[test]
+    fn echoes_a_genuinely_unknown_tier() {
+        assert_eq!(
+            claude_plan_label_with_subscription(Some("some_new_tier"), None).as_deref(),
+            Some("Claude (some_new_tier)")
+        );
+    }
 
     #[test]
     fn parses_current_cli_usage_screen() {
