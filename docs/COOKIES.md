@@ -36,10 +36,16 @@ When automatic import succeeds, Ceiling extracts only cookies for the enabled pr
 
 ## Manual cookies (recommended for Chromium providers)
 
-1. Open the provider's website in your browser (e.g. `claude.ai` or `opencode.ai`) and make sure you are logged in.
-2. Open DevTools (F12) → **Network** tab, refresh the page, and click any request to the provider.
-3. Copy the `Cookie` header value from **Request Headers**.
-4. In Ceiling → **Settings → Providers → provider detail → Browser Cookies**, paste the value.
+In the app: **Settings → Providers → pick provider → Browser Cookies**. Ceiling
+shows numbered steps and an **Open site** button. The short version:
+
+1. Open the provider site and stay signed in.
+2. Press **F12** → **Network** tab.
+3. Refresh (F5). Click any request to that site.
+4. Under **Request Headers**, find **Cookie**.
+5. Copy **only the value** after `Cookie:` — it looks like `name=value; other=value`.
+   Do **not** include the word `Cookie:` itself.
+6. Paste into Ceiling and click **Save Cookie**.
 
 Manual cookies are saved to the `ManualCookies` store and reused across restarts, not held only in memory. On **Windows** (the shipped app) they are encrypted with DPAPI and locked to your user with a user-only file ACL, under `%APPDATA%\Ceiling`. On other platforms — the Linux CLI build of the shared crate — they are written with owner-only (`0600`) file permissions rather than encrypted.
 

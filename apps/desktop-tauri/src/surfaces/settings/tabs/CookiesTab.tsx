@@ -108,8 +108,11 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
     <section className="settings-section">
       <h3 className="settings-section__title">Saved Cookies</h3>
       <p className="settings-section__hint">
-        Manual cookie overrides for browser-authenticated providers. These are
-        used when automatic browser cookie extraction is unavailable.
+        Paste a Cookie header from the provider site (recommended on Chrome,
+        Edge, and Brave). Open DevTools (F12) → Network → refresh → click any
+        request → copy the value of the Cookie request header only (not the
+        word Cookie:). Per-provider steps live under Providers → provider
+        detail.
       </p>
 
       {error && (
