@@ -33,10 +33,10 @@ App-Bound Encryption details.
 | **Claude** | Your signed-in Claude Code / Claude Desktop session, an OAuth token, or claude.ai cookies you provide; plus local `~/.claude` logs for cost and tokens | api.anthropic.com, claude.ai |
 | **Codex / OpenAI** | The OAuth token from your Codex CLI (`~/.codex/auth.json`) plus local `~/.codex/sessions` logs | chatgpt.com |
 | **Cursor** | Your signed-in Cursor IDE session (`state.vscdb`), or cursor.com cookies you provide | cursor.com |
-| **GitHub Copilot** | A GitHub account you pin in Ceiling (device-flow sign-in or stored OAuth token). Each stored account is tracked separately. Ambient `gh auth` is not followed for live meters. | api.github.com, or your GitHub Enterprise host |
+| **GitHub Copilot** | A GitHub account you pin in Ceiling (device-flow sign-in, **Import current gh account**, or stored OAuth token). Each stored account is tracked separately. Ambient `gh auth` is not followed for live meters after pin. | api.github.com, or your GitHub Enterprise host |
 | **Gemini** | The OAuth token from the Gemini CLI (`~/.gemini/oauth_creds.json`) | Google Code Assist and OAuth endpoints |
 | **Grok** | The OIDC session from Grok Build (`~/.grok/auth.json` via `grok login`), or grok.com cookies you provide; tokens refresh via auth.x.ai; plus local `~/.grok/sessions` logs for tokens / cache / effort / projects / API-equivalent $ (`costUsdTicks`) | grok.com, auth.x.ai |
-| **OpenCode Go** | Browser cookies from `opencode.ai` (auto-import or paste) for the workspace `/go` usage page; OpenCode CLI / local Go API key are detected for setup | opencode.ai |
+| **OpenCode Go** | Prefers `GET /zen/go/v1/usage` with the local Go API key when that route exists; otherwise browser cookies from `opencode.ai` for the workspace `/go` page. OpenCode CLI / `auth.json` are detected for setup. | opencode.ai |
 | Other providers | A local session or token on this PC, or the provider's own usage endpoint | The provider's own domain only |
 
 ## Network policy

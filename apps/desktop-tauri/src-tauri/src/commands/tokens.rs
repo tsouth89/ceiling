@@ -5,7 +5,9 @@
 //! against the current list size before each response.
 
 use codexbar::core::{ProviderId, TokenAccount, TokenAccountStore, TokenAccountSupport};
+use codexbar::providers::copilot::{CopilotApi, load_gh_cli_token};
 use serde::Serialize;
+use tauri::Emitter;
 
 /// Bridge-friendly token account support descriptor for a provider.
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +179,77 @@ pub fn set_active_token_account(
     let active = data.clamped_active_index();
     Ok(build_provider_token_accounts(
         id,
+        &support,
+        data.accounts,
+        active,
+    ))
+}
+
+/// Snapshot the current `gh auth token` into a pinned Copilot token account.
+///
+/// Ambient gh is not used for live meters; this one-shot import freezes the
+/// identity so later `gh auth switch` does not move the progress bar.
+#[tauri::command]
+pub async fn import_copilot_from_gh(
+    app: tauri::AppHandle,
+) -> Result<ProviderTokenAccountsBridge, String> {
+    let token = load_gh_cli_token(None).ok_or_else(|| {
+        "No GitHub CLI token found. Run `gh auth login`, then try again.".to_string()
+    })?;
+
+    let api = CopilotApi::new();
+    let identity = api.fetch_identity_with_token(&token, None).await.ok();
+    let plan = api
+        .fetch_usage_with_token(&token, None)
+        .await
+        .ok()
+        .and_then(|usage| usage.login_method);
+
+    let login = identity.as_ref().map(|identity| identity.login.clone());
+    let label = match (login.as_deref(), plan.as_deref()) {
+        (Some(login), Some(plan)) => format!("{login} ({plan})"),
+        (Some(login), None) => login.to_string(),
+        (None, Some(plan)) => plan.to_string(),
+        (None, None) => "GitHub CLI".to_string(),
+    };
+
+    let support = TokenAccountSupport::for_provider(ProviderId::Copilot)
+        .ok_or_else(|| "Copilot does not support token accounts".to_string())?;
+    let store = TokenAccountStore::new();
+    let mut data = store
+        .load_provider(ProviderId::Copilot)
+        .map_err(|e| e.to_string())?;
+
+    let existing_index = login.as_deref().and_then(|login| {
+        data.accounts.iter().position(|account| {
+            account.label == login || account.label.starts_with(&format!("{login} ("))
+        })
+    });
+
+    if let Some(index) = existing_index {
+        data.accounts[index].token = token;
+        data.accounts[index].label = label;
+        data.accounts[index].mark_used();
+        data.set_active(index);
+    } else {
+        let mut account = TokenAccount::new(label, token);
+        account.mark_used();
+        data.add_account(account);
+        data.set_active(data.accounts.len().saturating_sub(1));
+    }
+
+    store
+        .save_provider(ProviderId::Copilot, &data)
+        .map_err(|e| e.to_string())?;
+
+    let _ = app.emit(
+        "provider-updated",
+        serde_json::json!({ "providerId": "copilot" }),
+    );
+
+    let active = data.clamped_active_index();
+    Ok(build_provider_token_accounts(
+        ProviderId::Copilot,
         &support,
         data.accounts,
         active,

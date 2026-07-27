@@ -407,6 +407,11 @@ export function setActiveTokenAccount(
   });
 }
 
+/** Snapshot the current `gh auth token` into a pinned Copilot account. */
+export function importCopilotFromGh(): Promise<ProviderTokenAccountsBridge> {
+  return invoke<ProviderTokenAccountsBridge>("import_copilot_from_gh");
+}
+
 // ── Phase 5 — i18n ────────────────────────────────────────────────────
 
 export function getLocaleStrings(

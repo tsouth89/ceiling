@@ -860,6 +860,7 @@ locale_keys! {
     TokenAccountRemove,
     TokenAccountAddButton,
     TokenAccountGithubLoginButton,
+    TokenAccountImportGhButton,
     TokenAccountEmpty,
     TokenAccountLabelPlaceholder,
     TokenAccountProviderLabel,

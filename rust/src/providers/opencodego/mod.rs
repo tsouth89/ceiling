@@ -1,14 +1,17 @@
 //! OpenCode Go provider implementation
 //!
 //! Separate workspace surface that shares the `opencode.ai` cookie domain with
-//! the OpenCode provider. Resolves the workspace ID, then scrapes the `/go`
-//! usage page for rolling/weekly/monthly windows.
+//! the OpenCode provider.
+//!
+//! Fetch order (Auto):
+//! 1. `GET /zen/go/v1/usage` with the OpenCode Go API key (when the public
+//!    usage route ships; today it may still 404, and we fall through).
+//! 2. Browser / manual cookies against the workspace `/go` page scrape.
 //!
 //! Detection (Claude/Codex-style "available to track"):
 //! - CLI installed when `opencode` is on PATH or known install locations.
 //! - Local Go credentials when `auth.json` has an `opencode-go` API key.
-//! - Ready to track when browser cookies for `opencode.ai` can be imported
-//!   (usage still comes from the web console, not the model API key).
+//! - Ready when cookies can be imported or a local Go API key is present.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -24,6 +27,7 @@ use crate::core::{
 
 const BASE_URL: &str = "https://opencode.ai";
 const SERVER_URL: &str = "https://opencode.ai/_server";
+const USAGE_API_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const WORKSPACES_SERVER_ID: &str =
     "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -37,18 +41,22 @@ pub fn cli_installed() -> bool {
 }
 
 /// Whether a local OpenCode Go API key exists in the CLI auth store.
-///
-/// Presence means the user connected Go in the OpenCode CLI. Usage still
-/// requires opencode.ai session cookies for the web scrape path.
 pub fn local_go_credentials_available() -> bool {
+    local_go_api_key().is_some()
+}
+
+/// Load the OpenCode Go API key from the CLI auth store (never logs the value).
+pub fn local_go_api_key() -> Option<String> {
     auth_json_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .is_some_and(|root| {
+        .and_then(|root| {
             root.get("opencode-go")
                 .and_then(|entry| entry.get("key"))
                 .and_then(|key| key.as_str())
-                .is_some_and(|key| !key.trim().is_empty())
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(ToOwned::to_owned)
         })
 }
 
@@ -439,6 +447,149 @@ impl OpenCodeGoProvider {
         }
         Ok(result)
     }
+
+    /// Prefer the public usage API when it exists (anomalyco/opencode#16513).
+    /// Returns `None` for not-yet-shipped / missing-route responses so callers
+    /// can fall through to the cookie scrape.
+    async fn try_fetch_usage_api(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<ProviderFetchResult>, ProviderError> {
+        let response = self
+            .client
+            .get(USAGE_API_URL)
+            .bearer_auth(api_key.trim())
+            .header("Accept", "application/json")
+            .header("User-Agent", USER_AGENT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Other(format!("OpenCode Go usage API request failed: {e}")))?;
+
+        let status = response.status();
+        // Route not shipped yet, or not registered for this key shape.
+        if status.as_u16() == 404 || status.as_u16() == 405 {
+            tracing::debug!(
+                status = %status,
+                "OpenCode Go usage API unavailable; falling back to web scrape"
+            );
+            return Ok(None);
+        }
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Other(format!(
+                "OpenCode Go usage API returned {status}"
+            )));
+        }
+
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::Other(format!("OpenCode Go usage API body: {e}")))?;
+        match Self::parse_usage_api_json(&body) {
+            Ok(usage) => Ok(Some(ProviderFetchResult::new(usage, "api"))),
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    "OpenCode Go usage API body not parseable; falling back to web scrape"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Parse the proposed `/zen/go/v1/usage` payload (and close variants).
+    ///
+    /// Expected shape from PR #16513:
+    /// ```json
+    /// {
+    ///   "rollingUsage": { "usagePercent": 42, "resetInSec": 3600, "status": "ok" },
+    ///   "weeklyUsage":  { "usagePercent": 10, "resetInSec": 86400 },
+    ///   "monthlyUsage": { "usagePercent": 5,  "resetInSec": 2592000 }
+    /// }
+    /// ```
+    fn parse_usage_api_json(body: &str) -> Result<UsageSnapshot, ProviderError> {
+        let value: Value = serde_json::from_str(body)
+            .map_err(|e| ProviderError::Parse(format!("OpenCode Go usage API JSON: {e}")))?;
+
+        if value.get("type").and_then(|t| t.as_str()) == Some("error") {
+            return Err(ProviderError::AuthRequired);
+        }
+
+        let rolling = Self::window_from_api_value(&value, &["rollingUsage", "rolling_usage", "rolling"])
+            .ok_or_else(|| ProviderError::Parse("OpenCode Go usage API missing rolling window".into()))?;
+        let weekly = Self::window_from_api_value(&value, &["weeklyUsage", "weekly_usage", "weekly"]);
+        let monthly =
+            Self::window_from_api_value(&value, &["monthlyUsage", "monthly_usage", "monthly"]);
+
+        let now = Utc::now();
+        let primary = RateWindow::with_details(
+            rolling.0,
+            Some(300),
+            Some(now + chrono::Duration::seconds(rolling.1)),
+            None,
+        );
+        let mut snap = UsageSnapshot::new(primary).with_login_method("OpenCode Go");
+        if let Some((pct, reset)) = weekly {
+            snap = snap.with_secondary(RateWindow::with_details(
+                pct,
+                Some(10080),
+                Some(now + chrono::Duration::seconds(reset)),
+                None,
+            ));
+        }
+        if let Some((pct, reset)) = monthly {
+            snap = snap.with_tertiary(RateWindow::with_details(
+                pct,
+                Some(43200),
+                Some(now + chrono::Duration::seconds(reset)),
+                None,
+            ));
+        }
+        Ok(snap)
+    }
+
+    fn window_from_api_value(root: &Value, names: &[&str]) -> Option<(f64, i64)> {
+        for name in names {
+            let Some(block) = root.get(*name) else {
+                continue;
+            };
+            let Some(percent) = block
+                .get("usagePercent")
+                .or_else(|| block.get("usedPercent"))
+                .or_else(|| block.get("percentUsed"))
+                .or_else(|| block.get("percent"))
+                .and_then(Self::json_number)
+            else {
+                continue;
+            };
+            let reset = block
+                .get("resetInSec")
+                .or_else(|| block.get("resetInSeconds"))
+                .or_else(|| block.get("resetSeconds"))
+                .or_else(|| block.get("resetSec"))
+                .and_then(Self::json_number)
+                .map(|n| n as i64)
+                .unwrap_or(0)
+                .max(0);
+            let p = if percent <= 1.0 {
+                percent * 100.0
+            } else {
+                percent
+            };
+            return Some((p.clamp(0.0, 100.0), reset));
+        }
+        None
+    }
+
+    fn json_number(value: &Value) -> Option<f64> {
+        value
+            .as_f64()
+            .or_else(|| value.as_i64().map(|n| n as f64))
+            .or_else(|| value.as_u64().map(|n| n as f64))
+            .or_else(|| value.as_str()?.trim().replace(',', "").parse().ok())
+    }
 }
 
 impl Default for OpenCodeGoProvider {
@@ -461,14 +612,40 @@ impl Provider for OpenCodeGoProvider {
         tracing::debug!("Fetching OpenCode Go usage");
 
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
+            SourceMode::Auto | SourceMode::Web | SourceMode::Cli => {
+                // 1) API key path (local CLI key or explicit settings key).
+                let api_key = ctx
+                    .api_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(local_go_api_key);
+                if let Some(ref key) = api_key {
+                    match self.try_fetch_usage_api(key).await {
+                        Ok(Some(result)) => return Ok(result),
+                        Ok(None) => {}
+                        Err(ProviderError::AuthRequired) => {
+                            // Bad key: still try cookies if present.
+                            tracing::debug!(
+                                "OpenCode Go usage API rejected key; trying cookie scrape"
+                            );
+                        }
+                        Err(e) => {
+                            // Transient network/parse issues: still allow cookie fallback.
+                            tracing::debug!(error = %e, "OpenCode Go usage API error; trying cookies");
+                        }
+                    }
+                }
+
+                // 2) Manual or browser cookies against the workspace page.
                 if let Some(ref cookie_header) = ctx.manual_cookie_header {
                     return self
                         .fetch_with_cookies(cookie_header, ctx.workspace_id.as_deref())
                         .await;
                 }
 
-                match crate::providers::browser_cookie_header(&["opencode.ai"]) {
+                match crate::providers::browser_cookie_header(COOKIE_DOMAINS) {
                     Ok(cookie_header) => match self
                         .fetch_with_cookies(&cookie_header, ctx.workspace_id.as_deref())
                         .await
@@ -481,15 +658,20 @@ impl Provider for OpenCodeGoProvider {
                     Err(e) => return Err(e),
                 }
 
-                Err(ProviderError::AuthRequired)
+                if api_key.is_some() {
+                    Err(ProviderError::Other(
+                        "OpenCode Go usage API is not available yet and no opencode.ai cookies were found. Stay signed in at opencode.ai in your browser, or paste a cookie header.".into(),
+                    ))
+                } else {
+                    Err(ProviderError::AuthRequired)
+                }
             }
-            SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
             SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::Web]
+        vec![SourceMode::Auto, SourceMode::Web, SourceMode::Cli]
     }
 
     fn supports_web(&self) -> bool {
@@ -497,7 +679,7 @@ impl Provider for OpenCodeGoProvider {
     }
 
     fn supports_cli(&self) -> bool {
-        false
+        true
     }
 }
 
@@ -568,5 +750,26 @@ mod tests {
         let provider = OpenCodeGoProvider::new();
         assert!(provider.metadata().default_enabled);
         assert_eq!(provider.id(), ProviderId::OpenCodeGo);
+    }
+
+    #[test]
+    fn parses_usage_api_json_windows() {
+        let body = r#"{
+            "useBalance": false,
+            "rollingUsage": { "status": "ok", "usagePercent": 42, "resetInSec": 3600 },
+            "weeklyUsage":  { "status": "ok", "usagePercent": 13, "resetInSec": 86400 },
+            "monthlyUsage": { "status": "ok", "usagePercent": 7,  "resetInSec": 2592000 }
+        }"#;
+        let snap = OpenCodeGoProvider::parse_usage_api_json(body).unwrap();
+        assert!((snap.primary.used_percent - 42.0).abs() < 0.001);
+        assert!((snap.secondary.unwrap().used_percent - 13.0).abs() < 0.001);
+        assert!((snap.tertiary.unwrap().used_percent - 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn usage_api_error_payload_is_auth_required() {
+        let body = r#"{ "type": "error", "error": { "type": "AuthError", "message": "Unauthorized" } }"#;
+        let err = OpenCodeGoProvider::parse_usage_api_json(body).unwrap_err();
+        assert!(matches!(err, ProviderError::AuthRequired));
     }
 }

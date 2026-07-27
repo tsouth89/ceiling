@@ -191,6 +191,7 @@ fn main() {
             commands::add_token_account,
             commands::remove_token_account,
             commands::set_active_token_account,
+            commands::import_copilot_from_gh,
             commands::get_app_info,
             commands::get_provider_chart_data,
             commands::get_quota_run_history,

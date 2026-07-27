@@ -4,15 +4,30 @@ import DetectedAccountsCard from "./DetectedAccountsCard";
 import { setDetectedProviderIgnored } from "../lib/detectedProviderPreferences";
 
 const getDetectedProviderAccounts = vi.fn();
+const importCopilotFromGh = vi.fn();
 
 vi.mock("../lib/tauri", () => ({
   getDetectedProviderAccounts: () => getDetectedProviderAccounts(),
+  importCopilotFromGh: () => importCopilotFromGh(),
 }));
 
 describe("DetectedAccountsCard", () => {
   beforeEach(() => {
     window.localStorage.clear();
     getDetectedProviderAccounts.mockReset();
+    importCopilotFromGh.mockReset();
+    importCopilotFromGh.mockResolvedValue({
+      providerId: "copilot",
+      support: {
+        providerId: "copilot",
+        displayName: "Copilot",
+        title: "GitHub accounts",
+        subtitle: "",
+        placeholder: "",
+      },
+      accounts: [],
+      activeIndex: 0,
+    });
     getDetectedProviderAccounts.mockResolvedValue([
       {
         providerId: "codex",
@@ -36,6 +51,30 @@ describe("DetectedAccountsCard", () => {
         detail: "Not found on this PC",
       },
     ]);
+  });
+
+  it("pins current gh account when tracking Copilot", async () => {
+    getDetectedProviderAccounts.mockResolvedValue([
+      {
+        providerId: "copilot",
+        displayName: "Copilot",
+        status: "ready",
+        sourceLabel: "GitHub CLI (will pin on track)",
+        detail: "Signed in and ready to track",
+      },
+    ]);
+    const onEnable = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DetectedAccountsCard
+        enabledProviderIds={[]}
+        onEnable={onEnable}
+        onManage={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Copilot")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Track" }));
+    await waitFor(() => expect(importCopilotFromGh).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onEnable).toHaveBeenCalledWith(["copilot"]));
   });
 
   it("offers one-click tracking only for detected disabled providers", async () => {

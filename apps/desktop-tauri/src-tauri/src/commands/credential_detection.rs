@@ -122,6 +122,10 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
         .is_some_and(|data| !data.accounts.is_empty());
     let copilot_gh = codexbar::providers::copilot::gh_cli_token_available(None);
 
+    // OpenCode Go is Ready when cookies work or a local Go API key exists
+    // (API key path tries /zen/go/v1/usage first, then falls back to cookies).
+    let opencode_go_ready = opencode_go_cookies || opencode_go_auth;
+
     vec![
         detected_account(
             "codex",
@@ -192,14 +196,16 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
         detected_account(
             "opencodego",
             "OpenCode Go",
-            if opencode_go_cookies {
+            if opencode_go_ready {
                 DetectedAccountStatus::Ready
-            } else if opencode_go_cli || opencode_go_auth {
+            } else if opencode_go_cli {
                 DetectedAccountStatus::Installed
             } else {
                 DetectedAccountStatus::Unavailable
             },
-            if opencode_go_cli || opencode_go_auth {
+            if opencode_go_auth {
+                "OpenCode Go key"
+            } else if opencode_go_cli {
                 "OpenCode CLI"
             } else {
                 "opencode.ai"
@@ -208,15 +214,16 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
         detected_account(
             "copilot",
             "Copilot",
-            if copilot_has_pinned {
+            if copilot_has_pinned || copilot_gh {
+                // Ready when pinned, or when gh can be one-shot imported on Track.
                 DetectedAccountStatus::Ready
-            } else if copilot_gh {
-                DetectedAccountStatus::Installed
             } else {
                 DetectedAccountStatus::Unavailable
             },
             if copilot_has_pinned {
                 "GitHub OAuth (pinned)"
+            } else if copilot_gh {
+                "GitHub CLI (will pin on track)"
             } else {
                 "GitHub"
             },

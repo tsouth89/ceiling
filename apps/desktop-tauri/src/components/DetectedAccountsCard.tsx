@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DetectedProviderAccount } from "../types/bridge";
-import { getDetectedProviderAccounts } from "../lib/tauri";
+import { getDetectedProviderAccounts, importCopilotFromGh } from "../lib/tauri";
 import {
   getIgnoredDetectedProviderIds,
   setDetectedProviderIgnored,
@@ -86,6 +86,16 @@ export default function DetectedAccountsCard({
     if (providerIds.length === 0) return;
     setPendingIds((current) => new Set([...current, ...providerIds]));
     try {
+      // Copilot meters use pinned token accounts only. When Track is offered
+      // because gh is available, snapshot that identity before enabling so
+      // later `gh auth switch` does not move the bar.
+      if (providerIds.includes("copilot")) {
+        try {
+          await importCopilotFromGh();
+        } catch {
+          // If pin fails (no gh token), still enable; user can sign in from settings.
+        }
+      }
       await onEnable(providerIds);
       providerIds.forEach((providerId) => setDetectedProviderIgnored(providerId, false));
     } finally {

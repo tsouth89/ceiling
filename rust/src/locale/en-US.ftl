@@ -585,6 +585,7 @@ TokenAccountSetActive = Set Active
 TokenAccountRemove = Remove
 TokenAccountAddButton = Add Account
 TokenAccountGithubLoginButton = Sign in with GitHub
+TokenAccountImportGhButton = Import current gh account
 TokenAccountEmpty = No accounts saved for this provider.
 TokenAccountLabelPlaceholder = Label (e.g. Work, Personal)…
 TokenAccountProviderLabel = Provider
@@ -608,10 +609,10 @@ DataSourceLearnMore = Learn how Ceiling gets each provider's data
 DataSourceClaude = Reads usage from your signed-in Claude Code or Claude Desktop session, an OAuth token, or claude.ai cookies you provide. Talks only to api.anthropic.com and claude.ai.
 DataSourceCodex = Uses the OAuth token from your Codex CLI (~/.codex) plus local session logs on this PC. Talks only to chatgpt.com.
 DataSourceCursor = Uses your signed-in Cursor IDE session, or cursor.com cookies you provide. Talks only to cursor.com.
-DataSourceCopilot = Uses a GitHub account you pin in Ceiling (device-flow sign-in or stored OAuth token). Each stored GitHub account is tracked separately. Ambient gh auth is not followed, so switching GitHub CLI accounts will not move your meters. Talks only to api.github.com, or your configured GitHub Enterprise host.
+DataSourceCopilot = Uses a GitHub account you pin in Ceiling (device-flow sign-in, Import current gh account, or a stored OAuth token). Each stored GitHub account is tracked separately. Ambient gh auth is not followed after pin, so switching GitHub CLI accounts will not move your meters. Talks only to api.github.com, or your configured GitHub Enterprise host.
 DataSourceGemini = Reads the OAuth token from the Gemini CLI (~/.gemini). Talks only to Google's Code Assist and OAuth endpoints.
 DataSourceGrok = Uses ~/.grok/auth.json from `grok login` (Grok Build / SuperGrok), or grok.com browser cookies you provide. Talks only to grok.com and auth.x.ai. Weekly pool percent is sampled into local charts. Local Grok Build sessions under ~/.grok/sessions supply token, cache, reasoning, project, and API-equivalent dollar breakdowns (from session costUsdTicks, not SuperGrok pool billing).
-DataSourceOpenCodeGo = Uses browser cookies from opencode.ai (auto-import or paste) to read the OpenCode Go rolling, weekly, and monthly windows on your workspace /go page. Detects the OpenCode CLI and local Go API key for setup, but usage still comes from the web session. Talks only to opencode.ai.
+DataSourceOpenCodeGo = Tries GET /zen/go/v1/usage with your local OpenCode Go API key when that route is available, then falls back to browser cookies from opencode.ai for the workspace /go page (rolling, weekly, monthly). Talks only to opencode.ai.
 DataSourceGeneric = Reads this provider's usage from a local session or token on this PC, or by calling the provider's own usage endpoint. Your credentials are stored only on this PC and are never sent to Ceiling-operated servers; usage requests go only to that provider (or, for Wayfinder, your configured gateway).
 
 # First-run checklist (SOU-157)

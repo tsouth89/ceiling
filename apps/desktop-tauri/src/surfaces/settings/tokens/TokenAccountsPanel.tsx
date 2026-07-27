@@ -4,6 +4,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import {
   addTokenAccount,
   getTokenAccounts,
+  importCopilotFromGh,
   removeTokenAccount,
   setActiveTokenAccount,
   triggerProviderLogin,
@@ -126,6 +127,20 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     }
   };
 
+  const handleImportFromGh = async () => {
+    if (providerId !== "copilot") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await importCopilotFromGh();
+      setData(next);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!providerId) return null;
 
   const placeholder = data?.support.placeholder ?? "Paste token…";
@@ -200,13 +215,23 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
         <h3 className="settings-section__title">{t("SectionAddAccount")}</h3>
       )}
       {providerId === "copilot" && (
-        <button
-          className="credential-btn credential-btn--primary"
-          disabled={busy}
-          onClick={() => void handleProviderLogin()}
-        >
-          {t("TokenAccountGithubLoginButton")}
-        </button>
+        <div className="token-accounts-copilot-actions">
+          <button
+            className="credential-btn credential-btn--primary"
+            disabled={busy}
+            onClick={() => void handleProviderLogin()}
+          >
+            {t("TokenAccountGithubLoginButton")}
+          </button>
+          <button
+            className="credential-btn credential-btn--secondary"
+            disabled={busy}
+            onClick={() => void handleImportFromGh()}
+            title="Snapshot the current gh auth token into a pinned Ceiling account so later gh switches do not move your meters"
+          >
+            {t("TokenAccountImportGhButton")}
+          </button>
+        </div>
       )}
       <div className="credential-add-form token-accounts-add">
         <input
