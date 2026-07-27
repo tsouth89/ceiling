@@ -98,6 +98,17 @@ pub struct Settings {
     #[serde(default = "default_spend_budget_limit_usd")]
     pub spend_budget_limit_usd: f64,
 
+    /// Whether to alert when today's estimated API value is a multiple of the
+    /// recent 7-day average (a runaway-agent heuristic). Opt-in, like the
+    /// spend budget alert.
+    #[serde(default)]
+    pub spend_anomaly_alerts_enabled: bool,
+
+    /// Today's spend must exceed this multiple of the prior 7-day average
+    /// before an anomaly toast fires.
+    #[serde(default = "default_spend_anomaly_threshold_multiplier")]
+    pub spend_anomaly_threshold_multiplier: f64,
+
     /// Internal migration marker for notification defaults. This is not a UI
     /// preference; it prevents old default values from surviving policy fixes.
     #[serde(default)]
@@ -511,6 +522,22 @@ pub fn normalize_spend_budget_usd(value: f64) -> f64 {
     }
 }
 
+/// Default multiplier for the spend-anomaly alert. 3x means today's estimated
+/// API value must be at least three times the prior 7-day average.
+pub const fn default_spend_anomaly_threshold_multiplier() -> f64 {
+    3.0
+}
+
+/// Clamp the anomaly multiplier to a sane, positive range. Values below 1.0
+/// would fire on any below-average day inverted, so the floor is 1.5.
+pub fn normalize_spend_anomaly_threshold_multiplier(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(1.5, 100.0)
+    } else {
+        default_spend_anomaly_threshold_multiplier()
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         let mut enabled = HashSet::new();
@@ -536,6 +563,8 @@ impl Default for Settings {
             spend_budget_period: default_spend_budget_period(),
             spend_budget_warning_usd: default_spend_budget_warning_usd(),
             spend_budget_limit_usd: default_spend_budget_limit_usd(),
+            spend_anomaly_alerts_enabled: false,
+            spend_anomaly_threshold_multiplier: default_spend_anomaly_threshold_multiplier(),
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: HashMap::new(),
             switcher_shows_icons: true,

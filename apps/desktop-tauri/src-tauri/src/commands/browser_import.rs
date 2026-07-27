@@ -44,7 +44,9 @@ pub fn list_detected_browsers() -> Vec<DetectedBrowserBridge> {
 
 /// Diagnose automatic cookie availability for a provider across every browser.
 #[tauri::command]
-pub fn diagnose_browser_cookies(provider_id: String) -> Result<Vec<BrowserCookieProbeBridge>, String> {
+pub fn diagnose_browser_cookies(
+    provider_id: String,
+) -> Result<Vec<BrowserCookieProbeBridge>, String> {
     use codexbar::browser::cookies::{BrowserCookieProbeStatus, diagnose_cookies_for_domain};
 
     let pid = parse_provider_arg(&provider_id)?;
@@ -145,8 +147,12 @@ fn cookie_domain_for_provider(
             )),
         );
     }
-    pid.cookie_domain()
-        .ok_or_else(|| format!("Provider '{}' does not use cookie authentication", pid.cli_name()))
+    pid.cookie_domain().ok_or_else(|| {
+        format!(
+            "Provider '{}' does not use cookie authentication",
+            pid.cli_name()
+        )
+    })
 }
 
 fn format_cookie_error(error: codexbar::browser::cookies::CookieError) -> String {

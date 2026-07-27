@@ -172,6 +172,13 @@ pub struct NotificationManager {
     spend_budget_observed: bool,
     spend_budget_sent: std::collections::HashSet<SpendBudgetAlertLevel>,
     spend_budget_pending: Option<SpendBudgetAlertLevel>,
+    /// Spend-anomaly state. Keyed by calendar day so the alert fires at most
+    /// once per day, and gated by a startup baseline + two-scan confirmation
+    /// like the spend budget alert.
+    spend_anomaly_cycle: Option<String>,
+    spend_anomaly_observed: bool,
+    spend_anomaly_sent: bool,
+    spend_anomaly_pending: bool,
     /// Remains false until the initial provider refresh has established a
     /// trustworthy in-process baseline for every enabled provider.
     notifications_armed: bool,
@@ -200,6 +207,10 @@ impl NotificationManager {
             spend_budget_observed: false,
             spend_budget_sent: std::collections::HashSet::new(),
             spend_budget_pending: None,
+            spend_anomaly_cycle: None,
+            spend_anomaly_observed: false,
+            spend_anomaly_sent: false,
+            spend_anomaly_pending: false,
             notifications_armed: false,
             refresh_cycle_active: false,
             toast_emitted_this_refresh: false,
@@ -600,6 +611,87 @@ impl NotificationManager {
                 },
                 settings,
             );
+        }
+    }
+
+    /// Check whether today's estimated API value is an anomalous multiple of
+    /// the recent 7-day average. A spike must survive two scans and the first
+    /// reading of a calendar day is only a baseline (so an already-elevated
+    /// total at startup is never replayed as a fresh alert). The alert fires at
+    /// most once per day.
+    ///
+    /// `cycle_id` is the calendar day (e.g. `daily:2026-07-19`), `today_usd` is
+    /// the estimated API value accumulated since local midnight, and
+    /// `prior_average_usd` is the mean daily estimated API value over the prior
+    /// 7 calendar days (today excluded). The caller must guarantee
+    /// `prior_average_usd` is `0.0` when there is insufficient history.
+    pub fn check_spend_anomaly(
+        &mut self,
+        cycle_id: &str,
+        today_usd: f64,
+        prior_average_usd: f64,
+        settings: &Settings,
+    ) {
+        let enabled = settings.show_notifications
+            && settings.spend_anomaly_alerts_enabled
+            && settings.spend_anomaly_threshold_multiplier.is_finite()
+            && settings.spend_anomaly_threshold_multiplier > 0.0;
+        if !enabled
+            || !today_usd.is_finite()
+            || today_usd < 0.0
+            || !prior_average_usd.is_finite()
+            || prior_average_usd < 0.0
+        {
+            self.spend_anomaly_cycle = None;
+            self.spend_anomaly_observed = false;
+            self.spend_anomaly_sent = false;
+            self.spend_anomaly_pending = false;
+            return;
+        }
+
+        if self.spend_anomaly_cycle.as_deref() != Some(cycle_id) {
+            self.spend_anomaly_cycle = Some(cycle_id.to_string());
+            self.spend_anomaly_observed = false;
+            self.spend_anomaly_sent = false;
+            self.spend_anomaly_pending = false;
+        }
+
+        // A zero average means there is no usable history yet; a ratio against
+        // it is meaningless, so never alert until a baseline exists.
+        let is_anomaly = prior_average_usd > 0.0
+            && today_usd / prior_average_usd >= settings.spend_anomaly_threshold_multiplier;
+
+        // Never reinterpret an already-elevated total at startup (or right
+        // after enabling the feature) as a fresh anomaly.
+        if !self.spend_anomaly_observed {
+            self.spend_anomaly_observed = true;
+            if is_anomaly {
+                self.spend_anomaly_sent = true;
+            }
+            return;
+        }
+
+        if !is_anomaly {
+            self.spend_anomaly_pending = false;
+            return;
+        }
+        if self.spend_anomaly_sent {
+            return;
+        }
+        if !self.spend_anomaly_pending {
+            self.spend_anomaly_pending = true;
+            return;
+        }
+
+        self.spend_anomaly_pending = false;
+        self.spend_anomaly_sent = true;
+        let multiplier = today_usd / prior_average_usd;
+        let title = "Spend anomaly detected";
+        let body = format!(
+            "Today's estimated API value is ${today_usd:.2}, about {multiplier:.1}x your 7-day average (${prior_average_usd:.2}). This may signal a runaway agent. Estimate from local logs, not a bill."
+        );
+        if self.emit_toast(title, &body) {
+            play_alert(AlertSound::Warning, settings);
         }
     }
 
@@ -1558,5 +1650,126 @@ mod tests {
         assert!(manager.spend_budget_cycle.is_none());
         assert!(manager.spend_budget_sent.is_empty());
         assert!(manager.spend_budget_pending.is_none());
+    }
+
+    fn anomaly_settings(multiplier: f64) -> Settings {
+        Settings {
+            spend_anomaly_alerts_enabled: true,
+            spend_anomaly_threshold_multiplier: multiplier,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn spend_anomaly_requires_two_confirmed_scans_before_alerting() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings(3.0);
+        // A baseline below the multiplier is quiet and marks no sent state.
+        manager.check_spend_anomaly("daily:2026-07-19", 20.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(!manager.spend_anomaly_sent);
+
+        // The first anomalous scan is only a pending crossing.
+        manager.check_spend_anomaly("daily:2026-07-19", 31.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(manager.spend_anomaly_pending);
+        assert!(!manager.spend_anomaly_sent);
+
+        // A second consistent scan confirms and fires exactly once.
+        manager.check_spend_anomaly("daily:2026-07-19", 32.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+        assert!(manager.spend_anomaly_sent);
+    }
+
+    #[test]
+    fn spend_anomaly_high_first_reading_is_a_quiet_baseline() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings(3.0);
+        // Startup mid-day with already-elevated spend: the first reading is a
+        // baseline and must never be replayed as a fresh anomaly, no matter
+        // how high later readings climb.
+        manager.check_spend_anomaly("daily:2026-07-19", 50.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 60.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 70.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(manager.spend_anomaly_sent);
+    }
+
+    #[test]
+    fn spend_anomaly_does_not_alert_below_multiplier() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings(3.0);
+        // today/avg = 2.5x, below the 3.0 threshold.
+        manager.check_spend_anomaly("daily:2026-07-19", 25.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 25.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 25.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(!manager.spend_anomaly_sent);
+    }
+
+    #[test]
+    fn spend_anomaly_never_alerts_without_history() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings(3.0);
+        // Zero average = insufficient history. Even a huge today must not fire.
+        manager.check_spend_anomaly("daily:2026-07-19", 500.0, 0.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 500.0, 0.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(!manager.spend_anomaly_sent);
+    }
+
+    #[test]
+    fn spend_anomaly_fires_at_most_once_per_day() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings(3.0);
+        // Baseline below the multiplier, then a confirmed crossing.
+        manager.check_spend_anomaly("daily:2026-07-19", 20.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 31.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        manager.check_spend_anomaly("daily:2026-07-19", 32.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        // Repeated scans the same day must not re-fire.
+        manager.check_spend_anomaly("daily:2026-07-19", 40.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 50.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+        assert!(manager.spend_anomaly_sent);
+    }
+
+    #[test]
+    fn disabling_spend_anomaly_alerts_clears_its_in_memory_state() {
+        let mut manager = NotificationManager::new_armed();
+        let enabled = anomaly_settings(3.0);
+
+        manager.check_spend_anomaly("daily:2026-07-19", 31.0, 10.0, &enabled);
+        assert!(manager.spend_anomaly_observed);
+        assert!(manager.spend_anomaly_cycle.is_some());
+
+        manager.check_spend_anomaly("", 0.0, 0.0, &Settings::default());
+
+        assert!(!manager.spend_anomaly_observed);
+        assert!(manager.spend_anomaly_cycle.is_none());
+        assert!(!manager.spend_anomaly_sent);
+        assert!(!manager.spend_anomaly_pending);
+    }
+
+    #[test]
+    fn spend_anomaly_rearms_for_a_new_calendar_day() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings(3.0);
+        // Day 1: baseline below the multiplier, then a confirmed crossing.
+        manager.check_spend_anomaly("daily:2026-07-19", 20.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 31.0, 10.0, &settings);
+        manager.check_spend_anomaly("daily:2026-07-19", 32.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        // Day 2: a fresh below-multiplier baseline re-arms the alert, and a
+        // new confirmed crossing fires again.
+        manager.check_spend_anomaly("daily:2026-07-20", 20.0, 10.0, &settings);
+        assert!(!manager.spend_anomaly_sent);
+        manager.check_spend_anomaly("daily:2026-07-20", 31.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+        manager.check_spend_anomaly("daily:2026-07-20", 32.0, 10.0, &settings);
+        assert_eq!(manager.toasts_shown, 2);
     }
 }

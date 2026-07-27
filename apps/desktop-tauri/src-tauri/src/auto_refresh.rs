@@ -119,7 +119,10 @@ fn next_fixed_tick(
 
 fn local_usage_provider_ids(settings: &Settings) -> Vec<String> {
     let budget_alerts_enabled = settings.show_notifications && settings.spend_budget_alerts_enabled;
-    if !settings.powertoys_status_pipe_enabled && !budget_alerts_enabled {
+    let anomaly_alerts_enabled =
+        settings.show_notifications && settings.spend_anomaly_alerts_enabled;
+    if !settings.powertoys_status_pipe_enabled && !budget_alerts_enabled && !anomaly_alerts_enabled
+    {
         return Vec::new();
     }
 
@@ -147,14 +150,32 @@ fn clear_spend_budget_alert_state(app: &tauri::AppHandle, settings: &Settings) {
     }
 }
 
+fn clear_spend_anomaly_alert_state(app: &tauri::AppHandle, settings: &Settings) {
+    if settings.show_notifications && settings.spend_anomaly_alerts_enabled {
+        return;
+    }
+
+    let state = app.state::<Mutex<AppState>>();
+    match state.lock() {
+        Ok(mut guard) => guard
+            .notification_manager
+            .check_spend_anomaly("", 0.0, 0.0, settings),
+        Err(error) => {
+            tracing::warn!("failed to lock app state to clear spend anomaly notification: {error}")
+        }
+    }
+}
+
 pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Settings) {
-    // Clear the manager before a disabled budget path can return early. This
+    // Clear the managers before a disabled alert path can return early. This
     // also handles the no-provider case, so re-enabling starts from a fresh
     // baseline rather than stale threshold state.
     clear_spend_budget_alert_state(app, settings);
+    clear_spend_anomaly_alert_state(app, settings);
 
     let provider_ids = local_usage_provider_ids(settings);
-    if provider_ids.is_empty() {
+    let anomaly_enabled = settings.show_notifications && settings.spend_anomaly_alerts_enabled;
+    if provider_ids.is_empty() && !anomaly_enabled {
         return;
     }
     let app = app.clone();
@@ -167,28 +188,54 @@ pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Set
     };
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
-        crate::commands::refresh_provider_local_usage_cache(provider_ids.clone()).await;
+        if !provider_ids.is_empty() {
+            crate::commands::refresh_provider_local_usage_cache(provider_ids.clone()).await;
+        }
         if settings.show_notifications && settings.spend_budget_alerts_enabled {
-            let Some(total) = crate::commands::load_spend_budget_total(
+            // A failed budget scan must not skip the independent anomaly check.
+            match crate::commands::load_spend_budget_total(
                 provider_ids,
                 settings.spend_budget_period.clone(),
             )
             .await
-            else {
-                tracing::warn!("Unable to calculate local estimated API-value budget");
+            {
+                Some(total) => {
+                    let state = app.state::<Mutex<AppState>>();
+                    match state.lock() {
+                        Ok(mut guard) => guard.notification_manager.check_spend_budget(
+                            &total.cycle_id,
+                            total.period_label,
+                            total.estimated_usd,
+                            &settings,
+                        ),
+                        Err(error) => {
+                            tracing::warn!(
+                                "failed to lock app state for spend budget notification: {error}"
+                            )
+                        }
+                    }
+                }
+                None => {
+                    tracing::warn!("Unable to calculate local estimated API-value budget");
+                }
+            }
+        }
+        if anomaly_enabled {
+            let Some(total) = crate::commands::load_spend_anomaly_total().await else {
+                tracing::warn!("Unable to calculate local spend anomaly baseline");
                 return;
             };
             let state = app.state::<Mutex<AppState>>();
             match state.lock() {
-                Ok(mut guard) => guard.notification_manager.check_spend_budget(
+                Ok(mut guard) => guard.notification_manager.check_spend_anomaly(
                     &total.cycle_id,
-                    total.period_label,
-                    total.estimated_usd,
+                    total.today_usd,
+                    total.prior_average_usd,
                     &settings,
                 ),
                 Err(error) => {
                     tracing::warn!(
-                        "failed to lock app state for spend budget notification: {error}"
+                        "failed to lock app state for spend anomaly notification: {error}"
                     )
                 }
             }

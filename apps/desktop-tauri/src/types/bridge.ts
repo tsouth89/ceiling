@@ -226,6 +226,10 @@ export interface SettingsSnapshot {
   spendBudgetPeriod?: "daily" | "monthly";
   spendBudgetWarningUsd?: number;
   spendBudgetLimitUsd?: number;
+  /** Opt-in alert when today's estimated API value is a multiple of the prior 7-day average. */
+  spendAnomalyAlertsEnabled?: boolean;
+  /** Today's spend must exceed this multiple of the 7-day average to fire. */
+  spendAnomalyThresholdMultiplier?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
   switcherShowsIcons: boolean;
@@ -309,6 +313,8 @@ export interface SettingsUpdate {
   spendBudgetPeriod?: "daily" | "monthly";
   spendBudgetWarningUsd?: number;
   spendBudgetLimitUsd?: number;
+  spendAnomalyAlertsEnabled?: boolean;
+  spendAnomalyThresholdMultiplier?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
   switcherShowsIcons?: boolean;

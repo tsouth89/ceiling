@@ -727,6 +727,97 @@ pub(crate) async fn load_spend_budget_total(
 
 /// Inclusive local-calendar custom range for Estimated API value (YYYY-MM-DD).
 const API_VALUE_CUSTOM_MAX_DAYS: i64 = 366;
+#[derive(Debug, Clone)]
+pub(crate) struct SpendAnomalyTotal {
+    /// Calendar-day cycle key (e.g. `daily:2026-07-19`) so the notification
+    /// manager re-arms once per day.
+    pub cycle_id: String,
+    /// Estimated API value accumulated since local midnight today.
+    pub today_usd: f64,
+    /// Mean daily estimated API value over the prior 7 calendar days (today
+    /// excluded). `0.0` when there is insufficient history to form a baseline.
+    pub prior_average_usd: f64,
+}
+
+/// Minimum number of prior days with source data before an anomaly ratio is
+/// considered meaningful. Below this the average is reported as zero so the
+/// notification manager never fires on a thin baseline.
+const SPEND_ANOMALY_MIN_HISTORY_DAYS: usize = 3;
+
+/// Mean daily spend over the prior days, or `0.0` when there is insufficient
+/// history. A day counts toward the average only when at least one provider
+/// had source data for it. Extracted as a pure helper so the baseline logic is
+/// deterministic and testable without the filesystem.
+fn spend_anomaly_prior_average(per_day: &[f64], has_data: &[bool]) -> f64 {
+    let days_with_data = has_data.iter().filter(|has| **has).count();
+    if days_with_data < SPEND_ANOMALY_MIN_HISTORY_DAYS {
+        return 0.0;
+    }
+    per_day.iter().sum::<f64>() / days_with_data as f64
+}
+
+/// Scan today's and the prior 7 calendar days' estimated API value across the
+/// providers that expose token-derived local usage. Today is excluded from the
+/// 7-day average so a single active day cannot inflate its own baseline.
+pub(crate) async fn load_spend_anomaly_total() -> Option<SpendAnomalyTotal> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let now = Local::now();
+        let today = now.date_naive();
+        let cycle_id = format!("daily:{}", today.format("%F"));
+        let today_start = local_midnight_utc(today);
+        let now_utc = now.with_timezone(&Utc);
+
+        let mut windows = vec![CurrentUsageWindow {
+            id: "today".to_string(),
+            starts_at: today_start,
+            ends_at: now_utc,
+        }];
+        // Prior 7 calendar days, oldest first, each a [midnight, midnight) span.
+        for offset in 1..=7i64 {
+            let date = today - chrono::Duration::days(offset);
+            windows.push(CurrentUsageWindow {
+                id: format!("prior-{offset}"),
+                starts_at: local_midnight_utc(date),
+                ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
+            });
+        }
+
+        let mut today_usd = 0.0;
+        // One bin per prior day; summed across all providers.
+        let mut per_day: [f64; 7] = [0.0; 7];
+        let mut day_has_data: [bool; 7] = [false; 7];
+
+        for provider_id in API_VALUE_PROVIDERS {
+            let Some(report) = get_cost_usage_report_with_windows(provider_id, 8, &windows) else {
+                continue;
+            };
+            if let Some(summary) = report.current_windows.get("today") {
+                today_usd += api_value_period(provider_id, summary).api_value_usd;
+            }
+            for offset in 1..=7i64 {
+                if let Some(summary) = report.current_windows.get(&format!("prior-{offset}")) {
+                    let period = api_value_period(provider_id, summary);
+                    if period.has_data {
+                        per_day[(offset - 1) as usize] += period.api_value_usd;
+                        day_has_data[(offset - 1) as usize] = true;
+                    }
+                }
+            }
+        }
+
+        let prior_average_usd = spend_anomaly_prior_average(&per_day, &day_has_data);
+
+        Some(SpendAnomalyTotal {
+            cycle_id,
+            today_usd,
+            prior_average_usd,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 #[tauri::command]
 pub async fn get_local_api_value_totals(
     since: Option<String>,
@@ -1705,7 +1796,8 @@ mod tests {
         format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
         parse_api_value_custom_range, pricing_coverage_tokens, project_breakdown,
-        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        spend_anomaly_prior_average, spend_budget_period_details, token_breakdown,
+        token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2533,5 +2625,28 @@ mod tests {
         assert!(parse_api_value_custom_range("2026-07-10", "2026-07-01", today).is_err());
         assert!(parse_api_value_custom_range("2026-07-01", "2026-08-01", today).is_err());
         assert!(parse_api_value_custom_range("not-a-date", "2026-07-01", today).is_err());
+    }
+
+    #[test]
+    fn spend_anomaly_prior_average_skips_days_without_data() {
+        // Days with data: day0=10, day2=20, day4=30 -> average 20.
+        let per_day = [10.0, 0.0, 20.0, 0.0, 30.0, 0.0, 0.0];
+        let has_data = [true, false, true, false, true, false, false];
+        assert_eq!(spend_anomaly_prior_average(&per_day, &has_data), 20.0);
+    }
+
+    #[test]
+    fn spend_anomaly_prior_average_returns_zero_below_minimum_history() {
+        let per_day = [10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let has_data = [true, false, false, false, false, false, false];
+        assert_eq!(spend_anomaly_prior_average(&per_day, &has_data), 0.0);
+    }
+
+    #[test]
+    fn spend_anomaly_prior_average_with_all_seven_days() {
+        let per_day = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let has_data = [true, true, true, true, true, true, true];
+        // sum = 28, count = 7 -> average = 4.0
+        assert_eq!(spend_anomaly_prior_average(&per_day, &has_data), 4.0);
     }
 }

@@ -17,6 +17,9 @@ export default function GeneralTab({
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
+  const spendAnomalyAlertsEnabled = settings.spendAnomalyAlertsEnabled ?? false;
+  const spendAnomalyThresholdMultiplier =
+    settings.spendAnomalyThresholdMultiplier ?? 3;
   const [playingSound, setPlayingSound] = useState(false);
   const [testStatus, setTestStatus] = useState<TestNotificationStatus>("idle");
   const [testError, setTestError] = useState<string | null>(null);
@@ -223,6 +226,47 @@ export default function GeneralTab({
               onChange={(v) => set({
                 spendBudgetLimitUsd: Math.max(v, spendBudgetWarningUsd),
               })}
+            />
+          </Field>
+        </div>
+      </section>}
+
+      {mode === "notifications" && <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionSpendAnomaly")}</h3>
+        <div className="settings-section__group">
+          <Field
+            label={t("SpendAnomalyAlerts")}
+            description={t("SpendAnomalyAlertsHelper")}
+            leading
+          >
+            <Toggle
+              checked={spendAnomalyAlertsEnabled}
+              ariaLabel={t("SpendAnomalyAlerts")}
+              disabled={saving || !settings.showNotifications}
+              onChange={(v) => set({ spendAnomalyAlertsEnabled: v })}
+            />
+          </Field>
+          <Field
+            label={t("SpendAnomalyMultiplier")}
+            description={t("SpendAnomalyMultiplierHelper")}
+          >
+            <NumberInput
+              value={spendAnomalyThresholdMultiplier}
+              min={1.5}
+              max={100}
+              step={0.5}
+              ariaLabel={t("SpendAnomalyMultiplier")}
+              disabled={
+                saving || !settings.showNotifications || !spendAnomalyAlertsEnabled
+              }
+              onChange={(v) =>
+                set({
+                  spendAnomalyThresholdMultiplier: Math.min(
+                    100,
+                    Math.max(1.5, v),
+                  ),
+                })
+              }
             />
           </Field>
         </div>

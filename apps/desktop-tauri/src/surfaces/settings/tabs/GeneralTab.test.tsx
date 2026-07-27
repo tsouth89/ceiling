@@ -33,6 +33,8 @@ const settings: SettingsSnapshot = {
   spendBudgetPeriod: "daily",
   spendBudgetWarningUsd: 5,
   spendBudgetLimitUsd: 15,
+  spendAnomalyAlertsEnabled: false,
+  spendAnomalyThresholdMultiplier: 3,
   predictivePaceWarningEnabled: false,
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
@@ -185,7 +187,8 @@ describe("GeneralTab", () => {
       <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
     );
 
-    expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
+    // High usage + spend warning + spend cap + anomaly multiplier.
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(4);
     expect(screen.queryByText("PredictivePaceWarnings")).not.toBeInTheDocument();
     expect(screen.queryByText("CriticalUsageAlert")).not.toBeInTheDocument();
     expect(screen.queryByText("Codex · ProviderSession")).not.toBeInTheDocument();
@@ -205,5 +208,18 @@ describe("GeneralTab", () => {
     expect(screen.getByRole("button", { name: "SpendBudgetPeriod" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetWarning" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetCap" })).toBeDisabled();
+  });
+
+  it("configures spend anomaly alerts and multiplier", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "SpendAnomalyAlerts" }));
+    expect(set).toHaveBeenCalledWith({ spendAnomalyAlertsEnabled: true });
+    expect(
+      screen.getByRole("spinbutton", { name: "SpendAnomalyMultiplier" }),
+    ).toBeDisabled();
   });
 });

@@ -17,6 +17,11 @@ fn test_settings_default() {
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
     assert!(!settings.float_bar_show_cost);
+    assert!(!settings.spend_anomaly_alerts_enabled);
+    assert_eq!(
+        settings.spend_anomaly_threshold_multiplier,
+        default_spend_anomaly_threshold_multiplier()
+    );
 }
 
 #[test]
@@ -46,6 +51,30 @@ fn raw_settings_clamp_spend_budget_warning_to_cap() {
 
     assert_eq!(loaded.spend_budget_warning_usd, 10.0);
     assert_eq!(loaded.spend_budget_limit_usd, 10.0);
+}
+
+#[test]
+fn spend_anomaly_multiplier_clamps_to_safe_range() {
+    let too_low: Settings =
+        serde_json::from_str(r#"{ "spend_anomaly_threshold_multiplier": 0.5 }"#)
+            .expect("parse settings");
+    assert_eq!(too_low.spend_anomaly_threshold_multiplier, 1.5);
+
+    let reasonable: Settings =
+        serde_json::from_str(r#"{ "spend_anomaly_threshold_multiplier": 4.0 }"#)
+            .expect("parse settings");
+    assert_eq!(reasonable.spend_anomaly_threshold_multiplier, 4.0);
+
+    // serde_json cannot represent NaN in a document, so exercise the
+    // non-finite guard at the normalization boundary instead.
+    assert_eq!(
+        normalize_spend_anomaly_threshold_multiplier(f64::NAN),
+        default_spend_anomaly_threshold_multiplier()
+    );
+    assert_eq!(
+        normalize_spend_anomaly_threshold_multiplier(f64::INFINITY),
+        default_spend_anomaly_threshold_multiplier()
+    );
 }
 
 #[test]
