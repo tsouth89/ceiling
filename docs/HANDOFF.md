@@ -10,7 +10,7 @@ Use this as the implementation starting point. When it disagrees with the app, t
 - Website: [ceiling.win](https://ceiling.win).
 - Tracker: [Ceiling in Linear](https://linear.app/southforge-ai/project/ceiling-6615aa2c9e6b).
 
-Ceiling is a local-first Windows companion for AI-subscription capacity. First-class providers: Codex/ChatGPT, Claude, Cursor, **Grok**, Gemini, and GitHub Copilot. The app is built on the mature Win-CodexBar Tauri/Rust foundation while keeping Ceiling's Windows UI, release identity, and product behavior distinct.
+Ceiling is a local-first Windows companion for AI-subscription capacity. First-class providers: Codex/ChatGPT, Claude, Cursor, **Grok**, Gemini, GitHub Copilot, and OpenCode Go. The app is built on the mature Win-CodexBar Tauri/Rust foundation while keeping Ceiling's Windows UI, release identity, and product behavior distinct.
 
 ## Implemented product contract
 

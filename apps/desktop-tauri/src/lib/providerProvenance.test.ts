@@ -6,9 +6,9 @@ import {
 } from "./providerProvenance";
 
 describe("providerProvenance", () => {
-  it("gives the five first-class providers dedicated (non-generic) copy", () => {
+  it("gives the first-class providers dedicated (non-generic) copy", () => {
     expect([...DETAILED_PROVENANCE_PROVIDERS].sort()).toEqual(
-      ["claude", "codex", "copilot", "cursor", "gemini", "grok"].sort(),
+      ["claude", "codex", "copilot", "cursor", "gemini", "grok", "opencodego"].sort(),
     );
     for (const id of DETAILED_PROVENANCE_PROVIDERS) {
       expect(providerProvenanceKey(id)).not.toBe("DataSourceGeneric");

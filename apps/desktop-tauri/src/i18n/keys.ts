@@ -644,6 +644,7 @@ export const ALL_LOCALE_KEYS = [
   "DataSourceCursor",
   "DataSourceCopilot",
   "DataSourceGemini",
+  "DataSourceOpenCodeGo",
   "DataSourceGeneric",
   // First-run checklist (SOU-157)
   "FirstRunTitle",

@@ -26,6 +26,7 @@ const PROVIDER_TOKEN: Record<string, string> = {
   "kimi k2": "--chart-kimik2",
   kiro: "--chart-kiro",
   opencode: "--chart-opencode",
+  opencodego: "--chart-opencode",
   minimax: "--chart-minimax",
   vertexai: "--chart-vertexai",
   "vertex ai": "--chart-vertexai",

@@ -3,10 +3,18 @@
 //! Separate workspace surface that shares the `opencode.ai` cookie domain with
 //! the OpenCode provider. Resolves the workspace ID, then scrapes the `/go`
 //! usage page for rolling/weekly/monthly windows.
+//!
+//! Detection (Claude/Codex-style "available to track"):
+//! - CLI installed when `opencode` is on PATH or known install locations.
+//! - Local Go credentials when `auth.json` has an `opencode-go` API key.
+//! - Ready to track when browser cookies for `opencode.ai` can be imported
+//!   (usage still comes from the web console, not the model API key).
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
+use serde_json::Value;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::core::{
@@ -19,6 +27,96 @@ const SERVER_URL: &str = "https://opencode.ai/_server";
 const WORKSPACES_SERVER_ID: &str =
     "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const COOKIE_DOMAINS: &[&str] = &["opencode.ai"];
+
+/// Whether the OpenCode CLI appears installed on this machine.
+pub fn cli_installed() -> bool {
+    which::which("opencode").is_ok()
+        || which::which("opencode.exe").is_ok()
+        || known_cli_paths().into_iter().any(|path| path.is_file())
+}
+
+/// Whether a local OpenCode Go API key exists in the CLI auth store.
+///
+/// Presence means the user connected Go in the OpenCode CLI. Usage still
+/// requires opencode.ai session cookies for the web scrape path.
+pub fn local_go_credentials_available() -> bool {
+    auth_json_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|root| {
+            root.get("opencode-go")
+                .and_then(|entry| entry.get("key"))
+                .and_then(|key| key.as_str())
+                .is_some_and(|key| !key.trim().is_empty())
+        })
+}
+
+/// Whether browser cookies for opencode.ai can be imported right now.
+pub fn browser_cookies_available() -> bool {
+    matches!(
+        crate::providers::browser_cookie_header(COOKIE_DOMAINS),
+        Ok(header) if !header.trim().is_empty()
+    )
+}
+
+fn auth_json_path() -> Option<PathBuf> {
+    // OpenCode docs: %USERPROFILE%\.local\share\opencode\auth.json on Windows,
+    // ~/.local/share/opencode/auth.json on Unix. Also check XDG data home.
+    if let Some(home) = dirs::home_dir() {
+        let candidate = home
+            .join(".local")
+            .join("share")
+            .join("opencode")
+            .join("auth.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    if let Some(data) = dirs::data_local_dir() {
+        // Some Windows installs use %LOCALAPPDATA%\opencode
+        let candidate = data.join("opencode").join("auth.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    dirs::home_dir().map(|home| {
+        home.join(".local")
+            .join("share")
+            .join("opencode")
+            .join("auth.json")
+    })
+}
+
+fn known_cli_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        paths.push(
+            home.join("AppData")
+                .join("Roaming")
+                .join("npm")
+                .join("opencode.cmd"),
+        );
+        paths.push(
+            home.join("AppData")
+                .join("Roaming")
+                .join("npm")
+                .join("opencode.exe"),
+        );
+        paths.push(home.join(".opencode").join("bin").join("opencode.exe"));
+        paths.push(home.join(".opencode").join("bin").join("opencode"));
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        paths.push(local.join("opencode").join("opencode.exe"));
+        paths.push(
+            local
+                .join("Programs")
+                .join("opencode")
+                .join("opencode.exe"),
+        );
+    }
+    paths
+}
 
 pub struct OpenCodeGoProvider {
     metadata: ProviderMetadata,
@@ -35,9 +133,9 @@ impl OpenCodeGoProvider {
                 weekly_label: "Weekly",
                 supports_opus: false,
                 supports_credits: false,
-                default_enabled: false,
+                default_enabled: true,
                 is_primary: false,
-                dashboard_url: Some("https://opencode.ai"),
+                dashboard_url: Some("https://opencode.ai/go"),
                 status_page_url: None,
             },
             client: crate::core::credentialed_http_client_builder()
@@ -463,5 +561,12 @@ mod tests {
             renewal.window.resets_at.unwrap().to_rfc3339(),
             "2026-06-01T12:00:00+00:00"
         );
+    }
+
+    #[test]
+    fn is_default_enabled_first_class() {
+        let provider = OpenCodeGoProvider::new();
+        assert!(provider.metadata().default_enabled);
+        assert_eq!(provider.id(), ProviderId::OpenCodeGo);
     }
 }

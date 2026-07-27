@@ -4,12 +4,13 @@ use crate::commands::ProviderCatalogEntry;
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::Language;
 
-const FEATURED_TRAY_PROVIDER_IDS: [&str; 6] = [
+const FEATURED_TRAY_PROVIDER_IDS: [&str; 7] = [
     "codex",
     "claude",
     "cursor",
     "gemini",
     "copilot",
+    "opencodego",
     "antigravity",
 ];
 
@@ -379,6 +380,7 @@ mod tests {
             ("cursor", "Cursor"),
             ("gemini", "Gemini"),
             ("copilot", "Copilot"),
+            ("opencodego", "OpenCode Go"),
             ("antigravity", "Antigravity"),
             ("factory", "Factory"),
             ("zai", "z.ai"),
@@ -403,6 +405,7 @@ mod tests {
                 "Cursor",
                 "Gemini",
                 "Copilot",
+                "OpenCode Go",
                 "Antigravity",
                 "All providers...",
             ]

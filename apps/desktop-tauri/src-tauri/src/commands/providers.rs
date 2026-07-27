@@ -172,22 +172,60 @@ type ProviderCacheKey = (String, Option<String>);
 ///
 /// Empty targets means a single ambient fetch with `account_id = None`.
 /// Configured directories each produce one reading stamped with their id.
+/// Token-account providers (for example Copilot) produce one reading per
+/// stored account so multi-seat seats stay side by side.
 pub(crate) fn expected_cache_keys(
     enabled_ids: &[ProviderId],
     account_dirs: &ConfiguredAccounts,
+    token_accounts: &HashMap<ProviderId, ProviderAccountData>,
 ) -> HashSet<ProviderCacheKey> {
     let mut keys = HashSet::new();
     for id in enabled_ids {
-        let targets = account_dirs.targets_for(*id);
-        if targets.is_empty() {
-            keys.insert((id.cli_name().to_string(), None));
-        } else {
-            for target in targets {
+        let dir_targets = account_dirs.targets_for(*id);
+        if !dir_targets.is_empty() {
+            for target in dir_targets {
                 keys.insert((id.cli_name().to_string(), Some(target.id)));
             }
+            continue;
         }
+
+        let token_targets = token_account_targets(*id, token_accounts);
+        if !token_targets.is_empty() {
+            for target in token_targets {
+                keys.insert((id.cli_name().to_string(), Some(target.id)));
+            }
+            continue;
+        }
+
+        keys.insert((id.cli_name().to_string(), None));
     }
     keys
+}
+
+/// Stable token-account seats to fetch for a provider (capped).
+fn token_account_targets(
+    id: ProviderId,
+    token_accounts: &HashMap<ProviderId, ProviderAccountData>,
+) -> Vec<TokenAccountTarget> {
+    let Some(data) = token_accounts.get(&id) else {
+        return Vec::new();
+    };
+    data.accounts
+        .iter()
+        .take(codexbar::core::MAX_ACCOUNTS_PER_FETCH)
+        .map(|account| TokenAccountTarget {
+            id: account.id.to_string(),
+            label: account.label.clone(),
+            token: account.token.clone(),
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct TokenAccountTarget {
+    id: String,
+    label: String,
+    token: String,
 }
 
 /// Drop cache rows that do not belong to this cycle's expected set.
@@ -247,7 +285,11 @@ async fn do_refresh_providers_with_policy(
     // Without this, ambient (`account_id = None`) rows survive next to the
     // registered UUID reading once Accounts auto-registers the signed-in
     // directory — two identical cards for one account (issue #155).
-    let expected = expected_cache_keys(&inputs.enabled_ids, &inputs.account_dirs);
+    let expected = expected_cache_keys(
+        &inputs.enabled_ids,
+        &inputs.account_dirs,
+        &inputs.token_accounts,
+    );
     if let Ok(mut guard) = state.lock() {
         prune_stale_provider_readings(&mut guard.provider_cache, &expected, &inputs.enabled_ids);
     }
@@ -352,11 +394,14 @@ fn spawn_provider_refreshes(
         // One fetch per configured account, so several accounts on one provider
         // are read side by side rather than replacing each other. With none
         // configured this is a single ambient fetch, exactly as before.
-        let targets = inputs.account_dirs.targets_for(id);
-        let fetches: Vec<(FetchContext, AccountBadge)> = if targets.is_empty() {
-            vec![(base_ctx, AccountBadge::default())]
-        } else {
-            targets
+        //
+        // Directory accounts (Codex/Claude) win when present. Otherwise token
+        // accounts (Copilot and other OAuth/API-key seats) each get a row so
+        // multi-account tracking matches the directory model and does not
+        // silently follow ambient CLI identity switches.
+        let dir_targets = inputs.account_dirs.targets_for(id);
+        let fetches: Vec<(FetchContext, AccountBadge)> = if !dir_targets.is_empty() {
+            dir_targets
                 .into_iter()
                 .map(|target| {
                     let mut ctx = base_ctx.clone();
@@ -371,6 +416,43 @@ fn spawn_provider_refreshes(
                     (ctx, badge)
                 })
                 .collect()
+        } else {
+            let token_targets = token_account_targets(id, &inputs.token_accounts);
+            if token_targets.is_empty() {
+                vec![(base_ctx, AccountBadge::default())]
+            } else {
+                token_targets
+                    .into_iter()
+                    .map(|target| {
+                        let mut ctx = base_ctx.clone();
+                        let override_data = codexbar::core::TokenAccountOverride::from_account(
+                            id,
+                            codexbar::core::TokenAccount {
+                                id: uuid::Uuid::parse_str(&target.id)
+                                    .unwrap_or_else(|_| uuid::Uuid::nil()),
+                                label: target.label.clone(),
+                                token: target.token.clone(),
+                                added_at: 0,
+                                last_used: None,
+                            },
+                        );
+                        if let Some(env) = override_data.env_override.as_ref() {
+                            ctx.api_key = env.values().next().cloned();
+                        } else if let Some(cookie) = override_data.cookie_header {
+                            ctx.manual_cookie_header = Some(cookie);
+                            ctx.api_key = None;
+                        } else {
+                            ctx.api_key = Some(target.token);
+                        }
+                        let badge = AccountBadge {
+                            id: Some(target.id),
+                            label: Some(target.label),
+                            tint: None,
+                        };
+                        (ctx, badge)
+                    })
+                    .collect()
+            }
         };
 
         for (ctx, account) in fetches {

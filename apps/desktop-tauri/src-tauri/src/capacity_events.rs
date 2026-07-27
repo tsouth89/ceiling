@@ -750,7 +750,9 @@ fn core_window_id(normalized: &str) -> Option<&'static str> {
         "plan" => Some("plan"),
         "weekly" => Some("weekly"),
         "monthly" => Some("monthly"),
-        "session" | "session-5h" | "session-5-hour" | "5-hour" | "five-hour" => Some("session"),
+        "session" | "session-5h" | "session-5-hour" | "5-hour" | "five-hour" | "rolling" => {
+            Some("session")
+        }
         _ => None,
     }
 }

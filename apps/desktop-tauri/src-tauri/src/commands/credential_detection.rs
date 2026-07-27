@@ -109,6 +109,19 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
     let grok_ready = codexbar::providers::grok::local_credentials_available();
     let grok_installed = codexbar::providers::grok::cli_installed();
 
+    let opencode_go_cookies = codexbar::providers::opencodego::browser_cookies_available();
+    let opencode_go_cli = codexbar::providers::opencodego::cli_installed();
+    let opencode_go_auth = codexbar::providers::opencodego::local_go_credentials_available();
+
+    let copilot_token_accounts = codexbar::core::TokenAccountStore::new()
+        .load()
+        .ok()
+        .and_then(|map| map.get(&codexbar::core::ProviderId::Copilot).cloned());
+    let copilot_has_pinned = copilot_token_accounts
+        .as_ref()
+        .is_some_and(|data| !data.accounts.is_empty());
+    let copilot_gh = codexbar::providers::copilot::gh_cli_token_available(None);
+
     vec![
         detected_account(
             "codex",
@@ -175,6 +188,38 @@ pub fn get_detected_provider_accounts() -> Vec<DetectedProviderAccount> {
                 DetectedAccountStatus::Unavailable
             },
             "Grok Build",
+        ),
+        detected_account(
+            "opencodego",
+            "OpenCode Go",
+            if opencode_go_cookies {
+                DetectedAccountStatus::Ready
+            } else if opencode_go_cli || opencode_go_auth {
+                DetectedAccountStatus::Installed
+            } else {
+                DetectedAccountStatus::Unavailable
+            },
+            if opencode_go_cli || opencode_go_auth {
+                "OpenCode CLI"
+            } else {
+                "opencode.ai"
+            },
+        ),
+        detected_account(
+            "copilot",
+            "Copilot",
+            if copilot_has_pinned {
+                DetectedAccountStatus::Ready
+            } else if copilot_gh {
+                DetectedAccountStatus::Installed
+            } else {
+                DetectedAccountStatus::Unavailable
+            },
+            if copilot_has_pinned {
+                "GitHub OAuth (pinned)"
+            } else {
+                "GitHub"
+            },
         ),
     ]
 }

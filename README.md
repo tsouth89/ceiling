@@ -34,8 +34,9 @@ The goal is not another giant provider dashboard. It is a fast, calm way to answ
 - Grok
 - Gemini / Google AI
 - GitHub Copilot
+- OpenCode Go
 
-Additional providers remain available from the underlying foundation while Ceiling is narrowed around reliable support for the core five.
+Additional providers remain available from the underlying foundation while Ceiling is narrowed around reliable support for these first-class subscriptions.
 
 <p align="center">
   <img src="docs/images/ceiling-overview.png" alt="Ceiling's overview showing Codex, Claude, and Cursor usage at a glance" width="520">

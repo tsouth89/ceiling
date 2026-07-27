@@ -22,6 +22,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   grok: "Grok",
   gemini: "Gemini",
   copilot: "Copilot",
+  opencodego: "OpenCode Go",
   openaiapi: "OpenAI",
 };
 

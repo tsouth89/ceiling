@@ -18,6 +18,7 @@ const PROVENANCE_KEYS: Record<string, LocaleKey> = {
   copilot: "DataSourceCopilot",
   gemini: "DataSourceGemini",
   grok: "DataSourceGrok",
+  opencodego: "DataSourceOpenCodeGo",
 };
 
 /** Provider ids that ship dedicated (non-generic) provenance copy. */

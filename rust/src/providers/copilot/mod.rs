@@ -12,7 +12,7 @@ use crate::core::{
     SourceMode,
 };
 
-pub use api::CopilotApi;
+pub use api::{CopilotApi, gh_cli_token_available, load_gh_cli_token};
 
 /// GitHub Copilot provider for fetching AI usage limits
 pub struct CopilotProvider {

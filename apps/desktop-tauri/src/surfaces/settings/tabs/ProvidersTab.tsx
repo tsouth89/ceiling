@@ -214,6 +214,7 @@ function providerSourceHintShort(
     case "kimik2":
     case "augment":
     case "opencode":
+    case "opencodego":
     case "amp":
     case "ollama":
     case "alibaba":

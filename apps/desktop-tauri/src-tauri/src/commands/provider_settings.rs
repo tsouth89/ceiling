@@ -434,7 +434,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 None,
             ),
         ],
-        "opencode" => vec![
+        "opencode" | "opencodego" => vec![
             cookie_option(
                 lang,
                 "auto",
@@ -446,7 +446,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 lang,
                 "manual",
                 "",
-                "Paste a Cookie header from the billing page.",
+                "Paste a Cookie header from the OpenCode Go / billing page.",
                 None,
             ),
         ],

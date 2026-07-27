@@ -1,8 +1,10 @@
 //! GitHub Copilot API client for fetching usage information.
 //!
 //! Uses a GitHub OAuth token for GitHub's Copilot usage endpoint. The primary
-//! path is app-managed device OAuth/token accounts; legacy API key and Windows
-//! Credential Manager tokens remain supported as fallbacks.
+//! path is app-managed device OAuth / token accounts (pinned). Ambient
+//! `gh auth token` and Git Credential Manager identities are intentionally
+//! not used for live fetches so switching `gh auth` accounts does not move
+//! Ceiling's meters. Those sources remain available for detection / import.
 
 use crate::core::{NamedRateWindow, ProviderError, RateWindow, UsageSnapshot};
 use chrono::{DateTime, Utc};
@@ -17,12 +19,9 @@ const DEFAULT_GITHUB_HOST: &str = "github.com";
 const COPILOT_USAGE_PATH: &str = "/copilot_internal/user";
 const GITHUB_USER_PATH: &str = "/user";
 
-// Credential Manager targets to try
-const CREDENTIAL_TARGETS: &[&str] = &[
-    "codexbar-copilot",       // Our own storage
-    "git:https://github.com", // GitHub CLI / Git Credential Manager
-    "github.com",             // Alternative format
-];
+// App-managed Credential Manager target only. Do not read ambient git/gh
+// targets here: they follow the currently selected GitHub identity.
+const PINNED_CREDENTIAL_TARGETS: &[&str] = &["codexbar-copilot"];
 
 /// Basic GitHub identity for labeling OAuth token accounts.
 #[derive(Debug, Clone, Deserialize)]
@@ -143,19 +142,14 @@ impl CopilotApi {
     fn load_token(
         &self,
         api_key: Option<&str>,
-        github_host: Option<&str>,
+        _github_host: Option<&str>,
     ) -> Result<String, ProviderError> {
         if let Some(key) = normalize_token(api_key) {
             tracing::debug!("Using Copilot token from settings or active token account");
             return Ok(key);
         }
 
-        if let Some(token) = load_gh_cli_token(github_host) {
-            tracing::debug!("Using Copilot token from GitHub CLI auth");
-            return Ok(token);
-        }
-
-        for target in CREDENTIAL_TARGETS {
+        for target in PINNED_CREDENTIAL_TARGETS {
             if let Some(token) = self.try_load_credential(target)
                 && let Some(actual_token) = normalize_token(Some(&token))
             {
@@ -165,7 +159,7 @@ impl CopilotApi {
         }
 
         Err(ProviderError::NotInstalled(
-            "GitHub Copilot token not found. Sign in with GitHub from Copilot settings, run 'gh auth login', or add a legacy GitHub token.".to_string(),
+            "GitHub Copilot token not found. Sign in with GitHub from Copilot settings to pin an account, or paste a GitHub OAuth token. Ambient gh auth is not used so switching GitHub CLI accounts will not change your meters.".to_string(),
         ))
     }
 
@@ -581,7 +575,17 @@ fn normalize_token(raw: Option<&str>) -> Option<String> {
     }
 }
 
-fn load_gh_cli_token(github_host: Option<&str>) -> Option<String> {
+/// Whether `gh auth token` can produce a token for the host (detection only).
+///
+/// Live usage fetches do not call this; pin the account via device OAuth or a
+/// stored token account so meters stay stable when `gh auth` switches.
+pub fn gh_cli_token_available(github_host: Option<&str>) -> bool {
+    load_gh_cli_token(github_host).is_some()
+}
+
+/// Read a token from the GitHub CLI for import/detection. Not used for ambient
+/// usage fetches.
+pub fn load_gh_cli_token(github_host: Option<&str>) -> Option<String> {
     let host = github_host
         .map(str::trim)
         .filter(|host| !host.is_empty())

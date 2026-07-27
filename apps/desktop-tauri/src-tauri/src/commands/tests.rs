@@ -936,7 +936,8 @@ fn pruning_drops_disabled_providers() {
 #[test]
 fn expected_keys_are_ambient_when_nothing_is_configured() {
     let accounts = ConfiguredAccounts::default();
-    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts);
+    let token_accounts = std::collections::HashMap::new();
+    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts, &token_accounts);
 
     assert_eq!(keys.len(), 1);
     assert!(keys.contains(&("codex".to_string(), None)));
@@ -962,7 +963,8 @@ fn expected_keys_list_every_configured_directory_account() {
             std::path::PathBuf::from("/homes/work"),
         ));
 
-    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts);
+    let token_accounts = std::collections::HashMap::new();
+    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts, &token_accounts);
     let targets = accounts.targets_for(ProviderId::Codex);
 
     assert_eq!(keys.len(), 2);
@@ -975,6 +977,27 @@ fn expected_keys_list_every_configured_directory_account() {
     }
     // Ambient None must not coexist with configured ids.
     assert!(!keys.contains(&("codex".to_string(), None)));
+}
+
+#[test]
+fn expected_keys_list_every_copilot_token_account() {
+    let accounts = ConfiguredAccounts::default();
+    let personal = codexbar::core::TokenAccount::new("personal", "token-personal");
+    let work = codexbar::core::TokenAccount::new("work", "token-work");
+    let personal_id = personal.id.to_string();
+    let work_id = work.id.to_string();
+    let mut data = codexbar::core::ProviderAccountData::new();
+    data.add_account(personal);
+    data.add_account(work);
+    let mut token_accounts = std::collections::HashMap::new();
+    token_accounts.insert(ProviderId::Copilot, data);
+
+    let keys = super::expected_cache_keys(&[ProviderId::Copilot], &accounts, &token_accounts);
+
+    assert_eq!(keys.len(), 2);
+    assert!(keys.contains(&("copilot".to_string(), Some(personal_id))));
+    assert!(keys.contains(&("copilot".to_string(), Some(work_id))));
+    assert!(!keys.contains(&("copilot".to_string(), None)));
 }
 
 #[test]

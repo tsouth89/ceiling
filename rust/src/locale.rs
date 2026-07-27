@@ -888,6 +888,7 @@ locale_keys! {
     DataSourceCopilot,
     DataSourceGemini,
     DataSourceGrok,
+    DataSourceOpenCodeGo,
     DataSourceGeneric,
 
     // First-run checklist (SOU-157)

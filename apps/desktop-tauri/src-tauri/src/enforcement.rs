@@ -27,7 +27,14 @@ use crate::commands::{InactiveRateWindowSnapshot, ProviderUsageSnapshot};
 /// omitted window is routine, and flagging those would be more noise than
 /// signal. Keep this list small and deliberate.
 const FIRST_CLASS_PROVIDERS: &[&str] = &[
-    "claude", "codex", "cursor", "grok", "copilot", "gemini", "factory",
+    "claude",
+    "codex",
+    "cursor",
+    "grok",
+    "copilot",
+    "gemini",
+    "factory",
+    "opencodego",
 ];
 
 /// Only core subscription windows are tracked. Conditional bonus pools (promos,
