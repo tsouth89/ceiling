@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body {
+        position: relative;
+        background:
+          radial-gradient(900px 700px at 76% 48%, rgba(37, 154, 174, 0.18), transparent 72%),
+          radial-gradient(750px 520px at 10% 0%, rgba(81, 116, 123, 0.13), transparent 75%),
+          #07090c;
+        color: #edf2f4;
+        font-family: "Segoe UI Variable Display", "Segoe UI", Arial, sans-serif;
+      }
+      .asset { display: none; width: 100%; height: 100%; }
+      .slide { position: relative; padding: 108px 104px; }
+      .brand { display: flex; align-items: center; gap: 18px; font-size: 30px; font-weight: 650; }
+      .brand img { width: 58px; height: 58px; border-radius: 14px; }
+      .copy { position: absolute; z-index: 2; top: 300px; left: 104px; width: 690px; }
+      .eyebrow { margin: 0 0 24px; color: #5fdae9; font-size: 23px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; }
+      h1 { margin: 0; font-size: 78px; font-weight: 650; line-height: 1.03; letter-spacing: -0.055em; }
+      .copy p { width: 610px; margin: 30px 0 0; color: #aeb7c0; font-size: 29px; line-height: 1.46; }
+      .shot {
+        position: absolute;
+        z-index: 1;
+        top: 70px;
+        right: 86px;
+        width: 820px;
+        height: 940px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .shot img {
+        max-width: 100%;
+        max-height: 100%;
+        border: 1px solid rgba(205, 221, 231, 0.2);
+        border-radius: 18px;
+        box-shadow: 0 32px 90px rgba(0, 0, 0, 0.5);
+      }
+      .slide-3 .copy, .slide-4 .copy { width: 650px; }
+      .slide-3 .shot, .slide-4 .shot { right: 68px; width: 790px; height: 970px; top: 56px; }
+      .strip { position: absolute; left: 104px; bottom: 98px; width: 720px; }
+      .strip img { width: 100%; filter: drop-shadow(0 18px 30px rgba(0,0,0,.5)); }
+      .box, .poster { position: relative; background: radial-gradient(circle at 50% 35%, #162026, #07090c 62%); }
+      .box .box-inner { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 50px; }
+      .box .box-inner img { width: 430px; height: 430px; border-radius: 94px; box-shadow: 0 35px 100px rgba(0, 0, 0, 0.52); }
+      .box .wordmark { font-size: 100px; font-weight: 650; letter-spacing: -0.05em; }
+      .poster { padding: 135px 112px; }
+      .poster .brand { font-size: 46px; }
+      .poster .brand img { width: 84px; height: 84px; border-radius: 20px; }
+      .poster h1 { margin-top: 200px; font-size: 116px; }
+      .poster .tagline { margin-top: 44px; color: #aeb7c0; font-size: 42px; line-height: 1.45; }
+      .poster .poster-shot { position: absolute; left: 112px; right: 112px; bottom: 175px; height: 860px; display: flex; align-items: flex-end; justify-content: center; }
+      .poster .poster-shot img { max-width: 100%; max-height: 100%; border: 1px solid rgba(205,221,231,.2); border-radius: 26px; box-shadow: 0 40px 100px rgba(0,0,0,.55); }
+      .poster .footer { position: absolute; left: 112px; bottom: 78px; color: #7f8994; font-size: 31px; }
+    </style>
+  </head>
+  <body>
+    <section class="asset slide slide-1" data-asset="1">
+      <div class="brand"><img src="../rust/icons/icon.png" alt="" />Ceiling</div>
+      <div class="copy"><p class="eyebrow">Usage at a glance</p><h1>Know what you have left.</h1><p>See remaining capacity and reset times for the AI plans you use, all in one calm Windows view.</p></div>
+      <div class="shot"><img src="../docs/images/ceiling-overview.png" alt="" /></div>
+      <div class="strip"><img src="../site/ceiling-taskbar.png" alt="" /></div>
+    </section>
+    <section class="asset slide slide-2" data-asset="2">
+      <div class="brand"><img src="../rust/icons/icon.png" alt="" />Ceiling</div>
+      <div class="copy"><p class="eyebrow">Reset schedule</p><h1>Every reset, in one place.</h1><p>Know which limit resets next, what is coming later, and how much of each window you have used.</p></div>
+      <div class="shot"><img src="../docs/images/ceiling-activity.png" alt="" /></div>
+    </section>
+    <section class="asset slide slide-3" data-asset="3">
+      <div class="brand"><img src="../rust/icons/icon.png" alt="" />Ceiling</div>
+      <div class="copy"><p class="eyebrow">Compare</p><h1>Put AI usage on the same clock.</h1><p>Compare Codex and Claude across identical rolling windows using local session history.</p></div>
+      <div class="shot"><img src="../docs/images/ceiling-charts-comparison.png" alt="" /></div>
+    </section>
+    <section class="asset slide slide-4" data-asset="4">
+      <div class="brand"><img src="../rust/icons/icon.png" alt="" />Ceiling</div>
+      <div class="copy"><p class="eyebrow">Local history</p><h1>Understand where usage goes.</h1><p>Explore tokens and estimated API-equivalent value by window, model, reasoning effort, and project.</p></div>
+      <div class="shot"><img src="../docs/images/ceiling-charts-detailed-claude.png" alt="" /></div>
+    </section>
+    <section class="asset box" data-asset="box">
+      <div class="box-inner"><img src="../rust/icons/icon.png" alt="" /><div class="wordmark">Ceiling</div></div>
+    </section>
+    <section class="asset poster" data-asset="poster">
+      <div class="brand"><img src="../rust/icons/icon.png" alt="" />Ceiling</div>
+      <h1>Stay below<br />the ceiling.</h1>
+      <p class="tagline">AI capacity, reset times, alerts,<br />and local usage history for Windows.</p>
+      <div class="poster-shot"><img src="../docs/images/ceiling-overview.png" alt="" /></div>
+      <div class="footer">Windows 10 / 11 · local-first · free</div>
+    </section>
+    <script>
+      const asset = new URLSearchParams(location.search).get("asset") || "1";
+      document.querySelector(`[data-asset="${asset}"]`).style.display = "block";
+    </script>
+  </body>
+</html>
+
