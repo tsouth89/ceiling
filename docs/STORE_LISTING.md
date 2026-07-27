@@ -1,5 +1,9 @@
 # Ceiling Microsoft Store listing — English (United States)
 
+Text-only Partner Center copy. Screenshots, logos, and videos stay **out of this
+repo** (generate or keep them under a local `store-listing/` folder, which is
+gitignored). Update this file when product claims change.
+
 Prepared for the first Store submission using installer version 1.4.0.
 
 ## Product name
@@ -41,17 +45,21 @@ Enter each line as a separate feature. Do not include bullets in Partner Center.
 
 ## Screenshot upload order
 
-1. `01-overview.png`
-2. `02-reset-schedule.png`
-3. `03-compare.png`
-4. `04-local-history.png`
+Upload four 1920 x 1080 PNGs from your local packaging folder (not in git), in this order:
 
-All four are 1920 x 1080 PNG files. Do not upload the raw Accounts screenshot because it contains a personal email address.
+1. Overview
+2. Reset schedule
+3. Compare
+4. Local history
+
+Do not upload an Accounts screenshot that contains a personal email address.
 
 ## Store logos
 
-- 1:1 Box art: `box-art-1080.png`
-- 2:3 Poster art: `poster-art-1440x2160.png`
+From your local packaging folder (not in git):
+
+- 1:1 Box art (1080)
+- 2:3 Poster art (1440 x 2160)
 
 ## Short description
 

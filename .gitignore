@@ -82,3 +82,7 @@ codexbar-desktop-tauri.exe
 .dev.vars*
 !.dev.vars.example
 !.env.example
+
+# Microsoft Store packaging (screenshots, logos, video). Keep local only.
+store-listing/
+
