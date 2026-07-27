@@ -459,6 +459,11 @@ fn normalize_reset_description(desc: &str, lang: codexbar::settings::Language) -
     )
 }
 
+/// Charts read local `~/.claude` session logs; live capacity needs CLI OAuth.
+/// Call this out when capacity auth fails so Accounts/Charts do not look broken.
+const CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE: &str =
+    "Charts can still show local session spend without live capacity.";
+
 pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
     if id == ProviderId::Grok {
         let trimmed = error.trim();
@@ -489,32 +494,50 @@ pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
         return "Claude usage fetch was cancelled before usage data was returned. Refresh Claude, or re-authenticate with Claude Code and try again.".to_string();
     }
 
-    if lower.contains("claude oauth credentials not found") {
-        return "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Ceiling.".to_string();
-    }
-
-    if lower.contains("oauth token expired") || lower.contains("token invalid or expired") {
-        return "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Ceiling.".to_string();
-    }
-
-    if trimmed == "Authentication required" {
-        return "Claude needs sign-in before Ceiling can read usage. Run `claude` once, or add Claude cookies in Provider settings.".to_string();
-    }
-
+    // Multi-source Auto failures must be handled before the single-source OAuth
+    // rewrite: the composite string also contains "credentials not found" and
+    // used to collapse into an OAuth-only line that hid Web/CLI outcomes.
     if lower.starts_with("claude usage failed from all configured sources.") {
-        return trimmed
+        let detail = trimmed
+            .strip_prefix("Claude usage failed from all configured sources.")
+            .unwrap_or(trimmed)
+            .trim()
+            .trim_start_matches('.')
+            .trim()
             .replace(
                 "OAuth: OAuth error: Claude OAuth credentials not found. Run `claude` to authenticate.",
                 "OAuth: sign-in not found",
             )
             .replace(
-                "Web: No cookies available for web API",
-                "Web: no Claude cookies available",
+                "OAuth: OAuth error: Claude OAuth credentials not found",
+                "OAuth: sign-in not found",
             )
             .replace(
-                "CLI: Provider not installed:",
-                "CLI: not installed:",
-            );
+                "Web: No cookies available for web API",
+                "Web: no session available",
+            )
+            .replace("CLI: Provider not installed:", "CLI: not installed:");
+        return format!(
+            "Claude capacity could not be loaded ({detail}). Run `claude` once in a terminal, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
+    }
+
+    if lower.contains("claude oauth credentials not found") {
+        return format!(
+            "Claude CLI sign-in was not found. Run `claude` once in a terminal, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
+    }
+
+    if lower.contains("oauth token expired") || lower.contains("token invalid or expired") {
+        return format!(
+            "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
+    }
+
+    if trimmed == "Authentication required" {
+        return format!(
+            "Claude needs a CLI sign-in before Ceiling can read capacity. Run `claude` once, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
     }
 
     trimmed.to_string()
