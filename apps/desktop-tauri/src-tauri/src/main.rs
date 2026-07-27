@@ -179,6 +179,7 @@ fn main() {
             commands::set_manual_cookie,
             commands::remove_manual_cookie,
             commands::list_detected_browsers,
+            commands::diagnose_browser_cookies,
             commands::import_browser_cookies,
             commands::get_token_account_providers,
             commands::get_token_accounts,

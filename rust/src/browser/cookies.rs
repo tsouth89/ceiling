@@ -47,10 +47,15 @@ pub enum CookieError {
     /// `v20` prefix; older migrated profiles can also fail every AES-GCM decrypt while
     /// exposing `app_bound_encrypted_key` in Local State.
     #[error(
-        "Chrome/Edge App-Bound Encryption is blocking automatic browser import. \
-             Paste the Cookie header manually, or use Firefox if that browser has the same login."
+        "Chrome/Edge/Brave App-Bound Encryption is blocking automatic browser import. \
+             Sign in with Firefox (automatic works there), or paste the Cookie header \
+             from DevTools → Network → any request → Request Headers → Cookie."
     )]
     AppBoundEncryption,
+
+    /// Aggregated multi-browser scan failure with actionable detail.
+    #[error("{0}")]
+    ScanFailed(String),
 }
 
 /// A browser cookie
@@ -89,6 +94,7 @@ impl TemporaryCookieDatabase {
             .to_string_lossy();
         let path =
             std::env::temp_dir().join(format!("ceiling_{}_{}", uuid::Uuid::new_v4(), file_name));
+
         let mut destination_options = std::fs::OpenOptions::new();
         destination_options.write(true).create_new(true);
         #[cfg(unix)]
@@ -96,38 +102,72 @@ impl TemporaryCookieDatabase {
             use std::os::unix::fs::OpenOptionsExt;
             destination_options.mode(0o600);
         }
-        let mut destination = destination_options.open(&path)?;
-        let temporary = Self { path };
 
-        let copy_result = (|| -> Result<(), CookieError> {
+        let create_result = (|| -> Result<(), CookieError> {
+            let mut destination = destination_options.open(&path)?;
             #[cfg(windows)]
-            crate::windows_security::restrict_path_to_current_user(temporary.path())?;
+            crate::windows_security::restrict_path_to_current_user(&path)?;
 
-            #[cfg(windows)]
-            let mut source = {
-                use std::os::windows::fs::OpenOptionsExt;
-
-                const FILE_SHARE_READ: u32 = 0x00000001;
-                const FILE_SHARE_WRITE: u32 = 0x00000002;
-                const FILE_SHARE_DELETE: u32 = 0x00000004;
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-                    .open(source_path)?
-            };
-            #[cfg(not(windows))]
-            let mut source = std::fs::File::open(source_path)?;
-
-            std::io::copy(&mut source, &mut destination)?;
+            copy_file_shared(source_path, &mut destination)?;
             destination.sync_all()?;
+            drop(destination);
+
+            // Chromium/Firefox often use WAL journaling. Copying only the main
+            // file can yield an empty or stale snapshot while the browser is
+            // running. Sidecars share the same base name with -wal / -shm.
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = {
+                    let mut s = source_path.as_os_str().to_owned();
+                    s.push(suffix);
+                    std::path::PathBuf::from(s)
+                };
+                if !sidecar.is_file() {
+                    continue;
+                }
+                let dest_sidecar = {
+                    let mut s = path.as_os_str().to_owned();
+                    s.push(suffix);
+                    std::path::PathBuf::from(s)
+                };
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create(true).truncate(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                match options.open(&dest_sidecar) {
+                    Ok(mut out) => {
+                        #[cfg(windows)]
+                        crate::windows_security::restrict_path_to_current_user(&dest_sidecar)?;
+                        if let Err(error) = copy_file_shared(&sidecar, &mut out) {
+                            tracing::debug!(
+                                path = %sidecar.display(),
+                                %error,
+                                "cookie DB sidecar copy failed; continuing with main file"
+                            );
+                            let _ = std::fs::remove_file(&dest_sidecar);
+                        } else {
+                            let _ = out.sync_all();
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(
+                            path = %sidecar.display(),
+                            %error,
+                            "could not create cookie DB sidecar copy"
+                        );
+                    }
+                }
+            }
             Ok(())
         })();
 
-        // Close the destination before an error drops the guard so Windows can
-        // remove the partially copied file immediately.
-        drop(destination);
-        copy_result?;
-        Ok(temporary)
+        if let Err(error) = create_result {
+            cleanup_temp_cookie_files(&path);
+            return Err(error);
+        }
+        Ok(Self { path })
     }
 
     fn path(&self) -> &Path {
@@ -135,16 +175,68 @@ impl TemporaryCookieDatabase {
     }
 }
 
+fn cleanup_temp_cookie_files(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(sidecar));
+    }
+}
+
+fn copy_file_shared(source_path: &Path, destination: &mut std::fs::File) -> Result<(), CookieError> {
+    use std::io::{Read, Write};
+
+    #[cfg(windows)]
+    let mut source = {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 0x00000001;
+        const FILE_SHARE_WRITE: u32 = 0x00000002;
+        const FILE_SHARE_DELETE: u32 = 0x00000004;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(source_path)?
+    };
+    #[cfg(not(windows))]
+    let mut source = std::fs::File::open(source_path)?;
+
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        destination.write_all(&buffer[..read])?;
+    }
+    Ok(())
+}
+
 impl Drop for TemporaryCookieDatabase {
     fn drop(&mut self) {
-        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
-            let _ = file.set_len(0);
-            let _ = file.sync_all();
-        }
-        if let Err(error) = std::fs::remove_file(&self.path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(%error, "Failed to remove temporary browser cookie database");
+        for path in [
+            self.path.clone(),
+            {
+                let mut s = self.path.as_os_str().to_owned();
+                s.push("-wal");
+                std::path::PathBuf::from(s)
+            },
+            {
+                let mut s = self.path.as_os_str().to_owned();
+                s.push("-shm");
+                std::path::PathBuf::from(s)
+            },
+        ] {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
+                let _ = file.set_len(0);
+                let _ = file.sync_all();
+            }
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(%error, path = %path.display(), "Failed to remove temporary browser cookie database");
+            }
         }
     }
 }
@@ -239,20 +331,23 @@ impl CookieExtractor {
         profile: &BrowserProfile,
         domain: &str,
     ) -> Result<Vec<Cookie>, CookieError> {
-        let cookies_db = profile.cookies_db_path();
         tracing::debug!(
             "Reading Chromium cookies for {} profile {}",
             browser.browser_type.display_name(),
             profile.name
         );
 
-        if !cookies_db.exists() {
-            return Err(CookieError::NotFound(format!(
-                "Cookies database not found for {} profile {}",
-                browser.browser_type.display_name(),
-                profile.name
-            )));
-        }
+        let cookies_db = profile
+            .chromium_cookie_db_candidates()
+            .into_iter()
+            .find(|path| path.is_file())
+            .ok_or_else(|| {
+                CookieError::NotFound(format!(
+                    "Cookies database not found for {} profile {}",
+                    browser.browser_type.display_name(),
+                    profile.name
+                ))
+            })?;
 
         // Get the encryption key from Local State
         let local_state_path = profile.local_state_path(&browser.user_data_dir);
@@ -263,40 +358,50 @@ impl CookieExtractor {
         tracing::debug!("Got encryption key ({} bytes)", encryption_key.len());
 
         // Copy the database to a temp file (browser may have it locked)
-        tracing::debug!("Copying cookies DB to temp...");
+        tracing::debug!(path = %cookies_db.display(), "Copying cookies DB to temp...");
         let temp_db = TemporaryCookieDatabase::create(&cookies_db).map_err(|e| {
             tracing::debug!("Failed to copy cookies DB: {}", e);
             e
         })?;
 
-        let domain_pattern = format!("%{}", domain);
-        let dot_domain_pattern = format!(".{}", domain);
-        tracing::debug!("Searching for cookies for domain {}", domain);
-
         let mut cookies = Vec::new();
         let mut decrypt_failures: u32 = 0;
         let mut abe_decrypt_failures: u32 = 0;
+        let mut candidate_rows: u32 = 0;
         {
             // Keep SQLite handles scoped so Windows can delete the temp DB afterward.
             let conn = Connection::open(temp_db.path())?;
 
+            // Prefer an equality-friendly LIKE that still matches subdomains:
+            // host_key is stored as "example.com" or ".example.com".
             let mut stmt = conn.prepare(
                 "SELECT name, encrypted_value, host_key, path, expires_utc, is_secure, is_httponly
                  FROM cookies
-                 WHERE host_key LIKE ?1 OR host_key LIKE ?2",
+                 WHERE host_key = ?1
+                    OR host_key = ?2
+                    OR host_key LIKE ?3
+                    OR host_key LIKE ?4",
             )?;
 
-            let rows = stmt.query_map([&domain_pattern, &dot_domain_pattern], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,   // name
-                    row.get::<_, Vec<u8>>(1)?,  // encrypted_value
-                    row.get::<_, String>(2)?,   // host_key
-                    row.get::<_, String>(3)?,   // path
-                    row.get::<_, i64>(4)?,      // expires_utc
-                    row.get::<_, i32>(5)? != 0, // is_secure
-                    row.get::<_, i32>(6)? != 0, // is_httponly
-                ))
-            })?;
+            let bare = domain.trim().trim_start_matches('.').to_string();
+            let dotted = format!(".{bare}");
+            let like_suffix = format!("%.{bare}");
+            let like_any = format!("%{bare}");
+
+            let rows = stmt.query_map(
+                rusqlite::params![bare, dotted, like_suffix, like_any],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,   // name
+                        row.get::<_, Vec<u8>>(1)?,  // encrypted_value
+                        row.get::<_, String>(2)?,   // host_key
+                        row.get::<_, String>(3)?,   // path
+                        row.get::<_, i64>(4)?,      // expires_utc
+                        row.get::<_, i32>(5)? != 0, // is_secure
+                        row.get::<_, i32>(6)? != 0, // is_httponly
+                    ))
+                },
+            )?;
 
             for row in rows {
                 let (name, encrypted_value, host_key, path, expires_utc, is_secure, is_http_only) =
@@ -305,6 +410,7 @@ impl CookieExtractor {
                 if !domain_matches(&host_key, domain) {
                     continue;
                 }
+                candidate_rows += 1;
 
                 // Decrypt the cookie value
                 let value = match Self::decrypt_chromium_cookie(&encrypted_value, &encryption_key) {
@@ -339,9 +445,10 @@ impl CookieExtractor {
         }
 
         tracing::debug!(
-            "Found {} cookies for {} ({} failed to decrypt)",
+            "Found {} cookies for {} ({} candidates, {} failed to decrypt)",
             cookies.len(),
             domain,
+            candidate_rows,
             decrypt_failures
         );
 
@@ -350,15 +457,17 @@ impl CookieExtractor {
         // ABE replaces the user-level DPAPI cookie key with a system-level key that
         // cannot be read by third-party tools, causing systematic AES-GCM auth failures.
         if cookies.is_empty()
+            && candidate_rows > 0
             && (abe_decrypt_failures > 0
                 || (decrypt_failures > 0 && Self::detect_app_bound_encryption(&local_state_path)))
         {
             tracing::warn!(
                 browser = %browser.browser_type.display_name(),
+                profile = %profile.name,
                 decrypt_failures,
                 abe_decrypt_failures,
-                "Chromium App-Bound Encryption (ABE) detected: all {} cookies failed to decrypt",
-                decrypt_failures
+                candidates = candidate_rows,
+                "Chromium App-Bound Encryption (ABE) detected: all cookies failed to decrypt"
             );
             return Err(CookieError::AppBoundEncryption);
         }
@@ -555,7 +664,7 @@ impl CookieExtractor {
         profile: &BrowserProfile,
         domain: &str,
     ) -> Result<Vec<Cookie>, CookieError> {
-        let cookies_db = profile.path.join("cookies.sqlite");
+        let cookies_db = profile.firefox_cookies_db_path();
 
         if !cookies_db.exists() {
             return Err(CookieError::NotFound(format!(
@@ -564,11 +673,13 @@ impl CookieExtractor {
             )));
         }
 
-        // Copy to temp (browser may have it locked)
+        // Copy to temp (browser may have it locked), including -wal/-shm.
         let temp_db = TemporaryCookieDatabase::create(&cookies_db)?;
 
-        let domain_pattern = format!("%{}", domain);
-        let dot_domain_pattern = format!(".{}", domain);
+        let bare = domain.trim().trim_start_matches('.').to_string();
+        let dotted = format!(".{bare}");
+        let like_suffix = format!("%.{bare}");
+        let like_any = format!("%{bare}");
 
         let mut cookies = Vec::new();
         {
@@ -578,20 +689,26 @@ impl CookieExtractor {
             let mut stmt = conn.prepare(
                 "SELECT name, value, host, path, expiry, isSecure, isHttpOnly
                  FROM moz_cookies
-                 WHERE host LIKE ?1 OR host LIKE ?2",
+                 WHERE host = ?1
+                    OR host = ?2
+                    OR host LIKE ?3
+                    OR host LIKE ?4",
             )?;
 
-            let rows = stmt.query_map([&domain_pattern, &dot_domain_pattern], |row| {
-                Ok(Cookie {
-                    name: row.get(0)?,
-                    value: row.get(1)?,
-                    domain: row.get(2)?,
-                    path: row.get(3)?,
-                    expires: row.get(4).ok(),
-                    is_secure: row.get::<_, i32>(5)? != 0,
-                    is_http_only: row.get::<_, i32>(6)? != 0,
-                })
-            })?;
+            let rows = stmt.query_map(
+                rusqlite::params![bare, dotted, like_suffix, like_any],
+                |row| {
+                    Ok(Cookie {
+                        name: row.get(0)?,
+                        value: row.get(1)?,
+                        domain: row.get(2)?,
+                        path: row.get(3)?,
+                        expires: row.get(4).ok(),
+                        is_secure: row.get::<_, i32>(5)? != 0,
+                        is_http_only: row.get::<_, i32>(6)? != 0,
+                    })
+                },
+            )?;
 
             for row in rows {
                 let cookie = row?;
@@ -649,6 +766,107 @@ fn domain_matches(host_key: &str, domain: &str) -> bool {
     host == domain || host == format!(".{domain}") || host.ends_with(&format!(".{domain}"))
 }
 
+/// Result of probing one browser for a domain (diagnostics / UI).
+#[derive(Debug, Clone)]
+pub struct BrowserCookieProbe {
+    pub browser_key: String,
+    pub browser_name: String,
+    pub profile_count: usize,
+    pub status: BrowserCookieProbeStatus,
+    pub detail: String,
+    pub cookie_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserCookieProbeStatus {
+    Ready,
+    Empty,
+    AppBoundEncryption,
+    LockedOrUnreadable,
+    MissingDatabase,
+    Error,
+}
+
+/// Probe every detected browser for cookies on `domain` without short-circuiting.
+pub fn diagnose_cookies_for_domain(domain: &str) -> Vec<BrowserCookieProbe> {
+    use super::detection::BrowserDetector;
+
+    let browsers = BrowserDetector::detect_all();
+    let mut probes = Vec::with_capacity(browsers.len());
+    for browser in browsers {
+        probes.push(probe_browser_for_domain(&browser, domain));
+    }
+    probes
+}
+
+fn probe_browser_for_domain(
+    browser: &super::detection::DetectedBrowser,
+    domain: &str,
+) -> BrowserCookieProbe {
+    let browser_key = browser.browser_type.key().to_string();
+    let browser_name = browser.browser_type.display_name().to_string();
+    let profile_count = browser.profiles.len();
+    match CookieExtractor::extract_for_domain(browser, domain) {
+        Ok(cookies) if !cookies.is_empty() => BrowserCookieProbe {
+            browser_key,
+            browser_name,
+            profile_count,
+            status: BrowserCookieProbeStatus::Ready,
+            detail: format!(
+                "{} readable cookie{}",
+                cookies.len(),
+                if cookies.len() == 1 { "" } else { "s" }
+            ),
+            cookie_count: cookies.len(),
+        },
+        Ok(_) => BrowserCookieProbe {
+            browser_key,
+            browser_name,
+            profile_count,
+            status: BrowserCookieProbeStatus::Empty,
+            detail: format!("No cookies for {domain} in any profile (signed out?)"),
+            cookie_count: 0,
+        },
+        Err(CookieError::AppBoundEncryption) => BrowserCookieProbe {
+            browser_key,
+            browser_name,
+            profile_count,
+            status: BrowserCookieProbeStatus::AppBoundEncryption,
+            detail: "App-Bound Encryption blocks automatic decrypt (v20 cookies)".into(),
+            cookie_count: 0,
+        },
+        Err(CookieError::NotFound(msg)) => BrowserCookieProbe {
+            browser_key,
+            browser_name,
+            profile_count,
+            status: BrowserCookieProbeStatus::MissingDatabase,
+            detail: msg,
+            cookie_count: 0,
+        },
+        Err(CookieError::Io(err))
+            if err.kind() == std::io::ErrorKind::PermissionDenied
+                || err.raw_os_error() == Some(32) =>
+        {
+            BrowserCookieProbe {
+                browser_key,
+                browser_name,
+                profile_count,
+                status: BrowserCookieProbeStatus::LockedOrUnreadable,
+                detail: "Cookie database locked by a running browser; close it and retry".into(),
+                cookie_count: 0,
+            }
+        }
+        Err(err) => BrowserCookieProbe {
+            browser_key,
+            browser_name,
+            profile_count,
+            status: BrowserCookieProbeStatus::Error,
+            detail: err.to_string(),
+            cookie_count: 0,
+        },
+    }
+}
+
 /// Helper to get cookies for a specific domain from any available browser
 pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> {
     use super::detection::BrowserDetector;
@@ -659,33 +877,34 @@ pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> 
         return Err(CookieError::BrowserNotInstalled);
     }
 
-    // Track whether any browser raised an App-Bound Encryption error so we can
-    // surface that specific, actionable message if no other browser succeeds.
-    let mut abe_error_seen = false;
+    // Track scan outcomes so the final error is actionable instead of a bare
+    // "not found" after every Chromium browser hits App-Bound Encryption.
+    let mut abe_browsers: Vec<String> = Vec::new();
+    let mut empty_browsers: Vec<String> = Vec::new();
+    let mut other_notes: Vec<String> = Vec::new();
 
-    // Try each browser until we find cookies
-    for browser in browsers {
-        match CookieExtractor::extract_for_domain(&browser, domain) {
+    // Try each browser until we find cookies (Firefox-family first).
+    for browser in &browsers {
+        match CookieExtractor::extract_for_domain(browser, domain) {
             Ok(cookies) if !cookies.is_empty() => {
-                tracing::debug!(
-                    "Found {} cookies for {} in {}",
-                    cookies.len(),
-                    domain,
-                    browser.browser_type.display_name()
+                tracing::info!(
+                    browser = %browser.browser_type.display_name(),
+                    count = cookies.len(),
+                    %domain,
+                    "automatic cookie import succeeded"
                 );
                 return Ok(cookies);
             }
-            Ok(_) => continue,
+            Ok(_) => {
+                empty_browsers.push(browser.browser_type.display_name().to_string());
+            }
             Err(CookieError::AppBoundEncryption) => {
-                // Chrome ABE is blocking this browser; log a warning and keep
-                // trying Edge / Firefox which are unaffected by ABE.
                 tracing::warn!(
                     browser = %browser.browser_type.display_name(),
                     "App-Bound Encryption prevents automatic cookie import; \
                      trying remaining browsers"
                 );
-                abe_error_seen = true;
-                // Continue to next browser rather than giving up
+                abe_browsers.push(browser.browser_type.display_name().to_string());
             }
             Err(e) => {
                 tracing::debug!(
@@ -693,14 +912,42 @@ pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> 
                     browser.browser_type.display_name(),
                     e
                 );
+                other_notes.push(format!(
+                    "{}: {}",
+                    browser.browser_type.display_name(),
+                    e
+                ));
             }
         }
     }
 
-    // Surface a clear ABE error if it was the only kind of failure encountered,
-    // so the UI can show an actionable message instead of a generic "not found".
-    if abe_error_seen {
+    if !abe_browsers.is_empty() && empty_browsers.is_empty() && other_notes.is_empty() {
         return Err(CookieError::AppBoundEncryption);
+    }
+
+    if !abe_browsers.is_empty() {
+        let mut parts = vec![format!(
+            "Could not read cookies for {domain}. App-Bound Encryption blocked: {}.",
+            abe_browsers.join(", ")
+        )];
+        if !empty_browsers.is_empty() {
+            parts.push(format!(
+                "No login cookies found in: {}.",
+                empty_browsers.join(", ")
+            ));
+        }
+        parts.push(
+            "Sign in with Firefox (automatic works there), or paste the Cookie header from DevTools."
+                .into(),
+        );
+        return Err(CookieError::ScanFailed(parts.join(" ")));
+    }
+
+    if !empty_browsers.is_empty() {
+        return Err(CookieError::ScanFailed(format!(
+            "No cookies for {domain} in scanned browsers ({}). Sign in to that site in Firefox, Chrome, Edge, or Brave, then try again — or paste the Cookie header manually.",
+            empty_browsers.join(", ")
+        )));
     }
 
     Err(CookieError::NotFound(domain.to_string()))
@@ -809,13 +1056,24 @@ mod tests {
             "ABE error should mention App-Bound Encryption"
         );
         assert!(
-            msg.contains("Chrome/Edge"),
+            msg.contains("Chrome/Edge/Brave") || msg.contains("Chrome/Edge"),
             "ABE error should identify Chromium browsers"
         );
         assert!(
-            msg.contains("Paste") || msg.contains("manual"),
-            "ABE error should mention manual import fallback"
+            msg.contains("Paste") || msg.contains("manual") || msg.contains("Firefox"),
+            "ABE error should mention manual import or Firefox fallback"
         );
+    }
+
+    #[test]
+    fn diagnose_returns_probe_per_detected_browser() {
+        let probes = diagnose_cookies_for_domain("example.invalid");
+        // On CI without browsers this may be empty; on a real Windows desktop
+        // we expect at least one probe with a stable key.
+        for probe in &probes {
+            assert!(!probe.browser_key.is_empty());
+            assert!(!probe.browser_name.is_empty());
+        }
     }
 
     /// Verify that modern Chromium `v20` cookies are recognized as App-Bound

@@ -141,6 +141,12 @@ fn map_browser_cookie_error(
         | crate::browser::cookies::CookieError::NotFound(_) => {
             crate::core::ProviderError::NoCookies
         }
+        crate::browser::cookies::CookieError::AppBoundEncryption
+        | crate::browser::cookies::CookieError::ScanFailed(_) => {
+            // Keep the full actionable message so Settings / tray errors tell
+            // the user about ABE vs empty Firefox vs manual paste.
+            crate::core::ProviderError::Other(error.to_string())
+        }
         _ => crate::core::ProviderError::Other(format!("Failed to read browser cookies: {error}")),
     }
 }
