@@ -277,10 +277,17 @@ export function getLocalApiValueTotals(options?: {
   since?: string;
   until?: string;
 }): Promise<LocalApiValueProvider[]> {
-  return invoke<LocalApiValueProvider[]>("get_local_api_value_totals", {
-    since: options?.since ?? null,
-    until: options?.until ?? null,
-  });
+  const since = options?.since?.trim();
+  const until = options?.until?.trim();
+  // Only send the range when both sides are real dates. Passing null for both
+  // on every call made custom loads easy to mis-handle; omit args for presets.
+  if (since && until) {
+    return invoke<LocalApiValueProvider[]>("get_local_api_value_totals", {
+      since,
+      until,
+    });
+  }
+  return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
 }
 
 export function getCursorModelActivity(): Promise<CursorModelActivity[]> {

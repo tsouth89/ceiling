@@ -314,6 +314,10 @@ pub struct LocalApiValueProvider {
     /// Last seven local calendar days, oldest first, today last.
     #[serde(default)]
     pub last_seven_days: Vec<LocalApiValueDay>,
+    /// Scanned local calendar days (oldest first). Used for custom ranges and
+    /// trends so the card never depends only on a single window key.
+    #[serde(default)]
+    pub daily_series: Vec<LocalApiValueDay>,
 }
 
 /// One local calendar day of estimated API value, for the card's trend.
@@ -727,11 +731,23 @@ pub(crate) async fn load_spend_budget_total(
 
 /// Inclusive local-calendar custom range for Estimated API value (YYYY-MM-DD).
 const API_VALUE_CUSTOM_MAX_DAYS: i64 = 366;
+/// Default scan horizon so custom ranges and daily series cover a full month+.
+const API_VALUE_DEFAULT_SCAN_DAYS: u32 = 90;
 #[tauri::command]
 pub async fn get_local_api_value_totals(
     since: Option<String>,
     until: Option<String>,
 ) -> Result<Vec<LocalApiValueProvider>, String> {
+    let since = since
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let until = until
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let custom = match (since.as_deref(), until.as_deref()) {
         (None, None) => None,
         (Some(since), Some(until)) => Some(parse_api_value_custom_range(
@@ -799,9 +815,10 @@ fn load_local_api_value_totals(
         .map(|(start, _)| {
             let start_date = start.with_timezone(&Local).date_naive();
             let days = (today - start_date).num_days().max(0) as u32 + 1;
-            days.clamp(60, API_VALUE_CUSTOM_MAX_DAYS as u32)
+            days.max(API_VALUE_DEFAULT_SCAN_DAYS)
+                .min(API_VALUE_CUSTOM_MAX_DAYS as u32)
         })
-        .unwrap_or(60);
+        .unwrap_or(API_VALUE_DEFAULT_SCAN_DAYS);
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
@@ -854,13 +871,26 @@ fn load_local_api_value_totals(
                 .get("prior_thirty")
                 .cloned()
                 .unwrap_or_default();
-            let custom = custom_range.map(|_| {
-                let summary = report
+            let daily_series = daily_series_from_report(&report.daily_costs);
+            let custom = custom_range.map(|(starts_at, ends_at)| {
+                let start_day = starts_at.with_timezone(&Local).date_naive();
+                // ends_at is exclusive midnight; convert to inclusive local day.
+                let end_day =
+                    ends_at.with_timezone(&Local).date_naive() - chrono::Duration::days(1);
+                let from_window = report
                     .current_windows
                     .get("custom")
                     .cloned()
-                    .unwrap_or_default();
-                api_value_period(provider_id, &summary)
+                    .map(|summary| api_value_period(provider_id, &summary))
+                    .unwrap_or_else(empty_api_value_period);
+                let from_daily = period_from_daily_series(&daily_series, start_day, end_day);
+                // Prefer the richer window (tokens + dollars). If the window is
+                // empty but daily dollars exist, use daily so Custom never lies.
+                if from_window.has_data {
+                    from_window
+                } else {
+                    from_daily
+                }
             });
             // Oldest first so the trend reads left to right, ending today.
             let last_seven_days = (0..7i64)
@@ -888,16 +918,78 @@ fn load_local_api_value_totals(
                 prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
                 custom,
                 last_seven_days,
+                daily_series,
             };
             // Omit providers with no source data in any period.
             (provider.today.has_data
                 || provider.yesterday.has_data
                 || provider.thirty_days.has_data
                 || provider.prior_thirty_days.has_data
-                || provider.custom.as_ref().is_some_and(|p| p.has_data))
+                || provider.custom.as_ref().is_some_and(|p| p.has_data)
+                || provider
+                    .daily_series
+                    .iter()
+                    .any(|day| day.api_value_usd > 0.0))
             .then_some(provider)
         })
         .collect()
+}
+
+fn empty_api_value_period() -> LocalApiValuePeriod {
+    LocalApiValuePeriod {
+        api_value_usd: 0.0,
+        tokens: 0,
+        priced_tokens: 0,
+        total_tokens: 0,
+        has_data: false,
+    }
+}
+
+fn daily_series_from_report(daily_costs: &[(String, f64)]) -> Vec<LocalApiValueDay> {
+    let mut days: Vec<LocalApiValueDay> = daily_costs
+        .iter()
+        .map(|(date, api_value_usd)| LocalApiValueDay {
+            date: date.clone(),
+            api_value_usd: *api_value_usd,
+            tokens: 0,
+        })
+        .collect();
+    days.sort_by(|left, right| left.date.cmp(&right.date));
+    days
+}
+
+/// Inclusive local-calendar sum from the daily dollar series.
+fn period_from_daily_series(
+    daily_series: &[LocalApiValueDay],
+    start: NaiveDate,
+    end_inclusive: NaiveDate,
+) -> LocalApiValuePeriod {
+    if start > end_inclusive {
+        return empty_api_value_period();
+    }
+    let mut api_value_usd = 0.0;
+    let mut tokens: u64 = 0;
+    let mut has_data = false;
+    for day in daily_series {
+        let Ok(date) = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") else {
+            continue;
+        };
+        if date < start || date > end_inclusive {
+            continue;
+        }
+        if day.api_value_usd > 0.0 || day.tokens > 0 {
+            has_data = true;
+        }
+        api_value_usd += day.api_value_usd;
+        tokens = tokens.saturating_add(day.tokens);
+    }
+    LocalApiValuePeriod {
+        api_value_usd,
+        tokens,
+        priced_tokens: tokens,
+        total_tokens: tokens,
+        has_data: has_data || api_value_usd > 0.0,
+    }
 }
 
 /// One model's local Cursor activity. This is code-contribution activity from
@@ -1701,11 +1793,11 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
         LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry, effort_breakdown,
-        format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry, daily_series_from_report,
+        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
-        parse_api_value_custom_range, pricing_coverage_tokens, project_breakdown,
-        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
+        project_breakdown, spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2533,5 +2625,34 @@ mod tests {
         assert!(parse_api_value_custom_range("2026-07-10", "2026-07-01", today).is_err());
         assert!(parse_api_value_custom_range("2026-07-01", "2026-08-01", today).is_err());
         assert!(parse_api_value_custom_range("not-a-date", "2026-07-01", today).is_err());
+    }
+
+    #[test]
+    fn period_from_daily_series_sums_inclusive_range_only() {
+        let series = daily_series_from_report(&[
+            ("2026-07-01".into(), 10.0),
+            ("2026-07-02".into(), 5.0),
+            ("2026-07-15".into(), 1.0),
+            ("2026-07-28".into(), 99.0),
+        ]);
+        let period = period_from_daily_series(
+            &series,
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        );
+        assert!(period.has_data);
+        assert!((period.api_value_usd - 16.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn period_from_daily_series_empty_when_range_misses() {
+        let series = daily_series_from_report(&[("2026-06-01".into(), 10.0)]);
+        let period = period_from_daily_series(
+            &series,
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        );
+        assert!(!period.has_data);
+        assert_eq!(period.api_value_usd, 0.0);
     }
 }
