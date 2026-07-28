@@ -18,7 +18,7 @@ If Claude was Error with "sign-in was not found" while Charts still showed dolla
 
 ### Custom range on Estimated API value
 
-Charts → Estimated API value adds **Custom** next to Today / Yesterday / 30 days. Pick inclusive local From/To dates (up to 366 days) for every-other-week use or a single month.
+On Charts, Estimated API value adds **Custom** next to Today / Yesterday / 30 days. Pick inclusive local From/To dates (up to 366 days) for every-other-week use or a single month.
 
 ## Installers
 
