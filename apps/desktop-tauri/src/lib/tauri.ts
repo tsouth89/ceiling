@@ -272,8 +272,15 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getLocalApiValueTotals(): Promise<LocalApiValueProvider[]> {
-  return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
+/** Local API-value totals. Optional inclusive YYYY-MM-DD custom range fills `custom`. */
+export function getLocalApiValueTotals(options?: {
+  since?: string;
+  until?: string;
+}): Promise<LocalApiValueProvider[]> {
+  return invoke<LocalApiValueProvider[]>("get_local_api_value_totals", {
+    since: options?.since ?? null,
+    until: options?.until ?? null,
+  });
 }
 
 export function getCursorModelActivity(): Promise<CursorModelActivity[]> {

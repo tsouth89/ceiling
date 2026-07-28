@@ -18,7 +18,10 @@ const empty = period({});
 function provider(
   providerId: string,
   periods: Partial<
-    Record<"today" | "yesterday" | "thirtyDays" | "priorThirtyDays", LocalApiValuePeriod>
+    Record<
+      "today" | "yesterday" | "thirtyDays" | "priorThirtyDays" | "custom",
+      LocalApiValuePeriod
+    >
   >,
 ): LocalApiValueProvider {
   return {
@@ -27,6 +30,7 @@ function provider(
     yesterday: periods.yesterday ?? empty,
     thirtyDays: periods.thirtyDays ?? empty,
     priorThirtyDays: periods.priorThirtyDays ?? empty,
+    custom: periods.custom,
   };
 }
 
@@ -54,6 +58,27 @@ describe("buildApiValueCard", () => {
     expect(model.total).toBe(12);
     expect(model.coverage).toBe(1);
     expect(model.unpricedProviderIds).toHaveLength(0);
+  });
+
+  it("reads the custom period and skips period-over-period", () => {
+    const model = buildApiValueCard(
+      [
+        provider("codex", {
+          custom: period({
+            apiValueUsd: 42,
+            tokens: 4000,
+            pricedTokens: 4000,
+            totalTokens: 4000,
+            hasData: true,
+          }),
+        }),
+      ],
+      "custom",
+      "apiValue",
+    );
+    expect(model.isEmpty).toBe(false);
+    expect(model.total).toBe(42);
+    expect(model.periodChange).toBeNull();
   });
 
   it("ranks multiple providers by value with shares summing to 1", () => {

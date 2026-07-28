@@ -3,8 +3,8 @@ import type { LocalApiValuePeriod, LocalApiValueProvider } from "../types/bridge
 /** Metric the aggregate card is showing. */
 export type ApiValueMetric = "apiValue" | "tokens";
 
-/** Which of the three periods is selected. */
-export type ApiValuePeriodKey = "today" | "yesterday" | "thirtyDays";
+/** Which period is selected on the Estimated API value card. */
+export type ApiValuePeriodKey = "today" | "yesterday" | "thirtyDays" | "custom";
 
 export interface ApiValueSlice {
   providerId: string;
@@ -51,12 +51,21 @@ export interface ApiValueCardModel {
   periodChange: ApiValuePeriodChange | null;
 }
 
+const EMPTY_PERIOD: LocalApiValuePeriod = {
+  apiValueUsd: 0,
+  tokens: 0,
+  pricedTokens: 0,
+  totalTokens: 0,
+  hasData: false,
+};
+
 function periodOf(
   provider: LocalApiValueProvider,
   key: ApiValuePeriodKey,
 ): LocalApiValuePeriod {
   if (key === "today") return provider.today;
   if (key === "yesterday") return provider.yesterday;
+  if (key === "custom") return provider.custom ?? EMPTY_PERIOD;
   return provider.thirtyDays;
 }
 
@@ -70,7 +79,7 @@ function priorPeriodOf(
   if (key === "thirtyDays") {
     return { period: provider.priorThirtyDays, versusLabel: "vs prior 30d" };
   }
-  // Yesterday has no stable prior on this card.
+  // Yesterday and custom ranges have no stable prior on this card.
   return null;
 }
 

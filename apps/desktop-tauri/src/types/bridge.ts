@@ -728,6 +728,8 @@ export interface LocalApiValueProvider {
   thirtyDays: LocalApiValuePeriod;
   /** Calendar days [today-60, today-30) for 30d dollar period-over-period. */
   priorThirtyDays: LocalApiValuePeriod;
+  /** Inclusive local-calendar custom range when since/until were requested. */
+  custom?: LocalApiValuePeriod | null;
   /** Last seven local calendar days, oldest first, today last. */
   lastSevenDays?: LocalApiValueDay[];
 }

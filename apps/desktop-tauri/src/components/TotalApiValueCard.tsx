@@ -14,6 +14,7 @@ const PERIODS: { key: ApiValuePeriodKey; label: string }[] = [
   { key: "today", label: "Today" },
   { key: "yesterday", label: "Yesterday" },
   { key: "thirtyDays", label: "30 days" },
+  { key: "custom", label: "Custom" },
 ];
 
 const METRICS: { key: ApiValueMetric; label: string }[] = [
@@ -39,6 +40,40 @@ function providerLabel(providerId: string): string {
 
 function providerColor(providerId: string): string {
   return getProviderIcon(providerId).brandColor;
+}
+
+/** Local calendar date as YYYY-MM-DD. */
+function formatLocalDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function defaultCustomRange(): { since: string; until: string } {
+  const until = new Date();
+  const since = new Date();
+  since.setDate(since.getDate() - 6); // inclusive 7 local days ending today
+  return { since: formatLocalDate(since), until: formatLocalDate(until) };
+}
+
+function shortRangeLabel(since: string, until: string): string {
+  if (since === until) return since;
+  // Compact: "Jul 1 – Jul 7" when year matches; else keep ISO.
+  const parse = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+  const a = parse(since);
+  const b = parse(until);
+  if (!a || !b) return `${since} – ${until}`;
+  const fmt = (date: Date) =>
+    date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (a.getFullYear() === b.getFullYear()) {
+    return `${fmt(a)} – ${fmt(b)}`;
+  }
+  return `${since} – ${until}`;
 }
 
 type TrendDay = {
@@ -88,16 +123,40 @@ export function TotalApiValueCard() {
   const [failed, setFailed] = useState(false);
   const [period, setPeriod] = useState<ApiValuePeriodKey>("today");
   const [metric, setMetric] = useState<ApiValueMetric>("apiValue");
+  const [customSince, setCustomSince] = useState(() => defaultCustomRange().since);
+  const [customUntil, setCustomUntil] = useState(() => defaultCustomRange().until);
+  const [rangeError, setRangeError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
-    getLocalApiValueTotals()
-      .then((rows) => live && setProviders(rows))
-      .catch(() => live && setFailed(true));
+    setFailed(false);
+    setRangeError(null);
+
+    const options =
+      period === "custom"
+        ? { since: customSince, until: customUntil }
+        : undefined;
+
+    getLocalApiValueTotals(options)
+      .then((rows) => {
+        if (!live) return;
+        setProviders(rows);
+      })
+      .catch((err: unknown) => {
+        if (!live) return;
+        const message = err instanceof Error ? err.message : String(err ?? "");
+        // Backend validation (inverted range, future end, bad format) should
+        // stay on the custom pickers instead of blanking the whole card.
+        if (period === "custom" && message) {
+          setRangeError(message);
+          return;
+        }
+        setFailed(true);
+      });
     return () => {
       live = false;
     };
-  }, []);
+  }, [period, customSince, customUntil]);
 
   const model = useMemo(
     () => (providers ? buildApiValueCard(providers, period, metric) : null),
@@ -107,8 +166,12 @@ export function TotalApiValueCard() {
   const formatValue = (value: number) =>
     metric === "apiValue" ? formatUsd(value) : formatTokens(value);
 
-  const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? "";
+  const periodLabel =
+    period === "custom"
+      ? shortRangeLabel(customSince, customUntil)
+      : (PERIODS.find((p) => p.key === period)?.label ?? "");
   const metricLabel = METRICS.find((m) => m.key === metric)?.label ?? "";
+  const todayIso = formatLocalDate(new Date());
 
   if (failed) {
     return (
@@ -118,7 +181,7 @@ export function TotalApiValueCard() {
     );
   }
 
-  if (!model) {
+  if (!model && !rangeError) {
     return (
       <section className="api-value-card" aria-label="Total API value">
         <p className="api-value-card__status">Reading local usage…</p>
@@ -126,24 +189,25 @@ export function TotalApiValueCard() {
     );
   }
 
-  const segments = ringSegments(model.slices, CIRCUMFERENCE);
+  const safeModel = model ?? buildApiValueCard([], period, metric);
+  const segments = ringSegments(safeModel.slices, CIRCUMFERENCE);
   const coveragePercent =
-    model.coverage == null ? null : Math.round(model.coverage * 100);
+    safeModel.coverage == null ? null : Math.round(safeModel.coverage * 100);
   // Compare the raw ratio so 99.6% (rounds to 100) still shows the coverage
   // note when any tokens are unpriced.
-  const showCoverage = model.coverage != null && model.coverage < 1;
+  const showCoverage = safeModel.coverage != null && safeModel.coverage < 1;
   const periodChangeLabel =
-    model.periodChange && metric === "apiValue"
-      ? formatPeriodChange(model.periodChange)
+    safeModel.periodChange && metric === "apiValue"
+      ? formatPeriodChange(safeModel.periodChange)
       : null;
 
   // Seven-day trend, summed across providers per day. Heights are relative to
   // the busiest day so a quiet day still renders a visible sliver.
   const trend = buildTrend(providers ?? []);
 
-  const ariaSummary = model.isEmpty
+  const ariaSummary = safeModel.isEmpty
     ? `No local ${metricLabel} data for ${periodLabel}.`
-    : `${metricLabel} for ${periodLabel}: ${formatValue(model.total)} across ${model.slices
+    : `${metricLabel} for ${periodLabel}: ${formatValue(safeModel.total)} across ${safeModel.slices
         .map((slice) => providerLabel(slice.providerId))
         .join(", ")}.`;
 
@@ -188,9 +252,38 @@ export function TotalApiValueCard() {
         </div>
       </header>
 
-      {model.isEmpty ? (
+      {period === "custom" && (
+        <div className="api-value-card__custom-range" role="group" aria-label="Custom date range">
+          <label className="api-value-card__date-field">
+            <span>From</span>
+            <input
+              type="date"
+              value={customSince}
+              max={customUntil || todayIso}
+              onChange={(event) => setCustomSince(event.target.value)}
+            />
+          </label>
+          <label className="api-value-card__date-field">
+            <span>To</span>
+            <input
+              type="date"
+              value={customUntil}
+              min={customSince || undefined}
+              max={todayIso}
+              onChange={(event) => setCustomUntil(event.target.value)}
+            />
+          </label>
+          {rangeError && (
+            <p className="api-value-card__range-error" role="alert">
+              {rangeError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {safeModel.isEmpty || rangeError ? (
         <p className="api-value-card__status" role="status">
-          No data for {periodLabel}.
+          {rangeError ? "Adjust the dates to load a range." : `No data for ${periodLabel}.`}
         </p>
       ) : (
         <div className="api-value-card__body">
@@ -224,7 +317,7 @@ export function TotalApiValueCard() {
               </g>
             </svg>
             <div className="api-value-card__ring-center">
-              <strong>{formatValue(model.total)}</strong>
+              <strong>{formatValue(safeModel.total)}</strong>
               <small>{periodLabel}</small>
             </div>
           </div>
@@ -238,7 +331,7 @@ export function TotalApiValueCard() {
           </div>
 
           <ul className="api-value-card__legend">
-            {model.slices.map((slice) => (
+            {safeModel.slices.map((slice) => (
               <li className="api-value-card__legend-row" key={slice.providerId}>
                 <span
                   className="api-value-card__legend-dot"
@@ -283,7 +376,7 @@ export function TotalApiValueCard() {
         </div>
       )}
 
-      {!model.isEmpty && (
+      {!safeModel.isEmpty && !rangeError && (
         <p className="api-value-card__note">
           <span className="api-value-card__estimate-marker" aria-hidden="true">
             ~
@@ -293,8 +386,8 @@ export function TotalApiValueCard() {
             <>
               {" "}
               {coveragePercent}% of tokens priced
-              {model.unpricedProviderIds.length > 0 &&
-                ` (unpriced models in ${model.unpricedProviderIds
+              {safeModel.unpricedProviderIds.length > 0 &&
+                ` (unpriced models in ${safeModel.unpricedProviderIds
                   .map(providerLabel)
                   .join(", ")})`}
               .
