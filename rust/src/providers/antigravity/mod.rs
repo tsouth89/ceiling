@@ -344,7 +344,11 @@ impl AntigravityProvider {
         Vec::new()
     }
 
-    /// Fetch user status from Antigravity API
+    /// Fetch usage from Antigravity's local language-server API.
+    ///
+    /// Prefers `RetrieveUserQuotaSummary` (shared model-group weekly / 5-hour
+    /// pools that match Settings → Models). Falls back to per-model
+    /// `remainingFraction` on `GetUserStatus` when the summary is missing.
     async fn fetch_user_status(&self) -> Result<UsageSnapshot, ProviderError> {
         let process_info = Self::detect_process_info()?;
         let api_port = Self::find_api_port(process_info.extension_port, process_info.pid).await?;
@@ -357,32 +361,100 @@ impl AntigravityProvider {
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
 
-        let url = format!(
-            "https://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/GetUserStatus",
-            api_port
-        );
-
-        let body = serde_json::json!({
-            "metadata": {
-                "ideName": "antigravity",
-                "extensionName": "antigravity",
-                "ideVersion": "unknown",
-                "locale": "en"
-            }
-        });
-
-        // Prefer extension-server CSRF when present; otherwise the language-server
-        // token. CLI processes have neither — their local server accepts no CSRF.
         let csrf_token = process_info
             .extension_server_csrf_token
             .as_deref()
             .unwrap_or(&process_info.csrf_token);
+        let alt_csrf = process_info
+            .extension_server_csrf_token
+            .as_ref()
+            .filter(|_| !process_info.csrf_token.is_empty())
+            .map(|_| process_info.csrf_token.as_str());
+
+        // Plan / identity still live on GetUserStatus.
+        let user_status = Self::post_connect_json::<UserStatusResponse>(
+            &client,
+            api_port,
+            "GetUserStatus",
+            &serde_json::json!({
+                "metadata": {
+                    "ideName": "antigravity",
+                    "extensionName": "antigravity",
+                    "ideVersion": "unknown",
+                    "locale": "en"
+                }
+            }),
+            csrf_token,
+            alt_csrf,
+        )
+        .await
+        .ok()
+        .and_then(|resp| resp.user_status);
+
+        let plan_name = user_status.as_ref().and_then(|status| {
+            status
+                .plan_status
+                .as_ref()
+                .and_then(|ps| ps.plan_info.as_ref())
+                .and_then(|pi| pi.plan_display_name.clone().or(pi.plan_name.clone()))
+        });
+        let email = user_status.as_ref().and_then(|status| status.email.clone());
+
+        // Shared group pools (what Antigravity Settings shows).
+        if let Ok(summary) = Self::post_connect_json::<QuotaSummaryResponse>(
+            &client,
+            api_port,
+            "RetrieveUserQuotaSummary",
+            &serde_json::json!({}),
+            csrf_token,
+            alt_csrf,
+        )
+        .await
+            && let Some(mut snapshot) = parse_quota_summary(&summary)
+        {
+            if let Some(plan) = plan_name {
+                snapshot = snapshot.with_login_method(plan);
+            }
+            if let Some(email) = email {
+                snapshot = snapshot.with_email(email);
+            }
+            return Ok(snapshot);
+        }
+
+        // Fallback: older path using per-model remainingFraction on GetUserStatus.
+        let Some(status) = user_status else {
+            return Err(ProviderError::Other(
+                "Antigravity returned no user status and no quota summary".to_string(),
+            ));
+        };
+        let mut snapshot = self.parse_user_status(UserStatusResponse {
+            user_status: Some(status),
+        })?;
+        if let Some(email) = email {
+            snapshot = snapshot.with_email(email);
+        }
+        Ok(snapshot)
+    }
+
+    /// POST a Connect/JSON method on the local language server.
+    async fn post_connect_json<T: for<'de> Deserialize<'de>>(
+        client: &reqwest::Client,
+        api_port: u16,
+        method: &str,
+        body: &serde_json::Value,
+        csrf_token: &str,
+        alt_csrf: Option<&str>,
+    ) -> Result<T, ProviderError> {
+        let url = format!(
+            "https://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/{method}",
+            api_port
+        );
 
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Connect-Protocol-Version", "1")
-            .json(&body);
+            .json(body);
         if !csrf_token.is_empty() {
             request = request.header("X-Codeium-Csrf-Token", csrf_token);
         }
@@ -393,44 +465,34 @@ impl AntigravityProvider {
             .map_err(|e| ProviderError::Other(format!("API request failed: {}", e)))?;
 
         if !resp.status().is_success() {
-            // Retry with language server CSRF token if extension server token failed
-            if process_info.extension_server_csrf_token.is_some()
-                && !process_info.csrf_token.is_empty()
-            {
-                let retry_resp = client
+            if let Some(alt) = alt_csrf {
+                let retry = client
                     .post(&url)
                     .header("Content-Type", "application/json")
                     .header("Connect-Protocol-Version", "1")
-                    .header("X-Codeium-Csrf-Token", &process_info.csrf_token)
-                    .json(&body)
+                    .header("X-Codeium-Csrf-Token", alt)
+                    .json(body)
                     .send()
                     .await;
-
-                if let Ok(retry) = retry_resp
+                if let Ok(retry) = retry
                     && retry.status().is_success()
                 {
-                    let json: UserStatusResponse = retry
+                    return retry
                         .json()
                         .await
-                        .map_err(|e| ProviderError::Parse(e.to_string()))?;
-                    return self.parse_user_status(json);
+                        .map_err(|e| ProviderError::Parse(e.to_string()));
                 }
             }
-
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             return Err(ProviderError::Other(format!(
-                "API error {}: {}",
-                status, text
+                "API error {status} on {method}: {text}"
             )));
         }
 
-        let json: UserStatusResponse = resp
-            .json()
+        resp.json()
             .await
-            .map_err(|e| ProviderError::Other(format!("Failed to parse response: {}", e)))?;
-
-        self.parse_user_status(json)
+            .map_err(|e| ProviderError::Other(format!("Failed to parse {method}: {e}")))
     }
 
     fn parse_user_status(
@@ -577,10 +639,65 @@ struct UserStatusResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserStatus {
-    #[allow(dead_code)]
     email: Option<String>,
     plan_status: Option<PlanStatus>,
     cascade_model_config_data: Option<ModelConfigData>,
+}
+
+/// Shared model-group quota pools from `RetrieveUserQuotaSummary`.
+/// This is what Antigravity Settings → Models displays (weekly / 5-hour per group).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaSummaryResponse {
+    response: Option<QuotaSummaryBody>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaSummaryBody {
+    groups: Option<Vec<QuotaGroup>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaGroup {
+    display_name: Option<String>,
+    #[allow(dead_code)]
+    description: Option<String>,
+    buckets: Option<Vec<QuotaBucket>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaBucket {
+    bucket_id: Option<String>,
+    display_name: Option<String>,
+    window: Option<String>,
+    remaining_fraction: Option<f64>,
+    reset_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaGroupKind {
+    ClaudeGpt,
+    Gemini,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaWindowKind {
+    FiveHour,
+    Weekly,
+    Other,
+}
+
+struct ParsedQuotaBucket {
+    group_title: String,
+    bucket_title: String,
+    group_kind: QuotaGroupKind,
+    window_kind: QuotaWindowKind,
+    rate: RateWindow,
+    window_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -773,9 +890,16 @@ fn model_window_id(config: &ModelConfig) -> String {
 }
 
 fn rate_window_from_quota(quota: &QuotaInfo) -> RateWindow {
-    let remaining = quota.remaining_fraction.unwrap_or(1.0);
-    let used_percent = (1.0 - remaining) * 100.0;
-    RateWindow::with_details(used_percent, None, None, quota.reset_time.clone())
+    rate_window_from_remaining(quota.remaining_fraction, quota.reset_time.clone())
+}
+
+fn rate_window_from_remaining(
+    remaining_fraction: Option<f64>,
+    reset_time: Option<String>,
+) -> RateWindow {
+    let remaining = remaining_fraction.unwrap_or(1.0);
+    let used_percent = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+    RateWindow::with_details(used_percent, None, None, reset_time)
 }
 
 fn clean_model_label(label: &str) -> String {
@@ -784,6 +908,146 @@ fn clean_model_label(label: &str) -> String {
         out = out.replace("  ", " ");
     }
     out
+}
+
+fn classify_quota_group(display_name: &str) -> QuotaGroupKind {
+    let lower = display_name.to_lowercase();
+    if lower.contains("claude") || lower.contains("gpt") {
+        QuotaGroupKind::ClaudeGpt
+    } else if lower.contains("gemini") {
+        QuotaGroupKind::Gemini
+    } else {
+        QuotaGroupKind::Other
+    }
+}
+
+fn classify_quota_window(bucket: &QuotaBucket) -> QuotaWindowKind {
+    let haystack = format!(
+        "{} {} {}",
+        bucket.window.as_deref().unwrap_or(""),
+        bucket.display_name.as_deref().unwrap_or(""),
+        bucket.bucket_id.as_deref().unwrap_or("")
+    )
+    .to_lowercase();
+    if haystack.contains("five")
+        || haystack.contains("5-hour")
+        || haystack.contains("5 hour")
+        || haystack.contains("5h")
+        || haystack.contains("five_hour")
+        || haystack.contains("fivehour")
+    {
+        QuotaWindowKind::FiveHour
+    } else if haystack.contains("week") {
+        QuotaWindowKind::Weekly
+    } else {
+        QuotaWindowKind::Other
+    }
+}
+
+fn parse_quota_summary(response: &QuotaSummaryResponse) -> Option<UsageSnapshot> {
+    let groups = response.response.as_ref()?.groups.as_ref()?;
+    if groups.is_empty() {
+        return None;
+    }
+
+    let mut buckets: Vec<ParsedQuotaBucket> = Vec::new();
+    for group in groups {
+        let group_title = group
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Models")
+            .to_string();
+        let group_kind = classify_quota_group(&group_title);
+        for bucket in group.buckets.as_deref().unwrap_or(&[]) {
+            let bucket_title = bucket
+                .display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .or(bucket.window.as_deref())
+                .unwrap_or("Limit")
+                .to_string();
+            let window_kind = classify_quota_window(bucket);
+            let id_raw = bucket
+                .bucket_id
+                .clone()
+                .unwrap_or_else(|| format!("{group_title}-{bucket_title}"));
+            let window_id = format!(
+                "quota-{}",
+                id_raw
+                    .chars()
+                    .map(|ch| {
+                        if ch.is_ascii_alphanumeric() {
+                            ch.to_ascii_lowercase()
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect::<String>()
+                    .trim_matches('-')
+            );
+            buckets.push(ParsedQuotaBucket {
+                group_title: group_title.clone(),
+                bucket_title,
+                group_kind,
+                window_kind,
+                rate: rate_window_from_remaining(
+                    bucket.remaining_fraction,
+                    bucket.reset_time.clone(),
+                ),
+                window_id,
+            });
+        }
+    }
+
+    if buckets.is_empty() {
+        return None;
+    }
+
+    // Prefer the tighter five-hour window for summary meters when present.
+    let pick = |kind: QuotaGroupKind| {
+        buckets
+            .iter()
+            .filter(|b| b.group_kind == kind)
+            .min_by_key(|b| match b.window_kind {
+                QuotaWindowKind::FiveHour => 0u8,
+                QuotaWindowKind::Weekly => 1,
+                QuotaWindowKind::Other => 2,
+            })
+    };
+
+    let primary = pick(QuotaGroupKind::ClaudeGpt)
+        .or_else(|| buckets.first())
+        .map(|b| b.rate.clone())
+        .unwrap_or_else(|| RateWindow::new(0.0));
+    let mut snapshot = UsageSnapshot::new(primary);
+
+    if let Some(gemini) = pick(QuotaGroupKind::Gemini) {
+        snapshot = snapshot.with_secondary(gemini.rate.clone());
+    }
+
+    // If the Claude/GPT group has both five-hour and weekly, surface weekly as
+    // model_specific so both AG Settings rows stay visible in the detail list.
+    if let Some(weekly) = buckets.iter().find(|b| {
+        b.group_kind == QuotaGroupKind::ClaudeGpt && b.window_kind == QuotaWindowKind::Weekly
+    }) {
+        let primary_is_five = pick(QuotaGroupKind::ClaudeGpt)
+            .map(|b| b.window_kind == QuotaWindowKind::FiveHour)
+            .unwrap_or(false);
+        if primary_is_five {
+            snapshot = snapshot.with_model_specific(weekly.rate.clone());
+        }
+    }
+
+    for bucket in &buckets {
+        let title = format!("{} · {}", bucket.group_title, bucket.bucket_title);
+        snapshot =
+            snapshot.with_extra_rate_window(bucket.window_id.clone(), title, bucket.rate.clone());
+    }
+
+    Some(snapshot)
 }
 
 #[cfg(test)]
@@ -1050,5 +1314,113 @@ mod tests {
 
         assert!(error.contains("Start Google Antigravity or run `agy`"));
         assert!(error.contains("sign in"));
+    }
+
+    fn make_quota_summary(groups: serde_json::Value) -> QuotaSummaryResponse {
+        serde_json::from_value(serde_json::json!({ "response": { "groups": groups } })).unwrap()
+    }
+
+    #[test]
+    fn parse_quota_summary_matches_settings_group_pools() {
+        // Live shape from RetrieveUserQuotaSummary (weekly-only Pro seat).
+        let summary = make_quota_summary(serde_json::json!([
+            {
+                "displayName": "Gemini Models",
+                "description": "Models within this group: Gemini Flash, Gemini Pro",
+                "buckets": [{
+                    "bucketId": "gemini-weekly",
+                    "displayName": "Weekly Limit",
+                    "window": "weekly",
+                    "remainingFraction": 0.75,
+                    "resetTime": "2026-08-03T22:52:04Z"
+                }]
+            },
+            {
+                "displayName": "Claude and GPT models",
+                "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+                "buckets": [{
+                    "bucketId": "3p-weekly",
+                    "displayName": "Weekly Limit",
+                    "window": "weekly",
+                    "remainingFraction": 0.59,
+                    "resetTime": "2026-08-03T22:52:04Z"
+                }]
+            }
+        ]));
+
+        let snap = parse_quota_summary(&summary).expect("summary");
+        // Primary = Claude/GPT weekly used% = (1 - 0.59) * 100
+        assert!((snap.primary.used_percent - 41.0).abs() < 0.1);
+        let sec = snap.secondary.expect("gemini secondary");
+        assert!((sec.used_percent - 25.0).abs() < 0.1);
+        assert_eq!(snap.extra_rate_windows.len(), 2);
+        assert!(
+            snap.extra_rate_windows
+                .iter()
+                .any(|w| w.title.contains("Claude and GPT") && w.title.contains("Weekly"))
+        );
+        assert!(
+            snap.extra_rate_windows
+                .iter()
+                .any(|w| w.title.contains("Gemini") && w.title.contains("Weekly"))
+        );
+    }
+
+    #[test]
+    fn parse_quota_summary_prefers_five_hour_over_weekly_for_primary() {
+        // Matches AG Settings dual rows (reporter screenshot shape).
+        let summary = make_quota_summary(serde_json::json!([
+            {
+                "displayName": "Gemini Models",
+                "buckets": [
+                    {
+                        "bucketId": "gemini-weekly",
+                        "displayName": "Weekly Limit",
+                        "window": "weekly",
+                        "remainingFraction": 0.75
+                    },
+                    {
+                        "bucketId": "gemini-five-hour",
+                        "displayName": "Five Hour Limit",
+                        "window": "five_hour",
+                        "remainingFraction": 0.98
+                    }
+                ]
+            },
+            {
+                "displayName": "Claude and GPT models",
+                "buckets": [
+                    {
+                        "bucketId": "3p-weekly",
+                        "displayName": "Weekly Limit",
+                        "window": "weekly",
+                        "remainingFraction": 0.59
+                    },
+                    {
+                        "bucketId": "3p-five-hour",
+                        "displayName": "Five Hour Limit",
+                        "window": "five_hour",
+                        "remainingFraction": 1.0
+                    }
+                ]
+            }
+        ]));
+
+        let snap = parse_quota_summary(&summary).expect("summary");
+        // Claude five-hour remaining 1.0 → 0% used
+        assert!((snap.primary.used_percent - 0.0).abs() < 0.1);
+        // Gemini five-hour remaining 0.98 → 2% used
+        let sec = snap.secondary.expect("gemini");
+        assert!((sec.used_percent - 2.0).abs() < 0.1);
+        // Claude weekly also exposed when five-hour is primary
+        let weekly = snap.model_specific.expect("claude weekly");
+        assert!((weekly.used_percent - 41.0).abs() < 0.1);
+        assert_eq!(snap.extra_rate_windows.len(), 4);
+    }
+
+    #[test]
+    fn parse_quota_summary_empty_groups_returns_none() {
+        let summary = make_quota_summary(serde_json::json!([]));
+        assert!(parse_quota_summary(&summary).is_none());
     }
 }
