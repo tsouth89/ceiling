@@ -398,9 +398,7 @@ impl AntigravityProvider {
                 .and_then(|ps| ps.plan_info.as_ref())
                 .and_then(|pi| pi.plan_display_name.clone().or(pi.plan_name.clone()))
         });
-        let email = user_status
-            .as_ref()
-            .and_then(|status| status.email.clone());
+        let email = user_status.as_ref().and_then(|status| status.email.clone());
 
         // Shared group pools (what Antigravity Settings shows).
         if let Ok(summary) = Self::post_connect_json::<QuotaSummaryResponse>(
@@ -1045,11 +1043,8 @@ fn parse_quota_summary(response: &QuotaSummaryResponse) -> Option<UsageSnapshot>
 
     for bucket in &buckets {
         let title = format!("{} · {}", bucket.group_title, bucket.bucket_title);
-        snapshot = snapshot.with_extra_rate_window(
-            bucket.window_id.clone(),
-            title,
-            bucket.rate.clone(),
-        );
+        snapshot =
+            snapshot.with_extra_rate_window(bucket.window_id.clone(), title, bucket.rate.clone());
     }
 
     Some(snapshot)
@@ -1359,14 +1354,16 @@ mod tests {
         let sec = snap.secondary.expect("gemini secondary");
         assert!((sec.used_percent - 25.0).abs() < 0.1);
         assert_eq!(snap.extra_rate_windows.len(), 2);
-        assert!(snap
-            .extra_rate_windows
-            .iter()
-            .any(|w| w.title.contains("Claude and GPT") && w.title.contains("Weekly")));
-        assert!(snap
-            .extra_rate_windows
-            .iter()
-            .any(|w| w.title.contains("Gemini") && w.title.contains("Weekly")));
+        assert!(
+            snap.extra_rate_windows
+                .iter()
+                .any(|w| w.title.contains("Claude and GPT") && w.title.contains("Weekly"))
+        );
+        assert!(
+            snap.extra_rate_windows
+                .iter()
+                .any(|w| w.title.contains("Gemini") && w.title.contains("Weekly"))
+        );
     }
 
     #[test]
