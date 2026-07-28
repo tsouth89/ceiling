@@ -2,18 +2,32 @@
 
 ### Antigravity quotas match Settings
 
-Ceiling now reads Antigravity's shared model-group pools (`RetrieveUserQuotaSummary`) instead of only per-model `remainingFraction` on `GetUserStatus`. Weekly and five-hour group limits line up with Antigravity Settings → Models.
+Ceiling was reading each model's leftover fraction from the language server. Antigravity Settings shows shared pools instead: Gemini vs Claude/GPT, with weekly and five-hour limits.
 
-### Claude sign-in vs Charts
+1.5.15 uses that same group summary (`RetrieveUserQuotaSummary`). If Settings showed real weekly/5h usage while Ceiling listed every model at 0%, this is the fix. Leave Antigravity open and signed in, then refresh.
 
-Missing Claude CLI sign-in no longer collapses into a one-line OAuth message that hides other sources. Errors point at `claude` login for live capacity and note that Charts can still show local session spend without it.
+### Claude: capacity vs Charts
 
-### Custom date range on Estimated API value
+Live capacity (Accounts, tray meters) needs a Claude CLI sign-in. Charts still read local session logs under `~/.claude` without one.
 
-Charts → Estimated API value gains a **Custom** period with From/To pickers (inclusive local calendar days, up to 366 days), on top of Today / Yesterday / 30 days.
+If Claude was Error with "sign-in was not found" while Charts still showed dollars, that split is real. Errors now:
 
-## Fixes
+- keep multi-source Auto detail instead of collapsing to OAuth-only
+- point at running `claude` once in a terminal
+- say Charts can still show local spend without live capacity
 
-- Antigravity: prefer group weekly / five-hour quota summary over per-model zeros (#163, #167)
-- Claude: clearer multi-source capacity errors; charts-without-sign-in note (#165, #166)
-- Charts: custom inclusive date range for Estimated API value (#164, #168)
+### Custom range on Estimated API value
+
+Charts → Estimated API value adds **Custom** next to Today / Yesterday / 30 days. Pick inclusive local From/To dates (up to 366 days) for every-other-week use or a single month.
+
+## Installers
+
+- **Ceiling-1.5.15-Setup.exe** - standard installer
+- **Ceiling-1.5.15-portable.exe** - portable
+- **Ceiling-1.5.15-Store-Setup.exe** - Microsoft Store package (WebView2 bundled)
+
+---
+
+Patch on **1.5.14**.
+
+**Full Changelog**: https://github.com/tsouth89/ceiling/compare/v1.5.14...v1.5.15
