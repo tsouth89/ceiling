@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.15 - 2026-07-28
+
+Patch for reported Antigravity quota mismatch, Claude sign-in vs charts confusion, and custom chart date ranges.
+
+### Fixed
+- Antigravity capacity uses `RetrieveUserQuotaSummary` shared model-group weekly / five-hour pools (matches Settings to Models) instead of only per-model `remainingFraction`. (#163, #167)
+- Claude capacity errors no longer collapse multi-source Auto failures into an OAuth-only line; copy points at CLI `claude` login and notes Charts can still show local session spend without live capacity. (#165, #166)
+
+### Added
+- Estimated API value **Custom** date range (inclusive local From/To, up to 366 days) alongside Today / Yesterday / 30 days. (#164, #168)
+
 ## [Ceiling] 1.5.14 - 2026-07-26
 
 Patch so Weekly window API-equivalent dollars match priority/fast pricing after 1.5.13.
@@ -1278,3 +1289,5 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
+
+
