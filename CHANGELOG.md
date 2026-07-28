@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.16 - 2026-07-28
+
+Hotfix: Estimated API value **Custom** date range showed no data even when local logs had spend for that window.
+
+### Fixed
+- Custom ranges fall back to the scanned daily dollar series when the dedicated custom window is empty (#173)
+- Custom range UI keeps the ring layout while loading and shows a cleaner date bar (#173)
+- Codex local scan no longer drops window totals when a daily bucket key is missing (#173)
+
 ## [Ceiling] 1.5.15 - 2026-07-28
 
 Patch for reported Antigravity quota mismatch, Claude sign-in vs charts confusion, and custom chart date ranges.
@@ -1289,5 +1298,6 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
+
 
 
