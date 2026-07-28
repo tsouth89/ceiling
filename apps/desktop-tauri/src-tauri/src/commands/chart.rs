@@ -873,21 +873,23 @@ fn load_local_api_value_totals(
                 .unwrap_or_default();
             let daily_series = daily_series_from_report(&report.daily_costs);
             let custom = custom_range.map(|(starts_at, ends_at)| {
+                let start_day = starts_at.with_timezone(&Local).date_naive();
+                // ends_at is exclusive midnight; convert to inclusive local day.
+                let end_day =
+                    ends_at.with_timezone(&Local).date_naive() - chrono::Duration::days(1);
                 let from_window = report
                     .current_windows
                     .get("custom")
                     .cloned()
                     .map(|summary| api_value_period(provider_id, &summary))
-                    .unwrap_or_else(|| empty_api_value_period());
+                    .unwrap_or_else(empty_api_value_period);
+                let from_daily = period_from_daily_series(&daily_series, start_day, end_day);
+                // Prefer the richer window (tokens + dollars). If the window is
+                // empty but daily dollars exist, use daily so Custom never lies.
                 if from_window.has_data {
                     from_window
                 } else {
-                    // Belt-and-suspenders: same dollars as the chart series.
-                    period_from_daily_series(
-                        &daily_series,
-                        starts_at.with_timezone(&Local).date_naive(),
-                        ends_at.with_timezone(&Local).date_naive() - chrono::Duration::days(1),
-                    )
+                    from_daily
                 }
             });
             // Oldest first so the trend reads left to right, ending today.
@@ -966,6 +968,7 @@ fn period_from_daily_series(
         return empty_api_value_period();
     }
     let mut api_value_usd = 0.0;
+    let mut tokens: u64 = 0;
     let mut has_data = false;
     for day in daily_series {
         let Ok(date) = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") else {
@@ -978,12 +981,13 @@ fn period_from_daily_series(
             has_data = true;
         }
         api_value_usd += day.api_value_usd;
+        tokens = tokens.saturating_add(day.tokens);
     }
     LocalApiValuePeriod {
         api_value_usd,
-        tokens: 0,
-        priced_tokens: 0,
-        total_tokens: 0,
+        tokens,
+        priced_tokens: tokens,
+        total_tokens: tokens,
         has_data: has_data || api_value_usd > 0.0,
     }
 }
@@ -1789,11 +1793,11 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
         LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry, effort_breakdown,
-        format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry, daily_series_from_report,
+        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
-        parse_api_value_custom_range, pricing_coverage_tokens, project_breakdown,
-        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
+        project_breakdown, spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2621,5 +2625,34 @@ mod tests {
         assert!(parse_api_value_custom_range("2026-07-10", "2026-07-01", today).is_err());
         assert!(parse_api_value_custom_range("2026-07-01", "2026-08-01", today).is_err());
         assert!(parse_api_value_custom_range("not-a-date", "2026-07-01", today).is_err());
+    }
+
+    #[test]
+    fn period_from_daily_series_sums_inclusive_range_only() {
+        let series = daily_series_from_report(&[
+            ("2026-07-01".into(), 10.0),
+            ("2026-07-02".into(), 5.0),
+            ("2026-07-15".into(), 1.0),
+            ("2026-07-28".into(), 99.0),
+        ]);
+        let period = period_from_daily_series(
+            &series,
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        );
+        assert!(period.has_data);
+        assert!((period.api_value_usd - 16.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn period_from_daily_series_empty_when_range_misses() {
+        let series = daily_series_from_report(&[("2026-06-01".into(), 10.0)]);
+        let period = period_from_daily_series(
+            &series,
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        );
+        assert!(!period.has_data);
+        assert_eq!(period.api_value_usd, 0.0);
     }
 }
