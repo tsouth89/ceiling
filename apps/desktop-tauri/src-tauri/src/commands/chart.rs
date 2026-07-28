@@ -308,6 +308,9 @@ pub struct LocalApiValueProvider {
     pub thirty_days: LocalApiValuePeriod,
     /// Calendar days [today-60, today-30) for dollar period-over-period on 30d.
     pub prior_thirty_days: LocalApiValuePeriod,
+    /// Optional inclusive local-calendar range from `get_local_api_value_totals`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<LocalApiValuePeriod>,
     /// Last seven local calendar days, oldest first, today last.
     #[serde(default)]
     pub last_seven_days: Vec<LocalApiValueDay>,
@@ -722,11 +725,27 @@ pub(crate) async fn load_spend_budget_total(
     .flatten()
 }
 
+/// Inclusive local-calendar custom range for Estimated API value (YYYY-MM-DD).
+const API_VALUE_CUSTOM_MAX_DAYS: i64 = 366;
 #[tauri::command]
-pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, String> {
+pub async fn get_local_api_value_totals(
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<Vec<LocalApiValueProvider>, String> {
+    let custom = match (since.as_deref(), until.as_deref()) {
+        (None, None) => None,
+        (Some(since), Some(until)) => Some(parse_api_value_custom_range(
+            since,
+            until,
+            Local::now().date_naive(),
+        )?),
+        _ => {
+            return Err("Custom range needs both a start and end date (YYYY-MM-DD).".to_string());
+        }
+    };
     // A worker panic/cancel must surface as an error, not an empty result —
     // "unavailable" and "genuinely no data" are distinct on this card.
-    tauri::async_runtime::spawn_blocking(|| load_local_api_value_totals(Local::now()))
+    tauri::async_runtime::spawn_blocking(move || load_local_api_value_totals(Local::now(), custom))
         .await
         .map_err(|err| {
             tracing::warn!("Local API-value totals worker failed: {}", err);
@@ -734,7 +753,40 @@ pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, 
         })
 }
 
-fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvider> {
+/// Parse and validate an inclusive local-calendar custom range.
+/// Returns `(start, end_exclusive)` as UTC midnights for the cost scanner.
+fn parse_api_value_custom_range(
+    since: &str,
+    until: &str,
+    today: NaiveDate,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
+    let start = NaiveDate::parse_from_str(since.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("Start date must be YYYY-MM-DD (got {since:?})."))?;
+    let end_inclusive = NaiveDate::parse_from_str(until.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("End date must be YYYY-MM-DD (got {until:?})."))?;
+    if start > end_inclusive {
+        return Err("Start date must be on or before the end date.".to_string());
+    }
+    if end_inclusive > today {
+        return Err("End date cannot be in the future.".to_string());
+    }
+    let span_days = (end_inclusive - start).num_days() + 1;
+    if span_days > API_VALUE_CUSTOM_MAX_DAYS {
+        return Err(format!(
+            "Custom range can span at most {API_VALUE_CUSTOM_MAX_DAYS} days."
+        ));
+    }
+    // Inclusive end day → [start midnight, day-after-end midnight).
+    Ok((
+        local_midnight_utc(start),
+        local_midnight_utc(end_inclusive + chrono::Duration::days(1)),
+    ))
+}
+
+fn load_local_api_value_totals(
+    now: DateTime<Local>,
+    custom_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<LocalApiValueProvider> {
     let today = now.date_naive();
     let (yesterday_start, yesterday_end) = local_yesterday_window_utc(now);
     // Exact [start, end) windows so thirty-day and prior-thirty stay adjacent
@@ -743,6 +795,13 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
     let thirty_start = local_midnight_utc(today - chrono::Duration::days(29));
     let thirty_end = local_midnight_utc(today + chrono::Duration::days(1));
     let prior_start = local_midnight_utc(today - chrono::Duration::days(59));
+    let scan_days = custom_range
+        .map(|(start, _)| {
+            let start_date = start.with_timezone(&Local).date_naive();
+            let days = (today - start_date).num_days().max(0) as u32 + 1;
+            days.clamp(60, API_VALUE_CUSTOM_MAX_DAYS as u32)
+        })
+        .unwrap_or(60);
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
@@ -763,6 +822,13 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                     ends_at: thirty_start,
                 },
             ];
+            if let Some((starts_at, ends_at)) = custom_range {
+                windows.push(CurrentUsageWindow {
+                    id: "custom".to_string(),
+                    starts_at,
+                    ends_at,
+                });
+            }
             // One window per local calendar day for the seven-day trend.
             for offset in 0..7i64 {
                 let date = today - chrono::Duration::days(offset);
@@ -772,7 +838,7 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                     ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
                 });
             }
-            let report = get_cost_usage_report_with_windows(provider_id, 60, &windows)?;
+            let report = get_cost_usage_report_with_windows(provider_id, scan_days, &windows)?;
             let yesterday = report
                 .current_windows
                 .get("yesterday")
@@ -788,6 +854,14 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                 .get("prior_thirty")
                 .cloned()
                 .unwrap_or_default();
+            let custom = custom_range.map(|_| {
+                let summary = report
+                    .current_windows
+                    .get("custom")
+                    .cloned()
+                    .unwrap_or_default();
+                api_value_period(provider_id, &summary)
+            });
             // Oldest first so the trend reads left to right, ending today.
             let last_seven_days = (0..7i64)
                 .rev()
@@ -812,14 +886,16 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                 yesterday: api_value_period(provider_id, &yesterday),
                 thirty_days: api_value_period(provider_id, &thirty_days),
                 prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
+                custom,
                 last_seven_days,
             };
             // Omit providers with no source data in any period.
             (provider.today.has_data
                 || provider.yesterday.has_data
                 || provider.thirty_days.has_data
-                || provider.prior_thirty_days.has_data)
-                .then_some(provider)
+                || provider.prior_thirty_days.has_data
+                || provider.custom.as_ref().is_some_and(|p| p.has_data))
+            .then_some(provider)
         })
         .collect()
 }
@@ -1628,8 +1704,8 @@ mod tests {
         comparison_period_specs, cost_fetch_failure_allows_early_retry, effort_breakdown,
         format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
-        pricing_coverage_tokens, project_breakdown, spend_budget_period_details, token_breakdown,
-        token_cost_cache_is_fresh,
+        parse_api_value_custom_range, pricing_coverage_tokens, project_breakdown,
+        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2434,5 +2510,28 @@ mod tests {
             localized_estimate_note("claude", Language::English),
             "API-equivalent estimate from local Claude logs; not subscription spend"
         );
+    }
+    #[test]
+    fn parse_api_value_custom_range_accepts_inclusive_local_days() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 28).unwrap();
+        let (start, end) =
+            parse_api_value_custom_range("2026-07-01", "2026-07-07", today).expect("range");
+        assert_eq!(
+            start.with_timezone(&Local).date_naive(),
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+        );
+        // Exclusive end is the day after the inclusive until date.
+        assert_eq!(
+            end.with_timezone(&Local).date_naive(),
+            NaiveDate::from_ymd_opt(2026, 7, 8).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_api_value_custom_range_rejects_inverted_and_future() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 28).unwrap();
+        assert!(parse_api_value_custom_range("2026-07-10", "2026-07-01", today).is_err());
+        assert!(parse_api_value_custom_range("2026-07-01", "2026-08-01", today).is_err());
+        assert!(parse_api_value_custom_range("not-a-date", "2026-07-01", today).is_err());
     }
 }
