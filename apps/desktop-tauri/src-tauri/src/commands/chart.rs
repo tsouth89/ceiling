@@ -734,25 +734,23 @@ pub async fn get_local_api_value_totals(
 ) -> Result<Vec<LocalApiValueProvider>, String> {
     let custom = match (since.as_deref(), until.as_deref()) {
         (None, None) => None,
-        (Some(since), Some(until)) => {
-            Some(parse_api_value_custom_range(since, until, Local::now().date_naive())?)
-        }
+        (Some(since), Some(until)) => Some(parse_api_value_custom_range(
+            since,
+            until,
+            Local::now().date_naive(),
+        )?),
         _ => {
-            return Err(
-                "Custom range needs both a start and end date (YYYY-MM-DD).".to_string(),
-            );
+            return Err("Custom range needs both a start and end date (YYYY-MM-DD).".to_string());
         }
     };
     // A worker panic/cancel must surface as an error, not an empty result —
     // "unavailable" and "genuinely no data" are distinct on this card.
-    tauri::async_runtime::spawn_blocking(move || {
-        load_local_api_value_totals(Local::now(), custom)
-    })
-    .await
-    .map_err(|err| {
-        tracing::warn!("Local API-value totals worker failed: {}", err);
-        "Unable to load local API-value totals.".to_string()
-    })
+    tauri::async_runtime::spawn_blocking(move || load_local_api_value_totals(Local::now(), custom))
+        .await
+        .map_err(|err| {
+            tracing::warn!("Local API-value totals worker failed: {}", err);
+            "Unable to load local API-value totals.".to_string()
+        })
 }
 
 /// Parse and validate an inclusive local-calendar custom range.
@@ -762,12 +760,10 @@ fn parse_api_value_custom_range(
     until: &str,
     today: NaiveDate,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
-    let start = NaiveDate::parse_from_str(since.trim(), "%Y-%m-%d").map_err(|_| {
-        format!("Start date must be YYYY-MM-DD (got {since:?}).")
-    })?;
-    let end_inclusive = NaiveDate::parse_from_str(until.trim(), "%Y-%m-%d").map_err(|_| {
-        format!("End date must be YYYY-MM-DD (got {until:?}).")
-    })?;
+    let start = NaiveDate::parse_from_str(since.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("Start date must be YYYY-MM-DD (got {since:?})."))?;
+    let end_inclusive = NaiveDate::parse_from_str(until.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("End date must be YYYY-MM-DD (got {until:?})."))?;
     if start > end_inclusive {
         return Err("Start date must be on or before the end date.".to_string());
     }
@@ -899,7 +895,7 @@ fn load_local_api_value_totals(
                 || provider.thirty_days.has_data
                 || provider.prior_thirty_days.has_data
                 || provider.custom.as_ref().is_some_and(|p| p.has_data))
-                .then_some(provider)
+            .then_some(provider)
         })
         .collect()
 }
@@ -1709,7 +1705,7 @@ mod tests {
         format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
         parse_api_value_custom_range, pricing_coverage_tokens, project_breakdown,
-        spend_budget_period_details, token_breakdown,        token_cost_cache_is_fresh,
+        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
