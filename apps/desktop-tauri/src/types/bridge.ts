@@ -732,6 +732,8 @@ export interface LocalApiValueProvider {
   custom?: LocalApiValuePeriod | null;
   /** Last seven local calendar days, oldest first, today last. */
   lastSevenDays?: LocalApiValueDay[];
+  /** Scanned local days (oldest first) for custom ranges and trends. */
+  dailySeries?: LocalApiValueDay[];
 }
 
 /** One local calendar day of estimated API value, for the card's trend. */

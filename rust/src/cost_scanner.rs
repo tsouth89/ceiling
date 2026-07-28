@@ -1442,12 +1442,9 @@ impl<'a> CodexReportRollups<'a> {
                 &self.range.until_key,
             )
         }) {
-            let Some(day_summary) = self.daily.get_mut(&record.day_key) else {
-                continue;
-            };
-            if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
-                day_summary.total_cost_usd += cost;
-            }
+            // Always credit caller windows first. A missing daily bucket must not
+            // drop custom/reset-window totals (that is what broke Estimated API
+            // value custom ranges when a day key was absent from the map).
             if let Some(cost) = add_codex_record_to_summary(&mut file_summary, record) {
                 file_summary.total_cost_usd += cost;
             }
@@ -1461,6 +1458,12 @@ impl<'a> CodexReportRollups<'a> {
                     }
                 },
             );
+            let Some(day_summary) = self.daily.get_mut(&record.day_key) else {
+                continue;
+            };
+            if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
+                day_summary.total_cost_usd += cost;
+            }
             if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
                 contributed_today |= date == self.today;
                 contributed_seven_days |= date >= self.seven_day_start;

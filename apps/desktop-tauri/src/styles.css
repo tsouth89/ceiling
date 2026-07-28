@@ -8307,8 +8307,12 @@ body:has(.dashboard-shell) #root {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 10px 14px;
-  margin: 0 0 10px;
+  gap: 8px 10px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 .api-value-card__date-field {
   display: flex;
@@ -8327,6 +8331,24 @@ body:has(.dashboard-shell) #root {
   color: var(--text-primary);
   font-size: 11.5px;
   font-weight: 500;
+}
+.api-value-card__date-sep {
+  align-self: center;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.api-value-card__range-pill {
+  margin-left: auto;
+  align-self: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 .api-value-card__range-error {
   flex: 1 1 100%;
