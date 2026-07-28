@@ -116,12 +116,7 @@ fn known_cli_paths() -> Vec<PathBuf> {
     }
     if let Some(local) = dirs::data_local_dir() {
         paths.push(local.join("opencode").join("opencode.exe"));
-        paths.push(
-            local
-                .join("Programs")
-                .join("opencode")
-                .join("opencode.exe"),
-        );
+        paths.push(local.join("Programs").join("opencode").join("opencode.exe"));
     }
     paths
 }
@@ -463,7 +458,9 @@ impl OpenCodeGoProvider {
             .header("User-Agent", USER_AGENT)
             .send()
             .await
-            .map_err(|e| ProviderError::Other(format!("OpenCode Go usage API request failed: {e}")))?;
+            .map_err(|e| {
+                ProviderError::Other(format!("OpenCode Go usage API request failed: {e}"))
+            })?;
 
         let status = response.status();
         // Route not shipped yet, or not registered for this key shape.
@@ -517,9 +514,13 @@ impl OpenCodeGoProvider {
             return Err(ProviderError::AuthRequired);
         }
 
-        let rolling = Self::window_from_api_value(&value, &["rollingUsage", "rolling_usage", "rolling"])
-            .ok_or_else(|| ProviderError::Parse("OpenCode Go usage API missing rolling window".into()))?;
-        let weekly = Self::window_from_api_value(&value, &["weeklyUsage", "weekly_usage", "weekly"]);
+        let rolling =
+            Self::window_from_api_value(&value, &["rollingUsage", "rolling_usage", "rolling"])
+                .ok_or_else(|| {
+                    ProviderError::Parse("OpenCode Go usage API missing rolling window".into())
+                })?;
+        let weekly =
+            Self::window_from_api_value(&value, &["weeklyUsage", "weekly_usage", "weekly"]);
         let monthly =
             Self::window_from_api_value(&value, &["monthlyUsage", "monthly_usage", "monthly"]);
 
@@ -768,7 +769,8 @@ mod tests {
 
     #[test]
     fn usage_api_error_payload_is_auth_required() {
-        let body = r#"{ "type": "error", "error": { "type": "AuthError", "message": "Unauthorized" } }"#;
+        let body =
+            r#"{ "type": "error", "error": { "type": "AuthError", "message": "Unauthorized" } }"#;
         let err = OpenCodeGoProvider::parse_usage_api_json(body).unwrap_err();
         assert!(matches!(err, ProviderError::AuthRequired));
     }

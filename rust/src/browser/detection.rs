@@ -228,8 +228,11 @@ impl BrowserDetector {
         // In WSL, prefer Windows AppData paths when available
         if wsl::is_wsl()
             && let Some(appdata_local) = wsl::windows_appdata_local()
-            && let Some(path) =
-                Self::path_for(browser_type, &appdata_local, wsl::windows_appdata_roaming().as_deref())
+            && let Some(path) = Self::path_for(
+                browser_type,
+                &appdata_local,
+                wsl::windows_appdata_roaming().as_deref(),
+            )
             && path.exists()
         {
             return Some(path);
@@ -395,10 +398,7 @@ impl BrowserDetector {
         let local_state = user_data_dir.join("Local State");
         let content = std::fs::read_to_string(&local_state).ok()?;
         let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-        let info = json
-            .get("profile")?
-            .get("info_cache")?
-            .as_object()?;
+        let info = json.get("profile")?.get("info_cache")?.as_object()?;
         let last_used = json
             .get("profile")
             .and_then(|p| p.get("last_used"))

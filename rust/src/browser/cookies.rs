@@ -184,7 +184,10 @@ fn cleanup_temp_cookie_files(path: &Path) {
     }
 }
 
-fn copy_file_shared(source_path: &Path, destination: &mut std::fs::File) -> Result<(), CookieError> {
+fn copy_file_shared(
+    source_path: &Path,
+    destination: &mut std::fs::File,
+) -> Result<(), CookieError> {
     use std::io::{Read, Write};
 
     #[cfg(windows)]
@@ -912,11 +915,7 @@ pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> 
                     browser.browser_type.display_name(),
                     e
                 );
-                other_notes.push(format!(
-                    "{}: {}",
-                    browser.browser_type.display_name(),
-                    e
-                ));
+                other_notes.push(format!("{}: {}", browser.browser_type.display_name(), e));
             }
         }
     }
