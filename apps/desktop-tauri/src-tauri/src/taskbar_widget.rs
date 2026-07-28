@@ -72,10 +72,11 @@ fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) 
 
 /// The rate window that actually constrains a provider right now.
 ///
-/// Mirrors `constrainingWindow` in `capacityPresentation.ts` (SOU-288): an
-/// exhausted/maxed lane outranks everything else, then highest used percent,
-/// then soonest reset. The native taskbar is a one-number surface, so showing
-/// a freshly-reset 5h session while weekly is at 100% is actively misleading.
+/// Mirrors `constrainingWindow` in `capacityPresentation.ts` (SOU-288):
+/// - Default: exhausted/maxed outranks everything, then highest used %, then
+///   soonest reset (Claude session vs weekly).
+/// - Cursor: Auto/API are parallel pools. Prefer the hottest lane that still
+///   has room so a maxed API bar does not hide Auto capacity on the strip.
 #[derive(Debug, Clone, Copy)]
 struct ConstrainingReadout<'a> {
     label: Option<&'a str>,
@@ -112,9 +113,92 @@ fn outranks_window(
     }
 }
 
+/// Cursor Auto + API only (not Plan/Monthly blend).
+fn cursor_actionable_windows(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> {
+    let mut out = Vec::new();
+    if let Some(window) = snapshot.secondary.as_ref() {
+        out.push((snapshot.secondary_label.as_deref().or(Some("Auto")), window));
+    }
+    for extra in &snapshot.extra_rate_windows {
+        if extra.id != "cursor-api" {
+            continue;
+        }
+        out.push((Some(extra.title.as_str()), &extra.window));
+    }
+    out
+}
+
+fn cursor_strip_readout(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> ConstrainingReadout<'_> {
+    let actionable = cursor_actionable_windows(snapshot);
+    if !actionable.is_empty() {
+        // Hottest non-exhausted Auto/API lane.
+        let mut with_room: Option<ConstrainingReadout<'_>> = None;
+        for (label, window) in &actionable {
+            if is_blocking_window(window) {
+                continue;
+            }
+            let candidate = ConstrainingReadout {
+                label: *label,
+                window,
+            };
+            let replace = match with_room {
+                None => true,
+                Some(best) => {
+                    candidate.window.used_percent > best.window.used_percent
+                        || (candidate.window.used_percent == best.window.used_percent
+                            && reset_at_rank(candidate.window) < reset_at_rank(best.window))
+                }
+            };
+            if replace {
+                with_room = Some(candidate);
+            }
+        }
+        if let Some(best) = with_room {
+            return best;
+        }
+        // All actionable lanes exhausted: soonest reset.
+        let mut exhausted: Option<ConstrainingReadout<'_>> = None;
+        for (label, window) in &actionable {
+            if !is_blocking_window(window) {
+                continue;
+            }
+            let candidate = ConstrainingReadout {
+                label: *label,
+                window,
+            };
+            let replace = match exhausted {
+                None => true,
+                Some(best) => {
+                    reset_at_rank(candidate.window) < reset_at_rank(best.window)
+                        || (reset_at_rank(candidate.window) == reset_at_rank(best.window)
+                            && candidate.window.used_percent > best.window.used_percent)
+                }
+            };
+            if replace {
+                exhausted = Some(candidate);
+            }
+        }
+        if let Some(best) = exhausted {
+            return best;
+        }
+    }
+    ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+    }
+}
+
 fn constraining_readout(
     snapshot: &crate::commands::ProviderUsageSnapshot,
 ) -> ConstrainingReadout<'_> {
+    if snapshot.provider_id == "cursor" {
+        return cursor_strip_readout(snapshot);
+    }
+
     let mut best = ConstrainingReadout {
         label: snapshot.primary_label.as_deref(),
         window: &snapshot.primary,
@@ -2092,6 +2176,88 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("Session (5h)"));
         assert_eq!(readout.window.used_percent, 92.0);
+    }
+
+    #[test]
+    fn cursor_strip_prefers_auto_when_api_is_maxed() {
+        // Parallel pools: maxed API must not hide Auto that still has room.
+        let mut snapshot = snap("cursor", None, 40.0);
+        snapshot.primary_label = Some("Monthly".into());
+        snapshot.secondary = Some(rate_window(60.0, Some(10_080)));
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: rate_window(100.0, Some(10_080)),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Auto"));
+        assert_eq!(readout.window.used_percent, 60.0);
+    }
+
+    #[test]
+    fn cursor_strip_prefers_api_when_auto_is_maxed() {
+        let mut snapshot = snap("cursor", None, 40.0);
+        snapshot.primary_label = Some("Monthly".into());
+        snapshot.secondary = Some(rate_window(100.0, Some(10_080)));
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: rate_window(40.0, Some(10_080)),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("API"));
+        assert_eq!(readout.window.used_percent, 40.0);
+    }
+
+    #[test]
+    fn cursor_strip_ignores_hotter_plan_when_auto_api_exist() {
+        let mut snapshot = snap("cursor", None, 95.0);
+        snapshot.primary_label = Some("Monthly".into());
+        snapshot.secondary = Some(rate_window(55.0, Some(10_080)));
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: rate_window(30.0, Some(10_080)),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Auto"));
+        assert_eq!(readout.window.used_percent, 55.0);
+    }
+
+    #[test]
+    fn cursor_strip_picks_soonest_reset_when_both_exhausted() {
+        let mut soon = rate_window(100.0, Some(10_080));
+        soon.resets_at = Some("2026-07-21T04:00:00Z".into());
+        let mut later = rate_window(100.0, Some(10_080));
+        later.resets_at = Some("2026-07-28T04:00:00Z".into());
+
+        let mut snapshot = snap("cursor", None, 50.0);
+        snapshot.primary_label = Some("Monthly".into());
+        snapshot.secondary = Some(later);
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: soon,
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("API"));
+        assert_eq!(readout.window.used_percent, 100.0);
     }
 
     #[test]
