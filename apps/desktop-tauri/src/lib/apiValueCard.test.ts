@@ -81,6 +81,31 @@ describe("buildApiValueCard", () => {
     expect(model.periodChange).toBeNull();
   });
 
+  it("falls back to dailySeries when custom window is empty", () => {
+    const model = buildApiValueCard(
+      [
+        {
+          providerId: "codex",
+          today: empty,
+          yesterday: empty,
+          thirtyDays: empty,
+          priorThirtyDays: empty,
+          custom: period({ hasData: false }),
+          dailySeries: [
+            { date: "2026-07-01", apiValueUsd: 10, tokens: 100 },
+            { date: "2026-07-15", apiValueUsd: 5, tokens: 50 },
+            { date: "2026-07-28", apiValueUsd: 99, tokens: 999 },
+          ],
+        },
+      ],
+      "custom",
+      "apiValue",
+      { since: "2026-07-01", until: "2026-07-15" },
+    );
+    expect(model.isEmpty).toBe(false);
+    expect(model.total).toBe(15);
+  });
+
   it("ranks multiple providers by value with shares summing to 1", () => {
     const model = buildApiValueCard(
       [
