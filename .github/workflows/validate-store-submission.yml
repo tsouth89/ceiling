@@ -25,7 +25,9 @@ jobs:
     name: Validate Store access and package
     runs-on: windows-latest
     timeout-minutes: 30
-    environment: release
+    # Keep manual validation separate from the tag-only release environment,
+    # which also contains signing and R2 credentials.
+    environment: store-validation
 
     steps:
       - name: Check out main
