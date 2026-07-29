@@ -116,9 +116,16 @@ const MIN_TOAST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5
 const TOAST_BURST_WINDOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const MAX_TOASTS_PER_BURST_WINDOW: usize = 3;
 
+/// Reset toasts may exceed the one-per-refresh rule, but not without bound. A
+/// refresh reads a handful of providers, so anything past this is a bug rather
+/// than several genuine resets landing together.
+const MAX_RESET_TOASTS_PER_REFRESH: usize = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToastPriority {
     Normal,
+    /// A confirmed capacity reset. These are what users open Ceiling for, so
+    /// they are exempt from the rate limits that exist to tame usage alerts.
     Reset,
 }
 
@@ -180,6 +187,9 @@ pub struct NotificationManager {
     /// callers and focused unit tests deterministic.
     refresh_cycle_active: bool,
     toast_emitted_this_refresh: bool,
+    /// Resets are exempt from the one-toast-per-refresh rule, so they need
+    /// their own (much looser) ceiling to stay storm-proof.
+    reset_toasts_this_refresh: usize,
     last_toast_at: Option<std::time::Instant>,
     recent_toasts: std::collections::VecDeque<std::time::Instant>,
     #[cfg(test)]
@@ -203,6 +213,7 @@ impl NotificationManager {
             notifications_armed: false,
             refresh_cycle_active: false,
             toast_emitted_this_refresh: false,
+            reset_toasts_this_refresh: 0,
             last_toast_at: None,
             recent_toasts: std::collections::VecDeque::new(),
             #[cfg(test)]
@@ -225,17 +236,20 @@ impl NotificationManager {
         self.notifications_armed
     }
 
-    /// Start a real provider refresh. Every refresh gets at most one toast, and
-    /// the process-wide rolling limits still apply across refreshes.
+    /// Start a real provider refresh. Every refresh gets at most one *usage*
+    /// toast, and the process-wide rolling limits still apply across refreshes.
     pub fn begin_refresh_cycle(&mut self) {
         self.refresh_cycle_active = true;
         self.toast_emitted_this_refresh = false;
+        self.reset_toasts_this_refresh = 0;
     }
 
     /// Route confirmed reset events through the same startup gate and circuit
     /// breaker used by threshold notifications. Resets are the one event users
-    /// should never miss, so they may bypass the rolling cooldown while still
-    /// respecting the one-toast-per-refresh ceiling.
+    /// should never miss, so they bypass the rolling cooldown *and* the
+    /// one-toast-per-refresh ceiling: providers refresh concurrently, so that
+    /// ceiling meant an unrelated alert could silently eat the only weekly
+    /// reset notification a user gets all week.
     pub fn notify_capacity_event(&mut self, title: &str, body: &str) -> bool {
         self.emit_toast_with_priority(title, body, ToastPriority::Reset, false)
     }
@@ -294,20 +308,32 @@ impl NotificationManager {
                 .last_toast_at
                 .is_some_and(|sent_at| now.duration_since(sent_at) < MIN_TOAST_INTERVAL);
             let rolling_limit_reached = self.recent_toasts.len() >= MAX_TOASTS_PER_BURST_WINDOW;
-            let normal_rate_limited =
-                priority == ToastPriority::Normal && (too_soon || rolling_limit_reached);
-            if self.toast_emitted_this_refresh || normal_rate_limited {
+            let suppressed = match priority {
+                ToastPriority::Normal => {
+                    self.toast_emitted_this_refresh || too_soon || rolling_limit_reached
+                }
+                ToastPriority::Reset => {
+                    self.reset_toasts_this_refresh >= MAX_RESET_TOASTS_PER_REFRESH
+                }
+            };
+            if suppressed {
                 tracing::warn!(
                     title,
                     ?priority,
                     per_refresh_limit = self.toast_emitted_this_refresh,
                     minimum_interval_limit = too_soon,
                     rolling_count = self.recent_toasts.len(),
+                    resets_this_refresh = self.reset_toasts_this_refresh,
                     "suppressing notification due to toast circuit breaker"
                 );
                 return false;
             }
+            // A reset still consumes the usage-alert budget, so an unusual burst
+            // of resets cannot be followed by a pile of threshold warnings.
             self.toast_emitted_this_refresh = true;
+            if priority == ToastPriority::Reset {
+                self.reset_toasts_this_refresh += 1;
+            }
             self.last_toast_at = Some(now);
             self.recent_toasts.push_back(now);
         }
@@ -886,7 +912,7 @@ fn toast_powershell_script(title: &str, body: &str) -> String {
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml($template)
     $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Ceiling")
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("{}")
     if ($null -eq $notifier) {{ throw "CreateToastNotifier returned null" }}
     $notifier.Show($toast)
 }} catch {{
@@ -894,16 +920,64 @@ fn toast_powershell_script(title: &str, body: &str) -> String {
     exit 1
 }}"#,
         xml_escape(title),
-        xml_escape(body)
+        xml_escape(body),
+        CEILING_AUMID
     )
 }
 
-/// Register the AUMID at most once per process before showing a toast.
+/// Establish Ceiling's Windows notification identity at most once per process,
+/// before the first toast. Both halves matter: see [`ensure_aumid_registered`]
+/// and [`ensure_start_menu_shortcut`].
 #[cfg(target_os = "windows")]
 fn ensure_aumid_registered_once() {
     use std::sync::Once;
     static AUMID_INIT: Once = Once::new();
-    AUMID_INIT.call_once(ensure_aumid_registered);
+    AUMID_INIT.call_once(|| {
+        ensure_aumid_registered();
+        if let Err(error) = ensure_start_menu_shortcut() {
+            tracing::warn!(%error, "could not install the Start Menu shortcut Windows needs to keep Ceiling toasts in the notification center");
+        }
+        repair_action_center_visibility();
+    });
+}
+
+/// Undo the notification-center opt-out Windows applies to unregistered apps.
+///
+/// Windows creates our channel the first time we toast. Before Ceiling carried
+/// an AUMID on a Start Menu shortcut it had no real app identity, so Windows
+/// stamped `ShowInActionCenter=0` on that channel: banners appear for a few
+/// seconds and are then discarded instead of collecting in the notification
+/// center. Apps with a proper identity get no such value at all, and the
+/// absent-value default is to show.
+///
+/// Only ever flips an existing `0` back to `1`. A missing value already means
+/// "show", and nothing here creates or relaxes any other notification setting.
+#[cfg(target_os = "windows")]
+fn repair_action_center_visibility() {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
+
+    let path = format!(
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\{CEILING_AUMID}"
+    );
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(key) = hkcu.open_subkey_with_flags(&path, KEY_READ | KEY_SET_VALUE) else {
+        // No channel yet: Windows will create one once we toast, and by then
+        // the shortcut above gives us an identity that defaults to showing.
+        return;
+    };
+    if key.get_value::<u32, _>("ShowInActionCenter").ok() != Some(0) {
+        return;
+    }
+    match key.set_value("ShowInActionCenter", &1u32) {
+        Ok(()) => tracing::info!(
+            "re-enabled notification-center history for Ceiling; alerts were banner-only"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "could not re-enable notification-center history for Ceiling"
+        ),
+    }
 }
 
 /// Show a Ceiling toast synchronously and report whether the OS actually
@@ -967,9 +1041,9 @@ fn windows_notification_delivery_check() -> Result<(), String> {
         );
     }
 
-    if let Ok(key) = hkcu
-        .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Ceiling")
-    {
+    if let Ok(key) = hkcu.open_subkey(format!(
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\{CEILING_AUMID}"
+    )) {
         let disabled = notification_channel_is_disabled(key.get_value::<u32, _>("Enabled").ok());
         if disabled {
             return Err(
@@ -984,9 +1058,10 @@ fn windows_notification_delivery_check() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn notification_channel_is_disabled(enabled: Option<u32>) -> bool {
-    // `ShowInActionCenter=0` only disables notification-center history. Windows
-    // may leave it behind after the user re-enables the app channel, while
-    // banners are deliverable again. Only the explicit app toggle blocks us.
+    // Only the explicit app toggle blocks delivery outright. `ShowInActionCenter`
+    // is a separate value that suppresses notification-center history while
+    // banners still arrive; [`repair_action_center_visibility`] handles that one
+    // rather than treating it as an undeliverable channel.
     enabled == Some(0)
 }
 
@@ -1034,12 +1109,163 @@ fn ensure_aumid_registered() {
     // HKCU\SOFTWARE\Classes\AppUserModelId\<AUMID> is the documented path for
     // registering Win32 desktop app AUMIDs without a COM server or Start Menu shortcut.
     let result = hkcu
-        .create_subkey(r"SOFTWARE\Classes\AppUserModelId\Ceiling")
+        .create_subkey(format!(r"SOFTWARE\Classes\AppUserModelId\{CEILING_AUMID}"))
         .and_then(|(key, _)| key.set_value("DisplayName", &"Ceiling"));
 
     match result {
         Ok(()) => tracing::debug!("Ceiling AUMID registered for Windows toast notifications"),
         Err(e) => tracing::warn!("Failed to register Ceiling AUMID: {}", e),
+    }
+}
+
+/// The AUMID every Ceiling toast is published under.
+///
+/// This is the Tauri bundle `identifier` from `tauri.conf.json`, which the NSIS
+/// installer already stamps onto the Start Menu shortcut. Publishing under it
+/// means Windows resolves toasts to an app it actually knows about.
+///
+/// Ceiling used to toast under the bare string `"Ceiling"`, which no shortcut
+/// claimed. Windows accepted those toasts but treated the identity as
+/// unregistered: it stamped `ShowInActionCenter=0` on that channel, so banners
+/// flashed for a few seconds and were then discarded instead of collecting in
+/// the notification center. Keep this in step with `tauri.conf.json`.
+#[cfg(target_os = "windows")]
+const CEILING_AUMID: &str = "io.github.tsouth89.ceiling";
+
+/// `System.AppUserModel.ID`, the shortcut property that ties a desktop app to a
+/// notification identity. Declared here rather than pulled from
+/// `Win32_Storage_EnhancedStorage` to avoid enabling that feature for one
+/// constant; the value is fixed by the shell and documented by Microsoft.
+#[cfg(target_os = "windows")]
+const PKEY_APP_USER_MODEL_ID: windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY =
+    windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY {
+        fmtid: windows::core::GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
+        pid: 5,
+    };
+
+/// The Start Menu entry that claims our AUMID. The NSIS installer writes this
+/// exact file, so an installed build finds it already correct.
+#[cfg(target_os = "windows")]
+fn start_menu_shortcut_path() -> Result<std::path::PathBuf, String> {
+    let appdata = std::env::var_os("APPDATA").ok_or_else(|| "APPDATA is not set".to_string())?;
+    Ok(std::path::PathBuf::from(appdata)
+        .join(r"Microsoft\Windows\Start Menu\Programs")
+        .join("Ceiling.lnk"))
+}
+
+/// Make sure some Start Menu shortcut claims [`CEILING_AUMID`].
+///
+/// Windows resolves a desktop app's notification identity from a Start Menu
+/// shortcut carrying `System.AppUserModel.ID`. Without one it still renders the
+/// banner, but treats the app as unregistered and drops the toast instead of
+/// keeping it in the notification center.
+///
+/// Installed builds already have this: the NSIS installer stamps the bundle
+/// identifier onto `Ceiling.lnk`, and this is a no-op. Portable builds have no
+/// installer, so create the shortcut ourselves rather than shipping an app
+/// whose alerts cannot be reviewed after the fact.
+#[cfg(target_os = "windows")]
+fn ensure_start_menu_shortcut() -> Result<(), String> {
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+
+    let shortcut = start_menu_shortcut_path()?;
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate Ceiling.exe: {e}"))?;
+
+    unsafe {
+        // A failure here means this thread already has COM up under another
+        // model, which is fine to borrow. Only balance our own initialization.
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = if read_shortcut_aumid(&shortcut).as_deref() == Some(CEILING_AUMID) {
+            tracing::debug!("Start Menu shortcut already claims the Ceiling AUMID");
+            Ok(())
+        } else {
+            write_start_menu_shortcut(&shortcut, &exe)
+        };
+        if initialized {
+            CoUninitialize();
+        }
+        result
+    }
+}
+
+/// The AUMID an existing `.lnk` publishes under, if any.
+///
+/// Uses its own shell-link instance: an object loaded for reading cannot be
+/// reused to save, and silently failing to write the shortcut is exactly the
+/// failure mode this whole path exists to prevent.
+///
+/// # Safety
+/// COM must be initialized on the calling thread.
+#[cfg(target_os = "windows")]
+unsafe fn read_shortcut_aumid(shortcut: &std::path::Path) -> Option<String> {
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile, STGM_READ,
+    };
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::{HSTRING, Interface};
+
+    unsafe {
+        if !shortcut.exists() {
+            return None;
+        }
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let file: IPersistFile = link.cast().ok()?;
+        file.Load(&HSTRING::from(shortcut), STGM_READ).ok()?;
+        let store: IPropertyStore = link.cast().ok()?;
+        Some(store.GetValue(&PKEY_APP_USER_MODEL_ID).ok()?.to_string())
+    }
+}
+
+/// Writes a Start Menu shortcut for this executable under our AUMID.
+///
+/// # Safety
+/// COM must be initialized on the calling thread.
+#[cfg(target_os = "windows")]
+unsafe fn write_start_menu_shortcut(
+    shortcut: &std::path::Path,
+    exe: &std::path::Path,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile};
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::{HSTRING, Interface, PROPVARIANT};
+
+    unsafe {
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| format!("cannot create a shell link: {e}"))?;
+        let file: IPersistFile = link
+            .cast()
+            .map_err(|e| format!("shell link does not persist to a file: {e}"))?;
+        let store: IPropertyStore = link
+            .cast()
+            .map_err(|e| format!("shell link has no property store: {e}"))?;
+
+        if let Some(parent) = shortcut.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create the Start Menu folder: {e}"))?;
+        }
+        link.SetPath(&HSTRING::from(exe))
+            .map_err(|e| format!("cannot set the shortcut target: {e}"))?;
+        if let Some(parent) = exe.parent() {
+            let _ = link.SetWorkingDirectory(&HSTRING::from(parent));
+        }
+        let _ = link.SetDescription(&HSTRING::from("Ceiling"));
+        store
+            .SetValue(&PKEY_APP_USER_MODEL_ID, &PROPVARIANT::from(CEILING_AUMID))
+            .map_err(|e| format!("cannot set the shortcut AUMID: {e}"))?;
+        store
+            .Commit()
+            .map_err(|e| format!("cannot commit the shortcut AUMID: {e}"))?;
+        file.Save(&HSTRING::from(shortcut), BOOL(1))
+            .map_err(|e| format!("cannot save the Start Menu shortcut: {e}"))?;
+
+        tracing::info!(
+            path = %shortcut.display(),
+            "installed the Start Menu shortcut that lets Windows keep Ceiling toasts in the notification center"
+        );
+        Ok(())
     }
 }
 
@@ -1066,6 +1292,60 @@ mod tests {
         assert!(!notification_channel_is_disabled(None));
         assert!(!notification_channel_is_disabled(Some(1)));
         assert!(notification_channel_is_disabled(Some(0)));
+    }
+
+    /// The shortcut is the whole reason toasts survive in the notification
+    /// center, and its COM plumbing fails silently, so exercise it for real
+    /// against a scratch path instead of the live Start Menu.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_start_menu_shortcut_round_trips_the_aumid() {
+        use windows::Win32::System::Com::{
+            COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
+        };
+
+        let dir = std::env::temp_dir().join("ceiling-shortcut-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shortcut = dir.join("Ceiling.lnk");
+        let _ = std::fs::remove_file(&shortcut);
+        let exe = std::env::current_exe().unwrap();
+
+        unsafe {
+            let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+
+            assert_eq!(
+                read_shortcut_aumid(&shortcut),
+                None,
+                "a missing shortcut claims nothing"
+            );
+            write_start_menu_shortcut(&shortcut, &exe).expect("the shortcut should be written");
+            assert!(shortcut.exists(), "no .lnk was produced");
+
+            // Reading it back is what Windows does to resolve our identity: if
+            // the AUMID did not persist, every toast is orphaned again.
+            assert_eq!(
+                read_shortcut_aumid(&shortcut).as_deref(),
+                Some(CEILING_AUMID)
+            );
+
+            if initialized {
+                CoUninitialize();
+            }
+        }
+        let _ = std::fs::remove_file(&shortcut);
+    }
+
+    /// The AUMID must stay in step with the Tauri bundle identifier, since the
+    /// installer stamps that value onto the Start Menu shortcut and a mismatch
+    /// silently costs notification-center history.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_toast_aumid_matches_the_bundle_identifier() {
+        let config = include_str!("../../apps/desktop-tauri/src-tauri/tauri.conf.json");
+        assert!(
+            config.contains(&format!("\"identifier\": \"{CEILING_AUMID}\"")),
+            "tauri.conf.json no longer declares {CEILING_AUMID} as its identifier"
+        );
     }
 
     fn window(now: DateTime<Utc>, offset: Duration, minutes: u32) -> RateWindow {
@@ -1467,19 +1747,54 @@ mod tests {
     }
 
     #[test]
-    fn reset_notifications_bypass_cooldown_but_not_per_refresh_limit() {
+    fn reset_notifications_bypass_the_cooldown_and_the_per_refresh_limit() {
         let mut manager = NotificationManager::new_armed();
 
+        // Providers refresh concurrently, so two of them resetting in the same
+        // pass must produce two toasts. Dropping the second is how a weekly
+        // reset went unreported.
         manager.begin_refresh_cycle();
         assert!(manager.notify_capacity_event("First", "First trusted event"));
-        assert!(!manager.notify_capacity_event("Second", "Same refresh"));
-        assert_eq!(manager.toasts_shown, 1);
+        assert!(manager.notify_capacity_event("Second", "Same refresh"));
+        assert_eq!(manager.toasts_shown, 2);
 
         // A confirmed reset in a later refresh is more important than the
         // general cooldown and must remain dependable.
         manager.begin_refresh_cycle();
         assert!(manager.notify_capacity_event("Third", "Next refresh"));
-        assert_eq!(manager.toasts_shown, 2);
+        assert_eq!(manager.toasts_shown, 3);
+    }
+
+    #[test]
+    fn a_reset_storm_is_still_bounded_within_one_refresh() {
+        let mut manager = NotificationManager::new_armed();
+
+        manager.begin_refresh_cycle();
+        for index in 0..MAX_RESET_TOASTS_PER_REFRESH {
+            assert!(
+                manager.notify_capacity_event("Reset", &format!("event {index}")),
+                "reset {index} should be delivered"
+            );
+        }
+        assert!(!manager.notify_capacity_event("Reset", "one too many"));
+        assert_eq!(manager.toasts_shown, MAX_RESET_TOASTS_PER_REFRESH);
+    }
+
+    #[test]
+    fn a_reset_still_spends_the_usage_alert_budget_for_that_refresh() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings::default();
+
+        manager.begin_refresh_cycle();
+        manager.check_and_notify(ProviderId::Codex, None, "session", 40.0, &settings);
+        manager.check_and_notify(ProviderId::Codex, None, "session", 86.0, &settings);
+        assert!(manager.notify_capacity_event("Reset", "Weekly reset"));
+        manager.check_and_notify(ProviderId::Codex, None, "session", 87.0, &settings);
+
+        assert_eq!(
+            manager.toasts_shown, 1,
+            "a threshold warning must not ride along behind a reset"
+        );
     }
 
     #[test]

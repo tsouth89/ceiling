@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+- Windows notifications now stay in the notification center instead of flashing once and disappearing. Toasts were published under the AUMID `Ceiling`, which no Start Menu shortcut claimed, so Windows treated the app as unregistered and stamped `ShowInActionCenter=0` on that channel. They now use the installer's bundle identifier, which is a registered identity; portable builds get a Start Menu shortcut created for them, and an existing `ShowInActionCenter=0` is repaired on launch.
+- A confirmed reset is no longer dropped by the one-toast-per-refresh limit. Providers refresh concurrently, so an unrelated alert could silently swallow the only weekly-reset notification a user would get all week. Resets now bypass that limit and the rolling cooldown, bounded only by a per-refresh storm guard.
+
+### Changed
+- Scheduled 5-hour session resets no longer raise a Windows notification; they happen several times a day and are exactly what the user already expects. Weekly, monthly and other long windows always notify, and unexpected resets (early, partial, banked) still notify at any cadence.
+
 ## [Ceiling] 1.5.16 - 2026-07-28
 
 Hotfix: Estimated API value **Custom** date range showed no data even when local logs had spend for that window.

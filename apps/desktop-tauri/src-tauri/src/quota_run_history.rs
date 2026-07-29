@@ -884,6 +884,7 @@ mod tests {
             display_name: provider_id.into(),
             window_id: crate::capacity_events::semantic_window_id("Session", Some(300)),
             window_label: "Session".into(),
+            window_minutes: Some(300),
             kind,
             previous_used_percent: previous_used,
             current_used_percent: current_used,
