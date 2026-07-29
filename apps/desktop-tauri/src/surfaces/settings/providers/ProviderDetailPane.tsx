@@ -22,6 +22,10 @@ import {
   triggerProviderLogin,
 } from "../../../lib/tauri";
 import { listen } from "@tauri-apps/api/event";
+import {
+  type ProviderLoginPhase,
+  type ProviderLoginPhaseChangedPayload,
+} from "../../../lib/providerLogin";
 
 import { IdentitySection } from "./sections/IdentitySection";
 import { DataSourceSection } from "./sections/DataSourceSection";
@@ -86,6 +90,7 @@ export function ProviderDetailPane({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
   const [gatewayDraft, setGatewayDraft] = useState(wayfinderGatewayUrl);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
 
@@ -200,6 +205,22 @@ export function ProviderDetailPane({
     };
   }, [providerId, load]);
 
+  useEffect(() => {
+    setLoginPhase(null);
+    if (!providerId) return;
+    const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
+      "login-phase-changed",
+      ({ payload }) => {
+        if (payload.providerId === providerId) {
+          setLoginPhase(payload.phase);
+        }
+      },
+    );
+    return () => {
+      void unlistenPromise.then((fn) => fn());
+    };
+  }, [providerId]);
+
   if (!providerId) {
     return (
       <div className="provider-detail">
@@ -247,6 +268,7 @@ export function ProviderDetailPane({
 
   const handleSwitchAccount = async () => {
     setBusy(true);
+    setLoginPhase(null);
     try {
       await triggerProviderLogin(detail.id);
       setCredentialRevision((value) => value + 1);
@@ -422,6 +444,7 @@ export function ProviderDetailPane({
       <QuickActionsSection
         provider={detail}
         busy={busy}
+        loginPhase={loginPhase}
         onRefresh={handleRefresh}
         onSwitchAccount={handleSwitchAccount}
         onOpenDashboard={handleOpenDashboard}
