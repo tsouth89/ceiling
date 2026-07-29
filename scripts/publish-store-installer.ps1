@@ -153,6 +153,9 @@ try {
     # Retry the whole request on any failure, backing off, and only give up
     # once the object has had a fair chance to propagate. A genuinely missing
     # object still fails, just later.
+    # The loop owns the retry policy, so curl gets none of its own: nesting the
+    # two multiplies the worst case (3 curl retries x 180s max-time, per outer
+    # attempt) into something far longer than the window intended here.
     $maxAttempts = 8
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         & curl.exe `
@@ -163,9 +166,6 @@ try {
             --max-redirs 0 `
             --connect-timeout 10 `
             --max-time 180 `
-            --retry 3 `
-            --retry-delay 5 `
-            --retry-connrefused `
             --output $downloadPath `
             $installerUrl
         if ($LASTEXITCODE -eq 0) {
