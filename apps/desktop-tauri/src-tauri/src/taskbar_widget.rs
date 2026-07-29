@@ -119,13 +119,23 @@ fn cursor_actionable_windows(
 ) -> Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> {
     let mut out = Vec::new();
     if let Some(window) = snapshot.secondary.as_ref() {
-        out.push((snapshot.secondary_label.as_deref().or(Some("Auto")), window));
+        let label = snapshot
+            .secondary_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .unwrap_or("Auto");
+        out.push((Some(label), window));
     }
     for extra in &snapshot.extra_rate_windows {
         if extra.id != "cursor-api" {
             continue;
         }
-        out.push((Some(extra.title.as_str()), &extra.window));
+        let label = match extra.title.trim() {
+            "" => "API",
+            label => label,
+        };
+        out.push((Some(label), &extra.window));
     }
     out
 }
@@ -2215,6 +2225,31 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("API"));
         assert_eq!(readout.window.used_percent, 40.0);
+    }
+
+    #[test]
+    fn cursor_strip_trims_labels_and_falls_back_when_blank() {
+        let mut snapshot = snap("cursor", None, 40.0);
+        snapshot.secondary = Some(rate_window(60.0, Some(10_080)));
+        snapshot.secondary_label = Some("  Auto Custom  ".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "   ".into(),
+                window: rate_window(70.0, Some(10_080)),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("API"));
+
+        snapshot.extra_rate_windows.clear();
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Auto Custom"));
+
+        snapshot.secondary_label = Some("   ".into());
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Auto"));
     }
 
     #[test]
