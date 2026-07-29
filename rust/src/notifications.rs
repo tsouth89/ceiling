@@ -1002,9 +1002,7 @@ fn ensure_aumid_registered_once() {
     static AUMID_INIT: Once = Once::new();
     AUMID_INIT.call_once(|| {
         ensure_aumid_registered();
-        if let Err(error) = ensure_start_menu_shortcut() {
-            tracing::warn!(%error, "could not install the Start Menu shortcut Windows needs to keep Ceiling toasts in the notification center");
-        }
+        report_notification_history_support();
         repair_action_center_visibility();
     });
 }
@@ -1264,46 +1262,50 @@ fn start_menu_shortcut_path() -> Result<std::path::PathBuf, String> {
         .join("Ceiling.lnk"))
 }
 
-/// Make sure some Start Menu shortcut claims [`CEILING_AUMID`].
+/// Whether a Start Menu shortcut claims [`CEILING_AUMID`], which decides if
+/// Windows will keep our toasts in the notification center.
 ///
 /// Windows resolves a desktop app's notification identity from a Start Menu
-/// shortcut carrying `System.AppUserModel.ID`. Without one it still renders the
-/// banner, but treats the app as unregistered and drops the toast instead of
-/// keeping it in the notification center.
+/// shortcut carrying `System.AppUserModel.ID`. Without one it still shows the
+/// banner, but treats the app as unregistered and discards the toast rather
+/// than keeping it. The registry AUMID key is not a substitute: an identity
+/// registered that way and with `ShowInActionCenter=1` still did not retain.
 ///
-/// Installed builds already have this: the NSIS installer stamps the bundle
-/// identifier onto `Ceiling.lnk`, and this is a no-op. Portable builds have no
-/// installer, so create the shortcut ourselves rather than shipping an app
-/// whose alerts cannot be reviewed after the fact.
+/// Installed builds get this free, because the NSIS installer stamps the bundle
+/// identifier onto `Ceiling.lnk`. Portable builds have no installer and Ceiling
+/// deliberately does **not** create the shortcut for them: someone who chose a
+/// portable build did so to avoid writing to the machine, and silently adding a
+/// Start Menu entry to buy notification history is not a trade Ceiling should
+/// make on their behalf. Portable users get banners without history, and this
+/// says so in the log once rather than leaving it a mystery.
 #[cfg(target_os = "windows")]
-fn ensure_start_menu_shortcut() -> Result<(), String> {
+fn report_notification_history_support() {
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 
-    let shortcut = start_menu_shortcut_path()?;
-    let exe = std::env::current_exe().map_err(|e| format!("cannot locate Ceiling.exe: {e}"))?;
-
+    let Ok(shortcut) = start_menu_shortcut_path() else {
+        return;
+    };
     unsafe {
         // A failure here means this thread already has COM up under another
         // model, which is fine to borrow. Only balance our own initialization.
         let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
-        let result = if read_shortcut_aumid(&shortcut).as_deref() == Some(CEILING_AUMID) {
-            tracing::debug!("Start Menu shortcut already claims the Ceiling AUMID");
-            Ok(())
+        if read_shortcut_aumid(&shortcut).as_deref() == Some(CEILING_AUMID) {
+            tracing::debug!("Start Menu shortcut claims the Ceiling AUMID; toasts will persist");
         } else {
-            write_start_menu_shortcut(&shortcut, &exe)
-        };
+            tracing::info!(
+                expected = CEILING_AUMID,
+                path = %shortcut.display(),
+                "no Start Menu shortcut claims Ceiling's notification identity (normal for a portable build): \
+                 alerts will appear as banners but Windows will not keep them in the notification center"
+            );
+        }
         if initialized {
             CoUninitialize();
         }
-        result
     }
 }
 
 /// The AUMID an existing `.lnk` publishes under, if any.
-///
-/// Uses its own shell-link instance: an object loaded for reading cannot be
-/// reused to save, and silently failing to write the shortcut is exactly the
-/// failure mode this whole path exists to prevent.
 ///
 /// # Safety
 /// COM must be initialized on the calling thread.
@@ -1325,58 +1327,6 @@ unsafe fn read_shortcut_aumid(shortcut: &std::path::Path) -> Option<String> {
         file.Load(&HSTRING::from(shortcut), STGM_READ).ok()?;
         let store: IPropertyStore = link.cast().ok()?;
         Some(store.GetValue(&PKEY_APP_USER_MODEL_ID).ok()?.to_string())
-    }
-}
-
-/// Writes a Start Menu shortcut for this executable under our AUMID.
-///
-/// # Safety
-/// COM must be initialized on the calling thread.
-#[cfg(target_os = "windows")]
-unsafe fn write_start_menu_shortcut(
-    shortcut: &std::path::Path,
-    exe: &std::path::Path,
-) -> Result<(), String> {
-    use windows::Win32::Foundation::BOOL;
-    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile};
-    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
-    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-    use windows::core::{HSTRING, Interface, PROPVARIANT};
-
-    unsafe {
-        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| format!("cannot create a shell link: {e}"))?;
-        let file: IPersistFile = link
-            .cast()
-            .map_err(|e| format!("shell link does not persist to a file: {e}"))?;
-        let store: IPropertyStore = link
-            .cast()
-            .map_err(|e| format!("shell link has no property store: {e}"))?;
-
-        if let Some(parent) = shortcut.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("cannot create the Start Menu folder: {e}"))?;
-        }
-        link.SetPath(&HSTRING::from(exe))
-            .map_err(|e| format!("cannot set the shortcut target: {e}"))?;
-        if let Some(parent) = exe.parent() {
-            let _ = link.SetWorkingDirectory(&HSTRING::from(parent));
-        }
-        let _ = link.SetDescription(&HSTRING::from("Ceiling"));
-        store
-            .SetValue(&PKEY_APP_USER_MODEL_ID, &PROPVARIANT::from(CEILING_AUMID))
-            .map_err(|e| format!("cannot set the shortcut AUMID: {e}"))?;
-        store
-            .Commit()
-            .map_err(|e| format!("cannot commit the shortcut AUMID: {e}"))?;
-        file.Save(&HSTRING::from(shortcut), BOOL(1))
-            .map_err(|e| format!("cannot save the Start Menu shortcut: {e}"))?;
-
-        tracing::info!(
-            path = %shortcut.display(),
-            "installed the Start Menu shortcut that lets Windows keep Ceiling toasts in the notification center"
-        );
-        Ok(())
     }
 }
 
@@ -1472,45 +1422,44 @@ mod tests {
         )));
     }
 
-    /// The shortcut is the whole reason toasts survive in the notification
-    /// center, and its COM plumbing fails silently, so exercise it for real
-    /// against a scratch path instead of the live Start Menu.
+    /// Whether toasts persist hinges on reading this property correctly, and
+    /// the COM plumbing fails silently, so read the real installed shortcut
+    /// rather than trusting the call not to error.
+    ///
+    /// Ceiling never writes this file, so the test only reads: on a portable
+    /// or CI machine there is no shortcut and the absent case is what matters.
     #[cfg(target_os = "windows")]
     #[test]
-    fn the_start_menu_shortcut_round_trips_the_aumid() {
+    fn the_shortcut_aumid_is_readable_and_absence_is_not_an_error() {
         use windows::Win32::System::Com::{
             COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
         };
 
-        let dir = std::env::temp_dir().join("ceiling-shortcut-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let shortcut = dir.join("Ceiling.lnk");
-        let _ = std::fs::remove_file(&shortcut);
-        let exe = std::env::current_exe().unwrap();
-
         unsafe {
             let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
 
-            assert_eq!(
-                read_shortcut_aumid(&shortcut),
-                None,
-                "a missing shortcut claims nothing"
-            );
-            write_start_menu_shortcut(&shortcut, &exe).expect("the shortcut should be written");
-            assert!(shortcut.exists(), "no .lnk was produced");
+            // A path that cannot exist must read as "claims nothing", never as
+            // a panic or a false match that would mislead the log.
+            let missing = std::env::temp_dir().join("ceiling-no-such-shortcut.lnk");
+            let _ = std::fs::remove_file(&missing);
+            assert_eq!(read_shortcut_aumid(&missing), None);
 
-            // Reading it back is what Windows does to resolve our identity: if
-            // the AUMID did not persist, every toast is orphaned again.
-            assert_eq!(
-                read_shortcut_aumid(&shortcut).as_deref(),
-                Some(CEILING_AUMID)
-            );
+            // If a shortcut is installed, whatever it claims must be readable
+            // as a real string rather than coming back empty.
+            if let Ok(installed) = start_menu_shortcut_path()
+                && installed.exists()
+            {
+                let claimed = read_shortcut_aumid(&installed);
+                assert!(
+                    claimed.as_deref().is_some_and(|id| !id.is_empty()),
+                    "installed shortcut read back no AUMID: {claimed:?}"
+                );
+            }
 
             if initialized {
                 CoUninitialize();
             }
         }
-        let _ = std::fs::remove_file(&shortcut);
     }
 
     /// The AUMID must stay in step with the Tauri bundle identifier, since the
