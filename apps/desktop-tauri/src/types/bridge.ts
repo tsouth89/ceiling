@@ -519,6 +519,8 @@ export interface CapacityEventPayload {
   displayName: string;
   windowId: string;
   windowLabel: string;
+  /** Cadence of the window that changed; omitted when the provider has none. */
+  windowMinutes?: number | null;
   kind:
     | "scheduledReset"
     | "surpriseReset"

@@ -496,15 +496,24 @@ async fn refresh_provider(
 }
 
 fn capacity_event_uses_windows_notification(
-    kind: crate::capacity_events::CapacityEventKind,
+    event: &crate::capacity_events::CapacityEventPayload,
 ) -> bool {
-    matches!(
-        kind,
-        crate::capacity_events::CapacityEventKind::ScheduledReset
-            | crate::capacity_events::CapacityEventKind::SurpriseReset
-            | crate::capacity_events::CapacityEventKind::PartialReset
-            | crate::capacity_events::CapacityEventKind::BankedResetGranted
-    )
+    use crate::capacity_events::CapacityEventKind;
+    match event.kind {
+        // A 5-hour session rolling over on schedule happens several times a day
+        // and is precisely what the user already expects. Toasting it trains
+        // people to swipe Ceiling away, and it crowded out the weekly and
+        // monthly boundaries that actually change what someone can do today.
+        CapacityEventKind::ScheduledReset => event.is_long_window(),
+        // Capacity arriving early or out of band is news at any cadence.
+        CapacityEventKind::SurpriseReset
+        | CapacityEventKind::PartialReset
+        | CapacityEventKind::BankedResetGranted => true,
+        CapacityEventKind::ResetTimeShift
+        | CapacityEventKind::WindowLifted
+        | CapacityEventKind::WindowRestored
+        | CapacityEventKind::AllowanceGranted => false,
+    }
 }
 
 fn capacity_event_notification(
@@ -512,7 +521,7 @@ fn capacity_event_notification(
 ) -> Option<(String, String)> {
     let eligible = events
         .iter()
-        .filter(|event| capacity_event_uses_windows_notification(event.kind))
+        .filter(|event| capacity_event_uses_windows_notification(event))
         .collect::<Vec<_>>();
     match eligible.as_slice() {
         [] => None,
@@ -1138,29 +1147,101 @@ mod predictive_warning_tests {
         assert_eq!(alerts, vec![("weekly", 75.0)]);
     }
 
+    /// A payload for eligibility checks only; the numbers do not matter.
+    #[cfg(test)]
+    fn eligibility_event(
+        kind: crate::capacity_events::CapacityEventKind,
+        window_id: &str,
+        window_minutes: Option<u32>,
+    ) -> crate::capacity_events::CapacityEventPayload {
+        crate::capacity_events::CapacityEventPayload {
+            provider_id: "codex".into(),
+            display_name: "Codex".into(),
+            window_id: window_id.into(),
+            window_label: window_id.into(),
+            window_minutes,
+            kind,
+            previous_used_percent: 90.0,
+            current_used_percent: 2.0,
+            previous_reset_credits: None,
+            current_reset_credits: None,
+            previous_reset_at: "2026-07-25T03:42:20Z".into(),
+            current_reset_at: "2026-08-01T03:42:20Z".into(),
+            occurred_at: "2026-07-25T03:42:20Z".into(),
+            while_away: false,
+        }
+    }
+
     #[test]
     fn only_confirmed_resets_are_eligible_for_windows_notifications() {
         use crate::capacity_events::CapacityEventKind;
 
-        assert!(capacity_event_uses_windows_notification(
-            CapacityEventKind::ScheduledReset
-        ));
-        assert!(capacity_event_uses_windows_notification(
-            CapacityEventKind::SurpriseReset
-        ));
-        assert!(capacity_event_uses_windows_notification(
-            CapacityEventKind::PartialReset
-        ));
-        assert!(capacity_event_uses_windows_notification(
-            CapacityEventKind::BankedResetGranted
-        ));
+        for kind in [
+            CapacityEventKind::ScheduledReset,
+            CapacityEventKind::SurpriseReset,
+            CapacityEventKind::PartialReset,
+            CapacityEventKind::BankedResetGranted,
+        ] {
+            assert!(capacity_event_uses_windows_notification(
+                &eligibility_event(kind, "weekly", Some(10_080))
+            ));
+        }
         for visual_only in [
             CapacityEventKind::ResetTimeShift,
             CapacityEventKind::WindowLifted,
             CapacityEventKind::WindowRestored,
             CapacityEventKind::AllowanceGranted,
         ] {
-            assert!(!capacity_event_uses_windows_notification(visual_only));
+            assert!(!capacity_event_uses_windows_notification(
+                &eligibility_event(visual_only, "weekly", Some(10_080))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_scheduled_five_hour_reset_is_not_worth_a_toast() {
+        use crate::capacity_events::CapacityEventKind;
+
+        assert!(!capacity_event_uses_windows_notification(
+            &eligibility_event(CapacityEventKind::ScheduledReset, "session", Some(300))
+        ));
+        // Providers that omit a cadence fall back to the semantic window id.
+        assert!(!capacity_event_uses_windows_notification(
+            &eligibility_event(CapacityEventKind::ScheduledReset, "session", None)
+        ));
+
+        // The long windows a user actually plans around must still notify,
+        // including provider-specific ids like Cursor's monthly "Plan" pool.
+        for (window_id, minutes) in [
+            ("weekly", Some(10_080)),
+            ("monthly", Some(43_200)),
+            ("plan", None),
+        ] {
+            assert!(
+                capacity_event_uses_windows_notification(&eligibility_event(
+                    CapacityEventKind::ScheduledReset,
+                    window_id,
+                    minutes
+                )),
+                "{window_id} reset should notify"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unexpected_session_reset_still_notifies() {
+        use crate::capacity_events::CapacityEventKind;
+
+        // Getting a 5-hour window back early is not something the user could
+        // have predicted, so the noise argument for scheduled resets does not
+        // apply.
+        for kind in [
+            CapacityEventKind::SurpriseReset,
+            CapacityEventKind::PartialReset,
+        ] {
+            assert!(capacity_event_uses_windows_notification(
+                &eligibility_event(kind, "session", Some(300))
+            ));
         }
     }
 
@@ -1174,6 +1255,7 @@ mod predictive_warning_tests {
                 display_name: "Cursor".into(),
                 window_id: window_id.into(),
                 window_label: window_label.into(),
+                window_minutes: Some(43_200),
                 kind: CapacityEventKind::PartialReset,
                 previous_used_percent: before,
                 current_used_percent: after,
@@ -1203,6 +1285,7 @@ mod predictive_warning_tests {
             display_name: "Codex".into(),
             window_id: "weekly".into(),
             window_label: "Weekly".into(),
+            window_minutes: Some(10_080),
             kind: CapacityEventKind::PartialReset,
             previous_used_percent: 90.0,
             current_used_percent: 10.0,
@@ -1218,6 +1301,7 @@ mod predictive_warning_tests {
             display_name: "Codex".into(),
             window_id: "banked-resets".into(),
             window_label: "Banked resets".into(),
+            window_minutes: None,
             kind: CapacityEventKind::BankedResetGranted,
             previous_used_percent: 0.0,
             current_used_percent: 0.0,

@@ -33,6 +33,10 @@ pub struct CapacityEventPayload {
     pub display_name: String,
     pub window_id: String,
     pub window_label: String,
+    /// Cadence of the window that changed, when the provider reports one. Lets
+    /// consumers tell a 5-hour session boundary from a weekly or monthly one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_minutes: Option<u32>,
     pub kind: CapacityEventKind,
     pub previous_used_percent: f64,
     pub current_used_percent: f64,
@@ -50,7 +54,23 @@ pub struct CapacityEventPayload {
     pub while_away: bool,
 }
 
+/// Windows at or under this cadence reset several times a day.
+const SHORT_WINDOW_MAX_MINUTES: u32 = 720;
+
 impl CapacityEventPayload {
+    /// True for weekly, monthly and other long windows.
+    ///
+    /// A 5-hour session boundary comes round several times a day and is exactly
+    /// the reset a user already expects, so toasting each one is noise. Weekly
+    /// and monthly boundaries are rare and worth interrupting for. Providers
+    /// that omit a cadence fall back to the semantic window id.
+    pub fn is_long_window(&self) -> bool {
+        match self.window_minutes {
+            Some(minutes) => minutes > SHORT_WINDOW_MAX_MINUTES,
+            None => self.window_id != "session",
+        }
+    }
+
     pub fn notification_title(&self) -> String {
         match self.kind {
             CapacityEventKind::ScheduledReset => format!("{} reset", self.display_name),
@@ -148,6 +168,10 @@ struct ObservedWindow {
     label: String,
     used_percent: f64,
     resets_at: DateTime<Utc>,
+    /// Absent in baselines written by older builds, and for providers that do
+    /// not report a cadence.
+    #[serde(default)]
+    window_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +216,8 @@ struct PersistedEvent {
     display_name: String,
     window_id: String,
     window_label: String,
+    #[serde(default)]
+    window_minutes: Option<u32>,
     kind: CapacityEventKind,
     previous_used_percent: f64,
     current_used_percent: f64,
@@ -213,6 +239,7 @@ impl PersistedEvent {
             display_name: self.display_name,
             window_id: self.window_id,
             window_label: self.window_label,
+            window_minutes: self.window_minutes,
             kind: self.kind,
             previous_used_percent: self.previous_used_percent,
             current_used_percent: self.current_used_percent,
@@ -515,6 +542,7 @@ fn detect_reset(
         display_name: snapshot.display_name.clone(),
         window_id: current.id.clone(),
         window_label: current.label.clone(),
+        window_minutes: current.window_minutes,
         kind,
         previous_used_percent: previous.used_percent,
         current_used_percent: current.used_percent,
@@ -545,6 +573,9 @@ fn detect_banked_reset_grant(
         display_name: snapshot.display_name.clone(),
         window_id: "banked-resets".to_string(),
         window_label: "Banked resets".to_string(),
+        // Not tied to a rate window; a granted reset credit is always worth
+        // reporting, so leave the cadence unset rather than inventing one.
+        window_minutes: None,
         kind: CapacityEventKind::BankedResetGranted,
         previous_used_percent: 0.0,
         current_used_percent: 0.0,
@@ -649,6 +680,7 @@ fn detect_transition(
             display_name: snapshot.display_name.clone(),
             window_id: window_id.to_string(),
             window_label: label,
+            window_minutes: current_active.and_then(|window| window.window_minutes),
             kind,
             previous_used_percent,
             current_used_percent,
@@ -776,6 +808,7 @@ fn to_observed_window(label: &str, window: &RateWindowSnapshot) -> Option<Observ
         label: label.to_string(),
         used_percent: window.used_percent,
         resets_at,
+        window_minutes: window.window_minutes,
     })
 }
 
@@ -788,7 +821,9 @@ pub(crate) fn semantic_window_id(label: &str, window_minutes: Option<u32>) -> St
         return normalized;
     }
     match window_minutes {
-        Some(minutes) if minutes <= 720 => "session".to_string(),
+        // Shares its cutoff with `is_long_window` so the semantic id and the
+        // notify/skip decision cannot classify the same window differently.
+        Some(minutes) if minutes <= SHORT_WINDOW_MAX_MINUTES => "session".to_string(),
         Some(minutes) if minutes <= 20_160 => "weekly".to_string(),
         Some(_) => "monthly".to_string(),
         None => normalized,

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+- **Simplified Chinese** is a real, switchable interface language, selectable under Settings > General. Missing keys fall back to English, so new strings keep shipping without waiting on translation. (#113, #130)
+- In-app login flows for Claude and Codex, alongside the existing Copilot device flow, with typed and localized progress shown in provider settings. Providers without an in-app flow now return explicit credential guidance instead of silently opening a dashboard. Gemini remains a known gap because its CLI only authenticates through an interactive TUI. (#179)
+
+### Fixed
+- Estimated API value no longer under-reports on machines with more than one Codex or Claude seat. Unscoped scans only read the ambient home, so secondary accounts added under **Accounts** contributed nothing; every configured account home is now included, with dedup so overlapping copies do not inflate the total. Per-account charts still read only that account's home. (#176)
+- The one-number strip (native taskbar and float bar) could sit on a maxed-out Cursor API lane while Auto still had room. Cursor now shows the hottest non-exhausted Auto/API window, falling back to whichever resets soonest when both are spent. (#175)
+- Windows notifications carry the Ceiling name and logo instead of arriving as unattributed text, and now stay in the notification center instead of flashing once and disappearing. Toasts were published under the AUMID `Ceiling`, which no Start Menu shortcut claimed, so Windows treated the app as unregistered and stamped `ShowInActionCenter=0` on that channel. They now use the installer's bundle identifier, which is a registered identity, and an existing `ShowInActionCenter=0` is repaired on launch. Portable builds are unaffected by design: Windows only keeps toasts for an app claimed by a Start Menu shortcut, and Ceiling will not add one to a machine where you chose a portable build, so portable alerts appear as banners without notification-center history.
+- A confirmed reset is no longer dropped by the one-toast-per-refresh limit. Providers refresh concurrently, so an unrelated alert could silently swallow the only weekly-reset notification a user would get all week. Resets now bypass that limit and the rolling cooldown, bounded only by a per-refresh storm guard.
+
+### Changed
+- Scheduled 5-hour session resets no longer raise a Windows notification; they happen several times a day and are exactly what the user already expects. Weekly, monthly and other long windows always notify, and unexpected resets (early, partial, banked) still notify at any cadence.
+
+### Internal
+- Microsoft Store submissions are automated after a tagged release, gated behind an explicit enable flag until a validation-only run succeeds. Store validation runs in its own environment so manual runs cannot reach the release signing and R2 credentials. (#177, #178)
+
 ## [Ceiling] 1.5.16 - 2026-07-28
 
 Hotfix: Estimated API value **Custom** date range showed no data even when local logs had spend for that window.
