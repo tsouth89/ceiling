@@ -481,6 +481,7 @@ PanelThirtyDayCostHistogram = 30 天费用直方图
 PanelTopModelPrefix = 最常用模型
 PanelEstimatedFromLocalLogs = 根据本地日志的等效 API 估算；非订阅花费
 PanelEstimatedFromLocalLogsClaude = 根据本地 Claude 日志的等效 API 估算；非订阅花费
+PanelEstimatedFromLocalLogsGrok = 来自本地 Grok Build 会话（~/.grok/sessions）的等效 API 估算，与 `/usage` 中的 Cost 数值一致；并非 SuperGrok 订阅支出。部分会话会省略单次用量，因此某些项目可能只显示部分 token 总数。
 PanelExpected = 预期
 PanelActual = 实际
 PanelUsedSuffix = 已用
@@ -609,6 +610,7 @@ DataSourceCodex = 使用来自你的 Codex CLI（~/.codex）的 OAuth 令牌，�
 DataSourceCursor = 使用你已登录的 Cursor IDE 会话，或你提供的 cursor.com Cookie。仅与 cursor.com 通信。
 DataSourceCopilot = 使用你的 GitHub CLI 或 Git Credential Manager 令牌，或设备流登录。仅与 api.github.com 或你配置的 GitHub Enterprise 主机通信。
 DataSourceGemini = 从 Gemini CLI（~/.gemini）读取 OAuth 令牌。仅与 Google 的 Code Assist 和 OAuth 接口通信。
+DataSourceGrok = 使用 `grok login`（Grok Build / SuperGrok）生成的 ~/.grok/auth.json，或你提供的 grok.com 浏览器 Cookie。仅与 grok.com 和 auth.x.ai 通信。每周额度百分比会采样到本地图表中。~/.grok/sessions 下的本地 Grok Build 会话用于提供 token、缓存、推理、项目及等效 API 费用明细（来自会话的 costUsdTicks，并非 SuperGrok 额度计费）。
 DataSourceGeneric = 从本机的本地会话或令牌读取此服务商的用量，或通过调用服务商自己的用量接口获取。你的凭据仅存储在本机，绝不会发送到 Ceiling 运营的服务器；用量请求仅发送到该服务商（对于 Wayfinder 则为你配置的网关）。
 
 # First-run checklist (SOU-157)
