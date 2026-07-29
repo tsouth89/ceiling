@@ -20,7 +20,7 @@ export default function GeneralTab({
   set,
   saving,
 }: TabProps & { mode?: "general" | "notifications" }) {
-  const { t, setLanguage } = useLocale();
+  const { t } = useLocale();
   const spendBudgetAlertsEnabled = settings.spendBudgetAlertsEnabled ?? false;
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
@@ -89,7 +89,7 @@ export default function GeneralTab({
               ariaLabel={t("InterfaceLanguage")}
               disabled={saving}
               onChange={(v) => {
-                void setLanguage(v as Language);
+                set({ uiLanguage: v as Language });
               }}
             />
           </Field>

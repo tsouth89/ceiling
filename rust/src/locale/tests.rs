@@ -31,8 +31,9 @@ fn test_locale_key_chinese() {
 
 #[test]
 fn test_chinese_preserves_format_placeholders() {
-    // The `{}`/`{:.0}` tokens are filled later by `format_template`, so a
-    // translation that drops or mangles them would break runtime formatting.
+    // These raw tokens are filled later by their formatting call sites:
+    // `format_template` handles `{}`, while precision markers such as `{:.0}`
+    // use explicit replacements. Dropping either would break runtime output.
     assert_eq!(
         get_text(Language::Chinese, LocaleKey::UsedPercent),
         "已使用 {:.0}%"

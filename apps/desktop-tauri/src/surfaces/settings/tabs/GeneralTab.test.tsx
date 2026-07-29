@@ -92,14 +92,14 @@ describe("GeneralTab", () => {
     expect(screen.queryByText("RefreshAllProvidersOnMenuOpen")).not.toBeInTheDocument();
   });
 
-  it("switches the interface language through the locale provider", () => {
-    setLanguageMock.mockClear();
-    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+  it("persists the interface language through settings", () => {
+    const set = vi.fn();
+    render(<GeneralTab settings={settings} set={set} saving={false} />);
 
     fireEvent.click(screen.getByRole("button", { name: "InterfaceLanguage" }));
     fireEvent.click(screen.getByRole("option", { name: "中文" }));
 
-    expect(setLanguageMock).toHaveBeenCalledWith("chinese");
+    expect(set).toHaveBeenCalledWith({ uiLanguage: "chinese" });
   });
 
   it("shows English for persisted languages without a shipped bundle", () => {
