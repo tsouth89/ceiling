@@ -1,0 +1,153 @@
+name: Validate Microsoft Store submission
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing Ceiling version already published to R2 (for example, 1.5.16)
+        required: true
+        type: string
+      publish:
+        description: Submit this version to Microsoft Store after validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: microsoft-store-submission
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Store access and package
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: release
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Validate version
+        shell: pwsh
+        env:
+          STORE_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:STORE_VERSION -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Version must look like 1.5.16 (without the v prefix)."
+          }
+          "STORE_INSTALLER_URL=https://downloads.ceiling.win/releases/v$env:STORE_VERSION/Ceiling-$env:STORE_VERSION-Store-Setup.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify immutable R2 installer and checksum
+        shell: pwsh
+        run: |
+          $installerPath = Join-Path $env:RUNNER_TEMP "Ceiling-Store-Setup.exe"
+          $hashPath = "$installerPath.sha256"
+          & curl.exe --fail --silent --show-error --location --max-redirs 0 `
+            --retry 3 --output $installerPath $env:STORE_INSTALLER_URL
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download $env:STORE_INSTALLER_URL"
+          }
+          & curl.exe --fail --silent --show-error --location --max-redirs 0 `
+            --retry 3 --output $hashPath "$env:STORE_INSTALLER_URL.sha256"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download $env:STORE_INSTALLER_URL.sha256"
+          }
+          $expectedText = Get-Content -LiteralPath $hashPath -Raw
+          if ($expectedText -notmatch '(?i)\b([0-9a-f]{64})\b') {
+            throw "The published checksum sidecar does not contain a SHA-256 value."
+          }
+          $expected = $Matches[1].ToLowerInvariant()
+          $actual = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "R2 installer SHA-256 mismatch. Expected $expected, got $actual."
+          }
+          Write-Host "Verified immutable R2 installer: $env:STORE_INSTALLER_URL"
+
+      - name: Set up Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      - name: Configure Partner Center credentials
+        shell: pwsh
+        env:
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          foreach ($name in @(
+            "PARTNER_CENTER_TENANT_ID",
+            "PARTNER_CENTER_SELLER_ID",
+            "PARTNER_CENTER_CLIENT_ID",
+            "PARTNER_CENTER_CLIENT_SECRET"
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The release environment is missing secret $name."
+            }
+          }
+          msstore settings --enableTelemetry false
+          msstore reconfigure `
+            --tenantId $env:PARTNER_CENTER_TENANT_ID `
+            --sellerId $env:PARTNER_CENTER_SELLER_ID `
+            --clientId $env:PARTNER_CENTER_CLIENT_ID `
+            --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store CLI authentication failed."
+          }
+
+      - name: Read and prepare current Store package
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PARTNER_CENTER_PRODUCT_ID)) {
+            throw "The release environment is missing variable PARTNER_CENTER_PRODUCT_ID."
+          }
+          $currentPath = Join-Path $env:RUNNER_TEMP "store-package-current.json"
+          $preparedPath = Join-Path $env:RUNNER_TEMP "store-package-prepared.json"
+          msstore submission get $env:PARTNER_CENTER_PRODUCT_ID > $currentPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not retrieve Ceiling's current Microsoft Store package."
+          }
+          & .\scripts\prepare-store-submission.ps1 `
+            -CurrentPackagePath $currentPath `
+            -InstallerUrl $env:STORE_INSTALLER_URL `
+            -OutputPath $preparedPath
+          "STORE_PACKAGE_PATH=$preparedPath" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish Microsoft Store submission
+        if: inputs.publish
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+        run: |
+          $package = Get-Content -LiteralPath $env:STORE_PACKAGE_PATH -Raw
+          msstore submission update $env:PARTNER_CENTER_PRODUCT_ID $package
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store package update failed."
+          }
+          msstore submission publish $env:PARTNER_CENTER_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store submission failed."
+          }
+          "### Submitted Ceiling to Microsoft Store" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Installer: $env:STORE_INSTALLER_URL" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Report validation-only result
+        if: ${{ !inputs.publish }}
+        shell: pwsh
+        run: |
+          "### Microsoft Store validation passed" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Credentials, product access, package shape, and installer URL were validated. No submission was changed." |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
