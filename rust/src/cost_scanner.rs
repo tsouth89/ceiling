@@ -21,12 +21,28 @@ use crate::codex_costs::{
     codex_scan_dates, project_bucket, scan_codex_file_cost_for_range,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
-use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
+use crate::core::{
+    ConfiguredAccounts, CostUsageDayRange, CostUsagePricing, JsonlScanner, ProviderId,
+};
 use crate::grok_costs::{
     GrokUsageRecord, discover_grok_session_dirs, grok_sessions_dir, load_session_meta,
     parse_grok_updates_file, should_count_grok_record,
 };
 use crate::settings::Settings;
+
+/// Config directories for every directory-backed account of `provider`.
+///
+/// Estimated API value and other unscoped totals must include these homes;
+/// capacity multi-account setup alone does not put them in
+/// `codex_custom_sessions_dirs`.
+fn configured_account_homes(provider: ProviderId) -> Vec<PathBuf> {
+    ConfiguredAccounts::load()
+        .targets_for(provider)
+        .into_iter()
+        .map(|target| target.config_dir)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect()
+}
 
 /// Cost summary from scanning local logs
 #[derive(Debug, Clone, Default)]
@@ -573,6 +589,10 @@ pub struct CostScanner {
     scoped_home: Option<PathBuf>,
     /// Codex list-rate vs priority/fast pricing (ccusage `--speed` parity).
     codex_speed: CodexCostSpeed,
+    /// When set, use these account config homes instead of loading
+    /// [`ConfiguredAccounts`] (unit tests inject temp dirs). Production leaves
+    /// this `None` so live multi-account setup is always read at scan time.
+    account_homes_override: Option<Vec<PathBuf>>,
 }
 
 impl CostScanner {
@@ -580,11 +600,15 @@ impl CostScanner {
     ///
     /// Codex dollars follow ccusage auto speed: `service_tier = "priority"` in
     /// `~/.codex/config.toml` prices at the fast (2×) tier.
+    ///
+    /// Unscoped scans include every configured directory-backed account home
+    /// (Codex/Claude multi-account) so Estimated API value matches total usage.
     pub fn new(days: u32) -> Self {
         Self {
             days,
             scoped_home: None,
             codex_speed: CodexCostSpeed::resolve(None),
+            account_homes_override: None,
         }
     }
 
@@ -594,6 +618,7 @@ impl CostScanner {
             days,
             scoped_home: None,
             codex_speed: CodexCostSpeed::resolve(speed_override),
+            account_homes_override: None,
         }
     }
 
@@ -603,7 +628,33 @@ impl CostScanner {
             days,
             scoped_home: Some(home),
             codex_speed: CodexCostSpeed::resolve(None),
+            account_homes_override: None,
         }
+    }
+
+    /// Unscoped scanner that treats `homes` as the only configured account
+    /// directories (no live [`ConfiguredAccounts`] load). Used by tests.
+    #[cfg(test)]
+    fn with_account_homes(days: u32, homes: Vec<PathBuf>) -> Self {
+        Self {
+            days,
+            scoped_home: None,
+            codex_speed: CodexCostSpeed::resolve(None),
+            account_homes_override: Some(homes),
+        }
+    }
+
+    fn account_homes(&self, provider: ProviderId) -> Vec<PathBuf> {
+        if let Some(homes) = &self.account_homes_override {
+            return homes.clone();
+        }
+        // Unit-test builds must not pull the developer's real multi-account
+        // store into fixtures that set CODEX_HOME. Multi-account coverage uses
+        // `with_account_homes`. Production always loads ConfiguredAccounts.
+        if cfg!(test) {
+            return Vec::new();
+        }
+        configured_account_homes(provider)
     }
 
     /// Codex cost speed tier this scanner applies to dollar totals.
@@ -670,8 +721,12 @@ impl CostScanner {
 
     /// Scan Claude local logs, stopping early when the caller cancels the scan.
     pub fn scan_claude_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
-        let projects_dir = self.get_claude_projects_dir();
-        if !projects_dir.exists() {
+        let projects_dirs = self
+            .get_claude_projects_dirs()
+            .into_iter()
+            .filter(|dir| dir.is_dir())
+            .collect::<Vec<_>>();
+        if projects_dirs.is_empty() {
             return CostSummary::default();
         }
 
@@ -686,8 +741,18 @@ impl CostScanner {
         summary.period_end = Some(today);
 
         // Parse independent transcript files in parallel, then apply the
-        // cross-file de-duplication in deterministic file order.
-        let files = self.claude_files_since(&projects_dir, &cutoff, cancel);
+        // cross-file de-duplication in deterministic file order. One `seen`
+        // set spans every account home so the same record is never double
+        // counted if two roots overlap.
+        let mut files = Vec::new();
+        for projects_dir in &projects_dirs {
+            if is_cancelled(cancel) {
+                break;
+            }
+            files.extend(self.claude_files_since(projects_dir, &cutoff, cancel));
+        }
+        files.sort();
+        files.dedup();
         let parsed_files = parse_claude_files(&files, &cutoff, cancel);
         let mut seen = HashSet::new();
         for (_, records) in parsed_files {
@@ -720,10 +785,18 @@ impl CostScanner {
         }
         let settings = Settings::load();
         let codex_home = std::env::var("CODEX_HOME").ok();
+        // Merge custom session roots with every configured multi-account
+        // CODEX_HOME. `codex_sessions_dir_candidates` dedups by path so an
+        // account that is also ambient / listed in custom dirs is not double
+        // scanned; rollouts are also deduped by filename across homes.
+        let mut custom_dirs = settings.codex_custom_sessions_dirs.clone();
+        for home in self.account_homes(ProviderId::Codex) {
+            custom_dirs.push(home.to_string_lossy().into_owned());
+        }
         codex_sessions_dir_candidates(
             dirs::home_dir(),
             codex_home,
-            &settings.codex_custom_sessions_dirs,
+            &custom_dirs,
             &default_wsl_roots(),
         )
     }
@@ -811,26 +884,53 @@ impl CostScanner {
         }
     }
 
-    fn get_claude_projects_dir(&self) -> PathBuf {
+    /// Every Claude `projects/` root to scan unscoped: ambient config, then
+    /// each configured multi-account `CLAUDE_CONFIG_DIR`, deduped by path.
+    fn get_claude_projects_dirs(&self) -> Vec<PathBuf> {
         if let Some(home) = &self.scoped_home {
-            return home.join("projects");
+            return vec![home.join("projects")];
         }
+
+        let mut dirs = Vec::new();
+        let mut seen = HashSet::new();
+        let push = |dirs: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf| {
+            // Existing directories canonicalize to a stable spelling and
+            // separator form on Windows. Unix keeps case-distinct paths
+            // distinct instead of collapsing them through lowercasing.
+            let key = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if seen.insert(key) {
+                dirs.push(path);
+            }
+        };
+
         if let Ok(claude_config) = std::env::var("CLAUDE_CONFIG_DIR") {
             let trimmed = claude_config.trim();
             if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("projects");
+                push(
+                    &mut dirs,
+                    &mut seen,
+                    PathBuf::from(trimmed).join("projects"),
+                );
+            }
+        } else {
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let primary = home.join(".claude").join("projects");
+            if primary.exists() {
+                push(&mut dirs, &mut seen, primary);
+            } else {
+                push(
+                    &mut dirs,
+                    &mut seen,
+                    home.join(".config").join("claude").join("projects"),
+                );
             }
         }
 
-        // Try ~/.claude/projects first
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let claude_dir = home.join(".claude").join("projects");
-        if claude_dir.exists() {
-            return claude_dir;
+        for account_home in self.account_homes(ProviderId::Claude) {
+            push(&mut dirs, &mut seen, account_home.join("projects"));
         }
 
-        // Fallback to ~/.config/claude/projects
-        home.join(".config").join("claude").join("projects")
+        dirs
     }
 
     fn parse_codex_file(
@@ -1175,7 +1275,10 @@ pub fn has_cost_usage_sources() -> bool {
         .get_codex_sessions_dirs()
         .iter()
         .any(|dir| dir.exists())
-        || scanner.get_claude_projects_dir().exists()
+        || scanner
+            .get_claude_projects_dirs()
+            .iter()
+            .any(|dir| dir.exists())
         || grok_sessions_dir(None).is_some_and(|dir| dir.exists())
 }
 
@@ -1752,18 +1855,27 @@ fn scan_claude_report(
     days: u32,
     windows: &[CurrentUsageWindow],
 ) -> CostUsageReport {
-    let projects_dir = scanner.get_claude_projects_dir();
+    let projects_dirs = scanner.get_claude_projects_dirs();
     let mut daily = empty_daily_summaries(days);
     let mut current_windows = empty_current_window_summaries(windows);
-    if !projects_dir.exists() {
-        return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
-    }
 
     let today = Local::now().date_naive();
     let seven_day_start = today - Duration::days(6);
     // Inclusive local calendar window (matches CLI cost + Codex + ccusage).
     let period_start = codex_period_start(today, days);
     let cutoff = local_day_start_utc(period_start);
+
+    // Union files across ambient + every configured Claude account home.
+    let mut files = Vec::new();
+    for projects_dir in projects_dirs.iter().filter(|dir| dir.exists()) {
+        files.extend(scanner.claude_files_since(projects_dir, &cutoff, None));
+    }
+    files.sort();
+    files.dedup();
+    if files.is_empty() {
+        return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
+    }
+
     let mut seen = HashSet::new();
     let mut undated = CostSummary::default();
     let mut latest: Option<(DateTime<Utc>, CostSummary)> = None;
@@ -1771,7 +1883,6 @@ fn scan_claude_report(
     let mut seven_day_sessions = 0;
     let mut period_sessions = 0;
 
-    let files = scanner.claude_files_since(&projects_dir, &cutoff, None);
     for (path, records) in parse_claude_files(&files, &cutoff, None) {
         let mut file_summary = CostSummary::default();
         let mut latest_recorded_at: Option<DateTime<Utc>> = None;
@@ -1849,7 +1960,9 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 
     match provider {
         "codex" => {
-            // Scan Codex logs by day across Windows and WSL session roots.
+            // Scan Codex logs by day across ambient, multi-account, custom, and
+            // WSL session roots. Dedup by rollout filename so a shared copy
+            // across homes cannot inflate the day total.
             let sessions_dirs = scanner.get_codex_sessions_dirs();
             let speed_mult = scanner.codex_speed.multiplier();
             for days_ago in 0..days {
@@ -1857,6 +1970,11 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                 let date_str = date.format("%Y-%m-%d").to_string();
                 let range = CostUsageDayRange::new(date, date);
                 let mut day_cost = 0.0;
+                // Fresh per day: padded neighbor folders may re-list a rollout
+                // when computing an adjacent day, and each day range must parse
+                // it for its own window. Within a day, multi-home copies share
+                // one filename and must count once.
+                let mut seen = HashSet::new();
 
                 for sessions_dir in sessions_dirs.iter().filter(|dir| dir.exists()) {
                     for scan_date in codex_scan_dates(&range) {
@@ -1870,7 +1988,9 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                         if let Ok(entries) = fs::read_dir(&day_dir) {
                             for entry in entries.flatten() {
                                 let path = entry.path();
-                                if path.extension().is_some_and(|e| e == "jsonl") {
+                                if path.extension().is_some_and(|e| e == "jsonl")
+                                    && mark_unseen_rollout(&path, &mut seen)
+                                {
                                     day_cost += scan_codex_file_cost_for_range(&path, &range);
                                 }
                             }
@@ -1881,19 +2001,22 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
             }
         }
         "claude" => {
-            // Real per-day breakdown: walk the project logs once,
-            // de-duplicating records across files.
-            let projects_dir = scanner.get_claude_projects_dir();
-            if projects_dir.exists() {
-                let period_start = codex_period_start(today, days);
-                let cutoff = local_day_start_utc(period_start);
-                let mut seen = HashSet::new();
-                let mut handle_file = |path: &Path| {
-                    for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-                        add_claude_record_to_daily_costs(&mut daily_costs, record);
-                    });
-                };
-                scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+            // Real per-day breakdown: walk every projects root once,
+            // de-duplicating records across files and account homes.
+            let period_start = codex_period_start(today, days);
+            let cutoff = local_day_start_utc(period_start);
+            let mut seen = HashSet::new();
+            let mut handle_file = |path: &Path| {
+                for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
+                    add_claude_record_to_daily_costs(&mut daily_costs, record);
+                });
+            };
+            for projects_dir in scanner
+                .get_claude_projects_dirs()
+                .iter()
+                .filter(|dir| dir.exists())
+            {
+                scanner.walk_claude_files(projects_dir, &cutoff, None, &mut handle_file);
             }
         }
         _ => {}
@@ -2046,6 +2169,144 @@ mod tests {
         assert_eq!(work_report.thirty_days.input_tokens, 7000);
         assert_eq!(personal_report.thirty_days.sessions_count, 1);
         assert_eq!(work_report.thirty_days.sessions_count, 1);
+    }
+
+    /// Estimated API value / unscoped cost totals must sum every configured
+    /// multi-account home. Capacity accounts alone used to be invisible to
+    /// the machine-wide scanner (only ambient CODEX_HOME + custom session
+    /// dirs were walked).
+    #[test]
+    fn unscoped_scan_sums_configured_account_homes() {
+        let _guard = codex_home_lock().lock().expect("codex home lock");
+        let today = Local::now().date_naive();
+        let day = today.format("%Y-%m-%d").to_string();
+        let ts = format!("{day}T10:00:00.000Z");
+        let line = |input: u32| {
+            format!(
+                r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+            )
+        };
+
+        fn day_dir(home: &Path, today: chrono::NaiveDate) -> PathBuf {
+            home.join("sessions")
+                .join(today.format("%Y").to_string())
+                .join(today.format("%m").to_string())
+                .join(today.format("%d").to_string())
+        }
+
+        let personal = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let pd = day_dir(personal.path(), today);
+        let wd = day_dir(work.path(), today);
+        std::fs::create_dir_all(&pd).unwrap();
+        std::fs::create_dir_all(&wd).unwrap();
+        std::fs::write(
+            pd.join(format!(
+                "rollout-{day}-11111111-1111-1111-1111-111111111111.jsonl"
+            )),
+            line(1000),
+        )
+        .unwrap();
+        std::fs::write(
+            wd.join(format!(
+                "rollout-{day}-22222222-2222-2222-2222-222222222222.jsonl"
+            )),
+            line(7000),
+        )
+        .unwrap();
+
+        let previous = std::env::var("CODEX_HOME").ok();
+        // Ambient home is personal; work is only present as a configured account.
+        // SAFETY: serialized by `codex_home_lock`, and restored below.
+        unsafe { std::env::set_var("CODEX_HOME", personal.path()) };
+
+        // Without account homes, only ambient (personal) is scanned.
+        let ambient_only =
+            scan_codex_report(&CostScanner::with_account_homes(2, Vec::new()), 2, &[]);
+        assert_eq!(ambient_only.thirty_days.input_tokens, 1000);
+
+        // With the work account configured, totals include both homes.
+        let both = scan_codex_report(
+            &CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]),
+            2,
+            &[],
+        );
+        assert_eq!(
+            both.thirty_days.input_tokens, 8000,
+            "personal 1000 + work 7000 must both count toward unscoped totals"
+        );
+        assert_eq!(both.thirty_days.sessions_count, 2);
+
+        // Listing the ambient home again as an "account" must not double-count.
+        let with_dup_home = scan_codex_report(
+            &CostScanner::with_account_homes(
+                2,
+                vec![personal.path().to_path_buf(), work.path().to_path_buf()],
+            ),
+            2,
+            &[],
+        );
+        assert_eq!(
+            with_dup_home.thirty_days.input_tokens, 8000,
+            "same config dir listed as ambient and account must not inflate"
+        );
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
+    }
+
+    /// A rollout copied into two homes still counts once (filename dedup).
+    #[test]
+    fn unscoped_scan_dedups_same_rollout_across_account_homes() {
+        let _guard = codex_home_lock().lock().expect("codex home lock");
+        let today = Local::now().date_naive();
+        let day = today.format("%Y-%m-%d").to_string();
+        let ts = format!("{day}T10:00:00.000Z");
+        let token_line = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+        );
+        let shared = format!("rollout-{day}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl");
+
+        fn day_dir(home: &Path, today: chrono::NaiveDate) -> PathBuf {
+            home.join("sessions")
+                .join(today.format("%Y").to_string())
+                .join(today.format("%m").to_string())
+                .join(today.format("%d").to_string())
+        }
+
+        let personal = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let pd = day_dir(personal.path(), today);
+        let wd = day_dir(work.path(), today);
+        std::fs::create_dir_all(&pd).unwrap();
+        std::fs::create_dir_all(&wd).unwrap();
+        std::fs::write(pd.join(&shared), &token_line).unwrap();
+        std::fs::write(wd.join(&shared), &token_line).unwrap();
+
+        let previous = std::env::var("CODEX_HOME").ok();
+        unsafe { std::env::set_var("CODEX_HOME", personal.path()) };
+
+        let report = scan_codex_report(
+            &CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]),
+            2,
+            &[],
+        );
+        assert_eq!(
+            report.thirty_days.input_tokens, 1000,
+            "identical rollout name across homes must count once"
+        );
+        assert_eq!(report.thirty_days.sessions_count, 1);
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
     }
 
     #[test]
@@ -2436,6 +2697,71 @@ mod tests {
         let mut seen = HashSet::new();
         assert!(should_count_claude_record(&record, &cutoff, &mut seen));
         assert!(!should_count_claude_record(&record, &cutoff, &mut seen));
+    }
+
+    #[test]
+    fn unscoped_claude_scan_sums_account_homes_and_dedups_records() {
+        let _guard = codex_home_lock().lock().expect("environment lock");
+        let personal = tempfile::tempdir().expect("personal home");
+        let work = tempfile::tempdir().expect("work home");
+        let personal_projects = personal.path().join("projects").join("personal");
+        let work_projects = work.path().join("projects").join("work");
+        std::fs::create_dir_all(&personal_projects).expect("personal projects");
+        std::fs::create_dir_all(&work_projects).expect("work projects");
+
+        let timestamp = Utc::now().to_rfc3339();
+        let shared = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_shared","message":{{"id":"msg_shared","model":"claude-sonnet-4-6","usage":{{"input_tokens":100,"output_tokens":10}}}}}}"#
+        );
+        let personal_only = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_personal","message":{{"id":"msg_personal","model":"claude-sonnet-4-6","usage":{{"input_tokens":200,"output_tokens":20}}}}}}"#
+        );
+        let work_only = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_work","message":{{"id":"msg_work","model":"claude-sonnet-4-6","usage":{{"input_tokens":700,"output_tokens":70}}}}}}"#
+        );
+        std::fs::write(
+            personal_projects.join("personal.jsonl"),
+            format!("{shared}\n{personal_only}\n"),
+        )
+        .expect("personal transcript");
+        std::fs::write(
+            work_projects.join("work.jsonl"),
+            format!("{shared}\n{work_only}\n"),
+        )
+        .expect("work transcript");
+
+        let previous = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        // SAFETY: serialized by the environment lock and restored below.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", personal.path()) };
+
+        let summary =
+            CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]).scan_claude();
+        assert_eq!(
+            summary.input_tokens, 1000,
+            "shared 100 + personal 200 + work 700"
+        );
+        assert_eq!(summary.output_tokens, 100);
+        assert_eq!(summary.sessions_count, 2);
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn claude_scan_without_existing_projects_returns_default_summary() {
+        let missing = tempfile::tempdir()
+            .expect("temp home")
+            .path()
+            .join("missing");
+        let summary = CostScanner::scoped_to(2, missing).scan_claude();
+
+        assert!(summary.period_start.is_none());
+        assert!(summary.period_end.is_none());
+        assert_eq!(summary.sessions_count, 0);
     }
 
     #[test]
