@@ -362,6 +362,10 @@ locale_keys! {
     // Main popup - Provider detail actions
     ActionRefresh,
     ActionSwitchAccount,
+    LoginPhaseRequesting,
+    LoginPhaseWaitingBrowser,
+    LoginPhaseComplete,
+    LoginPhaseFailed,
     ActionUsageDashboard,
     ActionStatusPage,
     ActionCopyError,

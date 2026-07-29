@@ -1,4 +1,34 @@
 use super::*;
+use codexbar::login::{LoginOutcome, LoginPhase, LoginResult, run_claude_login, run_codex_login};
+
+const PROVIDER_LOGIN_TIMEOUT_SECS: u64 = 5 * 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CliLoginKind {
+    Claude,
+    Codex,
+}
+
+fn cli_login_kind(id: ProviderId) -> Option<CliLoginKind> {
+    match id {
+        ProviderId::Claude => Some(CliLoginKind::Claude),
+        ProviderId::Codex => Some(CliLoginKind::Codex),
+        // Gemini CLI currently exposes sign-in only through its interactive
+        // TUI. The existing Gemini credential setup section remains the
+        // truthful fallback until it offers a dedicated auth command.
+        ProviderId::Gemini => None,
+        _ => None,
+    }
+}
+
+fn login_phase_name(phase: LoginPhase) -> &'static str {
+    match phase {
+        LoginPhase::Idle => "idle",
+        LoginPhase::Requesting => "requesting",
+        LoginPhase::WaitingBrowser => "waitingBrowser",
+        LoginPhase::Complete => "complete",
+    }
+}
 
 #[tauri::command]
 pub fn get_app_info() -> AppInfoBridge {
@@ -333,23 +363,79 @@ pub async fn trigger_provider_login(
     let id = parse_provider_arg(&provider_id)?;
     let provider_id = id.cli_name().to_string();
 
-    if id == ProviderId::Copilot {
-        return run_copilot_device_login(&app).await;
-    }
+    let result = if id == ProviderId::Copilot {
+        run_copilot_device_login(&app).await
+    } else if let Some(kind) = cli_login_kind(id) {
+        run_cli_provider_login(&app, id, kind).await
+    } else {
+        Err(format!(
+            "{} does not support in-app login yet. Use its credential options below, or open its dashboard.",
+            id.display_name()
+        ))
+    };
 
-    // TODO(6b): replace fallthrough once LoginPhase events land. The login
-    // runners live in `codexbar::login` but are async-oriented and tightly
-    // coupled to the egui UI's phase callbacks. For the Tauri shell we
-    // currently surface the dashboard URL.
-    if let Some(url) = dashboard_url_for_provider(&provider_id) {
-        return open_url_in_browser(&url);
+    if result.is_err() {
+        events::emit_login_phase_changed(&app, &provider_id, "failed");
     }
-    Err(format!(
-        "Login flow for '{provider_id}' is not yet wired through the Tauri shell"
-    ))
+    result
+}
+
+async fn run_cli_provider_login(
+    app: &tauri::AppHandle,
+    id: ProviderId,
+    kind: CliLoginKind,
+) -> Result<(), String> {
+    let provider_id = id.cli_name().to_string();
+    let phase_app = app.clone();
+    let phase_provider_id = provider_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let on_phase = move |phase| {
+            events::emit_login_phase_changed(
+                &phase_app,
+                &phase_provider_id,
+                login_phase_name(phase),
+            );
+        };
+        match kind {
+            CliLoginKind::Claude => run_claude_login(PROVIDER_LOGIN_TIMEOUT_SECS, on_phase),
+            CliLoginKind::Codex => run_codex_login(PROVIDER_LOGIN_TIMEOUT_SECS, on_phase),
+        }
+    })
+    .await
+    .map_err(|error| format!("{} login task failed: {error}", id.display_name()))?;
+    require_successful_login(id, result)?;
+
+    let _ = app.emit(
+        "provider-updated",
+        serde_json::json!({ "providerId": provider_id }),
+    );
+    Ok(())
+}
+
+fn require_successful_login(id: ProviderId, result: LoginResult) -> Result<(), String> {
+    match result.outcome {
+        LoginOutcome::Success => Ok(()),
+        LoginOutcome::TimedOut => Err(format!(
+            "{} login timed out. Try again, or use the manual credential options below.",
+            id.display_name()
+        )),
+        LoginOutcome::Failed { status } => Err(format!(
+            "{} login exited with status {status}. Try again, or use the manual credential options below.",
+            id.display_name()
+        )),
+        LoginOutcome::MissingBinary => Err(format!(
+            "{} login CLI was not found on PATH. Install it, or use the manual credential options below.",
+            id.display_name()
+        )),
+        LoginOutcome::LaunchFailed(error) => Err(format!(
+            "Could not start {} login: {error}. Use the manual credential options below.",
+            id.display_name()
+        )),
+    }
 }
 
 async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> {
+    events::emit_login_phase_changed(app, ProviderId::Copilot.cli_name(), "requesting");
     let flow = CopilotDeviceFlow::new();
     let device = flow
         .start_flow()
@@ -357,6 +443,7 @@ async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> 
         .map_err(|e| format!("GitHub device login failed: {e}"))?;
 
     open_url_in_browser(device.verification_url_to_open())?;
+    events::emit_login_phase_changed(app, ProviderId::Copilot.cli_name(), "waitingBrowser");
 
     let token = flow
         .wait_for_token(&device.device_code, device.interval, device.expires_in)
@@ -408,6 +495,7 @@ async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> 
         "provider-updated",
         serde_json::json!({ "providerId": "copilot" }),
     );
+    events::emit_login_phase_changed(app, ProviderId::Copilot.cli_name(), "complete");
     Ok(())
 }
 
@@ -421,5 +509,31 @@ mod tests {
             dashboard_url_for_provider("codex").as_deref(),
             Some("https://chatgpt.com/codex/settings/usage")
         );
+    }
+
+    #[test]
+    fn cli_login_routing_is_provider_specific() {
+        assert_eq!(
+            cli_login_kind(ProviderId::Claude),
+            Some(CliLoginKind::Claude)
+        );
+        assert_eq!(cli_login_kind(ProviderId::Codex), Some(CliLoginKind::Codex));
+        assert_eq!(cli_login_kind(ProviderId::Gemini), None);
+        assert_eq!(cli_login_kind(ProviderId::Grok), None);
+    }
+
+    #[test]
+    fn failed_login_does_not_expose_captured_cli_output() {
+        let result = LoginResult {
+            outcome: LoginOutcome::Failed { status: 7 },
+            output: "secret-token-from-cli".to_string(),
+            auth_link: None,
+        };
+
+        let error = require_successful_login(ProviderId::Codex, result).unwrap_err();
+
+        assert!(error.contains("status 7"));
+        assert!(!error.contains("secret-token-from-cli"));
+        assert!(error.contains("manual credential options"));
     }
 }

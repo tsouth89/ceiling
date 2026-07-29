@@ -9,7 +9,12 @@ use std::io::{BufRead, BufReader, Read};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
+
+const CLAUDE_LOGIN_ARGS: &[&str] = &["auth", "login"];
+const CODEX_LOGIN_ARGS: &[&str] = &["login", "--device-auth"];
 
 /// Result of a login attempt
 #[derive(Debug, Clone)]
@@ -39,13 +44,13 @@ pub enum LoginPhase {
 }
 
 /// Run Claude CLI login
-pub async fn run_claude_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
+pub fn run_claude_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
 where
     F: Fn(LoginPhase) + Send + 'static,
 {
     run_cli_login(
         "claude",
-        &["/login"],
+        CLAUDE_LOGIN_ARGS,
         timeout_secs,
         on_phase,
         &[
@@ -54,17 +59,16 @@ where
             "Logged in successfully",
         ],
     )
-    .await
 }
 
 /// Run Codex CLI login
-pub async fn run_codex_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
+pub fn run_codex_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
 where
     F: Fn(LoginPhase) + Send + 'static,
 {
     run_cli_login(
         "codex",
-        &["auth", "login"],
+        CODEX_LOGIN_ARGS,
         timeout_secs,
         on_phase,
         &[
@@ -73,26 +77,10 @@ where
             "Logged in successfully",
         ],
     )
-    .await
-}
-
-/// Run Gemini/gcloud login
-pub async fn run_gemini_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
-where
-    F: Fn(LoginPhase) + Send + 'static,
-{
-    run_cli_login(
-        "gcloud",
-        &["auth", "login"],
-        timeout_secs,
-        on_phase,
-        &["You are now logged in", "Credentials saved"],
-    )
-    .await
 }
 
 /// Run Copilot/GitHub device flow login
-pub async fn run_copilot_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
+pub fn run_copilot_login<F>(timeout_secs: u64, on_phase: F) -> LoginResult
 where
     F: Fn(LoginPhase) + Send + 'static,
 {
@@ -103,11 +91,10 @@ where
         on_phase,
         &["Logged in as", "Authentication complete"],
     )
-    .await
 }
 
 /// Generic CLI login runner
-async fn run_cli_login<F>(
+fn run_cli_login<F>(
     binary: &str,
     args: &[&str],
     timeout_secs: u64,
@@ -124,22 +111,14 @@ where
 
     on_phase(LoginPhase::Requesting);
 
-    let mut child = match spawn_login_process(binary_path.as_path(), args) {
+    let child = match spawn_login_process(binary_path.as_path(), args) {
         Ok(c) => c,
         Err(e) => return launch_failed_result(e),
     };
 
-    let mut state = CliLoginState::new(timeout_secs, &on_phase, success_markers);
+    let state = CliLoginState::new(timeout_secs, &on_phase, success_markers);
 
-    if let Some(outcome) = read_login_stream(child.stdout.take(), &mut state) {
-        return stop_child_with_outcome(&mut child, state, outcome);
-    }
-
-    if let Some(outcome) = read_login_stream(child.stderr.take(), &mut state) {
-        return stop_child_with_outcome(&mut child, state, outcome);
-    }
-
-    wait_for_login_exit(child, state, &on_phase)
+    monitor_login_process(child, state, &on_phase)
 }
 
 fn missing_binary_result(binary: &str) -> LoginResult {
@@ -242,19 +221,76 @@ where
     }
 }
 
-fn read_login_stream<R, F>(
-    stream: Option<R>,
-    state: &mut CliLoginState<'_, F>,
-) -> Option<LoginOutcome>
+fn forward_login_stream<R>(stream: Option<R>, sender: mpsc::Sender<String>)
 where
-    R: Read,
+    R: Read + Send + 'static,
+{
+    let Some(stream) = stream else {
+        return;
+    };
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+fn monitor_login_process<F>(
+    mut child: Child,
+    mut state: CliLoginState<'_, F>,
+    on_phase: &F,
+) -> LoginResult
+where
     F: Fn(LoginPhase),
 {
-    let reader = BufReader::new(stream?);
-    reader
-        .lines()
-        .map_while(Result::ok)
-        .find_map(|line| state.handle_line(&line))
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+    let (sender, receiver) = mpsc::channel();
+    forward_login_stream(child.stdout.take(), sender.clone());
+    forward_login_stream(child.stderr.take(), sender);
+
+    loop {
+        if state.start.elapsed() >= state.timeout {
+            return stop_child_with_outcome(&mut child, state, LoginOutcome::TimedOut);
+        }
+
+        match receiver.recv_timeout(POLL_INTERVAL) {
+            Ok(line) => {
+                if let Some(outcome) = state.handle_line(&line) {
+                    return stop_child_with_outcome(&mut child, state, outcome);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => thread::sleep(POLL_INTERVAL),
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                for line in receiver.try_iter() {
+                    if let Some(outcome) = state.handle_line(&line) {
+                        return state.into_result(outcome);
+                    }
+                }
+                if status.success() {
+                    on_phase(LoginPhase::Complete);
+                    return state.into_result(LoginOutcome::Success);
+                }
+                return state.into_result(LoginOutcome::Failed {
+                    status: status.code().unwrap_or(-1),
+                });
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return stop_child_with_outcome(
+                    &mut child,
+                    state,
+                    LoginOutcome::LaunchFailed(error.to_string()),
+                );
+            }
+        }
+    }
 }
 
 fn stop_child_with_outcome<F>(
@@ -266,34 +302,35 @@ where
     F: Fn(LoginPhase),
 {
     let _ = child.kill();
+    let _ = child.wait();
     state.into_result(outcome)
-}
-
-fn wait_for_login_exit<F>(
-    mut child: Child,
-    state: CliLoginState<'_, F>,
-    on_phase: &F,
-) -> LoginResult
-where
-    F: Fn(LoginPhase),
-{
-    match child.wait() {
-        Ok(status) => {
-            if status.success() {
-                on_phase(LoginPhase::Complete);
-                state.into_result(LoginOutcome::Success)
-            } else {
-                state.into_result(LoginOutcome::Failed {
-                    status: status.code().unwrap_or(-1),
-                })
-            }
-        }
-        Err(e) => state.into_result(LoginOutcome::LaunchFailed(e.to_string())),
-    }
 }
 
 /// Open a URL in the default browser
 pub fn open_auth_url(url: &str) -> anyhow::Result<()> {
     open::that(url)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_commands_match_current_dedicated_auth_surfaces() {
+        assert_eq!(CLAUDE_LOGIN_ARGS, ["auth", "login"]);
+        assert_eq!(CODEX_LOGIN_ARGS, ["login", "--device-auth"]);
+    }
+
+    #[test]
+    fn success_marker_completes_and_notifies_the_caller() {
+        let phases = std::cell::RefCell::new(Vec::new());
+        let on_phase = |phase| phases.borrow_mut().push(phase);
+        let mut state = CliLoginState::new(30, &on_phase, &["Login successful"]);
+
+        let outcome = state.handle_line("Login successful");
+
+        assert!(matches!(outcome, Some(LoginOutcome::Success)));
+        assert_eq!(*phases.borrow(), vec![LoginPhase::Complete]);
+    }
 }

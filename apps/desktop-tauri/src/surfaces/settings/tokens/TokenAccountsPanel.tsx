@@ -8,6 +8,12 @@ import {
   setActiveTokenAccount,
   triggerProviderLogin,
 } from "../../../lib/tauri";
+import { listen } from "@tauri-apps/api/event";
+import {
+  providerLoginPhaseKey,
+  type ProviderLoginPhase,
+  type ProviderLoginPhaseChangedPayload,
+} from "../../../lib/providerLogin";
 
 interface Props {
   providerId: string;
@@ -35,6 +41,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const { t } = useLocale();
   const [data, setData] = useState<ProviderTokenAccountsBridge | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addLabel, setAddLabel] = useState("");
   const [addToken, setAddToken] = useState("");
@@ -63,6 +70,21 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setError(null);
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setLoginPhase(null);
+    const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
+      "login-phase-changed",
+      ({ payload }) => {
+        if (payload.providerId === providerId) {
+          setLoginPhase(payload.phase);
+        }
+      },
+    );
+    return () => {
+      void unlistenPromise.then((fn) => fn());
+    };
+  }, [providerId]);
 
   const handleAdd = async () => {
     if (!providerId || !addLabel.trim() || !addToken.trim()) return;
@@ -115,6 +137,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const handleProviderLogin = async () => {
     if (!providerId) return;
     setBusy(true);
+    setLoginPhase(null);
     setError(null);
     try {
       await triggerProviderLogin(providerId);
@@ -130,6 +153,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
 
   const placeholder = data?.support.placeholder ?? "Paste token…";
   const subtitle = data?.support.subtitle ?? "";
+  const loginStatusKey = providerLoginPhaseKey(loginPhase);
 
   const body = (
     <>
@@ -139,6 +163,11 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
 
       {error && (
         <div className="settings-status settings-status--error">{error}</div>
+      )}
+      {loginStatusKey && (
+        <div className="settings-status" role="status">
+          {t(loginStatusKey)}
+        </div>
       )}
 
       {!compact && (
@@ -205,7 +234,9 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
           disabled={busy}
           onClick={() => void handleProviderLogin()}
         >
-          {t("TokenAccountGithubLoginButton")}
+          {loginStatusKey && busy
+            ? t(loginStatusKey)
+            : t("TokenAccountGithubLoginButton")}
         </button>
       )}
       <div className="credential-add-form token-accounts-add">

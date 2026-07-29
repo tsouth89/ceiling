@@ -46,6 +46,13 @@ pub struct RefreshStartedPayload {
     pub provider_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginPhaseChangedPayload<'a> {
+    pub provider_id: &'a str,
+    pub phase: &'a str,
+}
+
 // ── Emit helpers ─────────────────────────────────────────────────────
 
 pub fn emit_surface_mode_changed(
@@ -91,8 +98,11 @@ pub fn emit_update_state_changed(app: &AppHandle, payload: &UpdateStatePayload) 
     let _ = app.emit(UPDATE_STATE_CHANGED, payload);
 }
 
-pub fn emit_login_phase_changed(app: &AppHandle) {
-    let _ = app.emit(LOGIN_PHASE_CHANGED, ());
+pub fn emit_login_phase_changed(app: &AppHandle, provider_id: &str, phase: &str) {
+    let _ = app.emit(
+        LOGIN_PHASE_CHANGED,
+        LoginPhaseChangedPayload { provider_id, phase },
+    );
 }
 
 pub fn emit_proof_state_changed(app: &AppHandle, payload: &ProofStatePayload) {

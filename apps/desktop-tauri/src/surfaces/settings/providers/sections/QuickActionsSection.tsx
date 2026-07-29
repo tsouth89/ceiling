@@ -1,9 +1,14 @@
 import type { ProviderDetail } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
+import {
+  providerLoginPhaseKey,
+  type ProviderLoginPhase,
+} from "../../../../lib/providerLogin";
 
 interface Props {
   provider: ProviderDetail;
   busy: boolean;
+  loginPhase: ProviderLoginPhase | null;
   onRefresh: () => void;
   onSwitchAccount: () => void;
   onOpenDashboard: () => void;
@@ -22,6 +27,7 @@ interface Props {
 export function QuickActionsSection({
   provider,
   busy,
+  loginPhase,
   onRefresh,
   onSwitchAccount,
   onOpenDashboard,
@@ -30,9 +36,16 @@ export function QuickActionsSection({
   onBuyCredits,
   t,
 }: Props) {
+  const loginStatusKey = providerLoginPhaseKey(loginPhase);
+
   return (
     <section className="provider-detail-section">
       <h4>{t("QuickActions")}</h4>
+      {loginStatusKey && (
+        <p className="settings-status" role="status">
+          {t(loginStatusKey)}
+        </p>
+      )}
       <div className="provider-detail-actions">
         <button
           type="button"
@@ -49,7 +62,9 @@ export function QuickActionsSection({
             onClick={onSwitchAccount}
             disabled={busy}
           >
-            {t("ActionSwitchAccount")}
+            {loginStatusKey && busy
+              ? t(loginStatusKey)
+              : t("ActionSwitchAccount")}
           </button>
         )}
         {provider.dashboardUrl && (
