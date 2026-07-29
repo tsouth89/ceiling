@@ -821,7 +821,9 @@ pub(crate) fn semantic_window_id(label: &str, window_minutes: Option<u32>) -> St
         return normalized;
     }
     match window_minutes {
-        Some(minutes) if minutes <= 720 => "session".to_string(),
+        // Shares its cutoff with `is_long_window` so the semantic id and the
+        // notify/skip decision cannot classify the same window differently.
+        Some(minutes) if minutes <= SHORT_WINDOW_MAX_MINUTES => "session".to_string(),
         Some(minutes) if minutes <= 20_160 => "weekly".to_string(),
         Some(_) => "monthly".to_string(),
         None => normalized,

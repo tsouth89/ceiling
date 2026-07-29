@@ -317,15 +317,25 @@ impl NotificationManager {
                 }
             };
             if suppressed {
-                tracing::warn!(
-                    title,
-                    ?priority,
-                    per_refresh_limit = self.toast_emitted_this_refresh,
-                    minimum_interval_limit = too_soon,
-                    rolling_count = self.recent_toasts.len(),
-                    resets_this_refresh = self.reset_toasts_this_refresh,
-                    "suppressing notification due to toast circuit breaker"
-                );
+                // Log only the limits that actually applied. A reset is gated
+                // solely by its own per-refresh ceiling, and reporting the
+                // usage-alert limits alongside it sent anyone debugging a
+                // dropped reset chasing the wrong guard.
+                match priority {
+                    ToastPriority::Normal => tracing::warn!(
+                        title,
+                        per_refresh_limit = self.toast_emitted_this_refresh,
+                        minimum_interval_limit = too_soon,
+                        rolling_count = self.recent_toasts.len(),
+                        "suppressing usage notification due to toast circuit breaker"
+                    ),
+                    ToastPriority::Reset => tracing::warn!(
+                        title,
+                        resets_this_refresh = self.reset_toasts_this_refresh,
+                        limit = MAX_RESET_TOASTS_PER_REFRESH,
+                        "suppressing reset notification: too many resets in one refresh"
+                    ),
+                }
                 return false;
             }
             // A reset still consumes the usage-alert budget, so an unusual burst
@@ -1041,11 +1051,16 @@ fn windows_notification_delivery_check() -> Result<(), String> {
         );
     }
 
-    if let Ok(key) = hkcu.open_subkey(format!(
-        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\{CEILING_AUMID}"
-    )) {
-        let disabled = notification_channel_is_disabled(key.get_value::<u32, _>("Enabled").ok());
-        if disabled {
+    // Check the retired channel too. Someone who switched Ceiling off in
+    // Windows Settings did so against the old AUMID, and moving to a new one
+    // would otherwise resume toasting straight over that decision.
+    for aumid in [CEILING_AUMID, LEGACY_CEILING_AUMID] {
+        let Ok(key) = hkcu.open_subkey(format!(
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\{aumid}"
+        )) else {
+            continue;
+        };
+        if notification_channel_is_disabled(key.get_value::<u32, _>("Enabled").ok()) {
             return Err(
                 "Windows notifications are turned off for Ceiling. Enable Ceiling in Settings > System > Notifications."
                     .to_string(),
@@ -1096,10 +1111,13 @@ pub fn send_test_notification() -> Result<(), String> {
     }
 }
 
-/// Register the Ceiling App User Model ID (AUMID) in the Windows registry so that
-/// `CreateToastNotifier("Ceiling")` resolves to a valid notifier instead of returning
-/// null.  Must be called at least once before the first toast.  Safe to call multiple
-/// times (idempotent registry write).
+/// Register [`CEILING_AUMID`] in the Windows registry so that
+/// `CreateToastNotifier(CEILING_AUMID)` resolves to a valid notifier instead of
+/// returning null.  Must be called at least once before the first toast.  Safe
+/// to call multiple times (idempotent registry write).
+///
+/// This covers activation only. Notification-center history additionally needs
+/// the Start Menu shortcut written by [`ensure_start_menu_shortcut`].
 #[cfg(target_os = "windows")]
 fn ensure_aumid_registered() {
     use winreg::RegKey;
@@ -1131,6 +1149,14 @@ fn ensure_aumid_registered() {
 /// the notification center. Keep this in step with `tauri.conf.json`.
 #[cfg(target_os = "windows")]
 const CEILING_AUMID: &str = "io.github.tsouth89.ceiling";
+
+/// The AUMID Ceiling toasted under before the fix above.
+///
+/// Only consulted so a user who switched Ceiling's notifications off in Windows
+/// Settings keeps that choice: their opt-out lives on this channel, and moving
+/// to a registered identity must not quietly undo it.
+#[cfg(target_os = "windows")]
+const LEGACY_CEILING_AUMID: &str = "Ceiling";
 
 /// `System.AppUserModel.ID`, the shortcut property that ties a desktop app to a
 /// notification identity. Declared here rather than pulled from
@@ -1292,6 +1318,21 @@ mod tests {
         assert!(!notification_channel_is_disabled(None));
         assert!(!notification_channel_is_disabled(Some(1)));
         assert!(notification_channel_is_disabled(Some(0)));
+    }
+
+    /// Switching AUMIDs must not resurrect notifications for someone who turned
+    /// them off, since their opt-out is recorded against the old channel.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_legacy_channel_is_distinct_and_still_consulted() {
+        assert_ne!(
+            CEILING_AUMID, LEGACY_CEILING_AUMID,
+            "the legacy channel check is pointless if both names match"
+        );
+        assert!(
+            notification_channel_is_disabled(Some(0)),
+            "an Enabled=0 on either channel must read as disabled"
+        );
     }
 
     /// The shortcut is the whole reason toasts survive in the notification
