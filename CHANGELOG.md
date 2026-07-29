@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.17 - 2026-07-29
+
+Windows notifications are the headline: they now carry the Ceiling name and logo, stay in the notification center instead of vanishing after a few seconds, and stop dropping the weekly and monthly resets worth interrupting for. Also adds Simplified Chinese and in-app provider login.
+
 ### Added
 - **Simplified Chinese** is a real, switchable interface language, selectable under Settings > General. Missing keys fall back to English, so new strings keep shipping without waiting on translation. (#113, #130)
 - In-app login flows for Claude and Codex, alongside the existing Copilot device flow, with typed and localized progress shown in provider settings. Providers without an in-app flow now return explicit credential guidance instead of silently opening a dashboard. Gemini remains a known gap because its CLI only authenticates through an interactive TUI. (#179)

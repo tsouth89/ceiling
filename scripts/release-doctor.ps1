@@ -236,7 +236,21 @@ if (-not $SkipGitHub) {
         try {
             $ghJsonPath = Join-Path $env:TEMP "ceiling-release-doctor-gh.json"
             $ghErrPath = Join-Path $env:TEMP "ceiling-release-doctor-gh.err"
-            & $gh.Source release view $tag --json assets,url 1>$ghJsonPath 2>$ghErrPath
+            # `gh release view` writing "release not found" to stderr is an
+            # expected answer before the release exists, not a script fault.
+            # Under $ErrorActionPreference = "Stop" a native command's stderr
+            # becomes a terminating error, which killed the doctor here and
+            # skipped its summary: every pre-tag run failed identically, so a
+            # genuine failure was indistinguishable from the normal case. Let
+            # the exit code below do the deciding, as this block already
+            # intended.
+            $previousErrorAction = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & $gh.Source release view $tag --json assets,url 1>$ghJsonPath 2>$ghErrPath
+            } finally {
+                $ErrorActionPreference = $previousErrorAction
+            }
             if ($LASTEXITCODE -eq 0) {
                 $release = Get-Content -Raw $ghJsonPath | ConvertFrom-Json
                 Write-Ok "GitHub release exists: $($release.url)"
