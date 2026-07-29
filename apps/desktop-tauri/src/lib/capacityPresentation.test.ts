@@ -93,7 +93,10 @@ describe("capacityPresentation", () => {
 
   it("prefers a blocking window over a merely higher-pressure one", () => {
     const exhausted = window(100);
+    // Claude uses the blocking-wins path (Cursor uses actionable remaining).
     const snap = provider({
+      providerId: "claude",
+      displayName: "Claude",
       primary: window(100),
       primaryLabel: "Session",
       secondary: { ...window(97), isExhausted: false },
@@ -106,6 +109,8 @@ describe("capacityPresentation", () => {
 
     // And a blocking non-primary wins even when primary reads higher.
     const blockedExtra = provider({
+      providerId: "claude",
+      displayName: "Claude",
       primary: window(80),
       primaryLabel: "Session",
       extraRateWindows: [
@@ -123,6 +128,8 @@ describe("capacityPresentation", () => {
     const soon = { ...window(60), resetsAt: "2026-07-21T04:00:00Z" };
     const later = { ...window(60), resetsAt: "2026-07-28T04:00:00Z" };
     const snap = provider({
+      providerId: "claude",
+      displayName: "Claude",
       primary: later,
       primaryLabel: "Weekly",
       secondary: soon,
@@ -130,6 +137,75 @@ describe("capacityPresentation", () => {
     });
 
     expect(constrainingWindow(snap).label).toBe("Session");
+  });
+
+  it("Cursor strip prefers hottest Auto/API that still has room (not Plan)", () => {
+    // Reporter case: API 100% while Auto ~60% still has room → show Auto.
+    const apiMaxed = provider({
+      primary: window(40),
+      primaryLabel: "Monthly",
+      secondary: window(60),
+      secondaryLabel: "Auto",
+      extraRateWindows: [
+        { id: "cursor-api", title: "API", window: window(100) },
+      ],
+    });
+    expect(constrainingWindow(apiMaxed).label).toBe("Auto");
+    expect(constrainingWindow(apiMaxed).window.usedPercent).toBe(60);
+
+    // Symmetric: Auto maxed, API still useful → show API.
+    const autoMaxed = provider({
+      primary: window(40),
+      primaryLabel: "Monthly",
+      secondary: window(100),
+      secondaryLabel: "Auto",
+      extraRateWindows: [
+        { id: "cursor-api", title: "API", window: window(40) },
+      ],
+    });
+    expect(constrainingWindow(autoMaxed).label).toBe("API");
+    expect(constrainingWindow(autoMaxed).window.usedPercent).toBe(40);
+
+    // Both open: hottest wins (not Plan even if Plan is hotter).
+    const bothOpen = provider({
+      primary: window(90),
+      primaryLabel: "Monthly",
+      secondary: window(55),
+      secondaryLabel: "Auto",
+      extraRateWindows: [
+        { id: "cursor-api", title: "API", window: window(70) },
+      ],
+    });
+    expect(constrainingWindow(bothOpen).label).toBe("API");
+    expect(constrainingWindow(bothOpen).window.usedPercent).toBe(70);
+  });
+
+  it("Cursor strip falls back to soonest-reset exhausted lane when both are maxed", () => {
+    const soon = { ...window(100), resetsAt: "2026-07-21T04:00:00Z" };
+    const later = { ...window(100), resetsAt: "2026-07-28T04:00:00Z" };
+    const snap = provider({
+      primary: window(50),
+      primaryLabel: "Monthly",
+      secondary: later,
+      secondaryLabel: "Auto",
+      extraRateWindows: [
+        { id: "cursor-api", title: "API", window: soon },
+      ],
+    });
+    expect(constrainingWindow(snap).label).toBe("API");
+    expect(constrainingWindow(snap).window.usedPercent).toBe(100);
+  });
+
+  it("Cursor strip falls back to Plan when Auto/API lanes are absent", () => {
+    const snap = provider({
+      primary: window(42),
+      primaryLabel: "Monthly",
+      secondary: null,
+      extraRateWindows: [],
+    });
+    expect(constrainingWindow(snap).id).toBe("primary");
+    expect(constrainingWindow(snap).label).toBe("Monthly");
+    expect(constrainingWindow(snap).window.usedPercent).toBe(42);
   });
 
   it("keeps Cursor plan as hero and shows reported Auto and API companions", () => {

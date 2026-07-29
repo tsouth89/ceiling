@@ -335,17 +335,17 @@ describe("FloatBar", () => {
     });
   });
 
-  it("headlines Cursor total usage instead of the Auto lane", async () => {
+  it("headlines Cursor Auto/API remaining capacity, not Plan total", async () => {
     const live = snapshot("cursor", "Cursor", 20);
     live.updatedAt = new Date().toISOString();
     live.primaryLabel = "Monthly";
     live.secondary = rateWindow(70);
     live.secondaryLabel = "Auto";
-    live.inactiveRateWindows = [
+    live.extraRateWindows = [
       {
         id: "cursor-api",
         title: "API",
-        description: "Not currently enforced by Cursor",
+        window: rateWindow(100),
       },
     ];
     tauriMocks.getCachedProviders.mockResolvedValue([live]);
@@ -361,16 +361,15 @@ describe("FloatBar", () => {
     );
 
     await waitFor(() => {
-      // Cursor's account-wide total remains the headline even when Auto is
-      // more constrained. The tray detail still exposes both lanes.
-      expect(container.querySelector(".floatbar__window")?.textContent).toBe("Total");
-      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("20%");
+      // API is maxed; Auto still has room → strip shows Auto, not Plan 20%.
+      expect(container.querySelector(".floatbar__window")?.textContent).toBe(
+        "Auto",
+      );
+      expect(container.querySelector(".floatbar__pct")?.textContent).toBe("70%");
       expect(container.querySelector(".floatbar__pill--crit")).toBeNull();
       // No tiny companion chip anymore.
       expect(container.querySelector(".floatbar__companion")).toBeNull();
-      // Inactive windows no longer paint the whole provider "lifted" (SOU-152).
-      // The provider timestamp is fresh (set above), so the pill is live with
-      // no state chip at all; the inactive lane surfaces in the tray detail.
+      // Fresh timestamp → live pill, no state chip.
       expect(container.querySelector(".floatbar__chip")).toBeNull();
       expect(container.querySelector(".floatbar__pill--lifted")).toBeNull();
     });
