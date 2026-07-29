@@ -144,21 +144,39 @@ if ($SkipPublicVerification) {
 
 $downloadPath = Join-Path ([System.IO.Path]::GetTempPath()) "ceiling-store-$Version-$([guid]::NewGuid().ToString('N')).exe"
 try {
-    & curl.exe `
-        --fail `
-        --silent `
-        --show-error `
-        --location `
-        --max-redirs 0 `
-        --connect-timeout 10 `
-        --max-time 180 `
-        --retry 3 `
-        --retry-delay 5 `
-        --retry-connrefused `
-        --output $downloadPath `
-        $installerUrl
-    if ($LASTEXITCODE -ne 0) {
-        throw "Direct public download failed with curl exit code $LASTEXITCODE."
+    # R2's public edge serves a newly written object a moment after the upload
+    # API returns, so the first read can 404 on an object that is genuinely
+    # there. curl's own --retry does not cover this: 404 is a permanent client
+    # error, so it fails immediately. v1.5.17 died here 160 ms after a
+    # successful upload, on a URL that served fine seconds later.
+    #
+    # Retry the whole request on any failure, backing off, and only give up
+    # once the object has had a fair chance to propagate. A genuinely missing
+    # object still fails, just later.
+    # The loop owns the retry policy, so curl gets none of its own: nesting the
+    # two multiplies the worst case (3 curl retries x 180s max-time, per outer
+    # attempt) into something far longer than the window intended here.
+    $maxAttempts = 8
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        & curl.exe `
+            --fail `
+            --silent `
+            --show-error `
+            --location `
+            --max-redirs 0 `
+            --connect-timeout 10 `
+            --max-time 180 `
+            --output $downloadPath `
+            $installerUrl
+        if ($LASTEXITCODE -eq 0) {
+            break
+        }
+        if ($attempt -eq $maxAttempts) {
+            throw "Direct public download failed with curl exit code $LASTEXITCODE after $maxAttempts attempts."
+        }
+        $backoff = [Math]::Min(5 * $attempt, 20)
+        Write-Host "Public download attempt $attempt/$maxAttempts failed (curl exit $LASTEXITCODE); retrying in ${backoff}s."
+        Start-Sleep -Seconds $backoff
     }
 
     $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
