@@ -2,7 +2,15 @@ import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { playNotificationSound, sendTestNotification } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
+import type { Language } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
+
+// Languages we ship a translation bundle for. Others fall back to English on
+// the backend, so we only surface the ones that actually change the UI.
+const LANGUAGE_OPTIONS: { value: Language; label: string }[] = [
+  { value: "english", label: "English" },
+  { value: "chinese", label: "中文" },
+];
 
 type TestNotificationStatus = "idle" | "sending" | "sent" | "failed";
 
@@ -17,6 +25,8 @@ export default function GeneralTab({
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
+  const selectedLanguage: Language =
+    settings.uiLanguage === "chinese" ? "chinese" : "english";
   const [playingSound, setPlayingSound] = useState(false);
   const [testStatus, setTestStatus] = useState<TestNotificationStatus>("idle");
   const [testError, setTestError] = useState<string | null>(null);
@@ -64,6 +74,23 @@ export default function GeneralTab({
               checked={settings.startMinimized}
               disabled={saving}
               onChange={(v) => set({ startMinimized: v })}
+            />
+          </Field>
+        </div>
+      </section>}
+
+      {mode === "general" && <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionLanguage")}</h3>
+        <div className="settings-section__group">
+          <Field label={t("InterfaceLanguage")}>
+            <Select
+              value={selectedLanguage}
+              options={LANGUAGE_OPTIONS}
+              ariaLabel={t("InterfaceLanguage")}
+              disabled={saving}
+              onChange={(v) => {
+                set({ uiLanguage: v as Language });
+              }}
             />
           </Field>
         </div>
