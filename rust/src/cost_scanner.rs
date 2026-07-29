@@ -721,7 +721,11 @@ impl CostScanner {
 
     /// Scan Claude local logs, stopping early when the caller cancels the scan.
     pub fn scan_claude_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
-        let projects_dirs = self.get_claude_projects_dirs();
+        let projects_dirs = self
+            .get_claude_projects_dirs()
+            .into_iter()
+            .filter(|dir| dir.is_dir())
+            .collect::<Vec<_>>();
         if projects_dirs.is_empty() {
             return CostSummary::default();
         }
@@ -889,8 +893,11 @@ impl CostScanner {
 
         let mut dirs = Vec::new();
         let mut seen = HashSet::new();
-        let push = |dirs: &mut Vec<PathBuf>, seen: &mut HashSet<String>, path: PathBuf| {
-            let key = path.to_string_lossy().to_lowercase();
+        let push = |dirs: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf| {
+            // Existing directories canonicalize to a stable spelling and
+            // separator form on Windows. Unix keeps case-distinct paths
+            // distinct instead of collapsing them through lowercasing.
+            let key = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
             if seen.insert(key) {
                 dirs.push(path);
             }
@@ -2690,6 +2697,71 @@ mod tests {
         let mut seen = HashSet::new();
         assert!(should_count_claude_record(&record, &cutoff, &mut seen));
         assert!(!should_count_claude_record(&record, &cutoff, &mut seen));
+    }
+
+    #[test]
+    fn unscoped_claude_scan_sums_account_homes_and_dedups_records() {
+        let _guard = codex_home_lock().lock().expect("environment lock");
+        let personal = tempfile::tempdir().expect("personal home");
+        let work = tempfile::tempdir().expect("work home");
+        let personal_projects = personal.path().join("projects").join("personal");
+        let work_projects = work.path().join("projects").join("work");
+        std::fs::create_dir_all(&personal_projects).expect("personal projects");
+        std::fs::create_dir_all(&work_projects).expect("work projects");
+
+        let timestamp = Utc::now().to_rfc3339();
+        let shared = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_shared","message":{{"id":"msg_shared","model":"claude-sonnet-4-6","usage":{{"input_tokens":100,"output_tokens":10}}}}}}"#
+        );
+        let personal_only = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_personal","message":{{"id":"msg_personal","model":"claude-sonnet-4-6","usage":{{"input_tokens":200,"output_tokens":20}}}}}}"#
+        );
+        let work_only = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_work","message":{{"id":"msg_work","model":"claude-sonnet-4-6","usage":{{"input_tokens":700,"output_tokens":70}}}}}}"#
+        );
+        std::fs::write(
+            personal_projects.join("personal.jsonl"),
+            format!("{shared}\n{personal_only}\n"),
+        )
+        .expect("personal transcript");
+        std::fs::write(
+            work_projects.join("work.jsonl"),
+            format!("{shared}\n{work_only}\n"),
+        )
+        .expect("work transcript");
+
+        let previous = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        // SAFETY: serialized by the environment lock and restored below.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", personal.path()) };
+
+        let summary =
+            CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]).scan_claude();
+        assert_eq!(
+            summary.input_tokens, 1000,
+            "shared 100 + personal 200 + work 700"
+        );
+        assert_eq!(summary.output_tokens, 100);
+        assert_eq!(summary.sessions_count, 2);
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn claude_scan_without_existing_projects_returns_default_summary() {
+        let missing = tempfile::tempdir()
+            .expect("temp home")
+            .path()
+            .join("missing");
+        let summary = CostScanner::scoped_to(2, missing).scan_claude();
+
+        assert!(summary.period_start.is_none());
+        assert!(summary.period_end.is_none());
+        assert_eq!(summary.sessions_count, 0);
     }
 
     #[test]
