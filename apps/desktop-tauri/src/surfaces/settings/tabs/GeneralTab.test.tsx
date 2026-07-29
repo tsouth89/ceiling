@@ -74,6 +74,7 @@ const settings: SettingsSnapshot = {
   floatBarContrast: "auto",
   floatBarClickThrough: false,
   floatBarProviderIds: [],
+    taskbarAccountByProvider: {},
   floatBarDarkText: false,
   floatBarShowResetInline: false,
   floatBarShowCost: false,

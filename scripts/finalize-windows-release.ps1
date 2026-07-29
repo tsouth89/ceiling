@@ -26,6 +26,7 @@ $assetsDir = Join-Path $WorkRoot "assets"
 $desktopExe = Join-Path $releaseBinDir "ceiling.exe"
 $cliExe = Join-Path $releaseBinDir "codexbar-cli.exe"
 $installer = Join-Path $assetsDir "Ceiling-$Version-Setup.exe"
+$storeInstaller = Join-Path $assetsDir "Ceiling-$Version-Store-Setup.exe"
 $portable = Join-Path $assetsDir "Ceiling-$Version-portable.exe"
 
 function Assert-ReleaseSignature {
@@ -52,11 +53,11 @@ function Assert-ReleaseSignature {
     Write-Host "[signed] $(Split-Path $Path -Leaf): $subject"
 }
 
-foreach ($path in @($desktopExe, $cliExe, $portable, $installer)) {
+foreach ($path in @($desktopExe, $cliExe, $portable, $installer, $storeInstaller)) {
     Assert-ReleaseSignature -Path $path
 }
 
-foreach ($asset in @($installer, $portable)) {
+foreach ($asset in @($installer, $storeInstaller, $portable)) {
     $fileName = Split-Path $asset -Leaf
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLowerInvariant()
     "$hash  $fileName" | Set-Content -Encoding ascii "$asset.sha256"

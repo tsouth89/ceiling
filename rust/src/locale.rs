@@ -726,6 +726,7 @@ locale_keys! {
     PanelTopModelPrefix,
     PanelEstimatedFromLocalLogs,
     PanelEstimatedFromLocalLogsClaude,
+    PanelEstimatedFromLocalLogsGrok,
     PanelExpected,
     PanelActual,
     PanelUsedSuffix,
@@ -891,6 +892,7 @@ locale_keys! {
     DataSourceCursor,
     DataSourceCopilot,
     DataSourceGemini,
+    DataSourceGrok,
     DataSourceGeneric,
 
     // First-run checklist (SOU-157)

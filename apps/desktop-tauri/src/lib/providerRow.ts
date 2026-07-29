@@ -1,3 +1,4 @@
+import { constrainingWindow } from "./capacityPresentation";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 
 /**
@@ -94,6 +95,110 @@ export function representativeForProvider<
     if (candidateUsed !== bestUsed) return candidateUsed > bestUsed ? candidate : best;
     return (candidate.accountId ?? "") < (best.accountId ?? "") ? candidate : best;
   });
+}
+
+/**
+ * How hot an account reads on a one-tile-per-provider strip.
+ *
+ * The strip shows the *constraining* window, so ranking accounts by their
+ * primary window disagreed with it: a Claude seat whose 5h session is fresh but
+ * whose weekly is maxed ranks last on primary and first on the strip. That is
+ * what made the flyout badge "On strip" the wrong account while the tile showed
+ * the right one.
+ *
+ * Mirrors `select_strip_snapshot` in `taskbar_widget.rs`.
+ */
+function stripHeat(provider: Pick<ProviderUsageSnapshot, "primary">): number {
+  if (!provider.primary) return -1;
+  return constrainingWindow(provider as ProviderUsageSnapshot).window.usedPercent;
+}
+
+/**
+ * Account-id order, matching Rust's `String: Ord` so the strip tie-break lands
+ * on the same seat as the native one.
+ *
+ * Deliberately not `localeCompare`: collation sorts "a" before "B" where a byte
+ * comparison does the reverse, so a mixed-case id could tie-break one way in
+ * the flyout and the other way on the tile.
+ */
+export function compareAccountIds(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const left = a ?? "";
+  const right = b ?? "";
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/**
+ * Which account the compact taskbar/float strip should show for a provider.
+ *
+ * Matches the native strip: an explicit pin wins when that account is present,
+ * otherwise the account closest to its constraining limit. Ties resolve on the
+ * lowest account id so the choice is stable between refreshes rather than
+ * flickering with fetch order.
+ */
+export function selectStripAccount<T extends ProviderUsageSnapshot>(
+  candidates: T[],
+  preferredAccountId?: string | null,
+): T | undefined {
+  if (candidates.length === 0) return undefined;
+  const want = preferredAccountId?.trim();
+  if (want) {
+    const hit = candidates.find((row) => row.accountId === want);
+    if (hit) return hit;
+  }
+  return [...candidates].sort((a, b) => {
+    const delta = stripHeat(b) - stripHeat(a);
+    if (delta !== 0) return delta;
+    return compareAccountIds(a.accountId, b.accountId);
+  })[0];
+}
+
+/**
+ * Flyout list order: strip providers in strip order, and within each multi-
+ * account provider put the strip account first so it matches the tile.
+ */
+export function orderFlyoutProviders<T extends ProviderUsageSnapshot>(
+  providers: T[],
+  stripProviderIds: string[],
+  pinnedAccounts: Record<string, string>,
+): T[] {
+  const byProvider = new Map<string, T[]>();
+  for (const row of providers) {
+    const group = byProvider.get(row.providerId) ?? [];
+    group.push(row);
+    byProvider.set(row.providerId, group);
+  }
+
+  const providerOrder =
+    stripProviderIds.length > 0
+      ? stripProviderIds.filter((id) => byProvider.has(id))
+      : [...byProvider.keys()];
+
+  // Append any remaining providers not in the strip list (should be rare after
+  // the flyout's own filter, but keeps the helper total).
+  for (const id of byProvider.keys()) {
+    if (!providerOrder.includes(id)) providerOrder.push(id);
+  }
+
+  const result: T[] = [];
+  for (const providerId of providerOrder) {
+    const group = byProvider.get(providerId) ?? [];
+    const strip = selectStripAccount(group, pinnedAccounts[providerId]);
+    if (!strip) continue;
+    result.push(strip);
+    const rest = group
+      .filter((row) => providerRowKey(row) !== providerRowKey(strip))
+      .sort((a, b) => {
+        const delta = stripHeat(b) - stripHeat(a);
+        if (delta !== 0) return delta;
+        return compareAccountIds(a.accountId, b.accountId);
+      });
+    result.push(...rest);
+  }
+  return result;
 }
 
 /**

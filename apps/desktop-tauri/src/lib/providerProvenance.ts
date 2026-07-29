@@ -17,6 +17,7 @@ const PROVENANCE_KEYS: Record<string, LocaleKey> = {
   cursor: "DataSourceCursor",
   copilot: "DataSourceCopilot",
   gemini: "DataSourceGemini",
+  grok: "DataSourceGrok",
 };
 
 /** Provider ids that ship dedicated (non-generic) provenance copy. */

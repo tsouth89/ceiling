@@ -11,6 +11,7 @@ mod floatbar;
 mod geometry_store;
 mod powertoys;
 mod proof_harness;
+mod quota_run_history;
 mod shell;
 mod shortcut_bridge;
 mod state;
@@ -192,6 +193,8 @@ fn main() {
             commands::set_active_token_account,
             commands::get_app_info,
             commands::get_provider_chart_data,
+            commands::get_quota_run_history,
+            commands::get_quota_run_efficiency,
             commands::get_provider_local_usage_summary,
             commands::get_local_api_value_totals,
             commands::get_cursor_model_activity,

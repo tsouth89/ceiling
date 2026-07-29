@@ -4,7 +4,16 @@ import type {
   RateWindowSnapshot,
 } from "../types/bridge";
 
-const PROVIDER_CHART_DATA_IDS = new Set(["claude", "codex", "cursor", "openai"]);
+// Providers whose live snapshots are sampled into local quota history, and/or
+// that have transcript/cost scanners. Grok also has local session logs under
+// ~/.grok/sessions (tokens, cache, effort, projects, API-equivalent $).
+const PROVIDER_CHART_DATA_IDS = new Set([
+  "claude",
+  "codex",
+  "cursor",
+  "openai",
+  "grok",
+]);
 const RESET_BOUNDARY_PRECISION_MS = 1_000;
 
 export function providerSupportsChartData(providerId: string): boolean {
@@ -58,7 +67,7 @@ function usageWindowRequest(
 export function providerLocalUsageWindows(
   provider: ProviderUsageSnapshot | null | undefined,
 ): LocalUsageWindowRequest[] {
-  if (!provider || !["codex", "claude"].includes(provider.providerId.toLowerCase())) {
+  if (!provider || !["codex", "claude", "grok"].includes(provider.providerId.toLowerCase())) {
     return [];
   }
   return [
@@ -75,11 +84,11 @@ export function providerLocalUsageWindows(
   ].filter((window): window is LocalUsageWindowRequest => window !== null);
 }
 
-/** Whether an active Codex/Claude limit cannot be tied to a provider reset boundary. */
+/** Whether an active Codex/Claude/Grok limit cannot be tied to a provider reset boundary. */
 export function providerHasUnavailableResetBoundary(
   provider: ProviderUsageSnapshot | null | undefined,
 ): boolean {
-  if (!provider || !["codex", "claude"].includes(provider.providerId.toLowerCase())) {
+  if (!provider || !["codex", "claude", "grok"].includes(provider.providerId.toLowerCase())) {
     return false;
   }
   return hasUnavailableResetBoundary(provider.primary)

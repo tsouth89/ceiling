@@ -18,7 +18,10 @@ const empty = period({});
 function provider(
   providerId: string,
   periods: Partial<
-    Record<"today" | "yesterday" | "thirtyDays" | "priorThirtyDays", LocalApiValuePeriod>
+    Record<
+      "today" | "yesterday" | "thirtyDays" | "priorThirtyDays" | "custom",
+      LocalApiValuePeriod
+    >
   >,
 ): LocalApiValueProvider {
   return {
@@ -27,6 +30,7 @@ function provider(
     yesterday: periods.yesterday ?? empty,
     thirtyDays: periods.thirtyDays ?? empty,
     priorThirtyDays: periods.priorThirtyDays ?? empty,
+    custom: periods.custom,
   };
 }
 
@@ -54,6 +58,52 @@ describe("buildApiValueCard", () => {
     expect(model.total).toBe(12);
     expect(model.coverage).toBe(1);
     expect(model.unpricedProviderIds).toHaveLength(0);
+  });
+
+  it("reads the custom period and skips period-over-period", () => {
+    const model = buildApiValueCard(
+      [
+        provider("codex", {
+          custom: period({
+            apiValueUsd: 42,
+            tokens: 4000,
+            pricedTokens: 4000,
+            totalTokens: 4000,
+            hasData: true,
+          }),
+        }),
+      ],
+      "custom",
+      "apiValue",
+    );
+    expect(model.isEmpty).toBe(false);
+    expect(model.total).toBe(42);
+    expect(model.periodChange).toBeNull();
+  });
+
+  it("falls back to dailySeries when custom window is empty", () => {
+    const model = buildApiValueCard(
+      [
+        {
+          providerId: "codex",
+          today: empty,
+          yesterday: empty,
+          thirtyDays: empty,
+          priorThirtyDays: empty,
+          custom: period({ hasData: false }),
+          dailySeries: [
+            { date: "2026-07-01", apiValueUsd: 10, tokens: 100 },
+            { date: "2026-07-15", apiValueUsd: 5, tokens: 50 },
+            { date: "2026-07-28", apiValueUsd: 99, tokens: 999 },
+          ],
+        },
+      ],
+      "custom",
+      "apiValue",
+      { since: "2026-07-01", until: "2026-07-15" },
+    );
+    expect(model.isEmpty).toBe(false);
+    expect(model.total).toBe(15);
   });
 
   it("ranks multiple providers by value with shares summing to 1", () => {

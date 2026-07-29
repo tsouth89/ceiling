@@ -31,6 +31,7 @@ The goal is not another giant provider dashboard. It is a fast, calm way to answ
 - OpenAI Codex
 - Claude
 - Cursor
+- Grok
 - Gemini / Google AI
 - GitHub Copilot
 

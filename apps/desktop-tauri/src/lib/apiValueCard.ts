@@ -1,10 +1,20 @@
-import type { LocalApiValuePeriod, LocalApiValueProvider } from "../types/bridge";
+import type {
+  LocalApiValueDay,
+  LocalApiValuePeriod,
+  LocalApiValueProvider,
+} from "../types/bridge";
 
 /** Metric the aggregate card is showing. */
 export type ApiValueMetric = "apiValue" | "tokens";
 
-/** Which of the three periods is selected. */
-export type ApiValuePeriodKey = "today" | "yesterday" | "thirtyDays";
+/** Which period is selected on the Estimated API value card. */
+export type ApiValuePeriodKey = "today" | "yesterday" | "thirtyDays" | "custom";
+
+/** Inclusive YYYY-MM-DD bounds for the Custom period. */
+export type ApiValueCustomRange = {
+  since: string;
+  until: string;
+};
 
 export interface ApiValueSlice {
   providerId: string;
@@ -51,12 +61,60 @@ export interface ApiValueCardModel {
   periodChange: ApiValuePeriodChange | null;
 }
 
+const EMPTY_PERIOD: LocalApiValuePeriod = {
+  apiValueUsd: 0,
+  tokens: 0,
+  pricedTokens: 0,
+  totalTokens: 0,
+  hasData: false,
+};
+
+/** Sum scanned daily dollars into a period for an inclusive local date range. */
+export function periodFromDailySeries(
+  days: LocalApiValueDay[] | undefined,
+  since: string,
+  until: string,
+): LocalApiValuePeriod {
+  if (!days?.length || !since || !until || since > until) {
+    return EMPTY_PERIOD;
+  }
+  let apiValueUsd = 0;
+  let tokens = 0;
+  let hasData = false;
+  for (const day of days) {
+    if (day.date < since || day.date > until) continue;
+    if (day.apiValueUsd > 0 || day.tokens > 0) hasData = true;
+    apiValueUsd += day.apiValueUsd;
+    tokens += day.tokens;
+  }
+  return {
+    apiValueUsd,
+    tokens,
+    pricedTokens: tokens,
+    totalTokens: tokens,
+    hasData: hasData || apiValueUsd > 0,
+  };
+}
+
 function periodOf(
   provider: LocalApiValueProvider,
   key: ApiValuePeriodKey,
+  customRange?: ApiValueCustomRange | null,
 ): LocalApiValuePeriod {
   if (key === "today") return provider.today;
   if (key === "yesterday") return provider.yesterday;
+  if (key === "custom") {
+    if (provider.custom?.hasData) return provider.custom;
+    // Fallback when the dedicated custom window is empty but daily series has
+    // dollars for the selected dates (the bug users hit on 1.5.15).
+    if (customRange) {
+      const series = provider.dailySeries?.length
+        ? provider.dailySeries
+        : provider.lastSevenDays;
+      return periodFromDailySeries(series, customRange.since, customRange.until);
+    }
+    return provider.custom ?? EMPTY_PERIOD;
+  }
   return provider.thirtyDays;
 }
 
@@ -70,8 +128,16 @@ function priorPeriodOf(
   if (key === "thirtyDays") {
     return { period: provider.priorThirtyDays, versusLabel: "vs prior 30d" };
   }
-  // Yesterday has no stable prior on this card.
+  // Yesterday and custom ranges have no stable prior on this card.
   return null;
+}
+
+function pickPeriod(
+  provider: LocalApiValueProvider,
+  key: ApiValuePeriodKey,
+  customRange?: ApiValueCustomRange | null,
+): LocalApiValuePeriod {
+  return periodOf(provider, key, customRange);
 }
 
 function metricValue(period: LocalApiValuePeriod, metric: ApiValueMetric): number {
@@ -104,9 +170,13 @@ export function buildApiValueCard(
   providers: LocalApiValueProvider[],
   periodKey: ApiValuePeriodKey,
   metric: ApiValueMetric,
+  customRange?: ApiValueCustomRange | null,
 ): ApiValueCardModel {
   const rows = providers
-    .map((provider) => ({ provider, period: periodOf(provider, periodKey) }))
+    .map((provider) => ({
+      provider,
+      period: pickPeriod(provider, periodKey, customRange),
+    }))
     .filter(({ period }) => period.hasData);
 
   const total = rows.reduce((sum, { period }) => sum + metricValue(period, metric), 0);
@@ -118,7 +188,7 @@ export function buildApiValueCard(
       ? []
       : providers
           .map((provider) => {
-            const period = periodOf(provider, periodKey);
+            const period = pickPeriod(provider, periodKey, customRange);
             return {
               providerId: provider.providerId,
               value: period.hasData ? metricValue(period, metric) : 0,

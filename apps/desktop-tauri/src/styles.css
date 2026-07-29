@@ -149,7 +149,8 @@
   --chart-windsurf: rgb(34, 197, 94);
   --chart-elevenlabs: rgb(17, 24, 39);
   --chart-deepgram: rgb(19, 239, 147);
-  --chart-grok: rgb(0, 0, 0);
+  /* Grok mark is monochrome; chart bars use a readable mid gray (icons use brandColor). */
+  --chart-grok: rgb(156, 163, 175);
   --chart-groq: rgb(245, 80, 54);
   --chart-llmproxy: rgb(79, 70, 229);
 
@@ -536,6 +537,85 @@ html {
 
 .settings-section__title:first-child {
   margin-top: 0;
+}
+
+.taskbar-provider-picker {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.taskbar-provider-picker__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.taskbar-provider-picker__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.taskbar-provider-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.taskbar-provider-picker__row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-elevated, rgba(255, 255, 255, 0.04));
+}
+
+.taskbar-provider-picker__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.taskbar-provider-picker__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.taskbar-provider-picker__rank {
+  margin-left: 4px;
+  font-size: 11px;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+.taskbar-provider-picker__account {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 28px;
+}
+
+.taskbar-provider-picker__account-label {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.taskbar-provider-picker__account .select {
+  width: 100%;
+  max-width: 100%;
 }
 
 .settings-section__hint {
@@ -1265,7 +1345,8 @@ body:has(.taskbar-flyout-frame) #root {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .taskbar-flyout__provider-name {
@@ -1278,22 +1359,46 @@ body:has(.taskbar-flyout-frame) #root {
   white-space: nowrap;
 }
 
+/* Secondary to banked-resets: identity cue only, keep it quieter and smaller. */
+.taskbar-flyout__on-strip {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--provider-brand, #6ea8fe) 78%, white);
+  background: color-mix(in srgb, var(--provider-brand, #6ea8fe) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--provider-brand, #6ea8fe) 30%, transparent);
+  border-radius: 999px;
+  padding: 0 5px;
+  line-height: 1.35;
+}
+
+/* Tint only — do not override margin/padding or the strip seat drifts
+   left of every other provider row (content inset must stay 14px). */
+.taskbar-flyout__provider--on-strip {
+  background: color-mix(in srgb, var(--provider-brand, #6ea8fe) 10%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--provider-brand, #6ea8fe) 22%, transparent);
+}
+
 .taskbar-flyout__provider-unavailable {
   color: rgba(255, 255, 255, 0.7);
   font-size: 11px;
   font-weight: 600;
 }
 
+/* Primary action cue: slightly larger than the On strip marker. */
 .taskbar-flyout__reset-credit {
   flex-shrink: 0;
-  padding: 2px 7px;
-  border: 1px solid rgba(128, 221, 255, 0.25);
+  padding: 2px 8px;
+  border: 1px solid rgba(128, 221, 255, 0.28);
   border-radius: 999px;
-  background: rgba(91, 201, 238, 0.1);
-  color: rgba(224, 247, 255, 0.9);
-  font-size: 10px;
+  background: rgba(91, 201, 238, 0.12);
+  color: rgba(224, 247, 255, 0.94);
+  font-size: 11px;
   font-weight: 600;
-  line-height: 14px;
+  line-height: 15px;
 }
 
 /* No banked resets: keep the indicator visible but quiet — nothing to act on. */
@@ -7762,6 +7867,15 @@ body:has(.dashboard-shell) #root {
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
+/* SOU-302: partial pricing coverage — same signal as Estimated API value. */
+.usage-period > .usage-period__pricing {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
 .usage-periods__note {
   grid-column: 1 / -1;
   display: flex;
@@ -7772,6 +7886,89 @@ body:has(.dashboard-shell) #root {
   font-size: 10.5px;
   flex-wrap: wrap;
 }
+/* SOU-299: tokens per 1% and run-over-run efficiency for completed quota runs. */
+.quota-efficiency {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 80%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.quota-efficiency__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+.quota-efficiency__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.quota-efficiency__subtitle {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+.quota-efficiency__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.quota-efficiency__row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.quota-efficiency__badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  border: 1px solid color-mix(in srgb, var(--text-secondary) 35%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.quota-efficiency__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.quota-efficiency__metrics span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.quota-efficiency__metrics small {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+.quota-efficiency__metrics strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.quota-efficiency__metrics strong[data-delta="down"] {
+  color: color-mix(in srgb, var(--usage-bar-high) 85%, white);
+}
+.quota-efficiency__metrics strong[data-delta="up"] {
+  color: color-mix(in srgb, var(--ceiling-cyan) 80%, white);
+}
+.quota-efficiency__note {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
 /* A caveat, not decoration: the totals beside it are not account-scoped. */
 .usage-periods__note--warn {
   margin: 8px 0 0;
@@ -8105,6 +8302,59 @@ body:has(.dashboard-shell) #root {
 .api-value-card__switch-btn[data-active="true"] {
   background: color-mix(in srgb, var(--text-primary) 12%, transparent);
   color: var(--text-primary);
+}
+.api-value-card__custom-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+.api-value-card__date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.api-value-card__date-field input[type="date"] {
+  min-width: 9.5rem;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-elevated, var(--bg-primary)) 88%, transparent);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.api-value-card__date-sep {
+  align-self: center;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.api-value-card__range-pill {
+  margin-left: auto;
+  align-self: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.api-value-card__range-error {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--danger, #e35d6a);
 }
 .api-value-card__body {
   display: flex;

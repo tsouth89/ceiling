@@ -360,9 +360,11 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             name: "Grok",
             requires_api_key: false,
             api_key_env_var: None,
-            api_key_help: Some("Uses Grok browser cookies or ~/.grok/auth.json."),
+            api_key_help: Some(
+                "Uses ~/.grok/auth.json from `grok login` (Grok Build), or grok.com browser cookies.",
+            ),
             config_file_path: Some("~/.grok/auth.json"),
-            dashboard_url: Some("https://grok.com/settings/subscription"),
+            dashboard_url: Some("https://grok.com/?_s=usage"),
         },
         ProviderConfigInfo {
             id: ProviderId::ElevenLabs,

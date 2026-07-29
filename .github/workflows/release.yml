@@ -196,13 +196,15 @@ jobs:
             -WorkRoot $env:RELEASE_WORK_ROOT `
             -PackageOnly
 
-      - name: Sign installer
+      - name: Sign installers
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files: ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
+          files: |
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Store-Setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -240,6 +242,8 @@ jobs:
           path: |
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Setup.exe.sha256
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Store-Setup.exe
+            ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-Store-Setup.exe.sha256
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-portable.exe
             ${{ env.RELEASE_ASSETS_DIR }}\Ceiling-${{ env.RELEASE_VERSION }}-portable.exe.sha256
           if-no-files-found: error
@@ -254,6 +258,8 @@ jobs:
           $assets = @(
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe",
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Setup.exe.sha256",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Store-Setup.exe",
+            "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-Store-Setup.exe.sha256",
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-portable.exe",
             "$env:RELEASE_ASSETS_DIR\Ceiling-$env:RELEASE_VERSION-portable.exe.sha256"
           )
@@ -296,6 +302,84 @@ jobs:
             -Version $env:RELEASE_VERSION `
             -AssetsDir $env:RELEASE_ASSETS_DIR `
             -BucketName $env:CLOUDFLARE_R2_BUCKET
+
+      - name: Set up Microsoft Store Developer CLI
+        if: vars.MICROSOFT_STORE_SUBMISSION_ENABLED == 'true'
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      - name: Configure Partner Center credentials
+        if: vars.MICROSOFT_STORE_SUBMISSION_ENABLED == 'true'
+        shell: pwsh
+        env:
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          foreach ($name in @(
+            "PARTNER_CENTER_TENANT_ID",
+            "PARTNER_CENTER_SELLER_ID",
+            "PARTNER_CENTER_CLIENT_ID",
+            "PARTNER_CENTER_CLIENT_SECRET"
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The release environment is missing secret $name."
+            }
+          }
+          msstore settings --enableTelemetry false
+          msstore reconfigure `
+            --tenantId $env:PARTNER_CENTER_TENANT_ID `
+            --sellerId $env:PARTNER_CENTER_SELLER_ID `
+            --clientId $env:PARTNER_CENTER_CLIENT_ID `
+            --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store CLI authentication failed."
+          }
+
+      - name: Prepare Microsoft Store package update
+        if: vars.MICROSOFT_STORE_SUBMISSION_ENABLED == 'true'
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PARTNER_CENTER_PRODUCT_ID)) {
+            throw "The release environment is missing variable PARTNER_CENTER_PRODUCT_ID."
+          }
+          $installerUrl = "https://downloads.ceiling.win/releases/v$env:RELEASE_VERSION/Ceiling-$env:RELEASE_VERSION-Store-Setup.exe"
+          $currentPath = Join-Path $env:RUNNER_TEMP "store-package-current.json"
+          $preparedPath = Join-Path $env:RUNNER_TEMP "store-package-prepared.json"
+          msstore submission get $env:PARTNER_CENTER_PRODUCT_ID > $currentPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not retrieve Ceiling's current Microsoft Store package."
+          }
+          & .\scripts\prepare-store-submission.ps1 `
+            -CurrentPackagePath $currentPath `
+            -InstallerUrl $installerUrl `
+            -OutputPath $preparedPath
+          "STORE_INSTALLER_URL=$installerUrl" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "STORE_PACKAGE_PATH=$preparedPath" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Submit update to Microsoft Store
+        if: vars.MICROSOFT_STORE_SUBMISSION_ENABLED == 'true'
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+        run: |
+          $package = Get-Content -LiteralPath $env:STORE_PACKAGE_PATH -Raw
+          msstore submission update $env:PARTNER_CENTER_PRODUCT_ID $package
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store package update failed."
+          }
+          msstore submission publish $env:PARTNER_CENTER_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store submission failed."
+          }
+          "### Submitted Ceiling to Microsoft Store" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Installer: $env:STORE_INSTALLER_URL" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Sign out of Azure
         if: always()

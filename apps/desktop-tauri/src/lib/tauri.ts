@@ -272,7 +272,21 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getLocalApiValueTotals(): Promise<LocalApiValueProvider[]> {
+/** Local API-value totals. Optional inclusive YYYY-MM-DD custom range fills `custom`. */
+export function getLocalApiValueTotals(options?: {
+  since?: string;
+  until?: string;
+}): Promise<LocalApiValueProvider[]> {
+  const since = options?.since?.trim();
+  const until = options?.until?.trim();
+  // Only send the range when both sides are real dates. Passing null for both
+  // on every call made custom loads easy to mis-handle; omit args for presets.
+  if (since && until) {
+    return invoke<LocalApiValueProvider[]>("get_local_api_value_totals", {
+      since,
+      until,
+    });
+  }
   return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
 }
 
@@ -283,6 +297,17 @@ export function getCursorModelActivity(): Promise<CursorModelActivity[]> {
 /** Export the provider's 30-day spend to a CSV in Downloads; resolves to the saved path. */
 export function exportCostCsv(providerId: string): Promise<string> {
   return invoke<string>("export_cost_csv", { providerId });
+}
+
+/** Latest quota-run efficiency cards per window (SOU-299). */
+export function getQuotaRunEfficiency(
+  providerId: string,
+  accountEmail?: string | null,
+): Promise<import("../types/bridge").QuotaRunEfficiency[]> {
+  return invoke("get_quota_run_efficiency", {
+    providerId,
+    accountEmail: accountEmail ?? null,
+  });
 }
 
 // ── Token account bridge ─────────────────────────────────────────────

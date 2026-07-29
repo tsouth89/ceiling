@@ -211,9 +211,18 @@ if ((Test-Path $changelogPath) -and (Select-String -Path $changelogPath -Pattern
 
 if (Test-Path $AssetsDir) {
     $installerAsset = Join-Path $AssetsDir "Ceiling-$Version-Setup.exe"
+    $storeInstallerAsset = Join-Path $AssetsDir "Ceiling-$Version-Store-Setup.exe"
     $portableAsset = Join-Path $AssetsDir "Ceiling-$Version-portable.exe"
     Test-AssetHash $installerAsset
     Test-AssetSignature $installerAsset
+    Test-AssetHash $storeInstallerAsset
+    Test-AssetSignature $storeInstallerAsset
+    if ((Test-Path -LiteralPath $storeInstallerAsset) -and
+        ((Get-Item -LiteralPath $storeInstallerAsset).Length -ge 50MB)) {
+        Write-Ok "$(Split-Path $storeInstallerAsset -Leaf) is large enough to contain the offline WebView2 runtime"
+    } else {
+        Write-Fail "$(Split-Path $storeInstallerAsset -Leaf) is too small to contain the offline WebView2 runtime"
+    }
     Test-AssetHash $portableAsset
     Test-AssetSignature $portableAsset
 } else {
@@ -235,6 +244,8 @@ if (-not $SkipGitHub) {
                 foreach ($name in @(
                     "Ceiling-$Version-Setup.exe",
                     "Ceiling-$Version-Setup.exe.sha256",
+                    "Ceiling-$Version-Store-Setup.exe",
+                    "Ceiling-$Version-Store-Setup.exe.sha256",
                     "Ceiling-$Version-portable.exe",
                     "Ceiling-$Version-portable.exe.sha256"
                 )) {

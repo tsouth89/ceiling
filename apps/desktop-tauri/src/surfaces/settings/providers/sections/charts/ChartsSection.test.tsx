@@ -5,6 +5,7 @@ const tauriMocks = vi.hoisted(() => ({
   getProviderChartData: vi.fn(),
   getSettingsSnapshot: vi.fn(),
   getCursorModelActivity: vi.fn(),
+  getQuotaRunEfficiency: vi.fn(),
   exportCostCsv: vi.fn(),
 }));
 
@@ -35,6 +36,9 @@ const enrichedData = {
         endsAt: new Date(Date.now() + 3_600_000).toISOString(),
         tokens: 18_400_000,
         cost: 12.4,
+        // Fully priced: no coverage note on this card.
+        pricedTokens: 18_400_000,
+        totalModelTokens: 18_400_000,
         tokenBreakdown: {
           processedTokens: 18_400_000,
           freshInputTokens: 100_000,
@@ -50,6 +54,9 @@ const enrichedData = {
         endsAt: new Date(Date.now() + 3 * 24 * 3_600_000).toISOString(),
         tokens: 843_400_000,
         cost: 842.5,
+        // 80% priced — dollars are the priced subset only (SOU-302).
+        pricedTokens: 800_000_000,
+        totalModelTokens: 1_000_000_000,
         tokenBreakdown: {
           processedTokens: 843_400_000,
           freshInputTokens: 1_000_000,
@@ -59,6 +66,10 @@ const enrichedData = {
         },
       },
     ],
+    sevenDayPricedTokens: 4_000_000_000,
+    sevenDayTotalModelTokens: 4_949_300_000,
+    thirtyDayPricedTokens: 23_550_000_000,
+    thirtyDayTotalModelTokens: 23_550_000_000,
     comparisonPeriods: [],
     latestTokens: 2_100_000,
     topModel: "claude-opus-4-8",
@@ -95,6 +106,30 @@ describe("ChartsSection local usage summary", () => {
     tauriMocks.getSettingsSnapshot.mockResolvedValue({ enableAnimations: false });
     tauriMocks.getProviderChartData.mockResolvedValue(enrichedData);
     tauriMocks.getCursorModelActivity.mockResolvedValue([]);
+    tauriMocks.getQuotaRunEfficiency.mockResolvedValue([
+      {
+        run: {
+          id: "run-1",
+          providerId: "claude",
+          displayName: "Claude",
+          windowId: "session",
+          windowLabel: "5-hour window",
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          peakUsedPercent: 95,
+          endUsedPercent: 95,
+          resetKind: "scheduled",
+          observedDurationSeconds: 14_000,
+          complete: true,
+          processedTokens: 19_000_000,
+        },
+        tokensPerPercent: 200_000,
+        cacheReadPercent: 88,
+        projectedTokensAt100: 20_000_000,
+        vsPreviousTokensPerPercent: -0.12,
+        note: "Locally observed tokens vs this account's quota %.",
+      },
+    ]);
     tauriMocks.exportCostCsv.mockResolvedValue("C:/Users/me/Downloads/ceiling-claude-spend.csv");
   });
 
@@ -102,10 +137,11 @@ describe("ChartsSection local usage summary", () => {
     const { getByText, getAllByText, getByLabelText } = render(
       <ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />,
     );
+    // getAllByText used below: period card + efficiency row share "5-hour window".
 
     await waitFor(() => expect(getByText("4.9B")).toBeTruthy());
     expect(getByText("23.6B")).toBeTruthy();
-    expect(getByText("5-hour window")).toBeTruthy();
+    expect(getAllByText("5-hour window").length).toBeGreaterThan(0);
     expect(getByText("Weekly window")).toBeTruthy();
     // Tokens and dollars are separate elements so the value never breaks
     // mid-string and the detail line can wrap inside its own card.
@@ -113,6 +149,14 @@ describe("ChartsSection local usage summary", () => {
     expect(getByText("$12.40")).toBeTruthy();
     expect(getByText("843.4M")).toBeTruthy();
     expect(getByText("$842.50")).toBeTruthy();
+    // Partial pricing on the weekly card; fully-priced 5-hour stays quiet.
+    expect(getByText("80% of tokens priced")).toBeTruthy();
+    expect(getByText("81% of tokens priced")).toBeTruthy(); // 7-day calendar
+    // SOU-299 efficiency card from completed quota runs.
+    expect(getByText("Quota run efficiency")).toBeTruthy();
+    expect(getByText("Tokens / 1%")).toBeTruthy();
+    expect(getByText("200.0K")).toBeTruthy();
+    expect(getByText("-12% vs prior run")).toBeTruthy();
     expect(() => getByText("Last session")).toThrow();
     expect(getByText("99.7% cache traffic")).toBeTruthy();
     expect(getAllByText(/Processed tokens · calendar/)).toHaveLength(2);

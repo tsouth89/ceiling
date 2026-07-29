@@ -140,6 +140,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarContrast: "light-text",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
+    taskbarAccountByProvider: {},
     floatBarDarkText: false,
     floatBarShowResetInline: false,
     floatBarShowCost: false,
@@ -450,6 +451,35 @@ describe("FloatBar", () => {
     });
   });
 
+  it("keeps floatBarProviderIds order instead of sorting by usage", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 90),
+      snapshot("codex", "Codex", 10),
+      snapshot("grok", "Grok", 50),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({
+        enabledProviders: ["claude", "codex", "grok"],
+        floatBarProviderIds: ["grok", "codex", "claude"],
+      }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({
+        enabledProviders: ["claude", "codex", "grok"],
+        floatBarProviderIds: ["grok", "codex", "claude"],
+      }),
+    );
+    await waitFor(() => {
+      const titles = [...container.querySelectorAll(".floatbar__pill")].map((el) =>
+        el.getAttribute("title") ?? "",
+      );
+      expect(titles[0]).toMatch(/Grok/);
+      expect(titles[1]).toMatch(/Codex/);
+      expect(titles[2]).toMatch(/Claude/);
+    });
+  });
+
   it("does not show stale cached providers when all providers are disabled", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 30),
@@ -463,6 +493,41 @@ describe("FloatBar", () => {
     await waitFor(() => {
       expect(container.querySelectorAll(".floatbar__pill").length).toBe(0);
       expect(container.querySelector(".floatbar__empty")).not.toBeNull();
+    });
+  });
+
+  it("hides enabled providers that have never successfully authenticated", async () => {
+    // Repro: enable Antigravity without the IDE/CLI installed. The refresh
+    // lands an error placeholder whose session_label is "Claude", which used
+    // to mint a blank "—" / Claude pill on the strip.
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 36),
+      {
+        ...snapshot("antigravity", "Antigravity", 0, {
+          error:
+            "Provider not installed: Antigravity language server not running.",
+        }),
+        primaryLabel: "Claude",
+      },
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["codex", "antigravity"] }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["codex", "antigravity"] }),
+    );
+
+    await waitFor(() => {
+      const pills = [...container.querySelectorAll(".floatbar__pill")];
+      expect(pills).toHaveLength(1);
+      expect(pills[0].getAttribute("title")).toMatch(/Codex/);
+      expect(pills.some((p) => (p.getAttribute("title") ?? "").includes("Claude"))).toBe(
+        false,
+      );
+      expect(
+        pills.some((p) => (p.getAttribute("title") ?? "").includes("Antigravity")),
+      ).toBe(false);
     });
   });
 

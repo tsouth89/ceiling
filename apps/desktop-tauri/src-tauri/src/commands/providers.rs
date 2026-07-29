@@ -46,6 +46,11 @@ pub(crate) fn build_fetch_context(
             "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
                 (SourceMode::OAuth, None)
             }
+            // Grok uses `~/.grok/auth.json` from `grok login` (and optional browser
+            // cookies). Do not force Cli when cookies are disabled/empty.
+            "off" if id == ProviderId::Grok && usage_source != SourceMode::Cli => {
+                (SourceMode::Auto, None)
+            }
             "off" if has_kimi_code_api_key && usage_source == SourceMode::Auto => {
                 (SourceMode::Auto, None)
             }
@@ -58,6 +63,9 @@ pub(crate) fn build_fetch_context(
                     SourceMode::Web
                 } else if id == ProviderId::Claude && usage_source != SourceMode::Cli {
                     SourceMode::OAuth
+                } else if id == ProviderId::Grok {
+                    // Local CLI auth file; provider also tries browser cookies.
+                    SourceMode::Auto
                 } else if id == ProviderId::Cursor {
                     // Provider resolves IDE disk session / browser cookies itself.
                     SourceMode::Web
@@ -123,7 +131,9 @@ const MAX_CONTEXT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from
 
 pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std::time::Duration {
     let provider_timeout = match id {
-        ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot => SLOW_PROVIDER_FETCH_TIMEOUT,
+        ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot | ProviderId::Grok => {
+            SLOW_PROVIDER_FETCH_TIMEOUT
+        }
         _ => DEFAULT_PROVIDER_FETCH_TIMEOUT,
     };
     let context_timeout = std::time::Duration::from_secs(ctx.web_timeout.saturating_add(5));
@@ -153,6 +163,51 @@ pub(crate) fn upsert_provider_cache(
     } else {
         cache.push(snapshot);
     }
+}
+
+/// One cache row identity: provider CLI name + optional configured-account id.
+type ProviderCacheKey = (String, Option<String>);
+
+/// The set of readings a refresh cycle will (or did) produce.
+///
+/// Empty targets means a single ambient fetch with `account_id = None`.
+/// Configured directories each produce one reading stamped with their id.
+pub(crate) fn expected_cache_keys(
+    enabled_ids: &[ProviderId],
+    account_dirs: &ConfiguredAccounts,
+) -> HashSet<ProviderCacheKey> {
+    let mut keys = HashSet::new();
+    for id in enabled_ids {
+        let targets = account_dirs.targets_for(*id);
+        if targets.is_empty() {
+            keys.insert((id.cli_name().to_string(), None));
+        } else {
+            for target in targets {
+                keys.insert((id.cli_name().to_string(), Some(target.id)));
+            }
+        }
+    }
+    keys
+}
+
+/// Drop cache rows that do not belong to this cycle's expected set.
+///
+/// Upsert alone cannot remove a row whose key changed: an ambient reading
+/// (`account_id = None`) and a later registered-account reading (`Some(uuid)`)
+/// are different keys, so both stay unless pruned. Disabled providers are
+/// dropped entirely so a disabled seat cannot linger on the overview.
+pub(crate) fn prune_stale_provider_readings(
+    cache: &mut Vec<ProviderUsageSnapshot>,
+    expected: &HashSet<ProviderCacheKey>,
+    enabled_ids: &[ProviderId],
+) {
+    let enabled: HashSet<&str> = enabled_ids.iter().map(|id| id.cli_name()).collect();
+    cache.retain(|snap| {
+        if !enabled.contains(snap.provider_id.as_str()) {
+            return false;
+        }
+        expected.contains(&(snap.provider_id.clone(), snap.account_id.clone()))
+    });
 }
 
 /// Core refresh logic, usable from both the Tauri command and tray menu actions.
@@ -187,6 +242,15 @@ async fn do_refresh_providers_with_policy(
 
     let handles = spawn_provider_refreshes(app, &inputs);
     await_provider_refreshes(handles).await;
+
+    // After every fetch has landed, drop readings this cycle did not own.
+    // Without this, ambient (`account_id = None`) rows survive next to the
+    // registered UUID reading once Accounts auto-registers the signed-in
+    // directory — two identical cards for one account (issue #155).
+    let expected = expected_cache_keys(&inputs.enabled_ids, &inputs.account_dirs);
+    if let Ok(mut guard) = state.lock() {
+        prune_stale_provider_readings(&mut guard.provider_cache, &expected, &inputs.enabled_ids);
+    }
 
     let error_count = finish_provider_refresh(&state)?;
     update_tray_and_notifications(app, &state, &inputs.settings, &inputs.token_accounts)?;
@@ -367,6 +431,9 @@ async fn refresh_provider(
         (snapshot, Vec::new(), false)
     };
     crate::usage_history::record_snapshot(&snapshot);
+    // Track open quota runs every sample so a confirmed reset can close a run
+    // with peak used % and observation span (SOU-298).
+    crate::quota_run_history::record_snapshot(&snapshot);
     events::emit_provider_updated(&app, &snapshot);
     let notification_settings = Settings::load();
 
@@ -389,6 +456,12 @@ async fn refresh_provider(
         }
         away
     };
+    // Persist completed runs for every classified reset we keep, including away
+    // events that skip the toast gate. Do this before the empty early-return so
+    // a quiet launch that only reports while_away still records history.
+    if !capacity_events.is_empty() {
+        crate::quota_run_history::record_capacity_events(&capacity_events, &snapshot);
+    }
     if capacity_events.is_empty() {
         return;
     }

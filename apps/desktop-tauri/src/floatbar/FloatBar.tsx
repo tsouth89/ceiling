@@ -41,6 +41,7 @@ import {
   type CapacityFreshness,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
+import { compareAccountIds } from "../lib/providerRow";
 import type { FloatBarInformationMode } from "../types/bridge";
 import "./FloatBar.css";
 
@@ -84,6 +85,26 @@ function inlineResetTime(resetText: string): string {
 
 function providerKey(provider: ProviderUsageSnapshot): string {
   return `${provider.providerId}:${provider.accountEmail ?? ""}`;
+}
+
+/**
+ * Whether a reading belongs on the always-visible capacity strip.
+ *
+ * Enabling a provider in Settings does not mean it has capacity yet. Until the
+ * first successful fetch, the cache holds an error placeholder (CLI missing,
+ * language server not running, sign-in needed). Those belong on Overview and
+ * Settings so the user can finish setup — not as a "—" pill that steals space
+ * and, for providers whose session window is named after a model family
+ * (Antigravity's primary label is "Claude"), mislabels the seat entirely.
+ *
+ * Matches widget-snapshot / tray policy: only error-free readings are
+ * capacity-ready.
+ */
+export function isFloatBarEligible(
+  provider: Pick<ProviderUsageSnapshot, "error">,
+): boolean {
+  const error = provider.error?.trim();
+  return error == null || error.length === 0;
 }
 
 /**
@@ -509,19 +530,54 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const filterIds = settings.floatBarProviderIds;
   const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
   const showResetInline = settings.floatBarShowResetInline || density === "detailed";
+  const pinnedAccounts = settings.taskbarAccountByProvider ?? {};
   const visible = useMemo(() => {
     const enabled = new Set(settings.enabledProviders);
-    let list = providers.filter((p) => enabled.has(p.providerId));
-    if (filterIds && filterIds.length > 0) {
-      const wanted = new Set(filterIds);
-      list = list.filter((p) => wanted.has(p.providerId));
-    }
-    return [...list].sort(
-      (a, b) =>
-        floatBarWindow(b).window.usedPercent -
-        floatBarWindow(a).window.usedPercent,
+    // Enabled alone is not enough: skip not-yet-ready error placeholders so
+    // turning on Antigravity without the app installed does not mint a blank
+    // "Claude" pill on the taskbar.
+    const eligible = providers.filter(
+      (p) => enabled.has(p.providerId) && isFloatBarEligible(p),
     );
-  }, [providers, settings.enabledProviders, filterIds]);
+    // One pill per provider: pin wins, else hottest account.
+    const byProvider = new Map<string, typeof eligible>();
+    for (const row of eligible) {
+      const group = byProvider.get(row.providerId) ?? [];
+      group.push(row);
+      byProvider.set(row.providerId, group);
+    }
+    const pick = (providerId: string) => {
+      const group = byProvider.get(providerId) ?? [];
+      if (group.length === 0) return undefined;
+      const want = pinnedAccounts[providerId]?.trim();
+      if (want) {
+        const hit = group.find((row) => row.accountId === want);
+        if (hit) return hit;
+      }
+      return [...group].sort((a, b) => {
+        const delta =
+          floatBarWindow(b).window.usedPercent -
+          floatBarWindow(a).window.usedPercent;
+        if (delta !== 0) return delta;
+        // Lowest account id, matching the native strip and the flyout so all
+        // three name the same seat when two accounts read the same pressure.
+        return compareAccountIds(a.accountId, b.accountId);
+      })[0];
+    };
+    if (filterIds && filterIds.length > 0) {
+      return filterIds
+        .map((id) => pick(id))
+        .filter((p): p is (typeof eligible)[number] => p !== undefined);
+    }
+    return [...byProvider.keys()]
+      .map((id) => pick(id))
+      .filter((p): p is (typeof eligible)[number] => p !== undefined)
+      .sort(
+        (a, b) =>
+          floatBarWindow(b).window.usedPercent -
+          floatBarWindow(a).window.usedPercent,
+      );
+  }, [providers, settings.enabledProviders, filterIds, pinnedAccounts]);
 
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);

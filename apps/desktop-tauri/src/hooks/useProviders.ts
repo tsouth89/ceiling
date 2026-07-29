@@ -213,6 +213,23 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
           refreshingRef.current = false;
           setRefreshingProviderIds(new Set());
           setLastRefresh(event.payload);
+          // Authoritative resync: the backend prunes ghost rows (e.g. ambient
+          // account_id=None after a directory account is registered). Event
+          // merges are upsert-only, so without this a removed row stays painted.
+          const epoch = settingsReloadEpochRef.current;
+          getCachedProviders()
+            .then((cached) => {
+              if (
+                !cancelled &&
+                epoch === settingsReloadEpochRef.current &&
+                !settingsReloadingRef.current
+              ) {
+                mergeSnapshots(cached, true);
+              }
+            })
+            .catch(() => {
+              // Keep the last good event-driven view if the cache read fails.
+            });
         }
       },
     );

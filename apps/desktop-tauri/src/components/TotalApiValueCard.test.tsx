@@ -82,4 +82,65 @@ describe("TotalApiValueCard", () => {
     const { findByText } = render(<TotalApiValueCard />);
     expect(await findByText(/unavailable right now/)).toBeTruthy();
   });
+
+  it("loads a custom date range when Custom is selected", async () => {
+    tauriMocks.getLocalApiValueTotals
+      .mockResolvedValueOnce([
+        {
+          providerId: "codex",
+          today: period({
+            apiValueUsd: 1,
+            tokens: 10,
+            pricedTokens: 10,
+            totalTokens: 10,
+            hasData: true,
+          }),
+          yesterday: period({}),
+          thirtyDays: period({}),
+          priorThirtyDays: period({}),
+        },
+      ])
+      .mockResolvedValue([
+        {
+          providerId: "codex",
+          today: period({
+            apiValueUsd: 1,
+            tokens: 10,
+            pricedTokens: 10,
+            totalTokens: 10,
+            hasData: true,
+          }),
+          yesterday: period({}),
+          thirtyDays: period({}),
+          priorThirtyDays: period({}),
+          custom: period({
+            apiValueUsd: 55,
+            tokens: 5000,
+            pricedTokens: 5000,
+            totalTokens: 5000,
+            hasData: true,
+          }),
+          dailySeries: [
+            { date: "2026-07-01", apiValueUsd: 20, tokens: 100 },
+            { date: "2026-07-15", apiValueUsd: 35, tokens: 200 },
+          ],
+        },
+      ]);
+    const { getByText, getAllByText, getByLabelText, findAllByText } = render(
+      <TotalApiValueCard />,
+    );
+    await waitFor(() => expect(getAllByText("$1.00").length).toBeGreaterThan(0));
+    getByText("Custom").click();
+    await waitFor(() =>
+      expect(tauriMocks.getLocalApiValueTotals).toHaveBeenCalledWith(
+        expect.objectContaining({
+          since: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          until: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        }),
+      ),
+    );
+    expect(getByLabelText("Custom date range")).toBeTruthy();
+    expect((await findAllByText("$55.00")).length).toBeGreaterThan(0);
+  });
+
 });

@@ -34,6 +34,13 @@ pub struct CostArgs {
     /// Number of days to scan (default: 30)
     #[arg(short, long, default_value = "30")]
     pub days: u32,
+
+    /// Codex cost speed tier (ccusage parity): auto | standard | fast.
+    ///
+    /// `auto` (default) reads `service_tier` from `~/.codex/config.toml`.
+    /// `priority` maps to fast (2× list rates), matching `ccusage codex --speed auto`.
+    #[arg(long = "codex-speed", default_value = "auto")]
+    pub codex_speed: String,
 }
 
 /// Run the cost command
@@ -46,13 +53,14 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
 
     let providers = ProviderSelection::from_arg(args.provider.as_deref())?;
     let use_color = !args.no_color && is_terminal();
-    let scanner = CostScanner::new(args.days);
+    let scanner = CostScanner::with_codex_speed(args.days, Some(args.codex_speed.as_str()));
 
     tracing::debug!(
-        "Running cost command: providers={:?}, format={:?}, days={}",
+        "Running cost command: providers={:?}, format={:?}, days={}, codex_speed={:?}",
         providers.as_list(),
         format,
-        args.days
+        args.days,
+        scanner.codex_speed()
     );
 
     // Collect cost data for requested providers
@@ -139,6 +147,19 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
                 println!("  Total:    {}", result.summary.format_total());
             }
 
+            // Codex speed tier (ccusage --speed parity) so Reddit/A-B compares
+            // can say whether dollars are standard list or priority/fast 2×.
+            if result.provider == "codex"
+                && let Some(speed) = result.summary.codex_cost_speed.as_deref()
+            {
+                match result.summary.codex_service_tier.as_deref() {
+                    Some(tier) => {
+                        println!("  Speed:    {} (config service_tier={})", speed, tier)
+                    }
+                    None => println!("  Speed:    {}", speed),
+                }
+            }
+
             // Token breakdown
             println!(
                 "  Tokens:   {} input, {} output, {} cached",
@@ -215,7 +236,9 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     "days_scanned": days,
                     "cost": {
                         "total_usd": r.summary.total_cost_usd,
-                        "currency": "USD"
+                        "currency": "USD",
+                        "codex_speed": r.summary.codex_cost_speed,
+                        "codex_service_tier": r.summary.codex_service_tier
                     },
                     "tokens": {
                         "input": r.summary.input_tokens,

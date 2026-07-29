@@ -151,6 +151,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarContrast: "auto",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
+    taskbarAccountByProvider: {},
     floatBarDarkText: false,
     floatBarShowResetInline: false,
     floatBarShowCost: false,

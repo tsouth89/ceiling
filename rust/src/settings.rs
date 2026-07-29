@@ -279,6 +279,15 @@ pub struct Settings {
     #[serde(default)]
     pub float_bar_provider_ids: Vec<String>,
 
+    /// Per-provider account id for the compact taskbar / float-bar strip.
+    ///
+    /// Key is the provider CLI name (`codex`, `claude`, …); value is a
+    /// directory-account UUID. Missing or empty means Auto: show the account
+    /// closest to its limit. This is a display preference for the strip only —
+    /// it does not change which account is "active" for CLI/fetch identity.
+    #[serde(default)]
+    pub taskbar_account_by_provider: std::collections::HashMap<String, String>,
+
     /// When true, the floating bar uses a dark-on-light palette so it
     /// stays legible on light desktop backgrounds. Defaults to false
     /// (light-on-dark, the original look).
@@ -505,9 +514,11 @@ pub fn normalize_spend_budget_usd(value: f64) -> f64 {
 impl Default for Settings {
     fn default() -> Self {
         let mut enabled = HashSet::new();
-        // Default enabled providers
+        // Default enabled providers (first-class local CLI companions)
         enabled.insert("claude".to_string());
         enabled.insert("codex".to_string());
+        enabled.insert("cursor".to_string());
+        enabled.insert("grok".to_string());
 
         Self {
             enabled_providers: enabled,
@@ -568,6 +579,7 @@ impl Default for Settings {
             float_bar_contrast: Some("auto".to_string()),
             float_bar_click_through: false,
             float_bar_provider_ids: Vec::new(),
+            taskbar_account_by_provider: std::collections::HashMap::new(),
             float_bar_dark_text: false,
             float_bar_show_reset_inline: true,
             float_bar_show_cost: false,
@@ -576,6 +588,15 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Preferred strip account for `provider_id`, if the user pinned one.
+    pub fn taskbar_account_for(&self, provider_id: &str) -> Option<&str> {
+        self.taskbar_account_by_provider
+            .get(provider_id)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
     /// Get the settings file path
     pub fn settings_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("Ceiling").join("settings.json"))

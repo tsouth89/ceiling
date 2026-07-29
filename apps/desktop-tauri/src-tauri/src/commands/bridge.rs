@@ -335,8 +335,12 @@ impl ProviderUsageSnapshot {
         }
     }
 
-    pub(super) fn from_error(id: ProviderId, metadata: &ProviderMetadata, error: String) -> Self {
+    pub(super) fn from_error(id: ProviderId, _metadata: &ProviderMetadata, error: String) -> Self {
         let error = friendly_provider_error(id, &error);
+        // Deliberately no primary_label: session_label names a usage *window*
+        // (Antigravity's is "Claude"), not the provider. On a failed fetch
+        // there is no window to label, and leaking "Claude" onto an
+        // Antigravity error pill misidentified the seat on the taskbar.
         Self {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
@@ -352,7 +356,7 @@ impl ProviderUsageSnapshot {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             },
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: None,
             secondary: None,
             secondary_label: None,
             model_specific: None,
@@ -455,7 +459,27 @@ fn normalize_reset_description(desc: &str, lang: codexbar::settings::Language) -
     )
 }
 
+/// Charts read local `~/.claude` session logs; live capacity needs CLI OAuth.
+/// Call this out when capacity auth fails so Accounts/Charts do not look broken.
+const CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE: &str =
+    "Charts can still show local session spend without live capacity.";
+
 pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
+    if id == ProviderId::Grok {
+        let trimmed = error.trim();
+        let lower = trimmed.to_lowercase();
+        if trimmed == "Authentication required"
+            || lower.contains("auth required")
+            || lower.contains("oauth")
+        {
+            return "Grok needs sign-in before Ceiling can read usage. Run `grok login`, then refresh Grok in Ceiling.".to_string();
+        }
+        if lower.contains("auth.json not found") || lower.contains("not installed") {
+            return "Grok CLI sign-in was not found. Install Grok Build, run `grok login`, then refresh.".to_string();
+        }
+        return error.to_string();
+    }
+
     if id != ProviderId::Claude {
         return error.to_string();
     }
@@ -470,32 +494,50 @@ pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
         return "Claude usage fetch was cancelled before usage data was returned. Refresh Claude, or re-authenticate with Claude Code and try again.".to_string();
     }
 
-    if lower.contains("claude oauth credentials not found") {
-        return "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Ceiling.".to_string();
-    }
-
-    if lower.contains("oauth token expired") || lower.contains("token invalid or expired") {
-        return "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Ceiling.".to_string();
-    }
-
-    if trimmed == "Authentication required" {
-        return "Claude needs sign-in before Ceiling can read usage. Run `claude` once, or add Claude cookies in Provider settings.".to_string();
-    }
-
+    // Multi-source Auto failures must be handled before the single-source OAuth
+    // rewrite: the composite string also contains "credentials not found" and
+    // used to collapse into an OAuth-only line that hid Web/CLI outcomes.
     if lower.starts_with("claude usage failed from all configured sources.") {
-        return trimmed
+        let detail = trimmed
+            .strip_prefix("Claude usage failed from all configured sources.")
+            .unwrap_or(trimmed)
+            .trim()
+            .trim_start_matches('.')
+            .trim()
             .replace(
                 "OAuth: OAuth error: Claude OAuth credentials not found. Run `claude` to authenticate.",
                 "OAuth: sign-in not found",
             )
             .replace(
-                "Web: No cookies available for web API",
-                "Web: no Claude cookies available",
+                "OAuth: OAuth error: Claude OAuth credentials not found",
+                "OAuth: sign-in not found",
             )
             .replace(
-                "CLI: Provider not installed:",
-                "CLI: not installed:",
-            );
+                "Web: No cookies available for web API",
+                "Web: no session available",
+            )
+            .replace("CLI: Provider not installed:", "CLI: not installed:");
+        return format!(
+            "Claude capacity could not be loaded ({detail}). Run `claude` once in a terminal, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
+    }
+
+    if lower.contains("claude oauth credentials not found") {
+        return format!(
+            "Claude CLI sign-in was not found. Run `claude` once in a terminal, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
+    }
+
+    if lower.contains("oauth token expired") || lower.contains("token invalid or expired") {
+        return format!(
+            "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
+    }
+
+    if trimmed == "Authentication required" {
+        return format!(
+            "Claude needs a CLI sign-in before Ceiling can read capacity. Run `claude` once, then refresh Claude in Ceiling. {CLAUDE_CHARTS_WITHOUT_CAPACITY_NOTE}"
+        );
     }
 
     trimmed.to_string()
@@ -587,6 +629,9 @@ pub struct SettingsSnapshot {
     float_bar_contrast: String,
     float_bar_click_through: bool,
     float_bar_provider_ids: Vec<String>,
+    /// Provider CLI name → directory-account id for the compact strip. Empty
+    /// map means Auto (hottest) for every provider.
+    taskbar_account_by_provider: std::collections::HashMap<String, String>,
     float_bar_dark_text: bool,
     float_bar_show_reset_inline: bool,
     float_bar_show_cost: bool,
@@ -692,6 +737,7 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_contrast,
             float_bar_click_through: settings.float_bar_click_through,
             float_bar_provider_ids: settings.float_bar_provider_ids,
+            taskbar_account_by_provider: settings.taskbar_account_by_provider,
             float_bar_dark_text: settings.float_bar_dark_text,
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
             float_bar_show_cost: settings.float_bar_show_cost,

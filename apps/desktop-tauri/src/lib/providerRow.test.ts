@@ -1,14 +1,33 @@
 import { describe, expect, it } from "vitest";
+import type { ProviderUsageSnapshot } from "../types/bridge";
 import {
+  compareAccountIds,
   hasMultipleAccounts,
+  orderFlyoutProviders,
   representativeForProvider,
   providerIdFromRowKey,
   providerRowKey,
   rowKeyIsProvider,
+  selectStripAccount,
 } from "./providerRow";
 
 const row = (providerId: string, accountId?: string) =>
   ({ providerId, accountId: accountId ?? null }) as never;
+
+const snap = (
+  providerId: string,
+  accountId: string | null,
+  used: number,
+  // Second lane, e.g. Claude's weekly beside its 5h session.
+  secondaryUsed?: number,
+) =>
+  ({
+    providerId,
+    accountId,
+    primary: { usedPercent: used },
+    secondary:
+      secondaryUsed === undefined ? null : { usedPercent: secondaryUsed },
+  }) as unknown as ProviderUsageSnapshot;
 
 describe("providerRowKey", () => {
   it("separates two accounts on one provider", () => {
@@ -60,12 +79,6 @@ describe("hasMultipleAccounts", () => {
 });
 
 describe("representativeForProvider", () => {
-  const snap = (providerId: string, accountId: string | null, used: number) => ({
-    providerId,
-    accountId,
-    primary: { usedPercent: used },
-  });
-
   it("picks the most-constrained account", () => {
     const rows = [
       snap("codex", "acct-personal", 12),
@@ -92,5 +105,89 @@ describe("representativeForProvider", () => {
     expect(
       representativeForProvider([snap("claude", null, 10)], "codex"),
     ).toBeNull();
+  });
+});
+
+describe("selectStripAccount", () => {
+  it("defaults to the hottest account", () => {
+    const rows = [
+      snap("codex", "personal", 20),
+      snap("codex", "work", 80),
+    ];
+    expect(selectStripAccount(rows)?.accountId).toBe("work");
+  });
+
+  it("honors an explicit pin when present", () => {
+    const rows = [
+      snap("codex", "personal", 20),
+      snap("codex", "work", 80),
+    ];
+    expect(selectStripAccount(rows, "personal")?.accountId).toBe("personal");
+  });
+
+  it("falls back to hottest when the pin is missing from cache", () => {
+    const rows = [
+      snap("codex", "personal", 20),
+      snap("codex", "work", 80),
+    ];
+    expect(selectStripAccount(rows, "gone")?.accountId).toBe("work");
+  });
+
+  it("ranks on the constraining window, not the primary one", () => {
+    // The strip tile shows the constraining window, so ranking seats by their
+    // primary made the flyout badge "On strip" the account the tile was not
+    // showing: a maxed weekly outranks a freshly reset 5h session.
+    const rows = [
+      snap("claude", "maxed-weekly", 0, 100),
+      snap("claude", "busy-session", 40, 0),
+    ];
+    expect(selectStripAccount(rows)?.accountId).toBe("maxed-weekly");
+  });
+
+  it("breaks ties on the lowest account id, as the native strip does", () => {
+    const forward = [snap("codex", "a", 50), snap("codex", "z", 50)];
+    const reversed = [snap("codex", "z", 50), snap("codex", "a", 50)];
+
+    expect(selectStripAccount(forward)?.accountId).toBe("a");
+    expect(selectStripAccount(reversed)?.accountId).toBe("a");
+  });
+
+  it("breaks ties by byte order, so mixed case matches the native strip", () => {
+    // Rust compares account ids as bytes, where "B" sorts before "a".
+    // `localeCompare` reverses that, which would badge a different seat than
+    // the tile shows.
+    const rows = [snap("codex", "apex", 50), snap("codex", "Beta", 50)];
+    expect(selectStripAccount(rows)?.accountId).toBe("Beta");
+  });
+});
+
+describe("compareAccountIds", () => {
+  it("orders by code unit, not locale collation", () => {
+    expect(compareAccountIds("Beta", "apex")).toBeLessThan(0);
+    expect(compareAccountIds("apex", "Beta")).toBeGreaterThan(0);
+    expect(compareAccountIds("same", "same")).toBe(0);
+  });
+
+  it("treats a missing id as empty, so it sorts first", () => {
+    expect(compareAccountIds(null, "a")).toBeLessThan(0);
+    expect(compareAccountIds(undefined, null)).toBe(0);
+  });
+});
+
+describe("orderFlyoutProviders", () => {
+  it("puts the strip account first within a multi-account provider", () => {
+    const rows = [
+      snap("codex", "work", 80),
+      snap("codex", "personal", 20),
+      snap("claude", "only", 10),
+    ];
+    const ordered = orderFlyoutProviders(rows, ["codex", "claude"], {
+      codex: "personal",
+    });
+    expect(ordered.map((row) => row.accountId)).toEqual([
+      "personal",
+      "work",
+      "only",
+    ]);
   });
 });

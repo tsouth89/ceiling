@@ -705,6 +705,14 @@ fn automatic_metric_window<'a>(
             );
             highest(windows)
         }
+        // Claude/Codex both expose a short session and a weekly pool. Automatic
+        // mode must surface the hotter of the two (SOU-288) so a maxed weekly
+        // is not hidden behind a fresh 5-hour session.
+        Some(ProviderId::Claude) | Some(ProviderId::Codex) => {
+            let mut windows = vec![&snapshot.primary];
+            windows.extend(snapshot.secondary.iter());
+            highest(windows)
+        }
         _ => Some(&snapshot.primary),
     }
 }
@@ -734,6 +742,11 @@ fn automatic_metric_percent(
             Some(snapshot.primary.used_percent),
             snapshot.secondary.as_ref().map(|w| w.used_percent),
             extra_rate_window_percent(snapshot),
+        ]),
+        Some(ProviderId::Claude) | Some(ProviderId::Codex) => max_metric_percent([
+            Some(snapshot.primary.used_percent),
+            snapshot.secondary.as_ref().map(|w| w.used_percent),
+            None,
         ]),
         _ => Some(snapshot.primary.used_percent),
     }
@@ -1600,6 +1613,40 @@ mod tests {
         // The tray menu status labels carry the reset text.
         let (_, label) = provider_status_label(&claude, codexbar::settings::Language::English);
         assert!(label.contains("Resets in"), "{label}");
+    }
+
+    #[test]
+    fn claude_automatic_surfaces_hot_weekly_over_fresh_session() {
+        // SOU-288: automatic metric for Claude must pick the hotter window.
+        let mut snapshot = fake_snapshot_with("claude", "Claude", 0.0, Some(100.0), None, None);
+        snapshot.primary_label = Some("Session (5h)".to_string());
+        snapshot.secondary_label = Some("Weekly".to_string());
+        snapshot.primary.window_minutes = Some(300);
+        if let Some(weekly) = snapshot.secondary.as_mut() {
+            weekly.window_minutes = Some(10_080);
+        }
+        let settings = Settings::default();
+
+        let (primary, secondary) = selected_tray_used_percents(&snapshot, &settings);
+        assert_eq!(primary, 100.0);
+        assert_eq!(secondary, Some(100.0));
+
+        let window = selected_metric_window(
+            &snapshot,
+            Some(ProviderId::Claude),
+            MetricPreference::Automatic,
+        )
+        .expect("claude automatic window");
+        assert_eq!(window.used_percent, 100.0);
+        assert_eq!(window.window_minutes, Some(10_080));
+    }
+
+    #[test]
+    fn codex_automatic_surfaces_hot_weekly_over_session() {
+        let snapshot = fake_snapshot_with("codex", "Codex", 10.0, Some(88.0), None, None);
+        let settings = Settings::default();
+        let (primary, _) = selected_tray_used_percents(&snapshot, &settings);
+        assert_eq!(primary, 88.0);
     }
 
     #[test]

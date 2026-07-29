@@ -28,6 +28,11 @@ pub struct ClaudeOAuthCredentials {
     pub expires_at: Option<DateTime<Utc>>,
     pub scopes: Vec<String>,
     pub rate_limit_tier: Option<String>,
+    /// Claude Code's `subscriptionType` ("pro" / "max" / "free"), which names
+    /// the plan when `rate_limit_tier` does not. Same field `ClaudeIdentity`
+    /// reads for account labels, kept here so the plan name is derived from the
+    /// credentials the reading was actually fetched with.
+    pub subscription_type: Option<String>,
 }
 
 impl ClaudeOAuthCredentials {
@@ -178,6 +183,7 @@ impl ClaudeOAuthFetcher {
             expires_at: None,
             scopes: vec!["user:profile".to_string()],
             rate_limit_tier: None,
+            subscription_type: None,
         };
 
         self.fetch_with_credentials(credentials).await
@@ -468,11 +474,15 @@ impl ClaudeOAuthFetcher {
                 ));
         }
 
-        // Login method from rate limit tier or default
-        if let Some(ref tier) = credentials.rate_limit_tier {
-            usage = usage.with_login_method(super::claude_plan_label(tier));
-        } else {
-            usage = usage.with_login_method("Claude (OAuth)");
+        // Plan name from the rate limit tier, falling back to the subscription
+        // type when the tier is shared across plans (Pro and Free both report
+        // `default_claude_ai`).
+        match super::claude_plan_label_with_subscription(
+            credentials.rate_limit_tier.as_deref(),
+            credentials.subscription_type.as_deref(),
+        ) {
+            Some(plan) => usage = usage.with_login_method(plan),
+            None => usage = usage.with_login_method("Claude (OAuth)"),
         }
 
         usage
@@ -562,6 +572,7 @@ mod tests {
             expires_at: None,
             scopes: vec!["user:profile".to_string()],
             rate_limit_tier: Some("default_claude_ai".to_string()),
+            subscription_type: None,
         }
     }
 
@@ -591,6 +602,24 @@ mod tests {
                 .expect("rate window");
 
         assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
+    }
+
+    /// End to end for the reported bug: a Pro seat's credentials must reach the
+    /// snapshot as "Claude Pro", not the raw shared tier.
+    #[test]
+    fn a_pro_seat_reaches_the_snapshot_as_claude_pro() {
+        let response: OAuthUsageResponse =
+            serde_json::from_str(r#"{"five_hour": {"utilization": 0}}"#).expect("response parses");
+
+        let mut credentials = test_credentials();
+        credentials.subscription_type = Some("pro".to_string());
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
+        assert_eq!(usage.login_method.as_deref(), Some("Claude Pro"));
+
+        // Without the subscription type the shared tier still reads as the
+        // product rather than leaking `default_claude_ai` to the UI.
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+        assert_eq!(usage.login_method.as_deref(), Some("Claude AI"));
     }
 
     /// SOU-286: a freshly reset window reports `1` (1% used). Read per value it
@@ -679,6 +708,7 @@ mod tests {
             expires_at: None,
             scopes: vec!["user:profile".to_string()],
             rate_limit_tier: Some("default_claude_ai".to_string()),
+            subscription_type: None,
         };
         let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
 

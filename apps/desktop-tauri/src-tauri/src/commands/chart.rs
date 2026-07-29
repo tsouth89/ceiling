@@ -24,9 +24,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-// Version 6 restores the rolling comparison periods Compare needs; entries
-// cached at version 5 hold an empty list that would leave the tab stuck.
-const CHART_CACHE_VERSION: u8 = 6;
+// Version 7: Codex priority/fast (2x) pricing for local cost. Entries cached at
+// version 6 still hold pre-2x standard dollars for reset windows, so the
+// Weekly window card could show ~half of the API-value ring after 1.5.13.
+const CHART_CACHE_VERSION: u8 = 7;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,10 +71,22 @@ pub struct ProviderLocalUsageSummary {
     pub seven_day_tokens: Option<u64>,
     #[serde(default)]
     pub seven_day_token_breakdown: Option<LocalTokenBreakdown>,
+    /// Model tokens with a canonical price over the last 7 calendar days.
+    #[serde(default)]
+    pub seven_day_priced_tokens: u64,
+    /// All model tokens (priced + unpriced) over the last 7 calendar days.
+    #[serde(default)]
+    pub seven_day_total_model_tokens: u64,
     pub thirty_day_cost: Option<f64>,
     pub thirty_day_tokens: Option<u64>,
     #[serde(default)]
     pub thirty_day_token_breakdown: Option<LocalTokenBreakdown>,
+    /// Model tokens with a canonical price over the last 30 calendar days.
+    #[serde(default)]
+    pub thirty_day_priced_tokens: u64,
+    /// All model tokens (priced + unpriced) over the last 30 calendar days.
+    #[serde(default)]
+    pub thirty_day_total_model_tokens: u64,
     #[serde(default)]
     pub current_windows: Vec<LocalUsageWindowSummary>,
     #[serde(default)]
@@ -125,6 +138,12 @@ pub struct LocalUsageWindowSummary {
     /// `None` when there is no priced activity (unpriced models stay excluded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<f64>,
+    /// Model tokens with a canonical price (pricing-coverage numerator).
+    #[serde(default)]
+    pub priced_tokens: u64,
+    /// All model tokens (priced + unpriced) — pricing-coverage denominator.
+    #[serde(default)]
+    pub total_model_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +221,10 @@ pub struct LocalTokenBreakdown {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// Reasoning tokens when the provider reports them (Grok). Not added into
+    /// `processed_tokens` because they are often already counted in output.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
 }
 
 /// Per-model local spend for a period. `cost` is `None` for models with no
@@ -285,9 +308,16 @@ pub struct LocalApiValueProvider {
     pub thirty_days: LocalApiValuePeriod,
     /// Calendar days [today-60, today-30) for dollar period-over-period on 30d.
     pub prior_thirty_days: LocalApiValuePeriod,
+    /// Optional inclusive local-calendar range from `get_local_api_value_totals`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<LocalApiValuePeriod>,
     /// Last seven local calendar days, oldest first, today last.
     #[serde(default)]
     pub last_seven_days: Vec<LocalApiValueDay>,
+    /// Scanned local calendar days (oldest first). Used for custom ranges and
+    /// trends so the card never depends only on a single window key.
+    #[serde(default)]
+    pub daily_series: Vec<LocalApiValueDay>,
 }
 
 /// One local calendar day of estimated API value, for the card's trend.
@@ -325,6 +355,24 @@ struct PersistedChartCache {
     version: u8,
     #[serde(default)]
     entries: HashMap<String, CachedProviderChartData>,
+}
+
+/// Completed quota-run snapshots for a provider/account (SOU-298), oldest first.
+#[tauri::command]
+pub fn get_quota_run_history(
+    provider_id: String,
+    account_email: Option<String>,
+) -> Vec<crate::quota_run_history::QuotaRunSnapshot> {
+    crate::quota_run_history::list_runs(&provider_id, account_email.as_deref())
+}
+
+/// Latest quota-run efficiency cards per window (SOU-299).
+#[tauri::command]
+pub fn get_quota_run_efficiency(
+    provider_id: String,
+    account_email: Option<String>,
+) -> Vec<crate::quota_run_history::QuotaRunEfficiency> {
+    crate::quota_run_history::efficiency_for_provider(&provider_id, account_email.as_deref())
 }
 
 #[tauri::command]
@@ -547,18 +595,19 @@ fn persist_chart_cache(cache: &PersistedChartCache) {
 
 /// Providers that expose token-derived local usage for the aggregate card.
 /// Inclusion is by capability, not by merely having some other dollar balance.
-const API_VALUE_PROVIDERS: [&str; 2] = ["codex", "claude"];
+// Grok dollars come from session costUsdTicks (API-equivalent), same as provider Charts.
+const API_VALUE_PROVIDERS: [&str; 3] = ["codex", "claude", "grok"];
 
-/// Aggregate one period's usage for one provider into the card shape.
-fn api_value_period(provider_id: &str, summary: &CostSummary) -> LocalApiValuePeriod {
-    let processed = token_breakdown(provider_id, summary).processed_tokens;
+/// Priced vs total model-token counts for pricing-coverage disclosure.
+///
+/// Unpriced models are those the scanner flagged as unknown; their tokens still
+/// count toward the denominator so a partial window cannot look exact.
+fn pricing_coverage_tokens(summary: &CostSummary) -> (u64, u64) {
     let total_tokens: u64 = summary
         .by_model_tokens
         .values()
         .map(|counts| counts.total())
         .sum();
-    // Unpriced models are exactly those the scanner flagged as unknown; their
-    // tokens still count toward the total but not toward priced coverage.
     let unpriced_tokens: u64 = summary
         .unknown_models
         .iter()
@@ -566,6 +615,13 @@ fn api_value_period(provider_id: &str, summary: &CostSummary) -> LocalApiValuePe
         .map(|counts| counts.total())
         .sum();
     let priced_tokens = total_tokens.saturating_sub(unpriced_tokens);
+    (priced_tokens, total_tokens)
+}
+
+/// Aggregate one period's usage for one provider into the card shape.
+fn api_value_period(provider_id: &str, summary: &CostSummary) -> LocalApiValuePeriod {
+    let processed = token_breakdown(provider_id, summary).processed_tokens;
+    let (priced_tokens, total_tokens) = pricing_coverage_tokens(summary);
     let has_data = summary.sessions_count > 0
         || total_tokens > 0
         || processed > 0
@@ -673,11 +729,39 @@ pub(crate) async fn load_spend_budget_total(
     .flatten()
 }
 
+/// Inclusive local-calendar custom range for Estimated API value (YYYY-MM-DD).
+const API_VALUE_CUSTOM_MAX_DAYS: i64 = 366;
+/// Default scan horizon so custom ranges and daily series cover a full month+.
+const API_VALUE_DEFAULT_SCAN_DAYS: u32 = 90;
 #[tauri::command]
-pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, String> {
+pub async fn get_local_api_value_totals(
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<Vec<LocalApiValueProvider>, String> {
+    let since = since
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let until = until
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let custom = match (since.as_deref(), until.as_deref()) {
+        (None, None) => None,
+        (Some(since), Some(until)) => Some(parse_api_value_custom_range(
+            since,
+            until,
+            Local::now().date_naive(),
+        )?),
+        _ => {
+            return Err("Custom range needs both a start and end date (YYYY-MM-DD).".to_string());
+        }
+    };
     // A worker panic/cancel must surface as an error, not an empty result —
     // "unavailable" and "genuinely no data" are distinct on this card.
-    tauri::async_runtime::spawn_blocking(|| load_local_api_value_totals(Local::now()))
+    tauri::async_runtime::spawn_blocking(move || load_local_api_value_totals(Local::now(), custom))
         .await
         .map_err(|err| {
             tracing::warn!("Local API-value totals worker failed: {}", err);
@@ -685,7 +769,40 @@ pub async fn get_local_api_value_totals() -> Result<Vec<LocalApiValueProvider>, 
         })
 }
 
-fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvider> {
+/// Parse and validate an inclusive local-calendar custom range.
+/// Returns `(start, end_exclusive)` as UTC midnights for the cost scanner.
+fn parse_api_value_custom_range(
+    since: &str,
+    until: &str,
+    today: NaiveDate,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
+    let start = NaiveDate::parse_from_str(since.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("Start date must be YYYY-MM-DD (got {since:?})."))?;
+    let end_inclusive = NaiveDate::parse_from_str(until.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("End date must be YYYY-MM-DD (got {until:?})."))?;
+    if start > end_inclusive {
+        return Err("Start date must be on or before the end date.".to_string());
+    }
+    if end_inclusive > today {
+        return Err("End date cannot be in the future.".to_string());
+    }
+    let span_days = (end_inclusive - start).num_days() + 1;
+    if span_days > API_VALUE_CUSTOM_MAX_DAYS {
+        return Err(format!(
+            "Custom range can span at most {API_VALUE_CUSTOM_MAX_DAYS} days."
+        ));
+    }
+    // Inclusive end day → [start midnight, day-after-end midnight).
+    Ok((
+        local_midnight_utc(start),
+        local_midnight_utc(end_inclusive + chrono::Duration::days(1)),
+    ))
+}
+
+fn load_local_api_value_totals(
+    now: DateTime<Local>,
+    custom_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<LocalApiValueProvider> {
     let today = now.date_naive();
     let (yesterday_start, yesterday_end) = local_yesterday_window_utc(now);
     // Exact [start, end) windows so thirty-day and prior-thirty stay adjacent
@@ -694,6 +811,14 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
     let thirty_start = local_midnight_utc(today - chrono::Duration::days(29));
     let thirty_end = local_midnight_utc(today + chrono::Duration::days(1));
     let prior_start = local_midnight_utc(today - chrono::Duration::days(59));
+    let scan_days = custom_range
+        .map(|(start, _)| {
+            let start_date = start.with_timezone(&Local).date_naive();
+            let days = (today - start_date).num_days().max(0) as u32 + 1;
+            days.max(API_VALUE_DEFAULT_SCAN_DAYS)
+                .min(API_VALUE_CUSTOM_MAX_DAYS as u32)
+        })
+        .unwrap_or(API_VALUE_DEFAULT_SCAN_DAYS);
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
@@ -714,6 +839,13 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                     ends_at: thirty_start,
                 },
             ];
+            if let Some((starts_at, ends_at)) = custom_range {
+                windows.push(CurrentUsageWindow {
+                    id: "custom".to_string(),
+                    starts_at,
+                    ends_at,
+                });
+            }
             // One window per local calendar day for the seven-day trend.
             for offset in 0..7i64 {
                 let date = today - chrono::Duration::days(offset);
@@ -723,7 +855,7 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                     ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
                 });
             }
-            let report = get_cost_usage_report_with_windows(provider_id, 60, &windows)?;
+            let report = get_cost_usage_report_with_windows(provider_id, scan_days, &windows)?;
             let yesterday = report
                 .current_windows
                 .get("yesterday")
@@ -739,6 +871,27 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                 .get("prior_thirty")
                 .cloned()
                 .unwrap_or_default();
+            let daily_series = daily_series_from_report(&report.daily_costs);
+            let custom = custom_range.map(|(starts_at, ends_at)| {
+                let start_day = starts_at.with_timezone(&Local).date_naive();
+                // ends_at is exclusive midnight; convert to inclusive local day.
+                let end_day =
+                    ends_at.with_timezone(&Local).date_naive() - chrono::Duration::days(1);
+                let from_window = report
+                    .current_windows
+                    .get("custom")
+                    .cloned()
+                    .map(|summary| api_value_period(provider_id, &summary))
+                    .unwrap_or_else(empty_api_value_period);
+                let from_daily = period_from_daily_series(&daily_series, start_day, end_day);
+                // Prefer the richer window (tokens + dollars). If the window is
+                // empty but daily dollars exist, use daily so Custom never lies.
+                if from_window.has_data {
+                    from_window
+                } else {
+                    from_daily
+                }
+            });
             // Oldest first so the trend reads left to right, ending today.
             let last_seven_days = (0..7i64)
                 .rev()
@@ -763,16 +916,80 @@ fn load_local_api_value_totals(now: DateTime<Local>) -> Vec<LocalApiValueProvide
                 yesterday: api_value_period(provider_id, &yesterday),
                 thirty_days: api_value_period(provider_id, &thirty_days),
                 prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
+                custom,
                 last_seven_days,
+                daily_series,
             };
             // Omit providers with no source data in any period.
             (provider.today.has_data
                 || provider.yesterday.has_data
                 || provider.thirty_days.has_data
-                || provider.prior_thirty_days.has_data)
-                .then_some(provider)
+                || provider.prior_thirty_days.has_data
+                || provider.custom.as_ref().is_some_and(|p| p.has_data)
+                || provider
+                    .daily_series
+                    .iter()
+                    .any(|day| day.api_value_usd > 0.0))
+            .then_some(provider)
         })
         .collect()
+}
+
+fn empty_api_value_period() -> LocalApiValuePeriod {
+    LocalApiValuePeriod {
+        api_value_usd: 0.0,
+        tokens: 0,
+        priced_tokens: 0,
+        total_tokens: 0,
+        has_data: false,
+    }
+}
+
+fn daily_series_from_report(daily_costs: &[(String, f64)]) -> Vec<LocalApiValueDay> {
+    let mut days: Vec<LocalApiValueDay> = daily_costs
+        .iter()
+        .map(|(date, api_value_usd)| LocalApiValueDay {
+            date: date.clone(),
+            api_value_usd: *api_value_usd,
+            tokens: 0,
+        })
+        .collect();
+    days.sort_by(|left, right| left.date.cmp(&right.date));
+    days
+}
+
+/// Inclusive local-calendar sum from the daily dollar series.
+fn period_from_daily_series(
+    daily_series: &[LocalApiValueDay],
+    start: NaiveDate,
+    end_inclusive: NaiveDate,
+) -> LocalApiValuePeriod {
+    if start > end_inclusive {
+        return empty_api_value_period();
+    }
+    let mut api_value_usd = 0.0;
+    let mut tokens: u64 = 0;
+    let mut has_data = false;
+    for day in daily_series {
+        let Ok(date) = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") else {
+            continue;
+        };
+        if date < start || date > end_inclusive {
+            continue;
+        }
+        if day.api_value_usd > 0.0 || day.tokens > 0 {
+            has_data = true;
+        }
+        api_value_usd += day.api_value_usd;
+        tokens = tokens.saturating_add(day.tokens);
+    }
+    LocalApiValuePeriod {
+        api_value_usd,
+        tokens,
+        priced_tokens: tokens,
+        total_tokens: tokens,
+        has_data: has_data || api_value_usd > 0.0,
+    }
 }
 
 /// One model's local Cursor activity. This is code-contribution activity from
@@ -1005,11 +1222,16 @@ fn local_usage_summary_from_report(
     }
 
     let lang = locale::current_language();
+    let (seven_day_priced_tokens, seven_day_total_model_tokens) =
+        pricing_coverage_tokens(seven_day_summary);
+    let (thirty_day_priced_tokens, thirty_day_total_model_tokens) =
+        pricing_coverage_tokens(&report.thirty_days);
     let current_windows = usage_window_requests
         .iter()
         .filter_map(|window| {
             let summary = report.current_windows.get(&window.id)?;
             let token_breakdown = token_breakdown(provider_id, summary);
+            let (priced_tokens, total_model_tokens) = pricing_coverage_tokens(summary);
             Some(LocalUsageWindowSummary {
                 id: window.id.clone(),
                 label: window.label.clone(),
@@ -1018,6 +1240,8 @@ fn local_usage_summary_from_report(
                 tokens: token_breakdown.processed_tokens,
                 token_breakdown,
                 cost: non_zero_f64(summary.total_cost_usd),
+                priced_tokens,
+                total_model_tokens,
             })
         })
         .collect();
@@ -1049,9 +1273,13 @@ fn local_usage_summary_from_report(
         seven_day_cost: non_zero_f64(seven_day_summary.total_cost_usd),
         seven_day_tokens: non_zero_u64(seven_day_tokens),
         seven_day_token_breakdown: Some(seven_day_breakdown),
+        seven_day_priced_tokens,
+        seven_day_total_model_tokens,
         thirty_day_cost: non_zero_f64(report.thirty_days.total_cost_usd),
         thirty_day_tokens: non_zero_u64(thirty_day_tokens),
         thirty_day_token_breakdown: Some(thirty_day_breakdown),
+        thirty_day_priced_tokens,
+        thirty_day_total_model_tokens,
         current_windows,
         comparison_periods,
         latest_tokens: non_zero_u64(last_session_tokens),
@@ -1128,6 +1356,8 @@ fn load_local_usage_summary_with_unknown_models(
     }
 
     let lang = locale::current_language();
+    let (thirty_day_priced_tokens, thirty_day_total_model_tokens) =
+        pricing_coverage_tokens(&thirty_day);
     (
         Some(ProviderLocalUsageSummary {
             today_cost: non_zero_f64(today.total_cost_usd),
@@ -1137,9 +1367,13 @@ fn load_local_usage_summary_with_unknown_models(
             seven_day_cost: None,
             seven_day_tokens: None,
             seven_day_token_breakdown: None,
+            seven_day_priced_tokens: 0,
+            seven_day_total_model_tokens: 0,
             thirty_day_cost: non_zero_f64(thirty_day.total_cost_usd),
             thirty_day_tokens: non_zero_u64(thirty_day_tokens),
             thirty_day_token_breakdown: Some(thirty_day_breakdown),
+            thirty_day_priced_tokens,
+            thirty_day_total_model_tokens,
             current_windows: Vec::new(),
             comparison_periods: Vec::new(),
             latest_tokens: non_zero_u64(latest_tokens),
@@ -1331,6 +1565,7 @@ fn current_unix_ms() -> i64 {
 fn localized_estimate_note(provider_id: &str, lang: codexbar::settings::Language) -> String {
     match provider_id {
         "claude" => locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogsClaude),
+        "grok" => locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogsGrok),
         _ => locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogs),
     }
 }
@@ -1344,6 +1579,11 @@ fn scan_local_cost(
     match provider_id {
         "codex" => Some(scanner.scan_codex_with_cancel(cancel)),
         "claude" => Some(scanner.scan_claude_with_cancel(cancel)),
+        // Grok has no cancel-aware summary path yet; use the full report scan.
+        "grok" => {
+            let _ = (scanner, cancel);
+            codexbar::cost_scanner::get_cost_usage_report("grok", days).map(|r| r.thirty_days)
+        }
         _ => None,
     }
 }
@@ -1356,6 +1596,7 @@ fn token_breakdown(provider_id: &str, summary: &CostSummary) -> LocalTokenBreakd
         output_tokens: normalized.output_tokens,
         cache_read_tokens: normalized.cache_read_tokens,
         cache_write_tokens: normalized.cache_write_tokens,
+        reasoning_tokens: summary.reasoning_tokens,
     }
 }
 
@@ -1552,10 +1793,11 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
         LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry, effort_breakdown,
-        format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
-        local_yesterday_window_utc, localized_estimate_note, model_breakdown, project_breakdown,
-        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry, daily_series_from_report,
+        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        local_yesterday_window_utc, localized_estimate_note, model_breakdown,
+        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
+        project_breakdown, spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -1599,9 +1841,13 @@ mod tests {
             seven_day_cost: Some(1.5),
             seven_day_tokens: Some(200),
             seven_day_token_breakdown: None,
+            seven_day_priced_tokens: 200,
+            seven_day_total_model_tokens: 200,
             thirty_day_cost: Some(2.0),
             thirty_day_tokens: Some(300),
             thirty_day_token_breakdown: None,
+            thirty_day_priced_tokens: 300,
+            thirty_day_total_model_tokens: 300,
             current_windows: Vec::new(),
             comparison_periods: Vec::new(),
             latest_tokens: Some(40),
@@ -1933,6 +2179,95 @@ mod tests {
         assert_eq!(period.total_tokens, 500); // model tokens: 400 priced + 100 unpriced
         assert_eq!(period.priced_tokens, 400);
         assert!(period.has_data);
+
+        // SOU-302: the same coverage feeds reset-window / calendar period cards.
+        assert_eq!(pricing_coverage_tokens(&summary), (400, 500));
+    }
+
+    #[test]
+    fn pricing_coverage_tokens_is_full_when_every_model_is_priced() {
+        let mut summary = CostSummary {
+            total_cost_usd: 2.0,
+            ..Default::default()
+        };
+        summary.by_model_tokens.insert(
+            "gpt-5.6-sol".to_string(),
+            ModelTokenCounts {
+                input_tokens: 200,
+                output_tokens: 50,
+                ..Default::default()
+            },
+        );
+        assert_eq!(pricing_coverage_tokens(&summary), (250, 250));
+    }
+
+    #[test]
+    fn local_usage_window_summary_carries_pricing_coverage() {
+        let mut window_summary = CostSummary {
+            total_cost_usd: 8.0,
+            sessions_count: 1,
+            ..Default::default()
+        };
+        window_summary
+            .by_model
+            .insert("gpt-5.6-sol".to_string(), 8.0);
+        window_summary.by_model_tokens.insert(
+            "gpt-5.6-sol".to_string(),
+            ModelTokenCounts {
+                input_tokens: 600,
+                output_tokens: 200,
+                ..Default::default()
+            },
+        );
+        window_summary.by_model_tokens.insert(
+            "gpt-mystery".to_string(),
+            ModelTokenCounts {
+                input_tokens: 200,
+                output_tokens: 0,
+                ..Default::default()
+            },
+        );
+        window_summary
+            .unknown_models
+            .insert("gpt-mystery".to_string());
+
+        let mut report = CostUsageReport {
+            daily_costs: Vec::new(),
+            thirty_days: window_summary.clone(),
+            seven_days: window_summary.clone(),
+            today: CostSummary::default(),
+            latest_session: None,
+            current_windows: Default::default(),
+        };
+        report
+            .current_windows
+            .insert("weekly".to_string(), window_summary);
+
+        let summary = local_usage_summary_from_report(
+            "codex",
+            &report,
+            &[LocalUsageWindowRequest {
+                id: "weekly".to_string(),
+                label: "Weekly".to_string(),
+                starts_at: "2026-07-01T00:00:00Z".to_string(),
+                ends_at: "2026-07-08T00:00:00Z".to_string(),
+            }],
+            &[],
+        )
+        .expect("summary");
+
+        let window = summary
+            .current_windows
+            .iter()
+            .find(|row| row.id == "weekly")
+            .expect("weekly window");
+        assert_eq!(window.cost, Some(8.0));
+        assert_eq!(window.priced_tokens, 800);
+        assert_eq!(window.total_model_tokens, 1000);
+        assert_eq!(summary.seven_day_priced_tokens, 800);
+        assert_eq!(summary.seven_day_total_model_tokens, 1000);
+        assert_eq!(summary.thirty_day_priced_tokens, 800);
+        assert_eq!(summary.thirty_day_total_model_tokens, 1000);
     }
 
     #[test]
@@ -2206,6 +2541,7 @@ mod tests {
                 output_tokens: 14_000_000,
                 cache_read_tokens: 4_810_000_000,
                 cache_write_tokens: 120_000_000,
+                reasoning_tokens: 0,
             }
         );
     }
@@ -2228,6 +2564,30 @@ mod tests {
                 output_tokens: 2_000_000,
                 cache_read_tokens: 808_000_000,
                 cache_write_tokens: 0,
+                reasoning_tokens: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn grok_token_breakdown_folds_cache_and_surfaces_reasoning() {
+        let summary = CostSummary {
+            input_tokens: 1000,
+            output_tokens: 100,
+            cached_tokens: 800,
+            cache_read_tokens: 800,
+            reasoning_tokens: 40,
+            ..CostSummary::default()
+        };
+        assert_eq!(
+            token_breakdown("grok", &summary),
+            LocalTokenBreakdown {
+                processed_tokens: 1100, // fresh 200 + output 100 + cache 800
+                fresh_input_tokens: 200,
+                output_tokens: 100,
+                cache_read_tokens: 800,
+                cache_write_tokens: 0,
+                reasoning_tokens: 40,
             }
         );
     }
@@ -2242,5 +2602,57 @@ mod tests {
             localized_estimate_note("claude", Language::English),
             "API-equivalent estimate from local Claude logs; not subscription spend"
         );
+    }
+    #[test]
+    fn parse_api_value_custom_range_accepts_inclusive_local_days() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 28).unwrap();
+        let (start, end) =
+            parse_api_value_custom_range("2026-07-01", "2026-07-07", today).expect("range");
+        assert_eq!(
+            start.with_timezone(&Local).date_naive(),
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+        );
+        // Exclusive end is the day after the inclusive until date.
+        assert_eq!(
+            end.with_timezone(&Local).date_naive(),
+            NaiveDate::from_ymd_opt(2026, 7, 8).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_api_value_custom_range_rejects_inverted_and_future() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 28).unwrap();
+        assert!(parse_api_value_custom_range("2026-07-10", "2026-07-01", today).is_err());
+        assert!(parse_api_value_custom_range("2026-07-01", "2026-08-01", today).is_err());
+        assert!(parse_api_value_custom_range("not-a-date", "2026-07-01", today).is_err());
+    }
+
+    #[test]
+    fn period_from_daily_series_sums_inclusive_range_only() {
+        let series = daily_series_from_report(&[
+            ("2026-07-01".into(), 10.0),
+            ("2026-07-02".into(), 5.0),
+            ("2026-07-15".into(), 1.0),
+            ("2026-07-28".into(), 99.0),
+        ]);
+        let period = period_from_daily_series(
+            &series,
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        );
+        assert!(period.has_data);
+        assert!((period.api_value_usd - 16.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn period_from_daily_series_empty_when_range_misses() {
+        let series = daily_series_from_report(&[("2026-06-01".into(), 10.0)]);
+        let period = period_from_daily_series(
+            &series,
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+        );
+        assert!(!period.has_data);
+        assert_eq!(period.api_value_usd, 0.0);
     }
 }

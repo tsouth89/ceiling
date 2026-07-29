@@ -17,7 +17,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $resolvedAssetsDir = (Resolve-Path -LiteralPath $AssetsDir).Path
-$installerName = "Ceiling-$Version-Setup.exe"
+$installerName = "Ceiling-$Version-Store-Setup.exe"
 $hashName = "$installerName.sha256"
 $installerPath = Join-Path $resolvedAssetsDir $installerName
 $hashPath = Join-Path $resolvedAssetsDir $hashName
@@ -39,6 +39,67 @@ if ($localHash -ne $expectedHash) {
 }
 
 $objectPrefix = "releases/v$Version"
+$installerUrl = "$($DownloadOrigin.TrimEnd('/'))/$objectPrefix/$installerName"
+$hashUrl = "$installerUrl.sha256"
+
+function Get-PublicObject {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $status = & curl.exe `
+        --silent `
+        --show-error `
+        --location `
+        --max-redirs 0 `
+        --connect-timeout 10 `
+        --max-time 180 `
+        --retry 3 `
+        --retry-delay 5 `
+        --retry-connrefused `
+        --output $Destination `
+        --write-out "%{http_code}" `
+        $Url
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not check existing immutable object $Url (curl exit $LASTEXITCODE)."
+    }
+
+    return [int]$status
+}
+
+$existingInstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) "ceiling-store-existing-$Version-$([guid]::NewGuid().ToString('N')).exe"
+$existingHashPath = "$existingInstallerPath.sha256"
+$skipUpload = $false
+try {
+    $installerStatus = Get-PublicObject -Url $installerUrl -Destination $existingInstallerPath
+    if ($installerStatus -eq 200) {
+        $existingHash = (Get-FileHash -LiteralPath $existingInstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($existingHash -ne $expectedHash) {
+            throw "Refusing to overwrite immutable release object $installerUrl. Existing SHA-256 is $existingHash; expected $expectedHash."
+        }
+
+        $hashStatus = Get-PublicObject -Url $hashUrl -Destination $existingHashPath
+        if ($hashStatus -ne 200) {
+            throw "Installer already exists, but its immutable checksum sidecar returned HTTP ${hashStatus}: $hashUrl"
+        }
+        $existingHashText = Get-Content -LiteralPath $existingHashPath -Raw
+        if ($existingHashText -notmatch '(?i)\b([0-9a-f]{64})\b' -or
+            $Matches[1].ToLowerInvariant() -ne $expectedHash) {
+            throw "Installer already exists, but its immutable checksum sidecar does not match: $hashUrl"
+        }
+
+        Write-Host "Immutable release objects already have the expected bytes; skipping upload."
+        $skipUpload = $true
+    } elseif ($installerStatus -ne 404) {
+        throw "Unexpected HTTP $installerStatus while checking immutable release object $installerUrl"
+    }
+} finally {
+    Remove-Item -LiteralPath $existingInstallerPath, $existingHashPath -Force -ErrorAction SilentlyContinue
+}
 
 function Publish-R2Object {
     param(
@@ -65,18 +126,19 @@ function Publish-R2Object {
     }
 }
 
-Publish-R2Object `
-    -Path $installerPath `
-    -ContentType "application/vnd.microsoft.portable-executable" `
-    -CacheControl "public, max-age=31536000, immutable"
-Publish-R2Object `
-    -Path $hashPath `
-    -ContentType "text/plain; charset=utf-8" `
-    -CacheControl "public, max-age=31536000, immutable"
+if (-not $skipUpload) {
+    Publish-R2Object `
+        -Path $installerPath `
+        -ContentType "application/vnd.microsoft.portable-executable" `
+        -CacheControl "public, max-age=31536000, immutable"
+    Publish-R2Object `
+        -Path $hashPath `
+        -ContentType "text/plain; charset=utf-8" `
+        -CacheControl "public, max-age=31536000, immutable"
+}
 
-$installerUrl = "$($DownloadOrigin.TrimEnd('/'))/$objectPrefix/$installerName"
 if ($SkipPublicVerification) {
-    Write-Output "Uploaded Microsoft Store installer: $installerUrl"
+    Write-Output "Microsoft Store installer is available at: $installerUrl"
     return
 }
 

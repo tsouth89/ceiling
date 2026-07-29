@@ -3,6 +3,7 @@ import {
   exportCostCsv,
   getCursorModelActivity,
   getProviderChartData,
+  getQuotaRunEfficiency,
   getSettingsSnapshot,
 } from "../../../../../lib/tauri";
 import {
@@ -19,6 +20,7 @@ import type {
   LocalTokenBreakdown,
   ProviderChartData,
   ProviderUsageSnapshot,
+  QuotaRunEfficiency,
   SettingsSnapshot,
 } from "../../../../../types/bridge";
 import type { useLocale } from "../../../../../hooks/useLocale";
@@ -87,12 +89,17 @@ function TokenMix({ breakdown }: { breakdown: LocalTokenBreakdown }) {
   const cacheShare = breakdown.processedTokens > 0
     ? (cachedTokens / breakdown.processedTokens) * 100
     : 0;
-  const items = [
+  const items: Array<[string, number]> = [
     ["Fresh input", breakdown.freshInputTokens],
     ["Output", breakdown.outputTokens],
     ["Cache read", breakdown.cacheReadTokens],
     ["Cache write", breakdown.cacheWriteTokens],
-  ] as const;
+  ];
+  // Reasoning is often already inside output; show it as a separate metric,
+  // not as an extra bucket that would inflate processed totals.
+  if ((breakdown.reasoningTokens ?? 0) > 0) {
+    items.push(["Reasoning", breakdown.reasoningTokens ?? 0]);
+  }
   return (
     <div className="usage-token-mix" aria-label="Last 7 days token breakdown">
       <div className="usage-token-mix__header">
@@ -118,6 +125,88 @@ function formatUsd(value: number): string {
     style: "currency",
     currency: "USD",
   }).format(value);
+}
+
+/**
+ * Pricing-coverage note for a period card (SOU-302).
+ *
+ * Matches the Estimated API value card: only speak when some model tokens are
+ * unpriced, so fully-priced windows stay quiet. Dollars stay the priced subset.
+ */
+function pricingCoverageNote(
+  pricedTokens: number | null | undefined,
+  totalModelTokens: number | null | undefined,
+): string | null {
+  const total = totalModelTokens ?? 0;
+  const priced = pricedTokens ?? 0;
+  if (total <= 0 || priced >= total) return null;
+  const percent = Math.round((priced / total) * 100);
+  return `${percent}% of tokens priced`;
+}
+
+function formatCompactTokens(value: number): string {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+function formatDeltaPercent(value: number): string {
+  const pct = Math.round(value * 100);
+  if (pct > 0) return `+${pct}% vs prior run`;
+  if (pct < 0) return `${pct}% vs prior run`;
+  return "Same as prior run";
+}
+
+function QuotaEfficiencyCard({ rows }: { rows: QuotaRunEfficiency[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="quota-efficiency" aria-label="Quota run efficiency">
+      <div className="quota-efficiency__header">
+        <span className="quota-efficiency__title">Quota run efficiency</span>
+        <span className="quota-efficiency__subtitle">Local observation · not a published allowance</span>
+      </div>
+      <div className="quota-efficiency__rows">
+        {rows.map((row) => (
+          <div className="quota-efficiency__row" key={row.run.id}>
+            <div className="quota-efficiency__row-head">
+              <strong>{row.run.windowLabel}</strong>
+              {!row.run.complete && <span className="quota-efficiency__badge">Partial</span>}
+            </div>
+            <div className="quota-efficiency__metrics">
+              {row.tokensPerPercent != null && (
+                <span>
+                  <small>Tokens / 1%</small>
+                  <strong>{formatCompactTokens(row.tokensPerPercent)}</strong>
+                </span>
+              )}
+              {row.cacheReadPercent != null && (
+                <span>
+                  <small>Cache read</small>
+                  <strong>{row.cacheReadPercent.toFixed(0)}%</strong>
+                </span>
+              )}
+              {row.projectedTokensAt100 != null && (
+                <span>
+                  <small>Projected @ 100%</small>
+                  <strong>{formatCompactTokens(row.projectedTokensAt100)}</strong>
+                </span>
+              )}
+              {row.vsPreviousTokensPerPercent != null && (
+                <span>
+                  <small>Run-over-run</small>
+                  <strong data-delta={row.vsPreviousTokensPerPercent < 0 ? "down" : "up"}>
+                    {formatDeltaPercent(row.vsPreviousTokensPerPercent)}
+                  </strong>
+                </span>
+              )}
+            </div>
+            <small className="quota-efficiency__note">{row.note}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Backend bucket for records whose rollout never declared a plan. */
@@ -387,12 +476,33 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
   const [enriching, setEnriching] = useState(false);
   const [failed, setFailed] = useState(false);
   const [cursorActivity, setCursorActivity] = useState<CursorModelActivity[] | null>(null);
+  const [efficiency, setEfficiency] = useState<QuotaRunEfficiency[]>([]);
   const usageWindows = providerLocalUsageWindows(providerSnapshot);
   const sourceLabel = providerSnapshot?.sourceLabel;
   const resetBoundaryUnavailable = providerHasUnavailableResetBoundary(providerSnapshot);
   const usageWindowsKey = usageWindows
     .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
     .join("|");
+
+  useEffect(() => {
+    let cancelled = false;
+    setEfficiency([]);
+    if (!providerSupportsChartData(providerId)) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    getQuotaRunEfficiency(providerId, accountEmail)
+      .then((rows) => {
+        if (!cancelled) setEfficiency(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setEfficiency([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, accountEmail]);
 
   useEffect(() => {
     let cancelled = false;
@@ -404,7 +514,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     setEnriching(
       cached !== null &&
       !cached.localUsage &&
-      ["codex", "claude"].includes(providerId.toLowerCase()),
+      ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
     );
     setFailed(false);
     if (!providerSupportsChartData(providerId)) {
@@ -425,7 +535,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           chartDataCache.set(cacheKey, d);
           setData(d);
           setEnriching(
-            !d.localUsage && ["codex", "claude"].includes(providerId.toLowerCase()),
+            !d.localUsage && ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
           );
           setLoading(false);
         }
@@ -485,9 +595,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
     if (
       !data ||
       data.localUsage ||
-      !["codex", "claude"].includes(providerId.toLowerCase())
+      !["codex", "claude", "grok"].includes(providerId.toLowerCase())
     ) {
-      if (data?.localUsage || !["codex", "claude"].includes(providerId.toLowerCase())) {
+      if (data?.localUsage || !["codex", "claude", "grok"].includes(providerId.toLowerCase())) {
         setEnriching(false);
       }
       return;
@@ -608,6 +718,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           label: window.label,
           tokens: window.tokens,
           cost: window.cost ?? null,
+          pricingNote: pricingCoverageNote(
+            window.pricedTokens,
+            window.totalModelTokens,
+          ),
           detail: `Since ${formatWindowStart(window.startsAt)}`,
           detailSecondary: `Resets ${formatWindowReset(window.endsAt)}`,
           current: true,
@@ -616,6 +730,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           label: "Last 7 days",
           tokens: data.localUsage.sevenDayTokens,
           cost: data.localUsage.sevenDayCost ?? null,
+          pricingNote: pricingCoverageNote(
+            data.localUsage.sevenDayPricedTokens,
+            data.localUsage.sevenDayTotalModelTokens,
+          ),
           detail: "Processed tokens · calendar",
           detailSecondary: null as string | null,
           current: false,
@@ -624,6 +742,10 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
           label: "Last 30 days",
           tokens: data.localUsage.thirtyDayTokens,
           cost: data.localUsage.thirtyDayCost ?? null,
+          pricingNote: pricingCoverageNote(
+            data.localUsage.thirtyDayPricedTokens,
+            data.localUsage.thirtyDayTotalModelTokens,
+          ),
           detail: "Processed tokens · calendar",
           detailSecondary: null as string | null,
           current: false,
@@ -660,6 +782,9 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
               {period.cost != null && (
                 <span className="usage-period__money">{formatUsd(period.cost)}</span>
               )}
+              {period.pricingNote && (
+                <span className="usage-period__pricing">{period.pricingNote}</span>
+              )}
               <small>
                 {period.detail}
                 {period.detailSecondary && (
@@ -682,6 +807,7 @@ export function ChartsSection({ providerId, accountEmail, providerSnapshot, t }:
             )}
             <span>Processed includes fresh input, output, cache reads, and cache writes.</span>
           </div>
+          <QuotaEfficiencyCard rows={efficiency} />
           {/* Local logs carry no account identity, so these totals cover every
               account that has used this machine. Disclose that rather than let
               the figures read as belonging to the signed-in account. */}

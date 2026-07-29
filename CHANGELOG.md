@@ -1,5 +1,130 @@
 # Changelog
 
+## Unreleased
+
+## [Ceiling] 1.5.16 - 2026-07-28
+
+Hotfix: Estimated API value **Custom** date range showed no data even when local logs had spend for that window.
+
+### Fixed
+- Custom ranges fall back to the scanned daily dollar series when the dedicated custom window is empty (#173)
+- Custom range UI keeps the ring layout while loading and shows a cleaner date bar (#173)
+- Codex local scan no longer drops window totals when a daily bucket key is missing (#173)
+
+## [Ceiling] 1.5.15 - 2026-07-28
+
+Patch for reported Antigravity quota mismatch, Claude sign-in vs charts confusion, and custom chart date ranges.
+
+### Fixed
+- Antigravity capacity uses `RetrieveUserQuotaSummary` shared model-group weekly / five-hour pools (matches Settings to Models) instead of only per-model `remainingFraction`. (#163, #167)
+- Claude capacity errors no longer collapse multi-source Auto failures into an OAuth-only line; copy points at CLI `claude` login and notes Charts can still show local session spend without live capacity. (#165, #166)
+
+### Added
+- Estimated API value **Custom** date range (inclusive local From/To, up to 366 days) alongside Today / Yesterday / 30 days. (#164, #168)
+
+## [Ceiling] 1.5.14 - 2026-07-26
+
+Patch so Weekly window API-equivalent dollars match priority/fast pricing after 1.5.13.
+
+### Fixed
+- Invalidate persisted chart cache after Codex priority/fast pricing so the Weekly window card no longer keeps pre-2x standard dollars while the API-value ring shows the correct doubled amount. (#161)
+
+## [Ceiling] 1.5.13 - 2026-07-26
+
+Patch for local cost accuracy vs ccusage (Codex priority/fast tiers and Claude day windows).
+
+### Fixed
+- Codex local cost now matches ccusage speed tiers: `service_tier = "priority"` in `~/.codex/config.toml` prices at the fast (2×) rate, with `codexbar cost --codex-speed auto|standard|fast` and JSON `cost.codex_speed` / `cost.codex_service_tier` for fair A/B compares. (#158)
+- Claude local cost `--days N` uses the same inclusive local calendar window as Codex (and ccusage), instead of a rolling UTC duration that labeled N+1 calendar days. (#158)
+
+## [Ceiling] 1.5.12 - 2026-07-26
+
+Patch release for reported Antigravity and multi-account bugs, plus a taskbar strip hygiene fix for providers that are enabled but not yet ready.
+
+### Fixed
+- Detect Antigravity on Windows when the language server uses `--https_server_port 0` and omits `--extension_server_port` (modern Antigravity 2.3+). (#153)
+- Detect Antigravity **CLI** (`agy` / `antigravity-cli`) as well as the IDE language server. The CLI hosts the same local quota API without a CSRF token; Ceiling now probes it when `agy` is running and signed in.
+- Drop ambient ghost Codex/Claude readings after Accounts registers the signed-in directory, so Overview no longer shows two identical cards for one seat. (#155)
+- Keep unauthenticated / not-installed providers off the always-visible taskbar strip (they still show on Overview and Settings for setup). Antigravity error placeholders no longer surface as a blank "Claude" pill.
+- Give Gemini (and Antigravity) a real native taskbar glyph instead of the hollow-ring fallback, and keep strip SVG marks brand-colored so first-class seats stay identifiable.
+
+## [Ceiling] 1.5.11 - 2026-07-25
+
+Signed draft of everything since public **1.5.6**: multi-account strip controls, Charts trust/efficiency, strip density polish, flyout alignment, constraining-window taskbar meters, and Grok API-equivalent dollar charts. Supersedes draft tags **1.5.7**–**1.5.10**.
+
+### Added
+- Price Grok Charts from local session `costUsdTicks` (same API-equivalent Cost as Grok Build `/usage`), including the Estimated API value card. Token/cache/effort/project rollups still apply; partial sessions without ticks stay unpriced with coverage disclosure.
+
+### Fixed
+- Native taskbar tiles use the constraining usage window (session vs weekly) instead of always showing the primary window, so a maxed weekly pool no longer reads as a free 5h bar.
+- Taskbar flyout **On strip** row no longer shifts left of the other providers. The strip seat keeps the brand tint without rewriting margin/padding, so icons and meters share one left edge.
+
+## [Ceiling] 1.5.10 - 2026-07-25
+
+Draft-only tag; use **1.5.11** for installs. On-strip flyout alignment (included in 1.5.11).
+
+## [Ceiling] 1.5.9 - 2026-07-25
+
+Tag exists but does not satisfy release validation (not on protected main). Use **1.5.11** for installs.
+
+## [Ceiling] 1.5.8 - 2026-07-25
+
+Draft-only tag; use **1.5.11** for installs. Strip tile density and flyout chip hierarchy (included in 1.5.11).
+
+### Fixed
+- Native strip detail line is window label only (Weekly / 5h) plus optional reset. Long account names no longer run into the next provider tile; seat identity stays in the flyout (**On strip** + account line).
+- Flyout **On strip** chip is quieter and smaller; banked-resets chip is slightly larger so the hierarchy is clear.
+
+## [Ceiling] 1.5.7 - 2026-07-25
+
+Draft-only tag; use **1.5.11** for installs. Multi-account strip controls, Charts trust, and quota-run efficiency (included in 1.5.11).
+
+### Added
+- Pin which multi-account seat drives each taskbar strip tile (Settings → Taskbar). The strip no longer always picks the hottest account when you care about a specific Codex or Claude seat.
+- Mark the strip account in the taskbar flyout (**On strip**) and list it first within each multi-account provider.
+- Persist completed quota runs when a reset is confirmed, and show a **Quota run efficiency** card on Charts: tokens per 1% used, cache-read share during that run, projected tokens at 100% (once the run has enough peak), and run-over-run change vs the previous complete run on the same window. Labeled as local observation, not a published allowance.
+
+### Fixed
+- Include multi-project and partial Grok local session usage on Charts so toolport/multi-cwd work is not missing from project rollups.
+- Show **N% of tokens priced** on reset-window and calendar period cards when unpriced models shrink the dollar total, matching the Estimated API value card. Fully priced windows stay quiet.
+
+## [Ceiling] 1.5.6 - 2026-07-24
+
+Signed release of Grok charts polish since 1.5.5.
+
+### Added
+- Scan local Grok Build sessions under `~/.grok/sessions` for Charts: tokens over time, cache vs fresh input, reasoning tokens, reasoning-effort tiers, and project rollups (unpriced SuperGrok pool usage; no fabricated API dollars).
+
+### Fixed
+- Label Grok's weekly pool as Weekly on the taskbar strip and popout instead of Extra credits.
+
+## [Ceiling] 1.5.5 - 2026-07-24
+
+Installable signed draft of the full first-class Grok story. Supersedes the unpublished 1.5.3 draft and the mis-pointed 1.5.4 tag (same product content, tagged from protected `main`).
+
+### Added
+- Treat Grok as a first-class provider alongside Claude, Codex, and Cursor: default-enabled, early catalog order, dedicated data-source copy, and enforcement tracking for the weekly pool.
+- Show Grok on Charts (sampled weekly-pool history), raise the native taskbar strip to five providers so Grok can sit after Cursor, and add Settings → Display controls to pick and reorder strip providers.
+- Use the official Grok monogram for tray, overview, providers, charts, and the taskbar strip.
+- Refresh expired Grok OIDC access tokens from `~/.grok/auth.json` via auth.x.ai (same silent refresh pattern as Claude).
+
+### Fixed
+- Make Grok usage tracking work with a normal `grok login`, the same way Claude and Codex pick up their local CLI sign-in. Empty cookie settings no longer force a "CLI not supported" path, and SuperGrok Heavy weekly pool responses that omit a zero percent reading show 0% with the correct weekly reset instead of failing to sync. The plan name (for example SuperGrok Heavy) is read from your Grok account when available.
+- Prefer `grok login` credentials over browser cookies, and surface clear re-login guidance when Grok auth fails.
+
+## [Ceiling] 1.5.4 - 2026-07-24
+
+Tag exists but does not satisfy release validation (pre-squash tip). Use **1.5.5** for installs.
+
+## [Ceiling] 1.5.3 - 2026-07-24
+
+Draft-only tag; use 1.5.5 for installs.
+
+## [Ceiling] 1.5.2 - 2026-07-23
+
+### Fixed
+- Add a signed Microsoft Store installer that bundles the full Microsoft Edge WebView2 Evergreen Standalone Installer and needs no runtime download during setup. The regular smaller installer remains available for GitHub and Winget.
+
 ## [Ceiling] 1.5.1 - 2026-07-23
 
 Supersedes 1.5.0, which was never released.
@@ -1173,3 +1298,6 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
+
+
+

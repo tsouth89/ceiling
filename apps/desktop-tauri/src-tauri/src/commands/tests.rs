@@ -7,8 +7,8 @@ use super::{
 use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 use codexbar::core::{
-    FetchContext, ProviderAccountData, ProviderFetchResult, ProviderId, SourceMode, TokenAccount,
-    instantiate_provider,
+    ConfiguredAccounts, FetchContext, ProviderAccountData, ProviderFetchResult, ProviderId,
+    SourceMode, TokenAccount, instantiate_provider,
 };
 use codexbar::host::session::launch_block_reason;
 use codexbar::settings::{ApiKeys, Language, ManualCookies, Settings};
@@ -313,6 +313,47 @@ fn fetch_context_claude_uses_oauth_without_manual_cookie() {
     );
 
     assert_eq!(ctx.source_mode, SourceMode::OAuth);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
+fn fetch_context_grok_uses_auto_without_manual_cookie() {
+    let settings = Settings::default();
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    // Default cookie source is Manual with no paste; Grok should fall back to
+    // local ~/.grok/auth.json via Auto (not Cli-only, which previously failed).
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
+fn fetch_context_grok_cookie_off_uses_auto() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Grok, "off");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
     assert!(ctx.manual_cookie_header.is_none());
 }
 
@@ -818,6 +859,124 @@ fn provider_cache_still_replaces_the_same_account() {
     assert_eq!(cache[0].error.as_deref(), Some("new"));
 }
 
+/// The reported failure (#155): first refresh follows the CLI (`account_id =
+/// None`). Opening Accounts registers the ambient directory as a real entry,
+/// so the next refresh stamps a UUID. Without pruning, both rows stay in the
+/// cache and the overview shows two identical Codex cards with no way to
+/// remove the ghost (Accounts only lists the registered entry).
+#[test]
+fn pruning_drops_ambient_ghost_after_directory_account_is_registered() {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(0.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "oauth".to_string(),
+    };
+    let mut ambient =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
+    ambient.account_id = None;
+    ambient.account_email = Some("insan@example.com".into());
+
+    let mut registered = ambient.clone();
+    registered.account_id = Some("11111111-2222-3333-4444-555555555555".into());
+    registered.account_label = Some("prolite".into());
+
+    let mut cache = vec![ambient, registered.clone()];
+    let expected: std::collections::HashSet<_> = [(
+        "codex".to_string(),
+        Some("11111111-2222-3333-4444-555555555555".to_string()),
+    )]
+    .into_iter()
+    .collect();
+
+    super::prune_stale_provider_readings(&mut cache, &expected, &[ProviderId::Codex]);
+
+    assert_eq!(cache.len(), 1, "ambient ghost must be dropped");
+    assert_eq!(
+        cache[0].account_id.as_deref(),
+        Some("11111111-2222-3333-4444-555555555555")
+    );
+}
+
+#[test]
+fn pruning_keeps_every_configured_account() {
+    let personal = account_snapshot("acct-personal", 12.0);
+    let work = account_snapshot("acct-work", 88.0);
+    let mut cache = vec![personal, work];
+    let expected: std::collections::HashSet<_> = [
+        ("codex".to_string(), Some("acct-personal".to_string())),
+        ("codex".to_string(), Some("acct-work".to_string())),
+    ]
+    .into_iter()
+    .collect();
+
+    super::prune_stale_provider_readings(&mut cache, &expected, &[ProviderId::Codex]);
+
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
+fn pruning_drops_disabled_providers() {
+    let codex = account_snapshot("acct-codex", 10.0);
+    let mut claude = account_snapshot("acct-claude", 20.0);
+    claude.provider_id = "claude".to_string();
+    let mut cache = vec![codex, claude];
+    let expected: std::collections::HashSet<_> =
+        [("codex".to_string(), Some("acct-codex".to_string()))]
+            .into_iter()
+            .collect();
+
+    super::prune_stale_provider_readings(&mut cache, &expected, &[ProviderId::Codex]);
+
+    assert_eq!(cache.len(), 1);
+    assert_eq!(cache[0].provider_id, "codex");
+}
+
+#[test]
+fn expected_keys_are_ambient_when_nothing_is_configured() {
+    let accounts = ConfiguredAccounts::default();
+    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts);
+
+    assert_eq!(keys.len(), 1);
+    assert!(keys.contains(&("codex".to_string(), None)));
+}
+
+#[test]
+fn expected_keys_list_every_configured_directory_account() {
+    let mut accounts = ConfiguredAccounts::default();
+    accounts
+        .codex
+        .add_account(codexbar::core::DirectoryAccount::<
+            codexbar::core::CodexIdentity,
+        >::new(
+            Some("personal".into()),
+            std::path::PathBuf::from("/homes/personal"),
+        ));
+    accounts
+        .codex
+        .add_account(codexbar::core::DirectoryAccount::<
+            codexbar::core::CodexIdentity,
+        >::new(
+            Some("work".into()),
+            std::path::PathBuf::from("/homes/work"),
+        ));
+
+    let keys = super::expected_cache_keys(&[ProviderId::Codex], &accounts);
+    let targets = accounts.targets_for(ProviderId::Codex);
+
+    assert_eq!(keys.len(), 2);
+    for target in targets {
+        assert!(
+            keys.contains(&("codex".to_string(), Some(target.id.clone()))),
+            "missing target {}",
+            target.id
+        );
+    }
+    // Ambient None must not coexist with configured ids.
+    assert!(!keys.contains(&("codex".to_string(), None)));
+}
+
 #[test]
 fn hiding_codex_spark_rows_preserves_other_extra_usage() {
     let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
@@ -1010,8 +1169,57 @@ fn claude_error_message_explains_missing_sign_in() {
 
     assert_eq!(
         message,
-        "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Ceiling."
+        "Claude CLI sign-in was not found. Run `claude` once in a terminal, then refresh Claude in Ceiling. Charts can still show local session spend without live capacity."
     );
+}
+
+#[test]
+fn claude_multi_source_failure_keeps_all_sources_not_oauth_only() {
+    let message = super::friendly_provider_error(
+        ProviderId::Claude,
+        "Claude usage failed from all configured sources. OAuth: OAuth error: Claude OAuth credentials not found. Run `claude` to authenticate.; Web: No cookies available for web API; CLI: Provider not installed: claude not found",
+    );
+
+    assert!(
+        message.contains("Claude capacity could not be loaded"),
+        "expected capacity framing, got: {message}"
+    );
+    assert!(
+        message.contains("OAuth: sign-in not found"),
+        "expected shortened OAuth detail, got: {message}"
+    );
+    assert!(
+        message.contains("Web: no session available"),
+        "expected shortened Web detail, got: {message}"
+    );
+    assert!(
+        message.contains("CLI: not installed:"),
+        "expected shortened CLI detail, got: {message}"
+    );
+    assert!(
+        message.contains("Run `claude` once in a terminal"),
+        "expected CLI fix hint, got: {message}"
+    );
+    assert!(
+        message.contains("Charts can still show local session spend without live capacity."),
+        "expected charts note, got: {message}"
+    );
+    assert!(
+        !message.starts_with("Claude CLI sign-in was not found."),
+        "multi-source must not collapse to the OAuth-only line: {message}"
+    );
+}
+
+#[test]
+fn claude_auth_required_does_not_suggest_cookies() {
+    let message = super::friendly_provider_error(ProviderId::Claude, "Authentication required");
+
+    assert!(message.contains("CLI sign-in") || message.contains("Run `claude`"));
+    assert!(
+        !message.to_lowercase().contains("cookie"),
+        "must not recommend browser cookies: {message}"
+    );
+    assert!(message.contains("Charts can still show local session spend without live capacity."));
 }
 
 #[test]

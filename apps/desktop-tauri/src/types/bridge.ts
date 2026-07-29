@@ -278,6 +278,12 @@ export interface SettingsSnapshot {
   floatBarClickThrough: boolean;
   /** Empty array = show all enabled providers. */
   floatBarProviderIds: string[];
+  /**
+   * Provider CLI name → directory-account id for the compact taskbar/float
+   * strip. Missing provider = Auto (account closest to its limit). Does not
+   * change which account is active for CLI identity.
+   */
+  taskbarAccountByProvider: Record<string, string>;
   /** When true, render with dark text/glass for light desktops. */
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
@@ -346,6 +352,8 @@ export interface SettingsUpdate {
   floatBarContrast?: FloatBarContrast;
   floatBarClickThrough?: boolean;
   floatBarProviderIds?: string[];
+  /** Full next map of provider → account id. Omit a provider (or use "") for Auto. */
+  taskbarAccountByProvider?: Record<string, string>;
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
   floatBarShowCost?: boolean;
@@ -639,9 +647,17 @@ export interface ProviderLocalUsageSummary {
   sevenDayCost: number | null;
   sevenDayTokens: number | null;
   sevenDayTokenBreakdown?: LocalTokenBreakdown | null;
+  /** Model tokens with a canonical price over the last 7 calendar days. */
+  sevenDayPricedTokens?: number;
+  /** All model tokens (priced + unpriced) over the last 7 calendar days. */
+  sevenDayTotalModelTokens?: number;
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
   thirtyDayTokenBreakdown?: LocalTokenBreakdown | null;
+  /** Model tokens with a canonical price over the last 30 calendar days. */
+  thirtyDayPricedTokens?: number;
+  /** All model tokens (priced + unpriced) over the last 30 calendar days. */
+  thirtyDayTotalModelTokens?: number;
   currentWindows: LocalUsageWindowSummary[];
   comparisonPeriods: LocalUsageComparisonPeriod[];
   latestTokens: number | null;
@@ -712,8 +728,12 @@ export interface LocalApiValueProvider {
   thirtyDays: LocalApiValuePeriod;
   /** Calendar days [today-60, today-30) for 30d dollar period-over-period. */
   priorThirtyDays: LocalApiValuePeriod;
+  /** Inclusive local-calendar custom range when since/until were requested. */
+  custom?: LocalApiValuePeriod | null;
   /** Last seven local calendar days, oldest first, today last. */
   lastSevenDays?: LocalApiValueDay[];
+  /** Scanned local days (oldest first) for custom ranges and trends. */
+  dailySeries?: LocalApiValueDay[];
 }
 
 /** One local calendar day of estimated API value, for the card's trend. */
@@ -745,6 +765,10 @@ export interface LocalUsageWindowSummary extends LocalUsageWindowRequest {
   tokenBreakdown: LocalTokenBreakdown;
   /** Estimated API-value USD for this reset window from priced models only. */
   cost?: number | null;
+  /** Model tokens with a canonical price (pricing-coverage numerator). */
+  pricedTokens?: number;
+  /** All model tokens (priced + unpriced) — pricing-coverage denominator. */
+  totalModelTokens?: number;
 }
 
 export interface LocalUsageComparisonPeriod {
@@ -762,6 +786,46 @@ export interface LocalTokenBreakdown {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Present when the provider reports reasoning tokens (e.g. Grok). */
+  reasoningTokens?: number;
+}
+
+/** Completed rate-window run (SOU-298). */
+export interface QuotaRunSnapshot {
+  id: string;
+  providerId: string;
+  displayName: string;
+  accountId?: string | null;
+  accountEmail?: string | null;
+  windowId: string;
+  windowLabel: string;
+  startedAt: string;
+  endedAt: string;
+  peakUsedPercent: number;
+  endUsedPercent: number;
+  afterResetUsedPercent?: number | null;
+  resetKind: "scheduled" | "surprise" | "partial" | "observedDrop";
+  windowMinutes?: number | null;
+  observedDurationSeconds: number;
+  complete: boolean;
+  whileAway?: boolean;
+  interrupted?: boolean;
+  processedTokens?: number | null;
+  freshInputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+}
+
+/** Efficiency card derived from a run (SOU-299). */
+export interface QuotaRunEfficiency {
+  run: QuotaRunSnapshot;
+  tokensPerPercent?: number | null;
+  cacheReadPercent?: number | null;
+  projectedTokensAt100?: number | null;
+  vsPreviousTokensPerPercent?: number | null;
+  previousRunId?: string | null;
+  note: string;
 }
 
 export interface ProviderChartData {

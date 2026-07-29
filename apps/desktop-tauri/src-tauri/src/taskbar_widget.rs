@@ -7,6 +7,11 @@ use crate::floatbar::taskbar::{TaskbarLandmarks, TaskbarLayout};
 
 const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Max provider tiles on the native taskbar strip. Keep this small enough that
+/// a typical primary taskbar still has a verified empty gap; the selection and
+/// order come from `float_bar_provider_ids` (or enabled providers in display order).
+const MAX_TASKBAR_WIDGET_PROVIDERS: usize = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChildPlacement {
     x: i32,
@@ -45,15 +50,141 @@ pub fn native_mode_enabled(settings: &codexbar::settings::Settings) -> bool {
     settings.taskbar_widget_enabled
 }
 
-fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) -> bool {
+/// Ordered provider ids for the native taskbar strip (and float-bar allowlist).
+/// Empty `float_bar_provider_ids` means auto: enabled providers in the Providers
+/// tab display order, capped at [`MAX_TASKBAR_WIDGET_PROVIDERS`].
+fn taskbar_strip_provider_ids(settings: &codexbar::settings::Settings) -> Vec<String> {
     let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
         settings.provider_display_order_names()
     } else {
         settings.float_bar_provider_ids.clone()
     };
     preferred_ids
-        .iter()
-        .any(|provider_id| settings.enabled_providers.contains(provider_id))
+        .into_iter()
+        .filter(|provider_id| settings.enabled_providers.contains(provider_id))
+        .take(MAX_TASKBAR_WIDGET_PROVIDERS)
+        .collect()
+}
+
+fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) -> bool {
+    !taskbar_strip_provider_ids(settings).is_empty()
+}
+
+/// The rate window that actually constrains a provider right now.
+///
+/// Mirrors `constrainingWindow` in `capacityPresentation.ts` (SOU-288): an
+/// exhausted/maxed lane outranks everything else, then highest used percent,
+/// then soonest reset. The native taskbar is a one-number surface, so showing
+/// a freshly-reset 5h session while weekly is at 100% is actively misleading.
+#[derive(Debug, Clone, Copy)]
+struct ConstrainingReadout<'a> {
+    label: Option<&'a str>,
+    window: &'a crate::commands::RateWindowSnapshot,
+}
+
+fn is_blocking_window(window: &crate::commands::RateWindowSnapshot) -> bool {
+    window.is_exhausted || window.used_percent >= 100.0
+}
+
+fn reset_at_rank(window: &crate::commands::RateWindowSnapshot) -> i64 {
+    window
+        .resets_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(i64::MAX)
+}
+
+/// Whether `candidate` should replace `best` as the constraining window.
+fn outranks_window(
+    candidate: &crate::commands::RateWindowSnapshot,
+    best: &crate::commands::RateWindowSnapshot,
+) -> bool {
+    let candidate_blocking = is_blocking_window(candidate);
+    let best_blocking = is_blocking_window(best);
+    if candidate_blocking != best_blocking {
+        return candidate_blocking;
+    }
+    match candidate.used_percent.total_cmp(&best.used_percent) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => reset_at_rank(candidate) < reset_at_rank(best),
+    }
+}
+
+fn constraining_readout(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> ConstrainingReadout<'_> {
+    let mut best = ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+    };
+
+    let candidates: Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> = {
+        let mut out = Vec::new();
+        if let Some(window) = snapshot.secondary.as_ref() {
+            out.push((snapshot.secondary_label.as_deref(), window));
+        }
+        if let Some(window) = snapshot.model_specific.as_ref() {
+            out.push((Some("Model"), window));
+        }
+        if let Some(window) = snapshot.tertiary.as_ref() {
+            out.push((Some("Extra"), window));
+        }
+        for extra in &snapshot.extra_rate_windows {
+            if extra.id == "reset-credits" {
+                continue;
+            }
+            out.push((Some(extra.title.as_str()), &extra.window));
+        }
+        out
+    };
+
+    for (label, window) in candidates {
+        if outranks_window(window, best.window) {
+            best = ConstrainingReadout { label, window };
+        }
+    }
+
+    best
+}
+
+/// Pick the reading to show on a one-tile-per-provider strip.
+///
+/// When `preferred_account_id` is set and that account is in the cache, use it.
+/// Otherwise pick the account closest to its constraining limit (stable across
+/// fetch order).
+fn select_strip_snapshot<'a, I>(
+    cache: I,
+    provider_id: &str,
+    preferred_account_id: Option<&str>,
+) -> Option<&'a crate::commands::ProviderUsageSnapshot>
+where
+    I: IntoIterator<Item = &'a crate::commands::ProviderUsageSnapshot>,
+{
+    let candidates: Vec<_> = cache
+        .into_iter()
+        .filter(|snapshot| snapshot.provider_id == provider_id)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    if let Some(want) = preferred_account_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        && let Some(hit) = candidates
+            .iter()
+            .find(|snapshot| snapshot.account_id.as_deref() == Some(want))
+    {
+        return Some(*hit);
+    }
+    candidates.into_iter().max_by(|a, b| {
+        constraining_readout(a)
+            .window
+            .used_percent
+            .total_cmp(&constraining_readout(b).window.used_percent)
+            .then_with(|| b.account_id.cmp(&a.account_id))
+    })
 }
 
 fn layout_is_enabled(layout: &TaskbarLayout, all_monitors: bool) -> bool {
@@ -524,11 +655,7 @@ mod windows_host {
             .get()
             .ok_or_else(|| "Native taskbar widget app handle is unavailable".to_string())?;
         let settings = codexbar::settings::Settings::load();
-        let preferred_ids = if settings.float_bar_provider_ids.is_empty() {
-            settings.provider_display_order_names()
-        } else {
-            settings.float_bar_provider_ids.clone()
-        };
+        let preferred_ids = taskbar_strip_provider_ids(&settings);
         let state = app.state::<Mutex<crate::state::AppState>>();
         let guard = state
             .lock()
@@ -536,54 +663,59 @@ mod windows_host {
 
         let providers = preferred_ids
             .into_iter()
-            .filter(|provider_id| settings.enabled_providers.contains(provider_id))
             .map(|provider_id| {
-                // One tile per provider, showing the account closest to its
-                // limit. `.find` returned whichever account sat first in the
-                // cache, which changes as fetches finish in different orders,
-                // so the tile flipped between accounts between refreshes.
-                let snapshot = guard
-                    .provider_cache
-                    .iter()
-                    .filter(|snapshot| snapshot.provider_id == provider_id)
-                    .max_by(|a, b| {
-                        a.primary
-                            .used_percent
-                            .total_cmp(&b.primary.used_percent)
-                            .then_with(|| b.account_id.cmp(&a.account_id))
-                    });
-                let percent =
-                    snapshot
-                        .filter(|snapshot| snapshot.error.is_none())
-                        .map(|snapshot| {
-                            let value = if settings.show_as_used {
-                                snapshot.primary.used_percent
-                            } else {
-                                snapshot.primary.remaining_percent
-                            };
-                            value.clamp(0.0, 100.0).round() as u8
-                        });
+                // One tile per provider. Default picks the account closest to
+                // its limit (stable across fetch order). Users can pin a
+                // specific Codex/Claude account in Settings → Taskbar Usage.
+                let preferred = settings.taskbar_account_for(&provider_id);
+                let snapshot = super::select_strip_snapshot(
+                    guard.provider_cache.iter(),
+                    &provider_id,
+                    preferred,
+                );
+                // One-number strip: surface the constraining window, not always
+                // the primary session. Claude weekly at 100% with a fresh 5h
+                // session must read as Weekly / 100%, not 5h / 0%.
+                let constraining = snapshot
+                    .filter(|snapshot| snapshot.error.is_none())
+                    .map(super::constraining_readout);
+                let percent = constraining.map(|readout| {
+                    let value = if settings.show_as_used {
+                        readout.window.used_percent
+                    } else {
+                        readout.window.remaining_percent
+                    };
+                    value.clamp(0.0, 100.0).round() as u8
+                });
                 ProviderReadout {
                     provider_id,
                     percent,
+                    // Window label only (Weekly / 5h). Account identity lives in
+                    // the flyout (On strip + account line); long tags collide
+                    // with the next tile on the compact strip.
                     window_label: compact_window_label(
-                        snapshot.and_then(|snapshot| snapshot.primary_label.as_deref()),
-                        snapshot.and_then(|snapshot| snapshot.primary.window_minutes),
+                        constraining.and_then(|readout| readout.label).or_else(|| {
+                            snapshot.and_then(|snapshot| snapshot.primary_label.as_deref())
+                        }),
+                        constraining
+                            .map(|readout| readout.window.window_minutes)
+                            .unwrap_or_else(|| {
+                                snapshot.and_then(|snapshot| snapshot.primary.window_minutes)
+                            }),
                     ),
                     reset: settings
                         .float_bar_show_reset_inline
                         .then(|| {
-                            snapshot.and_then(|snapshot| {
+                            constraining.and_then(|readout| {
                                 crate::tray_bridge::tooltip_short_reset(
-                                    snapshot.primary.resets_at.as_deref(),
-                                    snapshot.primary.reset_description.as_deref(),
+                                    readout.window.resets_at.as_deref(),
+                                    readout.window.reset_description.as_deref(),
                                 )
                             })
                         })
                         .flatten(),
                 }
             })
-            .take(3)
             .collect();
 
         // The taskbar surface follows Windows. Manual contrast is retained only
@@ -1049,6 +1181,8 @@ mod windows_host {
                 );
             }
 
+            // Window label (+ optional reset). Account identity is flyout-only
+            // so long tags don't collide with the next tile.
             let detail = match provider.reset.as_deref() {
                 Some(reset) => format!("{} · {reset}", provider.window_label),
                 None => provider.window_label.clone(),
@@ -1107,11 +1241,30 @@ mod windows_host {
             0x0000, 0x0000, 0x03c0, 0x0ff0, 0x1ff8, 0x200c, 0x303c, 0x307c, 0x38fc, 0x38fc, 0x3cfc,
             0x1ef8, 0x0ef0, 0x03c0, 0x0000, 0x0000,
         ];
+        // 16x16 raster of the official Grok monogram (same path as ProviderIcon-grok.svg).
+        const GROK: [u16; 16] = [
+            0x0000, 0x0000, 0x47c0, 0x27f0, 0x3038, 0x3818, 0x340c, 0x320c, 0x310c, 0x300c, 0x3018,
+            0x1818, 0x0fec, 0x07e4, 0x0000, 0x0000,
+        ];
+        // 16x16 four-point star approximating ProviderIcon-gemini.svg (was falling
+        // through to a hollow ring, so Gemini looked like a blank circle on the strip).
+        const GEMINI: [u16; 16] = [
+            0x01c0, 0x03e0, 0x03e0, 0x03e0, 0x03e0, 0x3dde, 0x7ebf, 0x7fff, 0x7ebf, 0x3dde, 0x03e0,
+            0x03e0, 0x03e0, 0x03e0, 0x01c0, 0x0000,
+        ];
+        // Compact Antigravity mark: two upper lobes over a center stem.
+        const ANTIGRAVITY: [u16; 16] = [
+            0x03c0, 0x07e0, 0x03e0, 0x07f0, 0x0f78, 0x1e3c, 0x3ff8, 0x1ff0, 0x0fe0, 0x07c0, 0x03c0,
+            0x03c0, 0x03c0, 0x03c0, 0x0000, 0x0000,
+        ];
 
         let mask = match provider_id {
             "codex" => Some(&CODEX),
             "claude" => Some(&CLAUDE),
             "cursor" => Some(&CURSOR),
+            "grok" => Some(&GROK),
+            "gemini" => Some(&GEMINI),
+            "antigravity" | "agy" => Some(&ANTIGRAVITY),
             _ => None,
         };
         if let Some(mask) = mask {
@@ -1119,38 +1272,15 @@ mod windows_host {
             return;
         }
 
-        let pen = unsafe { CreatePen(PS_SOLID, 2, color) };
+        // Unknown providers: solid disc so they still read as a mark, not an empty ring.
+        let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
+        let brush = unsafe { CreateSolidBrush(color) };
         let old_pen = unsafe { SelectObject(hdc, pen) };
-        match provider_id {
-            "claude" => {
-                for (dx, dy) in [(0, 7), (5, 5), (7, 0), (5, -5)] {
-                    unsafe {
-                        MoveToEx(hdc, x - dx, y - dy, std::ptr::null_mut());
-                        LineTo(hdc, x + dx, y + dy);
-                    }
-                }
-            }
-            "cursor" => {
-                let brush = unsafe { CreateSolidBrush(color) };
-                let old_brush = unsafe { SelectObject(hdc, brush) };
-                let points = [
-                    WinPoint { x, y: y - 8 },
-                    WinPoint { x: x + 8, y },
-                    WinPoint { x, y: y + 8 },
-                    WinPoint { x: x - 8, y },
-                ];
-                unsafe {
-                    Polygon(hdc, points.as_ptr(), points.len() as i32);
-                    SelectObject(hdc, old_brush);
-                    DeleteObject(brush);
-                }
-            }
-            _ => unsafe {
-                Ellipse(hdc, x - 8, y - 8, x + 8, y + 8);
-                Ellipse(hdc, x - 4, y - 4, x + 4, y + 4);
-            },
-        }
+        let old_brush = unsafe { SelectObject(hdc, brush) };
         unsafe {
+            Ellipse(hdc, x - 6, y - 6, x + 6, y + 6);
+            SelectObject(hdc, old_brush);
+            DeleteObject(brush);
             SelectObject(hdc, old_pen);
             DeleteObject(pen);
         }
@@ -1171,6 +1301,12 @@ mod windows_host {
             "claude" => rgb(216, 116, 75),
             "cursor" => rgb(15, 201, 181),
             "codex" => rgb(64, 196, 222),
+            // xAI / Grok monogram is monochrome; light silver for dark taskbar chrome.
+            "grok" => rgb(231, 233, 234),
+            // Match the web registry brand colors so strip and dashboard agree.
+            "gemini" => rgb(171, 135, 234),
+            "antigravity" | "agy" => rgb(96, 186, 126),
+            "copilot" => rgb(168, 85, 247),
             _ => rgb(204, 211, 220),
         }
     }
@@ -1364,7 +1500,6 @@ mod windows_host {
         fn TextOutW(hdc: isize, x: i32, y: i32, text: *const u16, count: i32) -> i32;
         fn MoveToEx(hdc: isize, x: i32, y: i32, previous: *mut WinPoint) -> i32;
         fn LineTo(hdc: isize, x: i32, y: i32) -> i32;
-        fn Polygon(hdc: isize, points: *const WinPoint, count: i32) -> i32;
         fn Ellipse(hdc: isize, left: i32, top: i32, right: i32, bottom: i32) -> i32;
         fn SetPixelV(hdc: isize, x: i32, y: i32, color: u32) -> i32;
     }
@@ -1532,6 +1667,58 @@ mod tests {
         assert!(!native_mode_has_configured_provider(&settings));
         settings.float_bar_provider_ids = vec!["codex".to_string()];
         assert!(native_mode_has_configured_provider(&settings));
+    }
+
+    #[test]
+    fn taskbar_strip_auto_includes_enabled_providers_after_cursor() {
+        let settings = Settings {
+            enabled_providers: ["codex", "claude", "cursor", "grok"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            float_bar_provider_ids: Vec::new(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            taskbar_strip_provider_ids(&settings),
+            vec![
+                "codex".to_string(),
+                "claude".to_string(),
+                "cursor".to_string(),
+                "grok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn taskbar_strip_respects_explicit_order_and_cap() {
+        let settings = Settings {
+            enabled_providers: ["codex", "claude", "cursor", "grok", "gemini"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            float_bar_provider_ids: vec![
+                "grok".to_string(),
+                "cursor".to_string(),
+                "claude".to_string(),
+                "codex".to_string(),
+                "gemini".to_string(),
+                "openaiapi".to_string(),
+            ],
+            ..Settings::default()
+        };
+        let ids = taskbar_strip_provider_ids(&settings);
+        assert_eq!(
+            ids,
+            vec![
+                "grok".to_string(),
+                "cursor".to_string(),
+                "claude".to_string(),
+                "codex".to_string(),
+                "gemini".to_string(),
+            ]
+        );
+        assert_eq!(ids.len(), MAX_TASKBAR_WIDGET_PROVIDERS);
     }
 
     #[test]
@@ -1799,5 +1986,128 @@ mod tests {
 
         assert_eq!(placement.x, 454);
         assert_eq!(placement.width, 312);
+    }
+
+    fn rate_window(used: f64, minutes: Option<u32>) -> crate::commands::RateWindowSnapshot {
+        crate::commands::RateWindowSnapshot {
+            used_percent: used,
+            remaining_percent: 100.0 - used,
+            window_minutes: minutes,
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: used >= 100.0,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+        }
+    }
+
+    fn snap(
+        provider_id: &str,
+        account_id: Option<&str>,
+        used: f64,
+    ) -> crate::commands::ProviderUsageSnapshot {
+        crate::commands::ProviderUsageSnapshot {
+            provider_id: provider_id.into(),
+            display_name: provider_id.into(),
+            primary: rate_window(used, Some(300)),
+            primary_label: Some("Session".into()),
+            secondary: None,
+            secondary_label: None,
+            model_specific: None,
+            tertiary: None,
+            extra_rate_windows: Vec::new(),
+            inactive_rate_windows: Vec::new(),
+            promo_signals: Vec::new(),
+            reset_credits_available: None,
+            cost: None,
+            plan_name: None,
+            account_email: None,
+            source_label: "test".into(),
+            updated_at: String::new(),
+            error: None,
+            pace: None,
+            account_organization: None,
+            tray_status_label: None,
+            account_id: account_id.map(str::to_string),
+            account_label: account_id.map(str::to_string),
+            account_tint: None,
+            fetch_duration_ms: None,
+            wayfinder_usage: None,
+        }
+    }
+
+    #[test]
+    fn strip_snapshot_defaults_to_hottest_account() {
+        let cache = [
+            snap("codex", Some("personal"), 20.0),
+            snap("codex", Some("work"), 80.0),
+        ];
+        let picked = select_strip_snapshot(cache.iter(), "codex", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn strip_snapshot_respects_pinned_account() {
+        let cache = [
+            snap("codex", Some("personal"), 20.0),
+            snap("codex", Some("work"), 80.0),
+        ];
+        let picked = select_strip_snapshot(cache.iter(), "codex", Some("personal")).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("personal"));
+    }
+
+    #[test]
+    fn strip_snapshot_falls_back_to_hottest_when_pin_missing() {
+        let cache = [
+            snap("codex", Some("personal"), 20.0),
+            snap("codex", Some("work"), 80.0),
+        ];
+        let picked = select_strip_snapshot(cache.iter(), "codex", Some("gone")).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn constraining_readout_surfaces_hot_weekly_over_fresh_session() {
+        // SOU-288 / taskbar: Claude session at 0% used must not hide a maxed weekly.
+        let mut snapshot = snap("claude", None, 0.0);
+        snapshot.primary_label = Some("Session (5h)".into());
+        snapshot.secondary = Some(rate_window(100.0, Some(10_080)));
+        snapshot.secondary_label = Some("Weekly".into());
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Weekly"));
+        assert_eq!(readout.window.used_percent, 100.0);
+        assert_eq!(readout.window.window_minutes, Some(10_080));
+    }
+
+    #[test]
+    fn constraining_readout_keeps_session_when_it_is_hotter() {
+        let mut snapshot = snap("claude", None, 92.0);
+        snapshot.primary_label = Some("Session (5h)".into());
+        snapshot.secondary = Some(rate_window(40.0, Some(10_080)));
+        snapshot.secondary_label = Some("Weekly".into());
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Session (5h)"));
+        assert_eq!(readout.window.used_percent, 92.0);
+    }
+
+    #[test]
+    fn strip_snapshot_ranks_accounts_by_constraining_window() {
+        // Account A: calm primary, maxed weekly. Account B: busy primary, calm weekly.
+        // Strip should pick A because weekly is the real constraint.
+        let mut calm_session = snap("claude", Some("a"), 5.0);
+        calm_session.secondary = Some(rate_window(100.0, Some(10_080)));
+        calm_session.secondary_label = Some("Weekly".into());
+
+        let mut busy_session = snap("claude", Some("b"), 70.0);
+        busy_session.secondary = Some(rate_window(20.0, Some(10_080)));
+        busy_session.secondary_label = Some("Weekly".into());
+
+        let cache = [calm_session, busy_session];
+        let picked = select_strip_snapshot(cache.iter(), "claude", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("a"));
     }
 }
