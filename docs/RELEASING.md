@@ -73,7 +73,10 @@ After adding the credentials, run **Validate Microsoft Store submission** from
 GitHub Actions with an existing R2 version and leave `publish` unchecked. This
 verifies the installer and checksum, authenticates to Partner Center, reads the
 current package configuration, and prepares the new package JSON without
-changing the Store submission. If it passes:
+changing the Store submission. The manual workflow uses a separate
+`store-validation` environment containing the same five Partner Center values,
+so it cannot access the tag-only environment's signing or R2 credentials. If it
+passes:
 
 1. rerun it once with `publish` checked to submit that version;
 2. wait for certification to complete in Partner Center; and
