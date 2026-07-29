@@ -906,6 +906,42 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// The Ceiling mark, shown on every toast and as the app icon Windows renders
+/// beside the "Ceiling" attribution. Embedded so it is available to portable
+/// builds, which have no install directory to read it from.
+#[cfg(target_os = "windows")]
+const NOTIFICATION_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
+
+/// Backplate Windows draws behind the app icon, matching the mark's own
+/// background so the two do not read as two stacked squares. ARGB hex.
+#[cfg(target_os = "windows")]
+const NOTIFICATION_ICON_BACKGROUND: &str = "FF0D1117";
+
+/// Write the toast icon next to the settings file and return its path.
+///
+/// Windows reads this off disk when it renders the toast, so it has to be a
+/// real file rather than an embedded resource. Rewritten only when missing or
+/// the wrong size, so a normal launch does no disk work.
+#[cfg(target_os = "windows")]
+fn notification_icon_path() -> Option<std::path::PathBuf> {
+    static ICON: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let path = crate::settings::Settings::settings_path()?
+            .parent()?
+            .join("notification-icon.png");
+        let current_len = std::fs::metadata(&path).ok().map(|meta| meta.len());
+        if current_len != Some(NOTIFICATION_ICON_PNG.len() as u64) {
+            std::fs::create_dir_all(path.parent()?).ok()?;
+            if let Err(error) = std::fs::write(&path, NOTIFICATION_ICON_PNG) {
+                tracing::warn!(%error, "could not write the toast icon; toasts will be text-only");
+                return None;
+            }
+        }
+        Some(path)
+    })
+    .clone()
+}
+
 /// Build the PowerShell snippet that shows a single Ceiling toast. Uses
 /// ToastGeneric (Win 10+) and wraps the body in try/catch so PowerShell exits
 /// with code 1 on failure instead of swallowing the error. A single-quoted
@@ -917,7 +953,7 @@ fn toast_powershell_script(title: &str, body: &str) -> String {
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
     $template = @'
-<toast><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual></toast>
+{}
 '@
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml($template)
@@ -929,9 +965,31 @@ fn toast_powershell_script(title: &str, body: &str) -> String {
     [System.Console]::Error.WriteLine("Ceiling toast failed: $_")
     exit 1
 }}"#,
-        xml_escape(title),
-        xml_escape(body),
+        toast_xml(title, body, notification_icon_path().as_deref()),
         CEILING_AUMID
+    )
+}
+
+/// The toast payload itself.
+///
+/// `appLogoOverride` puts the Ceiling mark in the toast body; the app name and
+/// the icon beside it come from the AUMID registration. Falls back to plain
+/// text when the icon could not be written, since a toast with no logo still
+/// beats no toast.
+#[cfg(target_os = "windows")]
+fn toast_xml(title: &str, body: &str, icon: Option<&std::path::Path>) -> String {
+    let logo = icon
+        .map(|path| {
+            format!(
+                r#"<image placement="appLogoOverride" src="{}"/>"#,
+                xml_escape(&path.display().to_string())
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<toast><visual><binding template="ToastGeneric">{logo}<text>{}</text><text>{}</text></binding></visual></toast>"#,
+        xml_escape(title),
+        xml_escape(body)
     )
 }
 
@@ -1051,24 +1109,41 @@ fn windows_notification_delivery_check() -> Result<(), String> {
         );
     }
 
-    // Check the retired channel too. Someone who switched Ceiling off in
-    // Windows Settings did so against the old AUMID, and moving to a new one
-    // would otherwise resume toasting straight over that decision.
-    for aumid in [CEILING_AUMID, LEGACY_CEILING_AUMID] {
-        let Ok(key) = hkcu.open_subkey(format!(
+    // The current channel is authoritative once it says anything, and the
+    // retired one is consulted only when it does not. Someone who switched
+    // Ceiling off before the AUMID changed recorded that against the old name,
+    // and moving identities must not toast straight over their decision; but
+    // once they re-enable Ceiling in Windows Settings that lands on the current
+    // channel, and a stale 0 on the old one must not veto it forever.
+    let channel_enabled = |aumid: &str| {
+        hkcu.open_subkey(format!(
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\{aumid}"
-        )) else {
-            continue;
-        };
-        if notification_channel_is_disabled(key.get_value::<u32, _>("Enabled").ok()) {
-            return Err(
-                "Windows notifications are turned off for Ceiling. Enable Ceiling in Settings > System > Notifications."
-                    .to_string(),
-            );
-        }
+        ))
+        .ok()
+        .and_then(|key| key.get_value::<u32, _>("Enabled").ok())
+    };
+    let effective = effective_channel_enabled(
+        channel_enabled(CEILING_AUMID),
+        channel_enabled(LEGACY_CEILING_AUMID),
+    );
+    if notification_channel_is_disabled(effective) {
+        return Err(
+            "Windows notifications are turned off for Ceiling. Enable Ceiling in Settings > System > Notifications."
+                .to_string(),
+        );
     }
 
     Ok(())
+}
+
+/// Which channel's `Enabled` value decides delivery.
+///
+/// The current AUMID wins whenever it has an explicit value; the retired one is
+/// a fallback for users who set their preference before the identity changed.
+/// Split out from the registry read so the precedence itself can be tested.
+#[cfg(target_os = "windows")]
+fn effective_channel_enabled(current: Option<u32>, legacy: Option<u32>) -> Option<u32> {
+    current.or(legacy)
 }
 
 #[cfg(target_os = "windows")]
@@ -1128,7 +1203,17 @@ fn ensure_aumid_registered() {
     // registering Win32 desktop app AUMIDs without a COM server or Start Menu shortcut.
     let result = hkcu
         .create_subkey(format!(r"SOFTWARE\Classes\AppUserModelId\{CEILING_AUMID}"))
-        .and_then(|(key, _)| key.set_value("DisplayName", &"Ceiling"));
+        .and_then(|(key, _)| {
+            // DisplayName and IconUri are what Windows renders as the sender of
+            // the toast, and on the Ceiling row in Settings > Notifications.
+            // Without them a toast is attributed to a nameless, iconless app.
+            key.set_value("DisplayName", &"Ceiling")?;
+            if let Some(icon) = notification_icon_path() {
+                key.set_value("IconUri", &icon.as_os_str())?;
+                key.set_value("IconBackgroundColor", &NOTIFICATION_ICON_BACKGROUND)?;
+            }
+            Ok(())
+        });
 
     match result {
         Ok(()) => tracing::debug!("Ceiling AUMID registered for Windows toast notifications"),
@@ -1312,6 +1397,40 @@ mod tests {
         }
     }
 
+    /// The payload is assembled by string formatting and handed to an XML
+    /// parser in another process, where a malformed document just means a
+    /// silently missing notification.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_toast_payload_carries_the_logo_and_escapes_its_content() {
+        let icon = std::path::Path::new(r"C:\Users\a b\AppData\Roaming\Ceiling\icon.png");
+        let xml = toast_xml("Codex weekly reset", "90% \"free\" & <ready>", Some(icon));
+
+        assert!(
+            xml.contains(r#"<image placement="appLogoOverride""#),
+            "logo missing: {xml}"
+        );
+        assert!(
+            xml.contains(r"Ceiling\icon.png"),
+            "icon path missing: {xml}"
+        );
+        // Unescaped quotes or angle brackets from a provider-supplied label
+        // would break the document, so the body must arrive escaped.
+        assert!(
+            xml.contains("&quot;free&quot; &amp; &lt;ready&gt;"),
+            "{xml}"
+        );
+        assert!(!xml.contains("<ready>"), "raw markup leaked: {xml}");
+
+        // No icon on disk still has to produce a valid, showable toast.
+        let bare = toast_xml("Title", "Body", None);
+        assert!(!bare.contains("<image"), "{bare}");
+        assert!(
+            bare.contains("<text>Title</text><text>Body</text>"),
+            "{bare}"
+        );
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn notification_channel_only_blocks_explicit_disable_flags() {
@@ -1321,18 +1440,36 @@ mod tests {
     }
 
     /// Switching AUMIDs must not resurrect notifications for someone who turned
-    /// them off, since their opt-out is recorded against the old channel.
+    /// them off, since their opt-out is recorded against the old channel. It
+    /// must also not trap them: re-enabling Ceiling writes to the *current*
+    /// channel, and a stale 0 on the retired one cannot be allowed to veto that
+    /// forever, because nothing in the Windows UI would clear it.
     #[cfg(target_os = "windows")]
     #[test]
-    fn the_legacy_channel_is_distinct_and_still_consulted() {
+    fn the_current_channel_outranks_the_retired_one() {
         assert_ne!(
             CEILING_AUMID, LEGACY_CEILING_AUMID,
             "the legacy channel check is pointless if both names match"
         );
-        assert!(
-            notification_channel_is_disabled(Some(0)),
-            "an Enabled=0 on either channel must read as disabled"
-        );
+
+        // Nothing set anywhere: deliverable.
+        assert!(!notification_channel_is_disabled(
+            effective_channel_enabled(None, None)
+        ));
+        // Opted out before the AUMID changed, never revisited: still honored.
+        assert!(notification_channel_is_disabled(effective_channel_enabled(
+            None,
+            Some(0)
+        )));
+        // Re-enabled in Windows Settings after the switch: the stale 0 loses.
+        assert!(!notification_channel_is_disabled(
+            effective_channel_enabled(Some(1), Some(0))
+        ));
+        // Opted out after the switch: honored regardless of the old value.
+        assert!(notification_channel_is_disabled(effective_channel_enabled(
+            Some(0),
+            Some(1)
+        )));
     }
 
     /// The shortcut is the whole reason toasts survive in the notification
