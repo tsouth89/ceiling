@@ -50,6 +50,9 @@ function resetAtMs(window: RateWindowSnapshot): number {
  *     you even when another lane reads higher pressure.
  *  2. Then the highest used percent, i.e. closest to its ceiling.
  *  3. Then the soonest reset, so a tie resolves toward the one that bites first.
+ *
+ * Cursor does **not** use this path (see `cursorStripWindow`): Auto and API are
+ * parallel pools, so a maxed API bar must not hide Auto capacity on the strip.
  */
 function outranks(
   candidate: ConstrainingWindow,
@@ -64,10 +67,103 @@ function outranks(
   return resetAtMs(candidate.window) < resetAtMs(best.window);
 }
 
+/**
+ * Cursor Auto + API lanes only. Plan/Monthly is a blend and is not used for the
+ * one-number strip when these actionable pools exist.
+ */
+function cursorActionableWindows(
+  provider: ProviderUsageSnapshot,
+): ConstrainingWindow[] {
+  const out: ConstrainingWindow[] = [];
+  if (provider.secondary) {
+    out.push({
+      id: "secondary",
+      label: provider.secondaryLabel?.trim() || "Auto",
+      window: provider.secondary,
+    });
+  }
+  for (const extra of provider.extraRateWindows ?? []) {
+    if (extra.id !== "cursor-api") continue;
+    out.push({
+      id: `extra-${extra.id}`,
+      label: extra.title?.trim() || "API",
+      window: extra.window,
+    });
+  }
+  return out;
+}
+
+/** Hottest non-exhausted window, then soonest reset on a used-% tie. */
+function hottestWithRoom(
+  windows: ConstrainingWindow[],
+): ConstrainingWindow | null {
+  let best: ConstrainingWindow | null = null;
+  for (const candidate of windows) {
+    if (isBlocking(candidate.window)) continue;
+    if (
+      !best ||
+      candidate.window.usedPercent > best.window.usedPercent ||
+      (candidate.window.usedPercent === best.window.usedPercent &&
+        resetAtMs(candidate.window) < resetAtMs(best.window))
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/** Among exhausted windows, prefer the one that resets soonest. */
+function soonestExhausted(
+  windows: ConstrainingWindow[],
+): ConstrainingWindow | null {
+  let best: ConstrainingWindow | null = null;
+  for (const candidate of windows) {
+    if (!isBlocking(candidate.window)) continue;
+    if (
+      !best ||
+      resetAtMs(candidate.window) < resetAtMs(best.window) ||
+      (resetAtMs(candidate.window) === resetAtMs(best.window) &&
+        candidate.window.usedPercent > best.window.usedPercent)
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
+ * Cursor strip / taskbar readout: show **actionable remaining** capacity.
+ *
+ * Auto and API are parallel product pools. A maxed API lane does not stop Auto,
+ * so the strip prefers the hottest lane that still has room. Only when every
+ * actionable lane is exhausted do we surface an exhausted bar (soonest reset).
+ * Plan/Monthly never wins the strip when Auto or API is present.
+ */
+function cursorStripWindow(
+  provider: ProviderUsageSnapshot,
+): ConstrainingWindow {
+  const actionable = cursorActionableWindows(provider);
+  if (actionable.length > 0) {
+    const withRoom = hottestWithRoom(actionable);
+    if (withRoom) return withRoom;
+    const exhausted = soonestExhausted(actionable);
+    if (exhausted) return exhausted;
+  }
+  return {
+    id: "primary",
+    label: provider.primaryLabel?.trim() || "Plan",
+    window: provider.primary,
+  };
+}
+
 /** Pick the window actually constraining this provider (see `outranks`). */
 export function constrainingWindow(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow {
+  if (provider.providerId === "cursor") {
+    return cursorStripWindow(provider);
+  }
+
   let best: ConstrainingWindow = {
     id: "primary",
     label: provider.primaryLabel?.trim() || "Plan",
