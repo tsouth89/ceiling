@@ -49,7 +49,41 @@ must define these Cloudflare values:
 The release workflow runs `scripts/publish-store-installer.ps1`, which validates
 the signed installer's checksum before upload and downloads it again from the
 custom domain with redirects disabled. This keeps the Microsoft Store package
-URL versioned, immutable, and directly downloadable.
+URL versioned, immutable, and directly downloadable. A retry skips an existing
+object only when its installer and checksum bytes match; it refuses to overwrite
+a version URL with different bytes.
+
+## Microsoft Store submission automation
+
+Microsoft Store submission is disabled until Partner Center onboarding has
+been validated. The GitHub `release` environment must define:
+
+- variable `PARTNER_CENTER_PRODUCT_ID`;
+- variable `MICROSOFT_STORE_SUBMISSION_ENABLED` (`false` during onboarding);
+- secrets `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`,
+  `PARTNER_CENTER_CLIENT_ID`, and `PARTNER_CENTER_CLIENT_SECRET`.
+
+The Entra application represented by those credentials must be associated with
+the Partner Center account and assigned the **Manager** role. Ceiling must
+already have a published MSI/EXE submission, and its Store product must be free;
+Microsoft Store Developer CLI does not currently support updates for paid
+MSI/EXE products.
+
+After adding the credentials, run **Validate Microsoft Store submission** from
+GitHub Actions with an existing R2 version and leave `publish` unchecked. This
+verifies the installer and checksum, authenticates to Partner Center, reads the
+current package configuration, and prepares the new package JSON without
+changing the Store submission. If it passes:
+
+1. rerun it once with `publish` checked to submit that version;
+2. wait for certification to complete in Partner Center; and
+3. set `MICROSOFT_STORE_SUBMISSION_ENABLED` to `true`.
+
+Future tagged releases then retrieve the current Store package configuration,
+change only its package URL to the newly verified immutable R2 installer, and
+submit it for certification. Leave the enable variable `false` if Store
+submission should temporarily remain manual. Never reuse or overwrite a
+versioned R2 URL after Microsoft has certified it.
 
 For a local unsigned packaging rehearsal, use the managed Windows checkout:
 
