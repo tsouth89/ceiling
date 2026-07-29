@@ -108,18 +108,11 @@ export function isFloatBarEligible(
 }
 
 /**
- * Cursor exposes a total plan meter alongside Auto/API lanes. The compact
- * strip should headline that account-wide total; the tray detail remains the
- * place to compare the individual lanes.
+ * One-number strip meter. Cursor uses actionable Auto/API selection inside
+ * `constrainingWindow` (a maxed API bar must not hide Auto that still has room).
+ * Overview still shows Plan as the hero via `glanceMeters`.
  */
 function floatBarWindow(provider: ProviderUsageSnapshot): ConstrainingWindow {
-  if (provider.providerId === "cursor") {
-    return {
-      id: "primary",
-      label: "Total",
-      window: provider.primary,
-    };
-  }
   return constrainingWindow(provider);
 }
 
