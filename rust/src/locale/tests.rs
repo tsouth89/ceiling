@@ -49,6 +49,38 @@ fn test_chinese_preserves_format_placeholders() {
 }
 
 #[test]
+fn test_all_locale_keys_present_in_chinese_with_matching_placeholders() {
+    let zh_cn = resource_key_names(include_str!("zh-CN.ftl"));
+    for (key, name) in LocaleKey::ALL {
+        assert!(zh_cn.contains(name), "missing Fluent key {name} in zh-CN");
+
+        let english = get_text(Language::English, *key);
+        let chinese = get_text(Language::Chinese, *key);
+        assert!(
+            !chinese.trim().is_empty(),
+            "missing or empty Chinese Fluent text for {key:?}"
+        );
+        assert_eq!(
+            format_placeholders(&chinese),
+            format_placeholders(&english),
+            "format placeholders differ for {name}"
+        );
+    }
+
+    assert_eq!(
+        format_template(
+            &get_text(Language::Chinese, LocaleKey::TrayResetsInLabel),
+            &["5 分钟"],
+        ),
+        "5 分钟 后重置"
+    );
+    assert_eq!(
+        get_text(Language::Chinese, LocaleKey::UsedPercent).replace("{:.0}", "42"),
+        "已使用 42%"
+    );
+}
+
+#[test]
 fn test_untranslated_language_falls_back_to_english() {
     // Languages without their own bundle (e.g. Spanish) resolve to English
     // rather than leaking a raw key name.
@@ -98,4 +130,19 @@ fn resource_key_names(resource: &str) -> HashSet<&str> {
         .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+fn format_placeholders(text: &str) -> Vec<&str> {
+    let mut placeholders = Vec::new();
+    let mut remainder = text;
+    while let Some(start) = remainder.find('{') {
+        let candidate = &remainder[start..];
+        let Some(end) = candidate.find('}') else {
+            break;
+        };
+        placeholders.push(&candidate[..=end]);
+        remainder = &candidate[end + 1..];
+    }
+    placeholders.sort_unstable();
+    placeholders
 }

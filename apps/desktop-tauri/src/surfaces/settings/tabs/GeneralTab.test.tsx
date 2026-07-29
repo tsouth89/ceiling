@@ -101,6 +101,18 @@ describe("GeneralTab", () => {
     expect(setLanguageMock).toHaveBeenCalledWith("chinese");
   });
 
+  it("shows English for persisted languages without a shipped bundle", () => {
+    render(
+      <GeneralTab
+        settings={{ ...settings, uiLanguage: "spanish" }}
+        set={vi.fn()}
+        saving={false}
+      />,
+    );
+
+    expect(screen.getByText("English")).toBeInTheDocument();
+  });
+
   it("uses a simple sound toggle without a separate volume control", () => {
     render(
       <GeneralTab

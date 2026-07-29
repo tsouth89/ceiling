@@ -25,6 +25,8 @@ export default function GeneralTab({
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
+  const selectedLanguage: Language =
+    settings.uiLanguage === "chinese" ? "chinese" : "english";
   const [playingSound, setPlayingSound] = useState(false);
   const [testStatus, setTestStatus] = useState<TestNotificationStatus>("idle");
   const [testError, setTestError] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export default function GeneralTab({
         <div className="settings-section__group">
           <Field label={t("InterfaceLanguage")}>
             <Select
-              value={settings.uiLanguage}
+              value={selectedLanguage}
               options={LANGUAGE_OPTIONS}
               ariaLabel={t("InterfaceLanguage")}
               disabled={saving}
