@@ -455,6 +455,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           <PlanStatusCard
             provider={p}
             showAccount={hasMultipleAccounts(sorted, p.providerId)}
+            hideEmail={settings.hidePersonalInfo}
             isRefreshing={refreshingProviderIds.has(p.providerId)}
             resetTimeRelative={settings.resetTimeRelative}
             showResetWhenExhausted={settings.showResetWhenExhausted}

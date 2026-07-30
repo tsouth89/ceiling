@@ -74,7 +74,10 @@ function localResetLabel(resetMs: number, nowMs: number): string {
   return `${weekday} at ${time}`;
 }
 
-function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
+function collectEntries(
+  providers: ProviderUsageSnapshot[],
+  hideEmail: boolean,
+): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   for (const provider of providers) {
     if (provider.error) continue;
@@ -91,7 +94,7 @@ function collectEntries(providers: ProviderUsageSnapshot[]): TimelineEntry[] {
         // Two Codex rows are otherwise identical text; name the account so they
         // are not indistinguishable.
         accountName: hasMultipleAccounts(providers, provider.providerId)
-          ? accountIdentityLabel(provider)
+          ? accountIdentityLabel(provider, hideEmail)
           : null,
         label: measured.label,
         window: measured.window,
@@ -229,8 +232,10 @@ function TimelineRow({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) 
 
 export default function ActivityTimeline({
   providers,
+  hideEmail = false,
 }: {
   providers: ProviderUsageSnapshot[];
+  hideEmail?: boolean;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -240,8 +245,12 @@ export default function ActivityTimeline({
 
   const entries = useMemo(
     () =>
-      sortEntries(collectEntries(providers).filter((entry) => !isQuiet(entry, nowMs))),
-    [providers, nowMs],
+      sortEntries(
+        collectEntries(providers, hideEmail).filter(
+          (entry) => !isQuiet(entry, nowMs),
+        ),
+      ),
+    [providers, hideEmail, nowMs],
   );
   const featured =
     entries.find((entry) => entry.resetMs !== null && entry.resetMs > nowMs) ?? null;

@@ -63,8 +63,26 @@ export default function ProvidersTab({
     });
   };
 
+  // Enabled providers first, so the ones you actually use are not buried
+  // among two dozen you do not. Drag order is preserved *within* the enabled
+  // group rather than alphabetised, because `reorder_providers` writes
+  // `provider_order`, which is also the order cards appear in the tray flyout
+  // and pop-out: re-sorting here would silently undo a deliberate dashboard
+  // arrangement. The disabled tail has no such meaning, so it sorts by name.
+  const sortedProviders = useMemo(() => {
+    const withIndex = orderedProviders.map((provider, index) => ({ provider, index }));
+    withIndex.sort((a, b) => {
+      const aOn = enabled.has(a.provider.id);
+      const bOn = enabled.has(b.provider.id);
+      if (aOn !== bOn) return aOn ? -1 : 1;
+      if (aOn) return a.index - b.index;
+      return a.provider.displayName.localeCompare(b.provider.displayName);
+    });
+    return withIndex.map((entry) => entry.provider);
+  }, [enabled, orderedProviders]);
+
   const rows: ProviderSidebarRow[] = useMemo(() => {
-    return orderedProviders.map((p) => {
+    return sortedProviders.map((p) => {
       const isOn = enabled.has(p.id);
       // This list configures providers, not accounts, so each row still
       // summarises one snapshot. With several accounts that has to be a
@@ -79,7 +97,7 @@ export default function ProvidersTab({
         subtitleSecondary: providerSidebarMetric(snap),
       };
     });
-  }, [enabled, orderedProviders, snapshots, t]);
+  }, [enabled, snapshots, sortedProviders, t]);
 
   const normalizedSearch = searchText.trim().toLowerCase();
   const visibleRows = useMemo(
@@ -105,10 +123,13 @@ export default function ProvidersTab({
   }, [selectedId, visibleRows]);
 
   const handleReorder = (ids: string[]) => {
-    const byId = new Map(orderedProviders.map((p) => [p.id, p]));
+    const byId = new Map(sortedProviders.map((p) => [p.id, p]));
+    // Merge against the order actually on screen. Using the raw catalog order
+    // here would drop the dragged row at the position it occupies in a list
+    // the user is not looking at.
     const nextIds = normalizedSearch
       ? mergeFilteredOrder(
-          orderedProviders.map((p) => p.id),
+          sortedProviders.map((p) => p.id),
           new Set(visibleRows.map((row) => row.id)),
           ids,
         )

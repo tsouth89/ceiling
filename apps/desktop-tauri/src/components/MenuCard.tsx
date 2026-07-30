@@ -23,6 +23,7 @@ import PaceDetailsChart from "./PaceDetailsChart";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
 import { accountIdentityLabel } from "../lib/providerRow";
+import { maskEmail } from "../lib/privacy";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -64,12 +65,6 @@ interface MenuCardProps {
   showAccount?: boolean;
   isRefreshing?: boolean;
   onLayoutChange?: () => void;
-}
-
-function maskEmail(email: string): string {
-  const at = email.indexOf("@");
-  if (at <= 1) return "••••@••••";
-  return email[0] + "•".repeat(at - 1) + email.slice(at);
 }
 
 /** Localize raw provider window labels using the active locale. */
@@ -456,7 +451,9 @@ export default function MenuCard({
   const planName = !isWayfinder ? displayPlanName(provider.planName) : null;
   // The account's email, shown only when several accounts share this provider.
   const accountName =
-    !isWayfinder && showAccount ? accountIdentityLabel(provider) : null;
+    !isWayfinder && showAccount
+      ? accountIdentityLabel(provider, hideEmail)
+      : null;
   // The account line already carries the email, so do not also print the raw
   // email row below it.
   const email = accountName ? null : rawEmail;

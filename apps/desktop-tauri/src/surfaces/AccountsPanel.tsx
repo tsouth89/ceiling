@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { maskIdentity } from "../lib/privacy";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { capacityFreshness } from "../lib/capacityPresentation";
@@ -28,12 +29,6 @@ function normalizePlan(planName: string | null): string | null {
   return planName;
 }
 
-function maskEmail(email: string | null, hide: boolean): string | null {
-  if (!email) return null;
-  if (!hide) return email;
-  return `${email[0]}•••`;
-}
-
 const STATUS_LABEL: Record<Status, string> = {
   connected: "Connected",
   stale: "Stale",
@@ -54,7 +49,7 @@ function AccountRow({
   const { t } = useLocale();
   const status = statusOf(provider, nowMs);
   const plan = normalizePlan(provider.planName);
-  const email = maskEmail(provider.accountEmail, hideEmail);
+  const email = maskIdentity(provider.accountEmail, hideEmail);
   const org = provider.accountOrganization;
   const updatedMs = Date.parse(provider.updatedAt);
   const updated = formatRelativeUpdated(

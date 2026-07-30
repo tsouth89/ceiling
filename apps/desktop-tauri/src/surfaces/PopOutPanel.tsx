@@ -376,6 +376,7 @@ export default function PopOutPanel({
                   resetTimeRelative={settings.resetTimeRelative}
                   showAsUsed={settings.showAsUsed}
                   isRefreshing={refreshingProviderIds.has(selectedProvider.providerId)}
+                  hideEmail={settings.hidePersonalInfo}
                 />
               ) : (
                 <>
@@ -419,6 +420,7 @@ export default function PopOutPanel({
                           <PlanStatusCard
                             provider={p}
                             showAccount={hasMultipleAccounts(sorted, p.providerId)}
+                            hideEmail={settings.hidePersonalInfo}
                             isRefreshing={refreshingProviderIds.has(p.providerId)}
                             resetTimeRelative={settings.resetTimeRelative}
                             showResetWhenExhausted={settings.showResetWhenExhausted}
@@ -436,7 +438,10 @@ export default function PopOutPanel({
                 </>
               )
             ) : activeSection === "activity" ? (
-              <ActivityTimeline providers={sorted} />
+              <ActivityTimeline
+                providers={sorted}
+                hideEmail={settings.hidePersonalInfo}
+              />
             ) : activeSection === "charts" ? (
               <ChartsPanel providers={sorted} />
             ) : activeSection === "accounts" ? (

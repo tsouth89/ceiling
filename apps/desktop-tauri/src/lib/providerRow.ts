@@ -1,4 +1,5 @@
 import { constrainingWindow } from "./capacityPresentation";
+import { maskIdentity } from "./privacy";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 
 /**
@@ -215,8 +216,18 @@ export function accountIdentityLabel(
     ProviderUsageSnapshot,
     "accountEmail" | "accountLabel" | "planName"
   >,
+  hideEmail = false,
 ): string | null {
   const identity = provider.accountEmail ?? provider.accountLabel ?? null;
   if (!identity) return null;
-  return provider.planName ? `${identity} (${provider.planName})` : identity;
+  const labelled = provider.planName
+    ? `${identity} (${provider.planName})`
+    : identity;
+  // Masked here rather than at each call site. Every surface that shows an
+  // account went through this function, and every one of them printed the raw
+  // address while "Hide Personal Info" was on; making the mask opt-out at the
+  // source is what stops the next surface from reintroducing the leak. Note it
+  // masks the whole string, because `accountLabel` falls back to an
+  // auto-derived "email (plan)" and is a second copy of the address.
+  return maskIdentity(labelled, hideEmail);
 }

@@ -158,6 +158,7 @@ export default function PlanStatusCard({
   showAsUsed = false,
   isRefreshing = false,
   showAccount = false,
+  hideEmail = false,
   onSelect,
 }: {
   provider: ProviderUsageSnapshot;
@@ -168,6 +169,7 @@ export default function PlanStatusCard({
   // True when this provider has more than one account. With one, the account
   // name is noise, so it stays hidden and the plan chip shows as before.
   showAccount?: boolean;
+  hideEmail?: boolean;
   onSelect?: () => void;
 }) {
   const brand = getProviderIcon(provider.providerId).brandColor;
@@ -176,7 +178,9 @@ export default function PlanStatusCard({
   const planName = displayPlanName(provider.planName, provider.displayName);
   // The account's email, shown only when several accounts share this provider.
   // It replaces the plan chip because it already carries the plan.
-  const accountName = showAccount ? accountIdentityLabel(provider) : null;
+  const accountName = showAccount
+    ? accountIdentityLabel(provider, hideEmail)
+    : null;
   const notEnforcedSummary = inactiveWindowSummary(provider, "notEnforced");
   const unavailableSummary = inactiveWindowSummary(provider, "unavailable");
   const resetCredits = codexResetCredits(provider);

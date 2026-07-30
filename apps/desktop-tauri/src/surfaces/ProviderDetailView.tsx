@@ -30,6 +30,7 @@ interface ProviderDetailViewProps {
   resetTimeRelative: boolean;
   showAsUsed: boolean;
   isRefreshing?: boolean;
+  hideEmail?: boolean;
 }
 
 function displayPlanName(planName: string | null): string | null {
@@ -208,6 +209,7 @@ export default function ProviderDetailView({
   resetTimeRelative,
   showAsUsed,
   isRefreshing = false,
+  hideEmail = false,
 }: ProviderDetailViewProps) {
   const { t } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
@@ -248,7 +250,7 @@ export default function ProviderDetailView({
   const planName = displayPlanName(provider.planName);
   // A drill-in opens a specific account, so name it whenever there is an email.
   // Without this, two accounts on one provider open two identical detail views.
-  const accountName = accountIdentityLabel(provider);
+  const accountName = accountIdentityLabel(provider, hideEmail);
   const resetCredits = codexResetCredits(provider);
   const updated = Number.isNaN(Date.parse(provider.updatedAt))
     ? provider.updatedAt
