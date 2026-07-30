@@ -1477,6 +1477,13 @@ mod tests {
             script.contains(&format!(r#"#define AppUserModelId "{CEILING_AUMID}""#)),
             "installer no longer defines {CEILING_AUMID} as its AppUserModelId"
         );
+        // AppId is Inno's upgrade identity and is written literally rather than
+        // through the preprocessor, so nothing but this stops the two drifting
+        // apart and publishing toasts under an id the shortcut does not claim.
+        assert!(
+            script.contains(&format!("{}AppId={CEILING_AUMID}", '\n')),
+            "installer AppId no longer matches {CEILING_AUMID}"
+        );
 
         let start_menu_icon = script
             .lines()

@@ -25,7 +25,11 @@
 #endif
 
 [Setup]
-AppId={#AppUserModelId}
+; Literal on purpose. AppId is Inno's upgrade identity, deciding whether a
+; new build replaces the installed one or lands beside it, so it is not
+; worth routing through the preprocessor to save a repetition. The test in
+; rust/src/notifications.rs asserts this and AppUserModelId stay equal.
+AppId=io.github.tsouth89.ceiling
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppVerName={#MyAppName} {#AppVersion}
