@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixed
+- Release builds no longer fail because a large installer is still becoming publicly readable. The check now verifies the tiny checksum sidecar first, which proves the download path is serving, and only warns if the installer itself is still settling. A wrong status such as a redirect or a permission error still fails immediately instead of being waited out.
 - A lightly used Claude account could report its 5-hour session as 100% used, and raise an exhausted alert, while the account was at 1%. Anthropic reports utilization as either whole percentages or fractions of the limit, and a lone `1` means 1% in one and 100% in the other. A response whose windows were all `0` or `1` was assumed to be fractions, so the first 1% of use rendered as a maxed-out session. The scale is now only read as fractions when the response actually contains a fractional value, which is the case that proves it.
 
 ## [Ceiling] 1.5.18 - 2026-07-29

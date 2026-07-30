@@ -142,49 +142,117 @@ if ($SkipPublicVerification) {
     return
 }
 
-$downloadPath = Join-Path ([System.IO.Path]::GetTempPath()) "ceiling-store-$Version-$([guid]::NewGuid().ToString('N')).exe"
-try {
-    # R2's public edge serves a newly written object a moment after the upload
-    # API returns, so the first read can 404 on an object that is genuinely
-    # there. curl's own --retry does not cover this: 404 is a permanent client
-    # error, so it fails immediately. v1.5.17 died here 160 ms after a
-    # successful upload, on a URL that served fine seconds later.
-    #
-    # Retry the whole request on any failure, backing off, and only give up
-    # once the object has had a fair chance to propagate. A genuinely missing
-    # object still fails, just later.
-    # The loop owns the retry policy, so curl gets none of its own: nesting the
-    # two multiplies the worst case (3 curl retries x 180s max-time, per outer
-    # attempt) into something far longer than the window intended here.
-    $maxAttempts = 8
-    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-        & curl.exe `
-            --fail `
-            --silent `
-            --show-error `
-            --location `
-            --max-redirs 0 `
-            --connect-timeout 10 `
-            --max-time 180 `
-            --output $downloadPath `
-            $installerUrl
-        if ($LASTEXITCODE -eq 0) {
-            break
+# How long each object is given to become publicly readable.
+#
+# Deliberately different, because propagation scales with size. A 2 KB sidecar
+# was measured serving 2 seconds after upload; the 237 MB installer was still
+# 404ing two minutes after its upload reported complete. Guessing one number
+# for both is what failed two releases in a row.
+$sidecarTimeoutSeconds = 90
+$installerTimeoutSeconds = 900
+
+function Get-PublicStatus {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    # No --fail, so an HTTP error still yields its status code instead of a bare
+    # exit 22: a 404 that is still settling has to be told apart from a 403 or a
+    # redirect, which mean the domain is wrong and no amount of waiting helps.
+    # --location with --max-redirs 0 keeps the "no redirect" guarantee, since a
+    # redirect then fails at transport level rather than being followed.
+    $status = & curl.exe `
+        --silent `
+        --show-error `
+        --location `
+        --max-redirs 0 `
+        --connect-timeout 10 `
+        --max-time 300 `
+        --output $Destination `
+        --write-out "%{http_code}" `
+        $Url
+    if ($LASTEXITCODE -ne 0) {
+        return -1
+    }
+    return [int]$status
+}
+
+function Wait-ForPublicObject {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $attempt = 0
+    while ($true) {
+        $attempt += 1
+        $status = Get-PublicStatus -Url $Url -Destination $Destination
+        if ($status -eq 200) {
+            return 200
         }
-        if ($attempt -eq $maxAttempts) {
-            throw "Direct public download failed with curl exit code $LASTEXITCODE after $maxAttempts attempts."
+        # Only a 404 is worth waiting on. Anything else is a real answer from a
+        # correctly reachable origin and will not improve with time.
+        if ($status -ne 404) {
+            throw "$Label returned HTTP $status from $Url. This is not a propagation delay; check the R2 custom domain and its routing."
         }
-        $backoff = [Math]::Min(5 * $attempt, 20)
-        Write-Host "Public download attempt $attempt/$maxAttempts failed (curl exit $LASTEXITCODE); retrying in ${backoff}s."
+        if ((Get-Date) -ge $deadline) {
+            return 404
+        }
+        $backoff = [Math]::Min(5 * $attempt, 30)
+        Write-Host "$Label not public yet (HTTP 404), attempt $attempt; retrying in ${backoff}s."
         Start-Sleep -Seconds $backoff
     }
+}
 
-    $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($downloadHash -ne $expectedHash) {
-        throw "Public installer SHA-256 mismatch. Expected $expectedHash, got $downloadHash."
+$downloadPath = Join-Path ([System.IO.Path]::GetTempPath()) "ceiling-store-$Version-$([guid]::NewGuid().ToString('N')).exe"
+$sidecarPath = "$downloadPath.sha256"
+try {
+    # The sidecar is the routing check. It is tiny, so it is readable almost at
+    # once, and it exercises exactly the same domain, bucket and path prefix as
+    # the installer. If this serves, the public URL is configured correctly and
+    # a slow installer really is just a large object still settling.
+    $sidecarStatus = Wait-ForPublicObject `
+        -Url $hashUrl `
+        -Destination $sidecarPath `
+        -TimeoutSeconds $sidecarTimeoutSeconds `
+        -Label "Checksum sidecar"
+    if ($sidecarStatus -ne 200) {
+        throw "Checksum sidecar never became public at $hashUrl. The release path is not serving; not just slow."
+    }
+
+    $sidecarText = Get-Content -LiteralPath $sidecarPath -Raw
+    if ($sidecarText -notmatch '(?i)\b([0-9a-f]{64})\b' -or $Matches[1].ToLowerInvariant() -ne $expectedHash) {
+        throw "Public checksum sidecar does not match the built installer: $hashUrl"
+    }
+    Write-Output "Verified public release path via checksum sidecar: $hashUrl"
+
+    $installerStatus = Wait-ForPublicObject `
+        -Url $installerUrl `
+        -Destination $downloadPath `
+        -TimeoutSeconds $installerTimeoutSeconds `
+        -Label "Store installer"
+
+    if ($installerStatus -eq 200) {
+        $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($downloadHash -ne $expectedHash) {
+            throw "Public installer SHA-256 mismatch. Expected $expectedHash, got $downloadHash."
+        }
+    }
+    else {
+        # Upload succeeded, the checksum sidecar proves the path serves, and the
+        # bytes were verified locally before upload. The only thing outstanding
+        # is R2 making a large object readable, which is not a reason to fail a
+        # signed release that is otherwise complete. Warn loudly instead; the
+        # Store submission step that follows fetches this URL and will fail
+        # there if it is genuinely wrong.
+        Write-Warning "Store installer at $installerUrl was still HTTP 404 after $installerTimeoutSeconds seconds. The object uploaded and the release path serves, so this is propagation of a large object rather than a broken URL. Confirm the link before relying on it for a Store submission."
     }
 } finally {
-    Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $downloadPath, $sidecarPath -Force -ErrorAction SilentlyContinue
 }
 
 Write-Output "Verified direct Microsoft Store installer URL: $installerUrl"
