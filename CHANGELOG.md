@@ -2,15 +2,13 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.19 - 2026-07-29
+
+Follow-up to 1.5.17, which shipped its own notification fix inert on a clean install. Also stops a lightly used Claude account reporting itself as maxed out, and makes Hide Personal Info do what it says.
+
 ### Fixed
-- Release builds no longer fail because a large installer is still becoming publicly readable. The check now verifies the tiny checksum sidecar first, which proves the download path is serving, and only warns if the installer itself is still settling. A wrong status such as a redirect or a permission error still fails immediately instead of being waited out.
 - A lightly used Claude account could report its 5-hour session as 100% used, and raise an exhausted alert, while the account was at 1%. Anthropic reports utilization as either whole percentages or fractions of the limit, and a lone `1` means 1% in one and 100% in the other. A response whose windows were all `0` or `1` was assumed to be fractions, so the first 1% of use rendered as a maxed-out session. The scale is now only read as fractions when the response actually contains a fractional value, which is the case that proves it.
-
-## [Ceiling] 1.5.18 - 2026-07-29
-
-Follow-up to 1.5.17. Notification history did not actually work on a clean install, and a Ceiling running from outside the installed folder could loop on the same update forever. Also makes Hide Personal Info do what it says.
-
-### Fixed
+- Release builds no longer fail because a large installer is still becoming publicly readable. The check now verifies the tiny checksum sidecar first, which proves the download path is serving, and only warns if the installer itself is still settling. A wrong status such as a redirect or a permission error still fails immediately instead of being waited out.
 - The Start Menu shortcut created by the installer now carries Ceiling's AppUserModelID. Without it Windows could not resolve who a toast came from, so it drew the banner and discarded it, and 1.5.17 shipped with its own notification-history fix inert on a clean install. If you installed 1.5.17, reinstalling picks up the corrected shortcut.
 - The updater refuses to apply an update that would not replace the running copy. A Ceiling started from anywhere other than the installed directory (a local build, an install from older packaging) would watch the installer succeed elsewhere, stay on the old version, and offer the same update forever with nothing explaining why. It now says so instead of looping.
 - Cached update installers are pruned once they are superseded. Every download was kept forever; one machine had ten going back to 0.43.3, 305 MB of them.
