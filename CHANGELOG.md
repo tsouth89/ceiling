@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.18 - 2026-07-29
+
+Follow-up to 1.5.17. Notification history did not actually work on a clean install, and a Ceiling running from outside the installed folder could loop on the same update forever. Also makes Hide Personal Info do what it says.
+
 ### Fixed
 - The Start Menu shortcut created by the installer now carries Ceiling's AppUserModelID. Without it Windows could not resolve who a toast came from, so it drew the banner and discarded it, and 1.5.17 shipped with its own notification-history fix inert on a clean install. If you installed 1.5.17, reinstalling picks up the corrected shortcut.
 - The updater refuses to apply an update that would not replace the running copy. A Ceiling started from anywhere other than the installed directory (a local build, an install from older packaging) would watch the installer succeed elsewhere, stay on the old version, and offer the same update forever with nothing explaining why. It now says so instead of looping.
