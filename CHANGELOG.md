@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- A lightly used Claude account could report its 5-hour session as 100% used, and raise an exhausted alert, while the account was at 1%. Anthropic reports utilization as either whole percentages or fractions of the limit, and a lone `1` means 1% in one and 100% in the other. A response whose windows were all `0` or `1` was assumed to be fractions, so the first 1% of use rendered as a maxed-out session. The scale is now only read as fractions when the response actually contains a fractional value, which is the case that proves it.
+
 ## [Ceiling] 1.5.18 - 2026-07-29
 
 Follow-up to 1.5.17. Notification history did not actually work on a clean install, and a Ceiling running from outside the installed folder could loop on the same update forever. Also makes Hide Personal Info do what it says.
