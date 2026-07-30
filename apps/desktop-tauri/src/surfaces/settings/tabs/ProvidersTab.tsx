@@ -69,17 +69,10 @@ export default function ProvidersTab({
   // `provider_order`, which is also the order cards appear in the tray flyout
   // and pop-out: re-sorting here would silently undo a deliberate dashboard
   // arrangement. The disabled tail has no such meaning, so it sorts by name.
-  const sortedProviders = useMemo(() => {
-    const withIndex = orderedProviders.map((provider, index) => ({ provider, index }));
-    withIndex.sort((a, b) => {
-      const aOn = enabled.has(a.provider.id);
-      const bOn = enabled.has(b.provider.id);
-      if (aOn !== bOn) return aOn ? -1 : 1;
-      if (aOn) return a.index - b.index;
-      return a.provider.displayName.localeCompare(b.provider.displayName);
-    });
-    return withIndex.map((entry) => entry.provider);
-  }, [enabled, orderedProviders]);
+  const sortedProviders = useMemo(
+    () => sortProvidersForSidebar(orderedProviders, enabled),
+    [enabled, orderedProviders],
+  );
 
   const rows: ProviderSidebarRow[] = useMemo(() => {
     return sortedProviders.map((p) => {
@@ -169,6 +162,32 @@ export default function ProvidersTab({
       />
     </div>
   );
+}
+
+/**
+ * Sidebar order: enabled providers first, then the rest by name.
+ *
+ * Drag order is preserved *within* the enabled group rather than alphabetised,
+ * because `reorder_providers` writes `provider_order`, which is also the order
+ * cards appear in the tray flyout and pop-out: re-sorting here would silently
+ * undo a deliberate dashboard arrangement. The disabled tail has no such
+ * meaning, so it sorts by name.
+ *
+ * Must be idempotent: the list is re-sorted from persisted order on every
+ * render, so a rule that reorders its own output would make rows drift.
+ */
+export function sortProvidersForSidebar<
+  T extends { id: string; displayName: string },
+>(providers: T[], enabled: Set<string>): T[] {
+  const withIndex = providers.map((provider, index) => ({ provider, index }));
+  withIndex.sort((a, b) => {
+    const aOn = enabled.has(a.provider.id);
+    const bOn = enabled.has(b.provider.id);
+    if (aOn !== bOn) return aOn ? -1 : 1;
+    if (aOn) return a.index - b.index;
+    return a.provider.displayName.localeCompare(b.provider.displayName);
+  });
+  return withIndex.map((entry) => entry.provider);
 }
 
 function mergeFilteredOrder(

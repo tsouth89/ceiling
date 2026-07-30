@@ -1,23 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-/**
- * Mirrors the ordering in ProvidersTab. Kept as a pure function here so the
- * rule can be asserted without mounting the whole settings surface.
- */
-function sortProviders<T extends { id: string; displayName: string }>(
-  providers: T[],
-  enabled: Set<string>,
-): T[] {
-  const withIndex = providers.map((provider, index) => ({ provider, index }));
-  withIndex.sort((a, b) => {
-    const aOn = enabled.has(a.provider.id);
-    const bOn = enabled.has(b.provider.id);
-    if (aOn !== bOn) return aOn ? -1 : 1;
-    if (aOn) return a.index - b.index;
-    return a.provider.displayName.localeCompare(b.provider.displayName);
-  });
-  return withIndex.map((entry) => entry.provider);
-}
+import { sortProvidersForSidebar as sortProviders } from "./ProvidersTab";
 
 const catalog = [
   { id: "zeta", displayName: "Zeta" },

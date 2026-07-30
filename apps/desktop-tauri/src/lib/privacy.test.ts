@@ -41,6 +41,16 @@ describe("maskEmailsIn", () => {
     );
   });
 
+  it("masks a local part containing punctuation legal in an address", () => {
+    // Narrowing the class to fix the label case went too far and matched
+    // "o'connor" only from "connor", leaving "o'" on screen: a leak in the
+    // feature meant to prevent exactly that.
+    expect(maskEmailsIn("o'connor@example.com")).toBe("o•••••••@example.com");
+    expect(maskEmailsIn("first.last+tag@example.com")).toBe(
+      "f•••••••••••••@example.com",
+    );
+  });
+
   it("handles a multi-part domain", () => {
     expect(maskEmailsIn("someone@team.example.co.uk")).toBe(
       "s••••••@team.example.co.uk",
