@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Internal
+- The release smoke test now asserts that the installed Start Menu shortcut carries Ceiling's AppUserModelID. That property is what lets Windows keep a notification, and 1.5.17 shipped without it: every gate checked source, while the one step that inspects the installed build never looked at it.
+
 ## [Ceiling] 1.5.19 - 2026-07-29
 
 Follow-up to 1.5.17, which shipped its own notification fix inert on a clean install. Also stops a lightly used Claude account reporting itself as maxed out, and makes Hide Personal Info do what it says.
