@@ -6,6 +6,9 @@
 - The Start Menu shortcut created by the installer now carries Ceiling's AppUserModelID. Without it Windows could not resolve who a toast came from, so it drew the banner and discarded it, and 1.5.17 shipped with its own notification-history fix inert on a clean install. If you installed 1.5.17, reinstalling picks up the corrected shortcut.
 - The updater refuses to apply an update that would not replace the running copy. A Ceiling started from anywhere other than the installed directory (a local build, an install from older packaging) would watch the installer succeed elsewhere, stay on the old version, and offer the same update forever with nothing explaining why. It now says so instead of looping.
 - Cached update installers are pruned once they are superseded. Every download was kept forever; one machine had ten going back to 0.43.3, 305 MB of them.
+- **Hide Personal Info** now actually hides it. The setting only ever reached the Accounts list, while the Overview, taskbar flyout, plan cards, activity timeline and provider detail all printed the raw address, because each built its account line from a helper that did no masking. Masking now happens inside that helper so a surface cannot opt out by forgetting, and it masks addresses inside labels too, since an account label defaults to `email (plan)` and was a second copy of the same address.
+- Switching accounts on the Providers page works. The selected account id was accepted by the frontend command wrapper and then never sent to the backend, so every click re-fetched whichever account the backend picks on its own and nothing appeared to happen.
+- Enabled providers sort to the top of the Providers list, with the rest by name. A configured provider could otherwise sit far down among ones you do not use. Drag order is kept within the enabled group, because that same order decides how cards are arranged in the tray flyout and pop-out.
 
 ## [Ceiling] 1.5.17 - 2026-07-29
 

@@ -98,17 +98,20 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   return [...preferred, ...remaining].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
 }
 
-function ProviderRow({ provider, showAccount, onStrip, showAsUsed, now }: {
+function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, now }: {
   provider: ProviderUsageSnapshot;
   // True when this provider has more than one account, so the account name is
   // needed to tell its rows apart. With one account it would be noise.
   showAccount: boolean;
+  hideEmail: boolean;
   /** This row is the account currently driving the compact strip tile. */
   onStrip: boolean;
   showAsUsed: boolean;
   now: number;
 }) {
-  const accountName = showAccount ? accountIdentityLabel(provider) : null;
+  const accountName = showAccount
+    ? accountIdentityLabel(provider, hideEmail)
+    : null;
   const icon = getProviderIcon(provider.providerId);
   if (provider.error) {
     return (
@@ -352,6 +355,7 @@ export default function TaskbarFlyout({ state }: { state: BootstrapState }) {
               key={providerRowKey(provider)}
               provider={provider}
               showAccount={multi}
+              hideEmail={settings.hidePersonalInfo}
               onStrip={onStrip}
               showAsUsed={settings.showAsUsed}
               now={now}

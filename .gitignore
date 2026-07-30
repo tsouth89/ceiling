@@ -82,3 +82,7 @@ codexbar-desktop-tauri.exe
 .dev.vars*
 !.dev.vars.example
 !.env.example
+
+# Local scratch for issue triage: screenshots and raw provider RPC dumps,
+# which contain real account identifiers and must never be committed.
+tmp-issue-imgs/

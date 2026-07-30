@@ -434,7 +434,10 @@ export function getProviderDetail(
   providerId: string,
   accountId: string | null = null,
 ): Promise<ProviderDetail> {
-  return invoke<ProviderDetail>("get_provider_detail", { providerId });
+  return invoke<ProviderDetail>("get_provider_detail", {
+    providerId,
+    accountId,
+  });
 }
 
 export function openProviderDashboard(providerId: string): Promise<void> {
