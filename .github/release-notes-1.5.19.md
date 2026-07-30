@@ -22,6 +22,10 @@ The setting only ever reached the Accounts list. The Overview, taskbar flyout, p
 
 All of them mask now, including account labels, which are filled in with your address by default and were a second copy of it. The domain stays visible so you can still tell your own accounts apart.
 
+### A barely used Claude account no longer reports itself as maxed out
+
+An account at 1% could show its 5-hour session as 100% used and raise an exhausted alert for it. Anthropic reports usage as either whole percentages or fractions of the limit, and a lone `1` means 1% in one and 100% in the other. Ceiling was guessing wrong when every window was still at 0 or 1, which is exactly what a lightly used account looks like.
+
 ## Also fixed
 
 - Switching between accounts on the Providers page works. Clicking the second account did nothing at all, because the chosen account was never sent to the backend.
@@ -29,12 +33,12 @@ All of them mask now, including account labels, which are filled in with your ad
 
 ## Installers
 
-- **Ceiling-1.5.18-Setup.exe** - standard installer
-- **Ceiling-1.5.18-portable.exe** - portable
-- **Ceiling-1.5.18-Store-Setup.exe** - Microsoft Store package (WebView2 bundled)
+- **Ceiling-1.5.19-Setup.exe** - standard installer
+- **Ceiling-1.5.19-portable.exe** - portable
+- **Ceiling-1.5.19-Store-Setup.exe** - Microsoft Store package (WebView2 bundled)
 
 Portable builds show alerts as banners but do not keep them in the notification center. That needs a Start Menu shortcut, and Ceiling will not add one to a machine where you chose a portable build.
 
 ---
 
-**Full Changelog**: https://github.com/tsouth89/ceiling/compare/v1.5.17...v1.5.18
+**Full Changelog**: https://github.com/tsouth89/ceiling/compare/v1.5.17...v1.5.19
