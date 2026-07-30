@@ -645,6 +645,34 @@ mod tests {
         );
     }
 
+    /// The reported case end to end: an account whose only activity is 1% of
+    /// its session, with every other window still at zero.
+    ///
+    /// The existing one-percent test above passes only because `five_hour: 28`
+    /// settles the scale for the whole response. Nothing settles this one, and
+    /// that is exactly the payload a lightly used account sends: it rendered a
+    /// 1% session as 100% used and raised an exhausted alert for it.
+    #[test]
+    fn a_lone_one_percent_window_is_not_read_as_exhausted() {
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 1, "resets_at": "2026-07-30T07:00:00Z"},
+                "seven_day": {"utilization": 0, "resets_at": "2026-08-05T08:00:00Z"}
+            }"#,
+        )
+        .expect("percentage OAuth response should parse");
+
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+
+        assert_eq!(response.utilization_scale(), UtilizationScale::Percent);
+        assert!(
+            (usage.primary.used_percent - 1.0).abs() < 0.001,
+            "a 1% session read as {}%",
+            usage.primary.used_percent
+        );
+        assert!((usage.secondary.expect("weekly").used_percent - 0.0).abs() < 0.001);
+    }
+
     /// The same `1` still means 100% when the response is genuinely fractional.
     #[test]
     fn fractional_response_keeps_a_full_window_at_one_hundred() {
@@ -672,14 +700,38 @@ mod tests {
         );
         assert_eq!(
             UtilizationScale::detect([0.0, 0.14, 1.0]),
-            UtilizationScale::Fraction
+            UtilizationScale::Fraction,
+            "a value between 0 and 1 can only be a fraction"
         );
-        // Nothing disambiguates an all zero/one response, so 1.0 stays 100%.
+    }
+
+    /// The reported bug: a session at 1% rendered as 100% used, and alerted as
+    /// exhausted, on an account whose other windows were all still at zero.
+    ///
+    /// The recorded history showed the session jump 0 -> 100 between two reads
+    /// with nothing in between, while a second account on the same build and
+    /// the same API climbed 91, 92, 93 - values only a percentage scale
+    /// produces. The response was percentages; `1` meant 1%.
+    #[test]
+    fn a_barely_used_session_is_not_read_as_exhausted() {
         assert_eq!(
-            UtilizationScale::detect([0.0, 1.0]),
-            UtilizationScale::Fraction
+            UtilizationScale::detect([1.0, 0.0]),
+            UtilizationScale::Percent,
+            "1 alongside only zeros is 1%, not a maxed-out fraction"
         );
-        assert_eq!(UtilizationScale::detect([]), UtilizationScale::Fraction);
+        assert_eq!(
+            UtilizationScale::detect([1.0, 0.0]).to_percent(1.0),
+            1.0,
+            "a freshly used session must not render as exhausted"
+        );
+
+        // An empty response has no evidence either way and must not invent a
+        // fraction scale that would multiply later readings by 100.
+        assert_eq!(UtilizationScale::detect([]), UtilizationScale::Percent);
+        assert_eq!(
+            UtilizationScale::detect([0.0, 0.0]),
+            UtilizationScale::Percent
+        );
     }
 
     #[test]

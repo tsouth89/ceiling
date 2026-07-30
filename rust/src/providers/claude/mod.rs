@@ -90,18 +90,40 @@ pub(crate) enum UtilizationScale {
 impl UtilizationScale {
     /// Resolve the unit from every raw utilization in one response.
     ///
-    /// A value above `1.0` can only be a percentage, since a fraction never
-    /// exceeds the limit, so one such window settles the whole response.
-    /// Otherwise the values are read as fractions, which keeps a genuine `1.0`
-    /// meaning 100%.
+    /// Two things settle it, and only real evidence in the payload counts:
+    ///
+    /// - a value above `1.0` can only be a percentage, since a fraction never
+    ///   exceeds the limit;
+    /// - a value strictly between `0` and `1` can only be a fraction, since the
+    ///   API reports whole percentages.
+    ///
+    /// With neither, every window is `0` or `1` and the response is genuinely
+    /// ambiguous. That is read as percentages, because the alternative is worse
+    /// in practice: an account that has just been used reports `1` for 1%, and
+    /// calling that a fraction renders a barely-touched session as **100%
+    /// used**, which is what this previously did. Reading a real fraction-scale
+    /// `1.0` as 1% is the opposite error, but it needs a maxed window while
+    /// every other window in the same response sits at exactly `0` or `1`.
+    ///
+    /// A response reporting fractions gives itself away as soon as any window
+    /// holds an ordinary value like `0.14`, which is the common case.
     pub(crate) fn detect(values: impl IntoIterator<Item = f64>) -> Self {
-        if values
-            .into_iter()
-            .any(|value| value.is_finite() && value > 1.0)
-        {
-            Self::Percent
-        } else {
+        let mut saw_fraction = false;
+        for value in values {
+            if !value.is_finite() {
+                continue;
+            }
+            if value > 1.0 {
+                return Self::Percent;
+            }
+            if value > 0.0 && value < 1.0 {
+                saw_fraction = true;
+            }
+        }
+        if saw_fraction {
             Self::Fraction
+        } else {
+            Self::Percent
         }
     }
 
