@@ -172,10 +172,29 @@ function Get-PublicStatus {
         --output $Destination `
         --write-out "%{http_code}" `
         $Url
-    if ($LASTEXITCODE -ne 0) {
-        return -1
+    $curlExit = $LASTEXITCODE
+    if ($curlExit -ne 0) {
+        # Keep the exit code. "HTTP -1" told us a fetch failed but not whether
+        # it was a redirect, a timeout or DNS, which is the first thing anyone
+        # debugging a broken download domain needs to know.
+        return [pscustomobject]@{ HttpStatus = 0; CurlExit = $curlExit }
     }
-    return [int]$status
+    return [pscustomobject]@{ HttpStatus = [int]$status; CurlExit = 0 }
+}
+
+function Format-CurlExit {
+    param([Parameter(Mandatory = $true)][int]$ExitCode)
+
+    $meaning = switch ($ExitCode) {
+        6  { "could not resolve host" }
+        7  { "could not connect" }
+        28 { "timed out" }
+        35 { "TLS handshake failed" }
+        47 { "redirected, but the release URL must serve directly" }
+        60 { "TLS certificate not trusted" }
+        default { "see curl exit codes" }
+    }
+    return "curl exit ${ExitCode} (${meaning})"
 }
 
 function Wait-ForPublicObject {
@@ -190,14 +209,17 @@ function Wait-ForPublicObject {
     $attempt = 0
     while ($true) {
         $attempt += 1
-        $status = Get-PublicStatus -Url $Url -Destination $Destination
-        if ($status -eq 200) {
+        $result = Get-PublicStatus -Url $Url -Destination $Destination
+        if ($result.CurlExit -ne 0) {
+            throw "$Label could not be fetched from ${Url}: $(Format-CurlExit -ExitCode $result.CurlExit). This is not a propagation delay; check the R2 custom domain and its routing."
+        }
+        if ($result.HttpStatus -eq 200) {
             return 200
         }
         # Only a 404 is worth waiting on. Anything else is a real answer from a
         # correctly reachable origin and will not improve with time.
-        if ($status -ne 404) {
-            throw "$Label returned HTTP $status from $Url. This is not a propagation delay; check the R2 custom domain and its routing."
+        if ($result.HttpStatus -ne 404) {
+            throw "$Label returned HTTP $($result.HttpStatus) from $Url. This is not a propagation delay; check the R2 custom domain and its routing."
         }
         if ((Get-Date) -ge $deadline) {
             return 404
@@ -251,8 +273,12 @@ try {
         # there if it is genuinely wrong.
         Write-Warning "Store installer at $installerUrl was still HTTP 404 after $installerTimeoutSeconds seconds. The object uploaded and the release path serves, so this is propagation of a large object rather than a broken URL. Confirm the link before relying on it for a Store submission."
     }
+    if ($installerStatus -eq 200) {
+        Write-Output "Verified direct Microsoft Store installer URL: $installerUrl"
+    }
+    else {
+        Write-Output "Release path verified, but the installer itself was not fetched: $installerUrl"
+    }
 } finally {
     Remove-Item -LiteralPath $downloadPath, $sidecarPath -Force -ErrorAction SilentlyContinue
 }
-
-Write-Output "Verified direct Microsoft Store installer URL: $installerUrl"
