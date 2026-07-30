@@ -25,6 +25,27 @@ describe("maskEmailsIn", () => {
   it("leaves a hand-typed label alone", () => {
     expect(maskEmailsIn("Work")).toBe("Work");
   });
+
+  it("keeps label text that runs straight into the address", () => {
+    // A permissive local part matched from "Work:bts" and masked the label
+    // itself away, losing the only thing distinguishing the account.
+    expect(maskEmailsIn("Work:bts@cssi.us")).toBe("Work:b••@cssi.us");
+    expect(maskEmailsIn("Contact:alice@example.com")).toBe(
+      "Contact:a••••@example.com",
+    );
+  });
+
+  it("masks every address when a label carries more than one", () => {
+    expect(maskEmailsIn("bts@cssi.us / tsouth2@gmail.com")).toBe(
+      "b••@cssi.us / t••••••@gmail.com",
+    );
+  });
+
+  it("handles a multi-part domain", () => {
+    expect(maskEmailsIn("someone@team.example.co.uk")).toBe(
+      "s••••••@team.example.co.uk",
+    );
+  });
 });
 
 describe("maskIdentity", () => {
