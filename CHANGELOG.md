@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+- The Start Menu shortcut created by the installer now carries Ceiling's AppUserModelID. Without it Windows could not resolve who a toast came from, so it drew the banner and discarded it, and 1.5.17 shipped with its own notification-history fix inert on a clean install. If you installed 1.5.17, reinstalling picks up the corrected shortcut.
+- The updater refuses to apply an update that would not replace the running copy. A Ceiling started from anywhere other than the installed directory (a local build, an install from older packaging) would watch the installer succeed elsewhere, stay on the old version, and offer the same update forever with nothing explaining why. It now says so instead of looping.
+- Cached update installers are pruned once they are superseded. Every download was kept forever; one machine had ten going back to 0.43.3, 305 MB of them.
+
 ## [Ceiling] 1.5.17 - 2026-07-29
 
 Windows notifications are the headline: they now carry the Ceiling name and logo, stay in the notification center instead of vanishing after a few seconds, and stop dropping the weekly and monthly resets worth interrupting for. Also adds Simplified Chinese and in-app provider login.

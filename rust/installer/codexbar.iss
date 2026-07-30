@@ -1,4 +1,7 @@
 #define MyAppName "Ceiling"
+; Ceiling's AppUserModelID. Must match CEILING_AUMID in
+; rust/src/notifications.rs and the identifier in tauri.conf.json.
+#define AppUserModelId "io.github.tsouth89.ceiling"
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
 #endif
@@ -22,7 +25,7 @@
 #endif
 
 [Setup]
-AppId=io.github.tsouth89.ceiling
+AppId={#AppUserModelId}
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppVerName={#MyAppName} {#AppVersion}
@@ -57,9 +60,14 @@ Source: "..\icons\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VCRedistPath}"; Flags: dontcopy
 Source: "{#WebView2InstallerPath}"; Flags: dontcopy
 
+; AppUserModelID must match CEILING_AUMID in rust/src/notifications.rs. Windows
+; resolves an app's notification identity from a Start Menu shortcut carrying
+; this property, and keeps toasts in the notification center only for an app it
+; can resolve. Without it here, every toast is treated as coming from an
+; unregistered app: the banner shows, then Windows discards it.
 [Icons]
-Name: "{autoprograms}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"
-Name: "{autodesktop}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"
+Name: "{autoprograms}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "{#AppUserModelId}"
+Name: "{autodesktop}\Ceiling"; Filename: "{app}\ceiling.exe"; Parameters: "menubar"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"; AppUserModelID: "{#AppUserModelId}"
 
 [Run]
 Filename: "{app}\ceiling.exe"; Parameters: "menubar"; Description: "Launch Ceiling"; Flags: nowait postinstall skipifsilent; Check: CanLaunchCeiling

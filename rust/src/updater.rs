@@ -258,6 +258,10 @@ pub async fn download_update(
 ) -> Result<PathBuf, String> {
     validate_auto_download(update_info)?;
 
+    // Clear out installers this build has already outgrown before adding
+    // another one, so the cache cannot grow without bound.
+    prune_superseded_downloads();
+
     let file_path = prepare_download_path(update_info)?;
     let response = start_download(&update_info.download_url).await?;
     write_download_response(response, &file_path, &progress_tx).await?;
@@ -479,6 +483,13 @@ pub fn apply_update(installer_path: &PathBuf) -> Result<(), String> {
     }
 
     #[cfg(target_os = "windows")]
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(reason) = update_would_not_replace_this_copy(&current_exe)
+    {
+        return Err(reason);
+    }
+
+    #[cfg(target_os = "windows")]
     spawn_windows_installer(
         installer_path,
         &windows_update_relaunch_path(
@@ -498,6 +509,80 @@ pub fn apply_update(installer_path: &PathBuf) -> Result<(), String> {
 
     // Exit the application to allow the installer to proceed
     std::process::exit(0);
+}
+
+/// Where the official installer puts Ceiling, as recorded by its own
+/// Add/Remove Programs registration.
+#[cfg(target_os = "windows")]
+fn registered_install_dir() -> Option<PathBuf> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\io.github.tsouth89.ceiling_is1",
+        )
+        .ok()?
+        .get_value::<String, _>("InstallLocation")
+        .ok()
+        .and_then(|location| parse_install_location(&location))
+}
+
+/// Turn a raw `InstallLocation` value into a directory worth comparing against.
+///
+/// Only an absolute path means anything here. A blank or relative value would
+/// be resolved against the *current working directory*, which for a shortcut
+/// launch is nothing to do with where Ceiling is installed, and could make the
+/// "this copy is not the installed one" refusal fire on a perfectly good
+/// install. Anything unusable is treated as "no registration", which lets the
+/// update proceed rather than blocking it on a malformed registry value.
+#[cfg(target_os = "windows")]
+fn parse_install_location(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim().trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    path.is_absolute().then_some(path)
+}
+
+/// Refuse to auto-apply an update that would leave *this* copy untouched.
+///
+/// The installer writes to a fixed directory. A copy of Ceiling running from
+/// anywhere else (a local `tauri build`, an old install from different
+/// packaging, a copy on a stick) is not the one it upgrades, so the update
+/// silently succeeds, this binary stays on the old version, the next check sees
+/// the same release, and it loops forever with nothing to show the user why.
+///
+/// Returns the reason to refuse, or `None` when applying is safe.
+#[cfg(target_os = "windows")]
+fn update_would_not_replace_this_copy(current_exe: &Path) -> Option<String> {
+    let install_dir = registered_install_dir()?;
+    if !install_dir.exists() {
+        // Nothing registered on disk to contradict; let the update proceed.
+        return None;
+    }
+    if path_is_within(current_exe, &install_dir) {
+        return None;
+    }
+    Some(format!(
+        "This copy of Ceiling is running from {} but the installer updates {}. \
+         Applying the update here would leave this copy on the old version and keep \
+         prompting you. Close this copy and run the installed Ceiling, or download the \
+         installer from the releases page.",
+        current_exe.parent().unwrap_or(current_exe).display(),
+        install_dir.display()
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn path_is_within(path: &Path, dir: &Path) -> bool {
+    // Compare case-insensitively: Windows paths differing only in case are the
+    // same directory, and refusing a valid update over that is worse than the
+    // rare false accept.
+    let normalize = |value: &Path| value.to_string_lossy().to_lowercase().replace('/', "\\");
+    let dir = normalize(dir);
+    normalize(path).starts_with(&format!("{}\\", dir.trim_end_matches('\\')))
 }
 
 #[cfg(target_os = "windows")]
@@ -675,9 +760,140 @@ pub fn cleanup_downloads() {
     }
 }
 
+/// Delete cached installers at or below the running version.
+///
+/// Every downloaded installer was kept forever: a real machine had ten of them
+/// going back to 0.43.3, 305 MB, none of them useful once installed. Only an
+/// installer newer than the running version can still be applied, which is
+/// exactly what [`find_pending_installer_in_dir`] looks for, so anything else
+/// is dead weight.
+///
+/// Best-effort by design. A file that will not delete (open, locked, denied) is
+/// skipped rather than failing the update it is housekeeping for.
+pub fn prune_superseded_downloads() {
+    let Some(download_dir) = get_download_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&download_dir) else {
+        return;
+    };
+    let current_version = parse_version_triplet(CURRENT_VERSION);
+    let mut removed = 0usize;
+    let mut freed = 0u64;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(version) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(installer_version_from_name)
+        else {
+            continue;
+        };
+        if version > current_version {
+            continue;
+        }
+        let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+            freed += size;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(
+            removed,
+            freed_mb = freed / (1024 * 1024),
+            "pruned superseded update installers"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A copy running outside the installed directory is never the one the
+    /// installer upgrades, and applying anyway is what produced a silent
+    /// forever-loop: install succeeds elsewhere, this binary stays old, the
+    /// next check offers the same release again.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_update_that_would_not_replace_this_copy_is_refused() {
+        let installed = Path::new(r"C:\Users\me\AppData\Local\Programs\Ceiling");
+
+        // The installed copy applies normally.
+        assert!(path_is_within(
+            Path::new(r"C:\Users\me\AppData\Local\Programs\Ceiling\ceiling.exe"),
+            installed
+        ));
+        // Windows path case must not decide whether an update is allowed.
+        assert!(path_is_within(
+            Path::new(r"c:\users\me\appdata\local\programs\CEILING\ceiling.exe"),
+            installed
+        ));
+        assert!(path_is_within(
+            Path::new(r"C:\Users\me\AppData\Local\Programs\Ceiling\bin\ceiling.exe"),
+            installed
+        ));
+
+        // A local `tauri build`, an old install from different packaging, and a
+        // sibling directory that merely shares a prefix are all not it.
+        for outside in [
+            r"C:\Users\me\AppData\Local\Ceiling\codexbar-desktop-tauri.exe",
+            r"C:\projects\ceiling\target\debug\ceiling.exe",
+            r"C:\Users\me\AppData\Local\Programs\Ceiling-old\ceiling.exe",
+        ] {
+            assert!(
+                !path_is_within(Path::new(outside), installed),
+                "{outside} should not count as installed"
+            );
+        }
+    }
+
+    /// A malformed registry value must not be mistaken for a real install
+    /// directory: a blank or relative one resolves against the working
+    /// directory, which could refuse a legitimate update.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn only_an_absolute_install_location_counts_as_a_registration() {
+        assert_eq!(
+            parse_install_location(r"C:\Users\me\AppData\Local\Programs\Ceiling\"),
+            Some(PathBuf::from(r"C:\Users\me\AppData\Local\Programs\Ceiling"))
+        );
+        // Surrounding whitespace is stripped, not treated as part of the path.
+        assert_eq!(
+            parse_install_location("  C:\\Programs\\Ceiling  "),
+            Some(PathBuf::from(r"C:\Programs\Ceiling"))
+        );
+
+        for unusable in ["", "   ", "\\", "/", "Ceiling", r".\Ceiling"] {
+            assert_eq!(
+                parse_install_location(unusable),
+                None,
+                "{unusable:?} should not read as an install directory"
+            );
+        }
+    }
+
+    #[test]
+    fn only_installers_newer_than_this_build_are_worth_keeping() {
+        // prune_superseded_downloads and find_pending_installer_in_dir must
+        // agree, or pruning would delete the very update about to be applied.
+        let current = parse_version_triplet(CURRENT_VERSION);
+        for name in [
+            "Ceiling-0.43.3-Setup.exe",
+            "Ceiling-1.2.0-Setup.exe",
+            "Ceiling-1.5.12-Setup.exe",
+        ] {
+            let version = installer_version_from_name(name).expect(name);
+            assert!(version <= current, "{name} should be prunable");
+        }
+
+        let far_future = installer_version_from_name("Ceiling-99.0.0-Setup.exe").unwrap();
+        assert!(
+            far_future > current,
+            "a genuinely newer installer must survive pruning"
+        );
+    }
 
     #[test]
     fn test_version_comparison() {

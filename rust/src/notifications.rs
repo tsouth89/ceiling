@@ -1444,18 +1444,6 @@ mod tests {
             let _ = std::fs::remove_file(&missing);
             assert_eq!(read_shortcut_aumid(&missing), None);
 
-            // If a shortcut is installed, whatever it claims must be readable
-            // as a real string rather than coming back empty.
-            if let Ok(installed) = start_menu_shortcut_path()
-                && installed.exists()
-            {
-                let claimed = read_shortcut_aumid(&installed);
-                assert!(
-                    claimed.as_deref().is_some_and(|id| !id.is_empty()),
-                    "installed shortcut read back no AUMID: {claimed:?}"
-                );
-            }
-
             if initialized {
                 CoUninitialize();
             }
@@ -1472,6 +1460,34 @@ mod tests {
         assert!(
             config.contains(&format!("\"identifier\": \"{CEILING_AUMID}\"")),
             "tauri.conf.json no longer declares {CEILING_AUMID} as its identifier"
+        );
+    }
+
+    /// The installer is the only thing that gives Ceiling a notification
+    /// identity, and it failing to do so is invisible until someone notices
+    /// alerts are not being kept. 1.5.17 shipped exactly that way: the
+    /// `[Icons]` entries had no `AppUserModelID`, so the shortcut claimed
+    /// nothing and Windows discarded every toast it rendered.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_installer_stamps_our_aumid_onto_the_start_menu_shortcut() {
+        let script = include_str!("../installer/codexbar.iss");
+
+        assert!(
+            script.contains(&format!(r#"#define AppUserModelId "{CEILING_AUMID}""#)),
+            "installer no longer defines {CEILING_AUMID} as its AppUserModelId"
+        );
+
+        let start_menu_icon = script
+            .lines()
+            .find(|line| {
+                line.trim_start()
+                    .starts_with(r#"Name: "{autoprograms}\Ceiling""#)
+            })
+            .expect("installer no longer creates a Start Menu shortcut");
+        assert!(
+            start_menu_icon.contains(r#"AppUserModelID: "{#AppUserModelId}""#),
+            "Start Menu shortcut does not claim our AUMID, so toasts will not be kept: {start_menu_icon}"
         );
     }
 
