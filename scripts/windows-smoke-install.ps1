@@ -205,9 +205,19 @@ namespace Ceiling {
     void GetValue(ref PropertyKey key, [In, Out] PropVariant value);
     void SetValue(ref PropertyKey key, PropVariant value); void Commit(); }
   [StructLayout(LayoutKind.Explicit)] internal class PropVariant : IDisposable {
+    private const ushort VT_EMPTY = 0;
+    private const ushort VT_LPWSTR = 31;
     [FieldOffset(0)] ushort valueType; [FieldOffset(8)] IntPtr pointer;
-    public string AsString() { return valueType == 31 && pointer != IntPtr.Zero ? Marshal.PtrToStringUni(pointer) : ""; }
-    public void Dispose() { if (pointer != IntPtr.Zero) { Marshal.FreeCoTaskMem(pointer); pointer = IntPtr.Zero; } } }
+    public string AsString() {
+      return valueType == VT_LPWSTR && pointer != IntPtr.Zero ? Marshal.PtrToStringUni(pointer) : ""; }
+    // Free only what is actually a CoTaskMem string. The field at offset 8
+    // overlaps a union, so a non-string variant can leave arbitrary non-zero
+    // bits there, and handing those to FreeCoTaskMem corrupts the heap.
+    // Anything else is left alone: leaking a few bytes in a short-lived check
+    // is strictly better than freeing memory that was never allocated.
+    public void Dispose() {
+      if (valueType == VT_LPWSTR && pointer != IntPtr.Zero) { Marshal.FreeCoTaskMem(pointer); }
+      valueType = VT_EMPTY; pointer = IntPtr.Zero; } }
   public static class Lnk {
     public static string ReadAppUserModelId(string path) {
       var key = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
