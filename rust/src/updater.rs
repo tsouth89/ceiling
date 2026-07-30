@@ -525,7 +525,25 @@ fn registered_install_dir() -> Option<PathBuf> {
         .ok()?
         .get_value::<String, _>("InstallLocation")
         .ok()
-        .map(|location| PathBuf::from(location.trim_end_matches(['\\', '/'])))
+        .and_then(|location| parse_install_location(&location))
+}
+
+/// Turn a raw `InstallLocation` value into a directory worth comparing against.
+///
+/// Only an absolute path means anything here. A blank or relative value would
+/// be resolved against the *current working directory*, which for a shortcut
+/// launch is nothing to do with where Ceiling is installed, and could make the
+/// "this copy is not the installed one" refusal fire on a perfectly good
+/// install. Anything unusable is treated as "no registration", which lets the
+/// update proceed rather than blocking it on a malformed registry value.
+#[cfg(target_os = "windows")]
+fn parse_install_location(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim().trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    path.is_absolute().then_some(path)
 }
 
 /// Refuse to auto-apply an update that would leave *this* copy untouched.
@@ -827,6 +845,31 @@ mod tests {
             assert!(
                 !path_is_within(Path::new(outside), installed),
                 "{outside} should not count as installed"
+            );
+        }
+    }
+
+    /// A malformed registry value must not be mistaken for a real install
+    /// directory: a blank or relative one resolves against the working
+    /// directory, which could refuse a legitimate update.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn only_an_absolute_install_location_counts_as_a_registration() {
+        assert_eq!(
+            parse_install_location(r"C:\Users\me\AppData\Local\Programs\Ceiling\"),
+            Some(PathBuf::from(r"C:\Users\me\AppData\Local\Programs\Ceiling"))
+        );
+        // Surrounding whitespace is stripped, not treated as part of the path.
+        assert_eq!(
+            parse_install_location("  C:\\Programs\\Ceiling  "),
+            Some(PathBuf::from(r"C:\Programs\Ceiling"))
+        );
+
+        for unusable in ["", "   ", "\\", "/", "Ceiling", r".\Ceiling"] {
+            assert_eq!(
+                parse_install_location(unusable),
+                None,
+                "{unusable:?} should not read as an install directory"
             );
         }
     }
