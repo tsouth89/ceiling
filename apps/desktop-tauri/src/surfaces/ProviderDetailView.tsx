@@ -221,7 +221,11 @@ export default function ProviderDetailView({
     }
     let cancelled = false;
     setChartData(null);
-    getProviderChartData(provider.providerId, provider.accountEmail ?? undefined)
+    getProviderChartData(
+      provider.providerId,
+      provider.accountEmail ?? undefined,
+      provider.accountId ?? undefined,
+    )
       .then((data) => {
         if (!cancelled) setChartData(data);
       })
@@ -231,7 +235,13 @@ export default function ProviderDetailView({
     return () => {
       cancelled = true;
     };
-  }, [provider.accountEmail, provider.error, provider.providerId, supportsLocalActivity]);
+  }, [
+    provider.accountEmail,
+    provider.accountId,
+    provider.error,
+    provider.providerId,
+    supportsLocalActivity,
+  ]);
 
   const primaryReset = useFormattedResetTime(
     provider.primary.resetsAt,

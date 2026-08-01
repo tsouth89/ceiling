@@ -250,7 +250,7 @@ impl OpenAIDashboardCacheStore {
                 let _ = fs::create_dir_all(parent);
             }
             if let Ok(data) = serde_json::to_string_pretty(cache) {
-                let _ = fs::write(&url, data);
+                let _ = crate::secure_file::atomic_write(&url, data.as_bytes());
             }
         }
     }

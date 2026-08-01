@@ -248,7 +248,7 @@ impl WidgetSnapshotStore {
         }
 
         let json = serde_json::to_string_pretty(snapshot)?;
-        fs::write(&path, json)?;
+        crate::secure_file::atomic_write(&path, json.as_bytes())?;
 
         tracing::debug!("Saved widget snapshot to {:?}", path);
         Ok(())
@@ -300,7 +300,7 @@ impl WidgetSelectionStore {
         }
 
         let json = serde_json::to_string(&Selection { provider })?;
-        fs::write(&path, json)?;
+        crate::secure_file::atomic_write(&path, json.as_bytes())?;
         Ok(())
     }
 

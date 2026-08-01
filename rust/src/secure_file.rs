@@ -1,7 +1,9 @@
 //! Small helper for storing local secret-bearing JSON files.
 
-use std::io;
+use std::ffi::OsString;
+use std::io::{self, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ const FORMAT: &str = "codexbar.secure-file";
 const VERSION: u32 = 1;
 const WINDOWS_DPAPI_USER: &str = "windows-dpapi-user";
 const WINDOWS_DPAPI_MACHINE: &str = "windows-dpapi-machine";
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProtectedFile {
@@ -95,8 +98,117 @@ pub fn read_string(path: &Path) -> io::Result<String> {
 /// Write a UTF-8 file, protecting it with Windows DPAPI when available.
 pub fn write_string(path: &Path, contents: &str) -> io::Result<()> {
     let bytes = protected_file_bytes(contents)?;
-    std::fs::write(path, bytes)?;
-    restrict_file_permissions(path)?;
+    atomic_write(path, &bytes)
+}
+
+/// Replace a local state file atomically with private permissions.
+///
+/// The temporary file lives beside the destination so the final rename stays
+/// on one filesystem. A crash can leave a harmless temp file, but it cannot
+/// truncate the last known-good settings or credential file.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "state file path has no parent")
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "state file path has no file name",
+        )
+    })?;
+
+    let mut temp_path = None;
+    let mut temp_file = None;
+    for _ in 0..16 {
+        let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut temp_name = OsString::from(".");
+        temp_name.push(file_name);
+        temp_name.push(format!(".ceiling-tmp-{}-{sequence}", std::process::id()));
+        let candidate = parent.join(temp_name);
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(file) => {
+                temp_path = Some(candidate);
+                temp_file = Some(file);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    let temp_path = temp_path.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not allocate a unique state-file temp path",
+        )
+    })?;
+    let mut temp_file = temp_file.expect("temp path and file are assigned together");
+
+    let result = (|| {
+        // Apply the private ACL/mode before secret bytes reach disk.
+        restrict_file_permissions(&temp_path)?;
+        temp_file.write_all(bytes)?;
+        temp_file.sync_all()?;
+        drop(temp_file);
+        atomic_replace(&temp_path, path)?;
+        sync_parent_directory(parent)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+
+    let from: Vec<u16> = from
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let to: Vec<u16> = to
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(from.as_ptr()),
+            PCWSTR(to.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+        .map_err(|error| io::Error::other(format!("atomic file replacement failed: {error}")))
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::rename(from, to)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) -> io::Result<()> {
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -240,6 +352,21 @@ mod tests {
         write_string(&path, r#"{"secret":"value"}"#).unwrap();
 
         assert_eq!(read_string(&path).unwrap(), r#"{"secret":"value"}"#);
+    }
+
+    #[test]
+    fn write_atomically_replaces_an_existing_file_without_temp_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secure.json");
+        write_string(&path, r#"{"secret":"first"}"#).unwrap();
+        write_string(&path, r#"{"secret":"second"}"#).unwrap();
+
+        assert_eq!(read_string(&path).unwrap(), r#"{"secret":"second"}"#);
+        let names = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![OsString::from("secure.json")]);
     }
 
     #[cfg(windows)]

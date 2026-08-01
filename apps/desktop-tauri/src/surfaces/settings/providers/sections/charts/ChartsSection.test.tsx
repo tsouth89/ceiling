@@ -133,6 +133,32 @@ describe("ChartsSection local usage summary", () => {
     tauriMocks.exportCostCsv.mockResolvedValue("C:/Users/me/Downloads/ceiling-claude-spend.csv");
   });
 
+  it("scopes chart and efficiency reads to the stable account id", async () => {
+    render(
+      <ChartsSection
+        providerId="claude"
+        accountEmail="shared@example.com"
+        accountId="acct-work"
+        t={(key) => key}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith(
+        "claude",
+        "shared@example.com",
+        "acct-work",
+        [],
+        undefined,
+      ),
+    );
+    expect(tauriMocks.getQuotaRunEfficiency).toHaveBeenCalledWith(
+      "claude",
+      "shared@example.com",
+      "acct-work",
+    );
+  });
+
   it("shows comparable processed totals and the seven-day token mix", async () => {
     const { getByText, getAllByText, getByLabelText } = render(
       <ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />,

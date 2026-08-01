@@ -438,6 +438,7 @@ export function ProviderDetailPane({
       <ChartsSection
         providerId={detail.id}
         accountEmail={detail.email}
+        accountId={detail.accountId}
         t={t}
       />
 

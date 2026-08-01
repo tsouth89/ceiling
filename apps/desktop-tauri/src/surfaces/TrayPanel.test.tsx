@@ -465,7 +465,11 @@ describe("TrayPanel provider grid", () => {
       )!,
     );
     await waitFor(() => {
-      expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("codex", undefined);
+      expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith(
+        "codex",
+        undefined,
+        undefined,
+      );
     });
   });
 

@@ -303,10 +303,12 @@ export function exportCostCsv(providerId: string): Promise<string> {
 export function getQuotaRunEfficiency(
   providerId: string,
   accountEmail?: string | null,
+  accountId?: string | null,
 ): Promise<import("../types/bridge").QuotaRunEfficiency[]> {
   return invoke("get_quota_run_efficiency", {
     providerId,
     accountEmail: accountEmail ?? null,
+    accountId: accountId ?? null,
   });
 }
 

@@ -884,7 +884,7 @@ impl JsonlScanner {
         }
 
         if let Ok(json) = serde_json::to_string_pretty(cache) {
-            let _ = fs::write(&cache_path, json);
+            let _ = crate::secure_file::atomic_write(&cache_path, json.as_bytes());
         }
     }
 

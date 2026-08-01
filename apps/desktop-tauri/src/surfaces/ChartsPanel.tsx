@@ -136,9 +136,10 @@ export default function ChartsPanel({
         </>
       ) : (
         <ChartsSection
-          key={selected.providerId}
+          key={`${selected.providerId}:${selected.accountId ?? "ambient"}`}
           providerId={selected.providerId}
           accountEmail={selected.accountEmail}
+          accountId={selected.accountId}
           providerSnapshot={selected}
           t={t}
         />
