@@ -126,8 +126,10 @@ export default function ProviderComparison({ providers }: {
           const result = await getProviderChartData(
             provider.providerId,
             provider.accountEmail ?? undefined,
-            undefined,
+            provider.accountId ?? undefined,
             providerLocalUsageWindows(provider),
+            undefined,
+            provider.accountOrganization ?? undefined,
           );
           return [provider.providerId, result] as const;
         }));

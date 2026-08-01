@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::capacity_events::{CapacityEventKind, CapacityEventPayload};
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
 
-const STORE_VERSION: u8 = 2;
+const STORE_VERSION: u8 = 3;
 /// Keep enough history for run-over-run efficiency (SOU-299) without unbounded growth.
 const MAX_RUNS_PER_SCOPE: usize = 40;
 const RETENTION_DAYS: i64 = 120;
@@ -309,13 +309,20 @@ pub fn record_capacity_events(events: &[CapacityEventPayload], snapshot: &Provid
 }
 
 /// Completed runs for a provider/account, chronological (oldest first).
-pub fn list_runs(provider_id: &str, account_email: Option<&str>) -> Vec<QuotaRunSnapshot> {
+pub fn list_runs(
+    provider_id: &str,
+    account_email: Option<&str>,
+    account_id: Option<&str>,
+) -> Vec<QuotaRunSnapshot> {
     let Ok(guard) = store().lock() else {
         return Vec::new();
     };
-    let exact = scope_key_parts(provider_id, account_email, None, None);
+    let exact = scope_key_parts(provider_id, account_email, account_id, None);
     if let Some(runs) = guard.runs.get(&exact) {
         return runs.clone();
+    }
+    if account_id.is_some() {
+        return Vec::new();
     }
     // Fall back to anonymous series for this provider only (never another seat).
     if account_email.is_some() {
@@ -331,8 +338,9 @@ pub fn list_runs(provider_id: &str, account_email: Option<&str>) -> Vec<QuotaRun
 pub fn efficiency_for_provider(
     provider_id: &str,
     account_email: Option<&str>,
+    account_id: Option<&str>,
 ) -> Vec<QuotaRunEfficiency> {
-    let runs = list_runs(provider_id, account_email);
+    let runs = list_runs(provider_id, account_email, account_id);
     if runs.is_empty() {
         return Vec::new();
     }
@@ -714,12 +722,16 @@ fn scope_key_parts(
     account_id: Option<&str>,
     organization: Option<&str>,
 ) -> String {
-    // Prefer email, then account id, then org — same idea as capacity observation
-    // scope without requiring source_label so list_runs stays callable from UI.
-    let identity = account_email
+    // A Ceiling-managed account id is stable even when two seats share an
+    // email address. Ambient readings still fall back to provider identity.
+    let identity = account_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .or_else(|| account_id.map(str::trim).filter(|value| !value.is_empty()))
+        .or_else(|| {
+            account_email
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
         .or_else(|| {
             organization
                 .map(str::trim)
@@ -796,7 +808,7 @@ fn persist_store(store: &QuotaRunStore) {
     }
     match serde_json::to_vec(store) {
         Ok(bytes) => {
-            if let Err(error) = fs::write(path, bytes) {
+            if let Err(error) = codexbar::secure_file::atomic_write(&path, &bytes) {
                 tracing::warn!("failed to persist quota run history: {error}");
             }
         }
@@ -924,7 +936,7 @@ mod tests {
         );
         record_capacity_events(&[event], &snap);
 
-        let runs = list_runs(provider, Some(email));
+        let runs = list_runs(provider, Some(email), Some("acct-work"));
         assert_eq!(runs.len(), 1);
         let run = &runs[0];
         assert!(run.complete, "watched from low used through reset");
@@ -964,7 +976,7 @@ mod tests {
         );
         record_capacity_events(&[event], &snap);
 
-        let runs = list_runs(provider, Some(email));
+        let runs = list_runs(provider, Some(email), Some("acct-work"));
         assert_eq!(runs.len(), 1);
         assert!(!runs[0].complete);
         assert_eq!(runs[0].reset_kind, QuotaRunResetKind::Surprise);
@@ -987,7 +999,7 @@ mod tests {
             true,
         );
         record_capacity_events(&[event], &snap);
-        let runs = list_runs(provider, Some(email));
+        let runs = list_runs(provider, Some(email), Some("acct-work"));
         assert_eq!(runs.len(), 1);
         assert!(!runs[0].complete);
         assert!(runs[0].while_away);
@@ -1021,8 +1033,11 @@ mod tests {
         work.updated_at = (at + Duration::hours(1)).to_rfc3339();
         record_capacity_events(&[event], &work);
 
-        assert_eq!(list_runs(provider, Some("me@job.test")).len(), 1);
-        assert!(list_runs(provider, Some("other@home.test")).is_empty());
+        assert_eq!(
+            list_runs(provider, Some("me@job.test"), Some("acct-work")).len(),
+            1
+        );
+        assert!(list_runs(provider, Some("me@job.test"), Some("acct-personal")).is_empty());
     }
 
     #[test]

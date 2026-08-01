@@ -256,6 +256,7 @@ export function getProviderChartData(
   accountId?: string,
   usageWindows?: import("../types/bridge").LocalUsageWindowRequest[],
   sourceLabel?: string,
+  accountOrganization?: string,
 ): Promise<ProviderChartData> {
   return invoke<ProviderChartData>("get_provider_chart_data", {
     providerId,
@@ -263,6 +264,7 @@ export function getProviderChartData(
     accountId,
     usageWindows,
     sourceLabel,
+    accountOrganization,
   });
 }
 
@@ -303,10 +305,12 @@ export function exportCostCsv(providerId: string): Promise<string> {
 export function getQuotaRunEfficiency(
   providerId: string,
   accountEmail?: string | null,
+  accountId?: string | null,
 ): Promise<import("../types/bridge").QuotaRunEfficiency[]> {
   return invoke("get_quota_run_efficiency", {
     providerId,
     accountEmail: accountEmail ?? null,
+    accountId: accountId ?? null,
   });
 }
 

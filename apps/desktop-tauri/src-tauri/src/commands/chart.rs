@@ -27,7 +27,7 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 // Version 7: Codex priority/fast (2x) pricing for local cost. Entries cached at
 // version 6 still hold pre-2x standard dollars for reset windows, so the
 // Weekly window card could show ~half of the API-value ring after 1.5.13.
-const CHART_CACHE_VERSION: u8 = 7;
+const CHART_CACHE_VERSION: u8 = 8;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,8 +362,13 @@ struct PersistedChartCache {
 pub fn get_quota_run_history(
     provider_id: String,
     account_email: Option<String>,
+    account_id: Option<String>,
 ) -> Vec<crate::quota_run_history::QuotaRunSnapshot> {
-    crate::quota_run_history::list_runs(&provider_id, account_email.as_deref())
+    crate::quota_run_history::list_runs(
+        &provider_id,
+        account_email.as_deref(),
+        account_id.as_deref(),
+    )
 }
 
 /// Latest quota-run efficiency cards per window (SOU-299).
@@ -371,8 +376,13 @@ pub fn get_quota_run_history(
 pub fn get_quota_run_efficiency(
     provider_id: String,
     account_email: Option<String>,
+    account_id: Option<String>,
 ) -> Vec<crate::quota_run_history::QuotaRunEfficiency> {
-    crate::quota_run_history::efficiency_for_provider(&provider_id, account_email.as_deref())
+    crate::quota_run_history::efficiency_for_provider(
+        &provider_id,
+        account_email.as_deref(),
+        account_id.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -382,6 +392,7 @@ pub async fn get_provider_chart_data(
     account_id: Option<String>,
     source_label: Option<String>,
     usage_windows: Option<Vec<LocalUsageWindowRequest>>,
+    account_organization: Option<String>,
 ) -> ProviderChartData {
     let usage_windows = usage_windows.unwrap_or_default();
     // An account's local logs live under its own config directory. Scanning
@@ -395,12 +406,18 @@ pub async fn get_provider_chart_data(
     let cache_key = chart_cache_key(
         &provider_id,
         account_email.as_deref(),
+        account_id.as_deref(),
+        account_organization.as_deref(),
         source_label.as_deref(),
         &usage_windows,
     );
     if let Some(mut cached) = cached_chart_data(&cache_key) {
-        cached.data.quota_history =
-            crate::usage_history::provider_history(&provider_id, account_email.as_deref());
+        cached.data.quota_history = crate::usage_history::provider_history(
+            &provider_id,
+            account_email.as_deref(),
+            account_id.as_deref(),
+            account_organization.as_deref(),
+        );
         if current_unix_ms().saturating_sub(cached.refreshed_at_ms)
             > CHART_CACHE_TTL.as_millis() as i64
         {
@@ -408,6 +425,8 @@ pub async fn get_provider_chart_data(
                 cache_key,
                 provider_id,
                 account_email,
+                account_id,
+                account_organization,
                 scoped_home.clone(),
                 usage_windows,
             );
@@ -415,8 +434,12 @@ pub async fn get_provider_chart_data(
         return cached.data;
     }
 
-    let quota_history =
-        crate::usage_history::provider_history(&provider_id, account_email.as_deref());
+    let quota_history = crate::usage_history::provider_history(
+        &provider_id,
+        account_email.as_deref(),
+        account_id.as_deref(),
+        account_organization.as_deref(),
+    );
     if !quota_history.is_empty() {
         let mut immediate = ProviderChartData::empty(provider_id.clone());
         immediate.quota_history = quota_history;
@@ -424,6 +447,8 @@ pub async fn get_provider_chart_data(
             cache_key,
             provider_id,
             account_email,
+            account_id,
+            account_organization,
             scoped_home.clone(),
             usage_windows,
         );
@@ -436,6 +461,8 @@ pub async fn get_provider_chart_data(
         build_provider_chart_data_with_cancel(
             provider_id,
             account_email,
+            account_id,
+            account_organization,
             scoped_home,
             usage_windows,
             Some(cancel),
@@ -483,6 +510,8 @@ fn schedule_chart_cache_refresh(
     key: String,
     provider_id: String,
     account_email: Option<String>,
+    account_id: Option<String>,
+    account_organization: Option<String>,
     scoped_home: Option<std::path::PathBuf>,
     usage_windows: Vec<LocalUsageWindowRequest>,
 ) {
@@ -500,6 +529,8 @@ fn schedule_chart_cache_refresh(
             build_provider_chart_data_with_cancel(
                 provider_id,
                 account_email,
+                account_id,
+                account_organization,
                 scoped_home,
                 usage_windows,
                 None,
@@ -519,12 +550,24 @@ fn schedule_chart_cache_refresh(
 fn chart_cache_key(
     provider_id: &str,
     account_email: Option<&str>,
+    account_id: Option<&str>,
+    account_organization: Option<&str>,
     source_label: Option<&str>,
     usage_windows: &[LocalUsageWindowRequest],
 ) -> String {
-    let identity = account_email
+    let identity = account_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            account_email
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            account_organization
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
         .unwrap_or("anonymous")
         .to_ascii_lowercase();
     let windows = usage_windows
@@ -585,7 +628,7 @@ fn persist_chart_cache(cache: &PersistedChartCache) {
     }
     match serde_json::to_vec(cache) {
         Ok(bytes) => {
-            if let Err(error) = fs::write(path, bytes) {
+            if let Err(error) = codexbar::secure_file::atomic_write(&path, &bytes) {
                 tracing::warn!("failed to persist chart cache: {error}");
             }
         }
@@ -1113,12 +1156,22 @@ pub(crate) fn build_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
-    build_provider_chart_data_with_cancel(provider_id, account_email, None, Vec::new(), None)
+    build_provider_chart_data_with_cancel(
+        provider_id,
+        account_email,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+    )
 }
 
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
+    account_id: Option<String>,
+    account_organization: Option<String>,
     scoped_home: Option<std::path::PathBuf>,
     usage_window_requests: Vec<LocalUsageWindowRequest>,
     cancel: Option<Arc<AtomicBool>>,
@@ -1184,6 +1237,8 @@ fn build_provider_chart_data_with_cancel(
         quota_history: crate::usage_history::provider_history(
             &provider_id,
             account_email.as_deref(),
+            account_id.as_deref(),
+            account_organization.as_deref(),
         ),
         provider_id,
         cost_history,
@@ -1793,17 +1848,40 @@ mod tests {
     use super::{
         CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
         LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry, daily_series_from_report,
-        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
-        local_yesterday_window_utc, localized_estimate_note, model_breakdown,
-        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
-        project_breakdown, spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        chart_cache_key, comparison_period_specs, cost_fetch_failure_allows_early_retry,
+        daily_series_from_report, effort_breakdown, format_cost_csv, local_midnight_in_tz,
+        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
+        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
+        pricing_coverage_tokens, project_breakdown, spend_budget_period_details, token_breakdown,
+        token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
     use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
     use codexbar::settings::Language;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn chart_cache_separates_managed_accounts_that_share_an_email() {
+        let personal = chart_cache_key(
+            "codex",
+            Some("shared@example.com"),
+            Some("acct-personal"),
+            None,
+            Some("oauth"),
+            &[],
+        );
+        let work = chart_cache_key(
+            "codex",
+            Some("shared@example.com"),
+            Some("acct-work"),
+            None,
+            Some("oauth"),
+            &[],
+        );
+
+        assert_ne!(personal, work);
+    }
 
     #[test]
     fn token_cost_age_does_not_use_provider_quota_age() {

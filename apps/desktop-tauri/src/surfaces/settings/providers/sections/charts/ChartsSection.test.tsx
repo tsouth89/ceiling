@@ -133,6 +133,33 @@ describe("ChartsSection local usage summary", () => {
     tauriMocks.exportCostCsv.mockResolvedValue("C:/Users/me/Downloads/ceiling-claude-spend.csv");
   });
 
+  it("scopes chart and efficiency reads to the stable account id", async () => {
+    render(
+      <ChartsSection
+        providerId="claude"
+        accountEmail="shared@example.com"
+        accountId="acct-work"
+        t={(key) => key}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith(
+        "claude",
+        "shared@example.com",
+        "acct-work",
+        [],
+        undefined,
+        undefined,
+      ),
+    );
+    expect(tauriMocks.getQuotaRunEfficiency).toHaveBeenCalledWith(
+      "claude",
+      "shared@example.com",
+      "acct-work",
+    );
+  });
+
   it("shows comparable processed totals and the seven-day token mix", async () => {
     const { getByText, getAllByText, getByLabelText } = render(
       <ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />,
@@ -264,7 +291,7 @@ describe("ChartsSection local usage summary", () => {
       updatedAt: "2026-07-19T12:00:00.000Z",
       error: null,
       pace: null,
-      accountOrganization: null,
+      accountOrganization: "org-work",
       trayStatusLabel: null,
     };
 
@@ -286,6 +313,7 @@ describe("ChartsSection local usage summary", () => {
       undefined,
       [],
       "Claude CLI",
+      "org-work",
     );
   });
 

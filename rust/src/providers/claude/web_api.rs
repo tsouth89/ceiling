@@ -174,7 +174,7 @@ fn json_value_kind(value: &serde_json::Value) -> &'static str {
 
 /// Claude Web API fetcher
 pub struct ClaudeWebApiFetcher {
-    client: Client,
+    client: Result<Client, String>,
 }
 
 /// Organization info from Claude API
@@ -356,8 +356,14 @@ impl ClaudeWebApiFetcher {
             client: crate::core::credentialed_http_client_builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .expect("Failed to create HTTP client"),
+                .map_err(|error| format!("Failed to create HTTP client: {error}")),
         }
+    }
+
+    fn client(&self) -> Result<&Client, ProviderError> {
+        self.client
+            .as_ref()
+            .map_err(|error| ProviderError::Other(error.clone()))
     }
 
     /// Fetch usage using browser cookies or env-var session key
@@ -626,7 +632,7 @@ impl ClaudeWebApiFetcher {
         let url = format!("{}/organizations", Self::BASE_URL);
 
         let response = self
-            .client
+            .client()?
             .get(&url)
             .headers(headers.clone())
             .send()
@@ -656,7 +662,7 @@ impl ClaudeWebApiFetcher {
         let url = format!("{}/organizations/{}/usage", Self::BASE_URL, org_id);
 
         let response = self
-            .client
+            .client()?
             .get(&url)
             .headers(headers.clone())
             .send()
@@ -685,7 +691,7 @@ impl ClaudeWebApiFetcher {
         );
 
         let response = self
-            .client
+            .client()?
             .get(&url)
             .headers(headers.clone())
             .send()
@@ -709,7 +715,7 @@ impl ClaudeWebApiFetcher {
         let url = format!("{}/account", Self::BASE_URL);
 
         let response = self
-            .client
+            .client()?
             .get(&url)
             .headers(headers.clone())
             .send()

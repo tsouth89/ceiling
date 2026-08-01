@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
 
-const STORE_VERSION: u8 = 1;
+const STORE_VERSION: u8 = 2;
 const RETENTION_DAYS: i64 = 30;
 const MIN_SAMPLE_INTERVAL_MINUTES: i64 = 5;
 
@@ -56,7 +56,12 @@ pub fn record_snapshot(snapshot: &ProviderUsageSnapshot) {
         recorded_at: recorded_at.to_rfc3339(),
         windows,
     };
-    let key = scope_key(&snapshot.provider_id, snapshot.account_email.as_deref());
+    let key = scope_key(
+        &snapshot.provider_id,
+        snapshot.account_email.as_deref(),
+        snapshot.account_id.as_deref(),
+        snapshot.account_organization.as_deref(),
+    );
 
     let Ok(mut guard) = store().lock() else {
         return;
@@ -88,13 +93,24 @@ pub fn record_snapshot(snapshot: &ProviderUsageSnapshot) {
     persist_store(&guard);
 }
 
-pub fn provider_history(provider_id: &str, account_email: Option<&str>) -> Vec<UsageHistoryPoint> {
+pub fn provider_history(
+    provider_id: &str,
+    account_email: Option<&str>,
+    account_id: Option<&str>,
+    account_organization: Option<&str>,
+) -> Vec<UsageHistoryPoint> {
     let Ok(guard) = store().lock() else {
         return Vec::new();
     };
-    select_series(&guard.series, provider_id, account_email)
-        .map(|points| visible_history(provider_id, points))
-        .unwrap_or_default()
+    select_series(
+        &guard.series,
+        provider_id,
+        account_email,
+        account_id,
+        account_organization,
+    )
+    .map(|points| visible_history(provider_id, points))
+    .unwrap_or_default()
 }
 
 /// Pick the series to chart for a provider/account.
@@ -111,12 +127,20 @@ fn select_series<'a>(
     series: &'a HashMap<String, Vec<UsageHistoryPoint>>,
     provider_id: &str,
     account_email: Option<&str>,
+    account_id: Option<&str>,
+    account_organization: Option<&str>,
 ) -> Option<&'a Vec<UsageHistoryPoint>> {
-    let exact = scope_key(provider_id, account_email);
+    let exact = scope_key(provider_id, account_email, account_id, account_organization);
     if let Some(points) = series.get(&exact) {
         return Some(points);
     }
-    let anonymous = scope_key(provider_id, None);
+    // A managed account has a stable identity. Falling back to an email or
+    // anonymous series here can show another seat's history when accounts
+    // share a login address, so wait for this account's first sample instead.
+    if account_id.is_some() || account_organization.is_some() {
+        return None;
+    }
+    let anonymous = scope_key(provider_id, None, None, None);
     if anonymous == exact {
         return None;
     }
@@ -199,8 +223,25 @@ fn normalize_id(value: &str) -> String {
         .join("-")
 }
 
-fn scope_key(provider_id: &str, account_email: Option<&str>) -> String {
-    let identity = account_email
+fn scope_key(
+    provider_id: &str,
+    account_email: Option<&str>,
+    account_id: Option<&str>,
+    organization: Option<&str>,
+) -> String {
+    let identity = account_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            account_email
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            organization
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("anonymous")
@@ -250,7 +291,7 @@ fn persist_store(store: &UsageHistoryStore) {
     }
     match serde_json::to_vec(store) {
         Ok(bytes) => {
-            if let Err(error) = fs::write(path, bytes) {
+            if let Err(error) = codexbar::secure_file::atomic_write(&path, &bytes) {
                 tracing::warn!("failed to persist usage history: {error}");
             }
         }
@@ -274,7 +315,7 @@ mod tests {
         let mut series = HashMap::new();
         for (provider, email, recorded_at) in entries {
             series.insert(
-                scope_key(provider, *email),
+                scope_key(provider, *email, None, None),
                 vec![UsageHistoryPoint {
                     recorded_at: recorded_at.to_string(),
                     windows: Vec::new(),
@@ -294,7 +335,7 @@ mod tests {
             "2026-07-21T00:00:00Z",
         )]);
 
-        let selected = select_series(&series, "codex", Some("work@example.com"));
+        let selected = select_series(&series, "codex", Some("work@example.com"), None, None);
 
         assert!(selected.is_none(), "got another account's series");
     }
@@ -305,7 +346,7 @@ mod tests {
         // the same person, so bridging to it is correct.
         let series = series_with(&[("codex", None, "2026-07-21T00:00:00Z")]);
 
-        let selected = select_series(&series, "codex", Some("person@example.com"));
+        let selected = select_series(&series, "codex", Some("person@example.com"), None, None);
 
         assert!(selected.is_some());
     }
@@ -317,7 +358,8 @@ mod tests {
             ("codex", Some("person@example.com"), "2026-07-20T00:00:00Z"),
         ]);
 
-        let selected = select_series(&series, "codex", Some("person@example.com")).unwrap();
+        let selected =
+            select_series(&series, "codex", Some("person@example.com"), None, None).unwrap();
 
         // Freshness must not override identity.
         assert_eq!(selected[0].recorded_at, "2026-07-20T00:00:00Z");
@@ -327,16 +369,62 @@ mod tests {
     fn another_providers_series_is_never_selected() {
         let series = series_with(&[("claude", Some("person@example.com"), "2026-07-21T00:00:00Z")]);
 
-        assert!(select_series(&series, "codex", Some("person@example.com")).is_none());
-        assert!(select_series(&series, "codex", None).is_none());
+        assert!(select_series(&series, "codex", Some("person@example.com"), None, None).is_none());
+        assert!(select_series(&series, "codex", None, None, None).is_none());
     }
 
     #[test]
     fn account_scope_does_not_persist_the_email() {
-        let key = scope_key("cursor", Some("Person@Example.com"));
+        let key = scope_key("cursor", Some("Person@Example.com"), None, None);
         assert!(key.starts_with("cursor:"));
         assert!(!key.contains("person"));
-        assert_eq!(key, scope_key("cursor", Some("person@example.com")));
+        assert_eq!(
+            key,
+            scope_key("cursor", Some("person@example.com"), None, None)
+        );
+    }
+
+    #[test]
+    fn stable_account_id_separates_seats_that_share_an_email() {
+        let personal = scope_key(
+            "codex",
+            Some("shared@example.com"),
+            Some("acct-personal"),
+            None,
+        );
+        let work = scope_key("codex", Some("shared@example.com"), Some("acct-work"), None);
+        assert_ne!(personal, work);
+
+        let mut series = HashMap::new();
+        series.insert(personal, Vec::new());
+        assert!(
+            select_series(
+                &series,
+                "codex",
+                Some("shared@example.com"),
+                Some("acct-work"),
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn organization_only_history_is_read_from_its_recorded_scope() {
+        let mut series = HashMap::new();
+        let organization_key = scope_key("openai", None, None, Some("org-work"));
+        series.insert(
+            organization_key,
+            vec![UsageHistoryPoint {
+                recorded_at: "2026-07-21T00:00:00Z".into(),
+                windows: Vec::new(),
+            }],
+        );
+
+        let selected = select_series(&series, "openai", None, None, Some("org-work"));
+
+        assert!(selected.is_some());
+        assert!(select_series(&series, "openai", None, None, Some("org-other")).is_none());
     }
 
     #[test]

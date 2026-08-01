@@ -20,11 +20,6 @@ const KEYRING_SERVICE: &str = "Claude Code-credentials";
 const ENV_TOKEN_KEY: &str = "CODEXBAR_CLAUDE_OAUTH_TOKEN";
 const ENV_SCOPES_KEY: &str = "CODEXBAR_CLAUDE_OAUTH_SCOPES";
 
-/// Monotonic counter to make the persist temp-file name unique per write, so
-/// concurrent refreshes (multiple instances / overlapping polls) never share a
-/// temp path.
-static PERSIST_TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 /// Identifies where a set of OAuth credentials was loaded from, so the
 /// refreshed-credentials cache never mixes tokens across sources.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -360,7 +355,7 @@ fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError>
 
 /// Persist refreshed tokens back to the config directory's `.credentials.json`,
 /// updating only the `claudeAiOauth` token fields and leaving everything else
-/// (e.g. `mcpOAuth`) untouched. Written atomically via a temp file + rename.
+/// (e.g. `mcpOAuth`) untouched. Written atomically beside the live file.
 ///
 /// `config_dir` must be the same account the credentials were loaded from, or a
 /// refresh would be written over a different seat's tokens.
@@ -384,17 +379,7 @@ pub(super) fn persist_refreshed_credentials(
     let serialized = serde_json::to_string_pretty(&root)
         .map_err(|e| ProviderError::OAuth(format!("Failed to serialize credentials: {e}")))?;
 
-    let parent = path
-        .parent()
-        .ok_or_else(|| ProviderError::OAuth("Credentials path has no parent".to_string()))?;
-    let tmp = parent.join(format!(
-        ".credentials.json.codexbar-tmp.{}.{}",
-        std::process::id(),
-        PERSIST_TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::write(&tmp, serialized.as_bytes())
-        .map_err(|e| ProviderError::OAuth(format!("Failed to write credentials temp file: {e}")))?;
-    std::fs::rename(&tmp, &path)
+    crate::secure_file::atomic_write(&path, serialized.as_bytes())
         .map_err(|e| ProviderError::OAuth(format!("Failed to replace credentials file: {e}")))?;
     Ok(())
 }

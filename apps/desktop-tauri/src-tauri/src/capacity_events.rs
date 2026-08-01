@@ -485,7 +485,7 @@ impl CapacityEventObserver {
         }
         match serde_json::to_vec_pretty(self) {
             Ok(bytes) => {
-                if let Err(error) = fs::write(path, bytes) {
+                if let Err(error) = codexbar::secure_file::atomic_write(path, &bytes) {
                     tracing::warn!("failed to persist capacity-event history: {error}");
                 }
             }

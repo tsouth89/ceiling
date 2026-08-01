@@ -117,7 +117,7 @@ fn save_file(file: &GeometryFile) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let json = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())
+    codexbar::secure_file::atomic_write(&path, json.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Look up remembered geometry for a surface mode. Returns `None` when the
