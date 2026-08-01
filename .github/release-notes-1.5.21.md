@@ -20,12 +20,12 @@ Claude now reports HTTP client setup failures instead of panicking a background 
 
 ## Installers
 
-- **Ceiling-1.5.20-Setup.exe** - standard installer
-- **Ceiling-1.5.20-portable.exe** - portable
-- **Ceiling-1.5.20-Store-Setup.exe** - Microsoft Store package (WebView2 bundled)
+- **Ceiling-1.5.21-Setup.exe** - standard installer
+- **Ceiling-1.5.21-portable.exe** - portable
+- **Ceiling-1.5.21-Store-Setup.exe** - Microsoft Store package (WebView2 bundled)
 
 Portable builds show alerts as banners but do not keep them in the notification center. That requires the Start Menu shortcut installed by the standard or Store build.
 
 ---
 
-**Full Changelog**: https://github.com/tsouth89/ceiling/compare/v1.5.19...v1.5.20
+**Full Changelog**: https://github.com/tsouth89/ceiling/compare/v1.5.19...v1.5.21
