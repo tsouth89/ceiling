@@ -256,6 +256,7 @@ export function getProviderChartData(
   accountId?: string,
   usageWindows?: import("../types/bridge").LocalUsageWindowRequest[],
   sourceLabel?: string,
+  accountOrganization?: string,
 ): Promise<ProviderChartData> {
   return invoke<ProviderChartData>("get_provider_chart_data", {
     providerId,
@@ -263,6 +264,7 @@ export function getProviderChartData(
     accountId,
     usageWindows,
     sourceLabel,
+    accountOrganization,
   });
 }
 

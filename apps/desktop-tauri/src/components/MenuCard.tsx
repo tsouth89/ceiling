@@ -428,6 +428,9 @@ export default function MenuCard({
       provider.providerId,
       provider.accountEmail ?? undefined,
       provider.accountId ?? undefined,
+      undefined,
+      undefined,
+      provider.accountOrganization ?? undefined,
     )
       .then((data) => {
         if (!cancelled) {
@@ -441,7 +444,7 @@ export default function MenuCard({
     return () => {
       cancelled = true;
     };
-  }, [provider.providerId, provider.accountEmail, provider.accountId, onLayoutChange]);
+  }, [provider.providerId, provider.accountEmail, provider.accountId, provider.accountOrganization, onLayoutChange]);
 
   const isWayfinder = provider.providerId === "wayfinder";
   const rawEmail = !isWayfinder && provider.accountEmail

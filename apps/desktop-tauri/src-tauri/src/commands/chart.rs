@@ -392,6 +392,7 @@ pub async fn get_provider_chart_data(
     account_id: Option<String>,
     source_label: Option<String>,
     usage_windows: Option<Vec<LocalUsageWindowRequest>>,
+    account_organization: Option<String>,
 ) -> ProviderChartData {
     let usage_windows = usage_windows.unwrap_or_default();
     // An account's local logs live under its own config directory. Scanning
@@ -406,6 +407,7 @@ pub async fn get_provider_chart_data(
         &provider_id,
         account_email.as_deref(),
         account_id.as_deref(),
+        account_organization.as_deref(),
         source_label.as_deref(),
         &usage_windows,
     );
@@ -414,6 +416,7 @@ pub async fn get_provider_chart_data(
             &provider_id,
             account_email.as_deref(),
             account_id.as_deref(),
+            account_organization.as_deref(),
         );
         if current_unix_ms().saturating_sub(cached.refreshed_at_ms)
             > CHART_CACHE_TTL.as_millis() as i64
@@ -423,6 +426,7 @@ pub async fn get_provider_chart_data(
                 provider_id,
                 account_email,
                 account_id,
+                account_organization,
                 scoped_home.clone(),
                 usage_windows,
             );
@@ -434,6 +438,7 @@ pub async fn get_provider_chart_data(
         &provider_id,
         account_email.as_deref(),
         account_id.as_deref(),
+        account_organization.as_deref(),
     );
     if !quota_history.is_empty() {
         let mut immediate = ProviderChartData::empty(provider_id.clone());
@@ -443,6 +448,7 @@ pub async fn get_provider_chart_data(
             provider_id,
             account_email,
             account_id,
+            account_organization,
             scoped_home.clone(),
             usage_windows,
         );
@@ -456,6 +462,7 @@ pub async fn get_provider_chart_data(
             provider_id,
             account_email,
             account_id,
+            account_organization,
             scoped_home,
             usage_windows,
             Some(cancel),
@@ -504,6 +511,7 @@ fn schedule_chart_cache_refresh(
     provider_id: String,
     account_email: Option<String>,
     account_id: Option<String>,
+    account_organization: Option<String>,
     scoped_home: Option<std::path::PathBuf>,
     usage_windows: Vec<LocalUsageWindowRequest>,
 ) {
@@ -522,6 +530,7 @@ fn schedule_chart_cache_refresh(
                 provider_id,
                 account_email,
                 account_id,
+                account_organization,
                 scoped_home,
                 usage_windows,
                 None,
@@ -542,6 +551,7 @@ fn chart_cache_key(
     provider_id: &str,
     account_email: Option<&str>,
     account_id: Option<&str>,
+    account_organization: Option<&str>,
     source_label: Option<&str>,
     usage_windows: &[LocalUsageWindowRequest],
 ) -> String {
@@ -550,6 +560,11 @@ fn chart_cache_key(
         .filter(|value| !value.is_empty())
         .or_else(|| {
             account_email
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            account_organization
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
         })
@@ -1141,13 +1156,22 @@ pub(crate) fn build_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
-    build_provider_chart_data_with_cancel(provider_id, account_email, None, None, Vec::new(), None)
+    build_provider_chart_data_with_cancel(
+        provider_id,
+        account_email,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+    )
 }
 
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
     account_id: Option<String>,
+    account_organization: Option<String>,
     scoped_home: Option<std::path::PathBuf>,
     usage_window_requests: Vec<LocalUsageWindowRequest>,
     cancel: Option<Arc<AtomicBool>>,
@@ -1214,6 +1238,7 @@ fn build_provider_chart_data_with_cancel(
             &provider_id,
             account_email.as_deref(),
             account_id.as_deref(),
+            account_organization.as_deref(),
         ),
         provider_id,
         cost_history,
@@ -1842,6 +1867,7 @@ mod tests {
             "codex",
             Some("shared@example.com"),
             Some("acct-personal"),
+            None,
             Some("oauth"),
             &[],
         );
@@ -1849,6 +1875,7 @@ mod tests {
             "codex",
             Some("shared@example.com"),
             Some("acct-work"),
+            None,
             Some("oauth"),
             &[],
         );

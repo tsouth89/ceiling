@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
-import ChartsPanel from "./ChartsPanel";
+import ChartsPanel, { chartSectionKey } from "./ChartsPanel";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 
 // Stub the async, backend-fetching ChartsSection so this test exercises only
@@ -66,6 +66,18 @@ function provider(
 }
 
 describe("ChartsPanel", () => {
+  it("remounts charts when fallback account identity changes", () => {
+    const personal = provider({ accountEmail: "personal@example.com" });
+    const work = provider({ accountEmail: "work@example.com" });
+    const organization = provider({
+      accountEmail: null,
+      accountOrganization: "org-work",
+    });
+
+    expect(chartSectionKey(personal)).not.toBe(chartSectionKey(work));
+    expect(chartSectionKey(organization)).toBe("codex:org-work");
+  });
+
   it("shows an empty state when no provider reports chart data", () => {
     const { container, getByText } = render(
       <ChartsPanel

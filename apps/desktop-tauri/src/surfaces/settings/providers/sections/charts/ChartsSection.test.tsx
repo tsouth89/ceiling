@@ -150,6 +150,7 @@ describe("ChartsSection local usage summary", () => {
         "acct-work",
         [],
         undefined,
+        undefined,
       ),
     );
     expect(tauriMocks.getQuotaRunEfficiency).toHaveBeenCalledWith(
@@ -290,7 +291,7 @@ describe("ChartsSection local usage summary", () => {
       updatedAt: "2026-07-19T12:00:00.000Z",
       error: null,
       pace: null,
-      accountOrganization: null,
+      accountOrganization: "org-work",
       trayStatusLabel: null,
     };
 
@@ -312,6 +313,7 @@ describe("ChartsSection local usage summary", () => {
       undefined,
       [],
       "Claude CLI",
+      "org-work",
     );
   });
 

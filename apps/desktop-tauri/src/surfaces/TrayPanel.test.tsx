@@ -469,6 +469,9 @@ describe("TrayPanel provider grid", () => {
         "codex",
         undefined,
         undefined,
+        undefined,
+        undefined,
+        undefined,
       );
     });
   });

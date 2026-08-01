@@ -225,6 +225,9 @@ export default function ProviderDetailView({
       provider.providerId,
       provider.accountEmail ?? undefined,
       provider.accountId ?? undefined,
+      undefined,
+      undefined,
+      provider.accountOrganization ?? undefined,
     )
       .then((data) => {
         if (!cancelled) setChartData(data);
@@ -238,6 +241,7 @@ export default function ProviderDetailView({
   }, [
     provider.accountEmail,
     provider.accountId,
+    provider.accountOrganization,
     provider.error,
     provider.providerId,
     supportsLocalActivity,

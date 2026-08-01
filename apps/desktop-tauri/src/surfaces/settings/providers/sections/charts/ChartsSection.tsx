@@ -50,10 +50,15 @@ function chartDataCacheKey(
   providerId: string,
   accountEmail: string | null,
   accountId: string | null | undefined,
+  accountOrganization: string | null | undefined,
   sourceLabel: string | undefined,
   usageWindowsKey = "",
 ): string {
-  const identity = accountId?.trim().toLowerCase() || accountEmail?.trim().toLowerCase() || "";
+  const identity =
+    accountId?.trim().toLowerCase() ||
+    accountEmail?.trim().toLowerCase() ||
+    accountOrganization?.trim().toLowerCase() ||
+    "";
   return `${providerId.toLowerCase()}:${identity}:${sourceLabel?.trim().toLowerCase() ?? ""}:${usageWindowsKey}`;
 }
 
@@ -482,6 +487,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
   const [efficiency, setEfficiency] = useState<QuotaRunEfficiency[]>([]);
   const usageWindows = providerLocalUsageWindows(providerSnapshot);
   const sourceLabel = providerSnapshot?.sourceLabel;
+  const accountOrganization = providerSnapshot?.accountOrganization;
   const resetBoundaryUnavailable = providerHasUnavailableResetBoundary(providerSnapshot);
   const usageWindowsKey = usageWindows
     .map((window) => `${window.id}:${window.startsAt}:${window.endsAt}`)
@@ -513,6 +519,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
       providerId,
       accountEmail,
       accountId,
+      accountOrganization,
       sourceLabel,
       usageWindowsKey,
     );
@@ -538,6 +545,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
       accountId ?? undefined,
       usageWindows,
       sourceLabel,
+      accountOrganization ?? undefined,
     )
       .then((d) => {
         if (!cancelled) {
@@ -562,7 +570,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
     return () => {
       cancelled = true;
     };
-  }, [providerId, accountEmail, accountId, sourceLabel, usageWindowsKey]);
+  }, [providerId, accountEmail, accountId, accountOrganization, sourceLabel, usageWindowsKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -625,11 +633,19 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
           accountId ?? undefined,
           usageWindows,
           sourceLabel,
+          accountOrganization ?? undefined,
         );
         if (cancelled) return;
         if (next.localUsage) {
           chartDataCache.set(
-            chartDataCacheKey(providerId, accountEmail, accountId, sourceLabel, usageWindowsKey),
+            chartDataCacheKey(
+              providerId,
+              accountEmail,
+              accountId,
+              accountOrganization,
+              sourceLabel,
+              usageWindowsKey,
+            ),
             next,
           );
           setData(next);
@@ -656,7 +672,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [data, providerId, accountEmail, accountId, sourceLabel, usageWindowsKey]);
+  }, [data, providerId, accountEmail, accountId, accountOrganization, sourceLabel, usageWindowsKey]);
 
   // Cursor activity is independent of chart history and only belongs to the
   // Cursor provider. Guard on the current provider so a stale fetch from a

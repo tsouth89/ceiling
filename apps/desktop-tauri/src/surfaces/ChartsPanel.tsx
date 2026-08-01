@@ -13,6 +13,15 @@ import {
 
 const COMPARE_ID = "compare";
 
+export function chartSectionKey(provider: ProviderUsageSnapshot): string {
+  const identity =
+    provider.accountId ??
+    provider.accountEmail ??
+    provider.accountOrganization ??
+    "ambient";
+  return `${provider.providerId}:${identity}`;
+}
+
 /**
  * Charts tab: quota, local token, credits, and usage history per provider.
  *
@@ -136,7 +145,7 @@ export default function ChartsPanel({
         </>
       ) : (
         <ChartsSection
-          key={`${selected.providerId}:${selected.accountId ?? "ambient"}`}
+          key={chartSectionKey(selected)}
           providerId={selected.providerId}
           accountEmail={selected.accountEmail}
           accountId={selected.accountId}
