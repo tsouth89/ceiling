@@ -56,6 +56,7 @@ try {
         Invoke-Step "Frontend build" "pnpm" @("--dir", "apps\desktop-tauri", "run", "build")
     }
     if ($All -or $ReleaseDoctor) {
+        Invoke-Step "Store submission preparation" "powershell.exe" @("-File", "scripts\ci\test-store-submission-preparation.ps1")
         $args = @("-File", "scripts\release-doctor.ps1")
         if ($Version) {
             $args += @("-Version", $Version)

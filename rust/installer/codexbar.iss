@@ -41,6 +41,7 @@ DefaultDirName={localappdata}\Programs\Ceiling
 DefaultGroupName=Ceiling
 DisableProgramGroupPage=yes
 DisableDirPage=auto
+DisableStartupPrompt=yes
 PrivilegesRequired=lowest
 UsePreviousAppDir=yes
 CloseApplications=yes
@@ -207,6 +208,14 @@ end;
 function NeedRestart(): Boolean;
 begin
   Result := NeedsVCRedistRestart or NeedsWebView2Restart;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  if NeedRestart() then
+    Result := 3010
+  else
+    Result := 0;
 end;
 
 function CanLaunchCeiling(): Boolean;
