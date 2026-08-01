@@ -183,52 +183,20 @@ Write-Step "Start Menu shortcut: $shortcut"
 # with the installer setting no such property: every alert drew a banner and was
 # then discarded. Nothing caught it, because every other gate checks source
 # while this is the only step that inspects what was actually installed.
-# -TypeDefinition, not -MemberDefinition: this declares types, which the
-# member form cannot host.
-if (-not ('Ceiling.Lnk' -as [type])) {
-    Add-Type -Language CSharp -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-namespace Ceiling {
-  [ComImport, Guid("00021401-0000-0000-C000-000000000046")] internal class ShellLink {}
-  [ComImport, Guid("0000010b-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  internal interface IPersistFile {
-    void GetClassID(out Guid pClassID); [PreserveSig] int IsDirty();
-    void Load([MarshalAs(UnmanagedType.LPWStr)] string fileName, int mode);
-    void Save([MarshalAs(UnmanagedType.LPWStr)] string fileName, [MarshalAs(UnmanagedType.Bool)] bool remember);
-    void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string fileName);
-    void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string fileName); }
-  [StructLayout(LayoutKind.Sequential)] internal struct PropertyKey { public Guid fmtid; public uint pid; }
-  [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  internal interface IPropertyStore {
-    void GetCount(out uint count); void GetAt(uint index, out PropertyKey key);
-    void GetValue(ref PropertyKey key, [In, Out] PropVariant value);
-    void SetValue(ref PropertyKey key, PropVariant value); void Commit(); }
-  [StructLayout(LayoutKind.Explicit)] internal class PropVariant : IDisposable {
-    private const ushort VT_EMPTY = 0;
-    private const ushort VT_LPWSTR = 31;
-    [FieldOffset(0)] ushort valueType; [FieldOffset(8)] IntPtr pointer;
-    public string AsString() {
-      return valueType == VT_LPWSTR && pointer != IntPtr.Zero ? Marshal.PtrToStringUni(pointer) : ""; }
-    // Free only what is actually a CoTaskMem string. The field at offset 8
-    // overlaps a union, so a non-string variant can leave arbitrary non-zero
-    // bits there, and handing those to FreeCoTaskMem corrupts the heap.
-    // Anything else is left alone: leaking a few bytes in a short-lived check
-    // is strictly better than freeing memory that was never allocated.
-    public void Dispose() {
-      if (valueType == VT_LPWSTR && pointer != IntPtr.Zero) { Marshal.FreeCoTaskMem(pointer); }
-      valueType = VT_EMPTY; pointer = IntPtr.Zero; } }
-  public static class Lnk {
-    public static string ReadAppUserModelId(string path) {
-      var key = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
-      var link = new ShellLink();
-      ((IPersistFile)link).Load(path, 0);
-      using (var value = new PropVariant()) {
-        ((IPropertyStore)link).GetValue(ref key, value);
-        return value.AsString(); } } } }
-'@
+# Ask the Windows Shell for the canonical property value. The previous custom
+# PROPVARIANT marshaller assumed VT_LPWSTR, but Shell links can surface the
+# value through another string variant; that made a correct installer look
+# broken and blocked the 1.5.20 release after signing and packaging succeeded.
+$shell = New-Object -ComObject Shell.Application
+$shortcutFolder = $shell.Namespace((Split-Path -Parent $shortcut))
+if (-not $shortcutFolder) {
+    throw "Could not open the Start Menu shortcut folder: $(Split-Path -Parent $shortcut)"
 }
-$shortcutAumid = [Ceiling.Lnk]::ReadAppUserModelId($shortcut)
+$shortcutItem = $shortcutFolder.ParseName((Split-Path -Leaf $shortcut))
+if (-not $shortcutItem) {
+    throw "Could not inspect the Start Menu shortcut: $shortcut"
+}
+$shortcutAumid = [string]$shortcutItem.ExtendedProperty("System.AppUserModel.ID")
 if ($shortcutAumid -ne $ExpectedAppUserModelId) {
     throw "Start Menu shortcut publishes AppUserModelID '$shortcutAumid' but Ceiling toasts under '$ExpectedAppUserModelId'. Windows will show alerts as banners and then discard them instead of keeping them in the notification center. Check AppUserModelID on the [Icons] entries in rust/installer/codexbar.iss."
 }

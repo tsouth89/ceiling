@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## [Ceiling] 1.5.20 - 2026-08-01
+## [Ceiling] 1.5.21 - 2026-08-01
 
 Patch release for duplicate scheduled-reset notifications and reliability hardening around local state and account-scoped history.
 
@@ -14,6 +14,7 @@ Patch release for duplicate scheduled-reset notifications and reliability harden
 
 ### Internal
 - The release smoke test now asserts that the installed Start Menu shortcut carries Ceiling's AppUserModelID. That property is what lets Windows keep a notification, and 1.5.17 shipped without it: every gate checked source, while the one step that inspects the installed build never looked at it.
+- Shortcut identity validation now asks the Windows Shell for `System.AppUserModel.ID`. The custom property marshaller misread a correctly packaged shortcut as empty and blocked the unpublished 1.5.20 release.
 
 ## [Ceiling] 1.5.19 - 2026-07-29
 
