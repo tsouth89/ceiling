@@ -52,6 +52,9 @@ jobs:
         with:
           shared-key: ci-shared
       - run: cargo fmt --all --check
+      - name: Test Store submission preparation
+        shell: pwsh
+        run: .\scripts\ci\test-store-submission-preparation.ps1
       - run: cargo test --manifest-path rust/Cargo.toml
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 
