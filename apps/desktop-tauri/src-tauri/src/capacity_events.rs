@@ -210,6 +210,13 @@ struct PendingTransition {
     candidate: CandidateState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct EmittedScheduledReset {
+    scope: String,
+    window_id: String,
+    reset_boundary: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedEvent {
     provider_id: String,
@@ -264,6 +271,11 @@ pub struct CapacityEventObserver {
     pending_reset_credits: HashMap<String, PendingResetCredits>,
     #[serde(skip)]
     pending_transitions: HashMap<String, PendingTransition>,
+    /// Scheduled resets are trusted on their first post-boundary reading. Keep
+    /// a process-local cycle key as a final guard against replaying that same
+    /// reset if unrelated provider-window churn temporarily pins a baseline.
+    #[serde(skip)]
+    emitted_scheduled_resets: HashSet<EmittedScheduledReset>,
     /// Every provider/account scope is re-baselined on its first live reading
     /// after launch so changes that happened while Ceiling was closed are not
     /// emitted as if they just occurred.
@@ -332,6 +344,7 @@ impl CapacityEventObserver {
         let mut emitted = Vec::new();
         let mut held_for_confirmation = false;
         let mut confirmed_windows = HashSet::new();
+        let mut scheduled_window_updates = Vec::new();
         let reset_credit_key = format!("{scope}:banked-resets");
         let mut confirmed_reset_credits = false;
         if let Some(pending) = self.pending_reset_credits.get(&reset_credit_key).cloned() {
@@ -385,7 +398,27 @@ impl CapacityEventObserver {
                 continue;
             };
             if event.kind == CapacityEventKind::ScheduledReset {
-                emitted.push(event.payload());
+                let reset_key = EmittedScheduledReset {
+                    scope: scope.clone(),
+                    window_id: window_id.clone(),
+                    reset_boundary: event.previous_reset_at,
+                };
+                self.emitted_scheduled_resets.retain(|existing| {
+                    existing.scope != reset_key.scope
+                        || existing.window_id != reset_key.window_id
+                        || existing.reset_boundary == reset_key.reset_boundary
+                });
+                if self.emitted_scheduled_resets.insert(reset_key) {
+                    emitted.push(event.payload());
+                }
+                // A scheduled reset is independently corroborated by its old
+                // boundary having passed. Commit this window immediately even
+                // if another window in the same provider response needs a
+                // confirming read. Holding the whole provider baseline here is
+                // what replayed Copilot's monthly reset on every refresh while
+                // its quota list was changing at the boundary.
+                scheduled_window_updates.push((window_id.clone(), current_window.clone()));
+                confirmed_windows.insert(window_id.clone());
             } else {
                 self.pending_resets.insert(
                     pending_key,
@@ -427,7 +460,13 @@ impl CapacityEventObserver {
             held_for_confirmation = true;
         }
 
-        if !held_for_confirmation {
+        if held_for_confirmation {
+            if let Some(baseline) = self.baselines.get_mut(&scope) {
+                for (window_id, window) in scheduled_window_updates {
+                    baseline.windows.insert(window_id, window);
+                }
+            }
+        } else {
             self.baselines.insert(scope, current);
         }
         self.persist();
@@ -1160,6 +1199,91 @@ mod tests {
         let events = observer.observe(&snapshot(start + Duration::minutes(6), 3.0, new_reset));
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, CapacityEventKind::ScheduledReset);
+    }
+
+    #[test]
+    fn scheduled_reset_is_not_replayed_while_another_window_awaits_confirmation() {
+        let start = Utc::now();
+        let old_reset = start + Duration::minutes(5);
+        let new_reset = start + Duration::days(31);
+        let mut observer = CapacityEventObserver::default();
+
+        let mut before = snapshot(start, 52.4, old_reset);
+        before.provider_id = "copilot".into();
+        before.display_name = "Copilot".into();
+        before.primary_label = Some("Premium".into());
+        before.primary.window_minutes = None;
+        observer.observe(&before);
+
+        // GitHub's response can briefly add quota rows at the monthly boundary.
+        // The new allowance needs confirmation, but the independently confirmed
+        // Premium reset must still advance its own baseline immediately.
+        let mut first_after = with_extra(
+            snapshot(start + Duration::minutes(6), 0.0, new_reset),
+            "completions",
+            "Completions",
+            0.0,
+            new_reset,
+        );
+        first_after.provider_id = "copilot".into();
+        first_after.display_name = "Copilot".into();
+        first_after.primary_label = Some("Premium".into());
+        first_after.primary.window_minutes = None;
+        first_after.extra_rate_windows[0].window.window_minutes = None;
+
+        let first = observer.observe(&first_after);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].kind, CapacityEventKind::ScheduledReset);
+        assert_eq!(first[0].window_id, "premium");
+
+        let mut rapid_repeat = first_after.clone();
+        rapid_repeat.updated_at =
+            (start + Duration::minutes(6) + Duration::seconds(2)).to_rfc3339();
+        assert!(
+            observer.observe(&rapid_repeat).is_empty(),
+            "a second boundary refresh must not replay the Premium reset"
+        );
+
+        let mut settled = snapshot(start + Duration::minutes(10), 0.0, new_reset);
+        settled.provider_id = "copilot".into();
+        settled.display_name = "Copilot".into();
+        settled.primary_label = Some("Premium".into());
+        settled.primary.window_minutes = None;
+        assert!(
+            observer.observe(&settled).is_empty(),
+            "the next fixed refresh must remain quiet after quota churn settles"
+        );
+    }
+
+    #[test]
+    fn scheduled_reset_cycle_key_suppresses_a_replayed_stale_baseline() {
+        let start = Utc::now();
+        let old_reset = start + Duration::minutes(5);
+        let new_reset = start + Duration::hours(5);
+        let mut observer = CapacityEventObserver::default();
+
+        observer.observe(&snapshot(start, 88.0, old_reset));
+        let stale_baselines = observer.baselines.clone();
+        let after = snapshot(start + Duration::minutes(6), 3.0, new_reset);
+        assert_eq!(observer.observe(&after).len(), 1);
+
+        // Simulate a future regression or external baseline restore. The cycle
+        // key is a second line of defense around user-visible notifications.
+        observer.baselines = stale_baselines;
+        assert!(observer.observe(&after).is_empty());
+
+        let next_boundary = new_reset;
+        let next_after = snapshot(
+            next_boundary + Duration::minutes(1),
+            2.0,
+            next_boundary + Duration::hours(5),
+        );
+        assert_eq!(observer.observe(&next_after).len(), 1);
+        assert_eq!(
+            observer.emitted_scheduled_resets.len(),
+            1,
+            "only the latest reset boundary should remain for this scope and window"
+        );
     }
 
     #[test]
