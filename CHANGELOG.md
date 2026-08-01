@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [Ceiling] 1.5.20 - 2026-08-01
+
+Patch release for duplicate scheduled-reset notifications and reliability hardening around local state and account-scoped history.
+
+### Fixed
+- A confirmed monthly or weekly reset now advances its own baseline immediately, even when another quota window is still awaiting confirmation. The stale baseline could otherwise replay the same reset and send two or three identical notifications during one provider refresh cycle.
+- Chart history, quota-run efficiency, and chart caches now follow the stable account ID, with email and organization fallbacks. Accounts sharing an email no longer blend history, and organization-only providers can read back the history they recorded.
+- Settings, credentials, history, geometry, and cache files are replaced atomically, so an interrupted write cannot truncate the last known-good local state.
+- Claude refreshes report HTTP client initialization failures instead of panicking a background task, and refreshed OAuth credentials are replaced reliably on Windows.
+
 ### Internal
 - The release smoke test now asserts that the installed Start Menu shortcut carries Ceiling's AppUserModelID. That property is what lets Windows keep a notification, and 1.5.17 shipped without it: every gate checked source, while the one step that inspects the installed build never looked at it.
 
