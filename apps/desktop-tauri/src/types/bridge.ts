@@ -429,6 +429,7 @@ export interface ProviderUsageSnapshot {
   secondaryLabel?: string;
   modelSpecific: RateWindowSnapshot | null;
   tertiary: RateWindowSnapshot | null;
+  tertiaryLabel?: string;
   extraRateWindows: Array<{
     id: string;
     title: string;

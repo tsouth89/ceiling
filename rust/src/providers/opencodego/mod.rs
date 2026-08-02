@@ -154,12 +154,14 @@ impl OpenCodeGoProvider {
         }
 
         if let Some((pct, reset)) = monthly {
-            snap = snap.with_tertiary(RateWindow::with_details(
-                pct,
-                Some(43200),
-                Some(now + chrono::Duration::seconds(reset)),
-                None,
-            ));
+            snap = snap
+                .with_tertiary(RateWindow::with_details(
+                    pct,
+                    Some(43200),
+                    Some(now + chrono::Duration::seconds(reset)),
+                    None,
+                ))
+                .with_tertiary_label("Monthly");
         }
 
         if let Some(renews_at) = Self::extract_renewal(text) {

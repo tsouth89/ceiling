@@ -226,6 +226,7 @@ mod tests {
             secondary_label: Some("Weekly".into()),
             model_specific: None,
             tertiary: None,
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
@@ -268,6 +269,7 @@ mod tests {
             primary: window_resetting_at(Some("2026-07-21T05:00:00Z")),
             secondary: Some(window_resetting_at(Some("2026-07-28T02:00:00Z"))),
             tertiary: Some(window_resetting_at(None)),
+            tertiary_label: None,
             model_specific: Some(window_resetting_at(Some("not-a-timestamp"))),
             ..sample_snapshot()
         };

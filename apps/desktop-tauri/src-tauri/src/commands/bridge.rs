@@ -116,6 +116,7 @@ pub struct ProviderUsageSnapshot {
     pub secondary_label: Option<String>,
     pub model_specific: Option<RateWindowSnapshot>,
     pub tertiary: Option<RateWindowSnapshot>,
+    pub tertiary_label: Option<String>,
     pub extra_rate_windows: Vec<NamedRateWindowSnapshot>,
     pub inactive_rate_windows: Vec<InactiveRateWindowSnapshot>,
     pub promo_signals: Vec<PromoSignalSnapshot>,
@@ -274,6 +275,7 @@ impl ProviderUsageSnapshot {
                 .tertiary
                 .as_ref()
                 .map(RateWindowSnapshot::from_rate_window),
+            tertiary_label: usage.tertiary_label.clone(),
             extra_rate_windows: usage
                 .extra_rate_windows
                 .iter()
@@ -361,6 +363,7 @@ impl ProviderUsageSnapshot {
             secondary_label: None,
             model_specific: None,
             tertiary: None,
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),

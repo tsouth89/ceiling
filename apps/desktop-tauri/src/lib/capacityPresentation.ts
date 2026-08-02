@@ -252,7 +252,7 @@ function nonPrimaryWindows(
 
   push("secondary", provider.secondaryLabel, provider.secondary, "Weekly");
   push("model", null, provider.modelSpecific, "Model");
-  push("tertiary", null, provider.tertiary, "Extra");
+  push("tertiary", provider.tertiaryLabel, provider.tertiary, "Extra");
   for (const extra of provider.extraRateWindows ?? []) {
     if (extra.id === "reset-credits") continue;
     push(`extra-${extra.id}`, extra.title, extra.window, extra.title);

@@ -1312,6 +1312,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             }),
+            tertiary_label: None,
             inactive_rate_windows: Vec::new(),
             extra_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
