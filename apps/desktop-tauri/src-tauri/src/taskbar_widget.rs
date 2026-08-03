@@ -2111,6 +2111,7 @@ mod tests {
             secondary_label: None,
             model_specific: None,
             tertiary: None,
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),

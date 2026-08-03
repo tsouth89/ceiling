@@ -211,6 +211,12 @@ pub struct UsageSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tertiary: Option<RateWindow>,
 
+    /// Label for the tertiary window, shown in the UI instead of the "Extra"
+    /// fallback. Set this when the tertiary slot has a known purpose (for
+    /// example "Monthly" for the OpenCode Go monthly quota).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tertiary_label: Option<String>,
+
     /// Additional labeled windows that do not fit the primary/secondary/model slots.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_rate_windows: Vec<NamedRateWindow>,
@@ -251,6 +257,7 @@ impl UsageSnapshot {
             secondary: None,
             model_specific: None,
             tertiary: None,
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
@@ -277,6 +284,12 @@ impl UsageSnapshot {
     /// Builder pattern: set tertiary window
     pub fn with_tertiary(mut self, tertiary: RateWindow) -> Self {
         self.tertiary = Some(tertiary);
+        self
+    }
+
+    /// Builder pattern: set a display label for the tertiary window
+    pub fn with_tertiary_label(mut self, label: impl Into<String>) -> Self {
+        self.tertiary_label = Some(label.into());
         self
     }
 
