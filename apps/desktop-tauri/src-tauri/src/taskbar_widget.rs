@@ -223,7 +223,7 @@ fn constraining_readout(
             out.push((Some("Model"), window));
         }
         if let Some(window) = snapshot.tertiary.as_ref() {
-            out.push((Some("Extra"), window));
+            out.push((snapshot.tertiary_label.as_deref().or(Some("Extra")), window));
         }
         for extra in &snapshot.extra_rate_windows {
             if extra.id == "reset-credits" {
@@ -2187,6 +2187,32 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("Session (5h)"));
         assert_eq!(readout.window.used_percent, 92.0);
+    }
+
+    #[test]
+    fn constraining_readout_uses_tertiary_label_when_it_binds() {
+        // OpenCode Go monthly bar: the tertiary window's own label must show on
+        // the taskbar, not the generic "Extra".
+        let mut snapshot = snap("opencodego", None, 10.0);
+        snapshot.primary_label = Some("Rolling".into());
+        snapshot.tertiary = Some(rate_window(100.0, Some(43_200)));
+        snapshot.tertiary_label = Some("Monthly".into());
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Monthly"));
+        assert_eq!(readout.window.used_percent, 100.0);
+    }
+
+    #[test]
+    fn constraining_readout_falls_back_to_extra_for_unnamed_tertiary() {
+        let mut snapshot = snap("opencodego", None, 10.0);
+        snapshot.primary_label = Some("Rolling".into());
+        snapshot.tertiary = Some(rate_window(100.0, Some(43_200)));
+        snapshot.tertiary_label = None;
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Extra"));
+        assert_eq!(readout.window.used_percent, 100.0);
     }
 
     #[test]
