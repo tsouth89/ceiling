@@ -108,31 +108,60 @@ fn snapshot_from_usage(value: &Value) -> UsageSnapshot {
 }
 
 fn quota_windows(value: &Value) -> Vec<RateWindow> {
+    let mut raw_percents = Vec::new();
+    collect_reported_percents(value, &mut raw_percents);
+    let fraction_scale = crate::core::detect_fraction_scale(raw_percents);
     let mut out = Vec::new();
-    collect_windows(value, &mut out);
+    collect_windows(value, fraction_scale, &mut out);
     out
 }
 
-fn collect_windows(value: &Value, out: &mut Vec<RateWindow>) {
+fn collect_reported_percents(value: &Value, out: &mut Vec<f64>) {
     match value {
         Value::Object(map) => {
-            if let Some(percent) = percent_from_object(map) {
-                out.push(RateWindow::new(percent));
+            for key in [
+                "usage_percent",
+                "usagePercent",
+                "percent_used",
+                "percentUsed",
+            ] {
+                if let Some(v) = map.get(key).and_then(Value::as_f64) {
+                    out.push(v);
+                }
             }
             for value in map.values() {
-                collect_windows(value, out);
+                collect_reported_percents(value, out);
             }
         }
         Value::Array(items) => {
             for value in items {
-                collect_windows(value, out);
+                collect_reported_percents(value, out);
             }
         }
         _ => {}
     }
 }
 
-fn percent_from_object(map: &serde_json::Map<String, Value>) -> Option<f64> {
+fn collect_windows(value: &Value, fraction_scale: bool, out: &mut Vec<RateWindow>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(percent) = percent_from_object(map, fraction_scale) {
+                out.push(RateWindow::new(percent));
+            }
+            for value in map.values() {
+                collect_windows(value, fraction_scale, out);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                collect_windows(value, fraction_scale, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn percent_from_object(map: &serde_json::Map<String, Value>, fraction_scale: bool) -> Option<f64> {
     for key in [
         "usage_percent",
         "usagePercent",
@@ -140,7 +169,7 @@ fn percent_from_object(map: &serde_json::Map<String, Value>) -> Option<f64> {
         "percentUsed",
     ] {
         if let Some(v) = map.get(key).and_then(Value::as_f64) {
-            return Some(if v <= 1.0 { v * 100.0 } else { v });
+            return Some(crate::core::to_percent(v, fraction_scale));
         }
     }
     let used = ["used", "usage", "current_usage", "currentUsage"]
@@ -164,5 +193,16 @@ mod tests {
         let snapshot =
             snapshot_from_usage(&serde_json::json!({"quotas":[{"used":25,"limit":100}]}));
         assert_eq!(snapshot.primary.used_percent, 25.0);
+    }
+
+    #[test]
+    fn one_percent_window_is_not_full() {
+        let snapshot = snapshot_from_usage(&serde_json::json!({
+            "quotas": [
+                {"usagePercent": 1, "limit": 100},
+                {"usagePercent": 0, "limit": 100}
+            ]
+        }));
+        assert!((snapshot.primary.used_percent - 1.0).abs() < 0.001);
     }
 }
