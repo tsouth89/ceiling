@@ -226,15 +226,26 @@ impl OpenCodeProvider {
             self.find_usage_window(json, &["rollingUsage", "rolling", "rolling_usage"])?;
         let weekly = self.find_usage_window(json, &["weeklyUsage", "weekly", "weekly_usage"])?;
 
+        // A window reports either a whole percentage (23 = 23%) or a fraction of
+        // the limit (0.23 = 23%). A lone `1` is ambiguous, so resolve the scale
+        // from every reported window in this response before converting.
+        let fraction_scale = crate::core::detect_fraction_scale(
+            [rolling, weekly]
+                .into_iter()
+                .filter_map(|(percent, _, from_percent_key)| from_percent_key.then_some(percent)),
+        );
+        let rolling_percent = Self::resolve_percent(rolling, fraction_scale);
+        let weekly_percent = Self::resolve_percent(weekly, fraction_scale);
+
         let primary = RateWindow::with_details(
-            rolling.0,
+            rolling_percent,
             Some(300),
             Some(now + chrono::Duration::seconds(rolling.1)),
             None,
         );
 
         let secondary = RateWindow::with_details(
-            weekly.0,
+            weekly_percent,
             Some(10080),
             Some(now + chrono::Duration::seconds(weekly.1)),
             None,
@@ -255,12 +266,13 @@ impl OpenCodeProvider {
     }
 
     /// Find usage window in JSON by keys
-    fn find_usage_window(&self, json: &Value, keys: &[&str]) -> Option<(f64, i64)> {
+    fn find_usage_window(&self, json: &Value, keys: &[&str]) -> Option<(f64, i64, bool)> {
         for key in keys {
             if let Some(obj) = json.get(key)
-                && let Some(window) = self.parse_window(obj)
+                && let Some((percent, from_percent_key)) = Self::window_percent(obj)
             {
-                return Some(window);
+                let reset_sec = Self::window_reset_seconds(obj).unwrap_or(0);
+                return Some((percent, reset_sec, from_percent_key));
             }
         }
 
@@ -276,14 +288,7 @@ impl OpenCodeProvider {
         None
     }
 
-    /// Parse a usage window object
-    fn parse_window(&self, obj: &Value) -> Option<(f64, i64)> {
-        let percent = Self::window_percent(obj)?;
-        let reset_sec = Self::window_reset_seconds(obj).unwrap_or(0);
-        Some((percent.clamp(0.0, 100.0), reset_sec.max(0)))
-    }
-
-    fn window_percent(obj: &Value) -> Option<f64> {
+    fn window_percent(obj: &Value) -> Option<(f64, bool)> {
         let percent_keys = [
             "usagePercent",
             "usedPercent",
@@ -297,9 +302,24 @@ impl OpenCodeProvider {
             "usage",
         ];
 
-        Self::first_f64(obj, &percent_keys)
-            .map(|val| if val <= 1.0 { val * 100.0 } else { val })
-            .or_else(|| Self::percent_from_used_limit(obj))
+        if let Some(val) = Self::first_f64(obj, &percent_keys) {
+            return Some((val, true));
+        }
+        Self::percent_from_used_limit(obj).map(|val| (val, false))
+    }
+
+    /// Convert a raw window value to a percentage, scaling it only when it came
+    /// from an ambiguous percent key. A used/limit fallback is already a
+    /// percentage.
+    fn resolve_percent(
+        (percent, _, from_percent_key): (f64, i64, bool),
+        fraction_scale: bool,
+    ) -> f64 {
+        if from_percent_key {
+            crate::core::to_percent(percent, fraction_scale)
+        } else {
+            percent.clamp(0.0, 100.0)
+        }
     }
 
     fn percent_from_used_limit(obj: &Value) -> Option<f64> {
@@ -563,6 +583,37 @@ mod tests {
             renewal.window.resets_at.unwrap().to_rfc3339(),
             "2026-06-01T12:00:00+00:00"
         );
+    }
+
+    #[test]
+    fn one_percent_window_is_not_full() {
+        // A lightly used account reports `1` for 1% on the whole-percent scale
+        // with the weekly window at 0. The old per-window rule read that lone
+        // `1` as a fraction and rendered the rolling window as 100% used.
+        let provider = OpenCodeProvider::new();
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let payload = serde_json::json!({
+            "rollingUsage": { "usagePercent": 1, "resetInSec": 600 },
+            "weeklyUsage": { "usagePercent": 0, "resetInSec": 3600 },
+        });
+
+        let snap = provider.parse_usage_json(&payload, now).expect("snapshot");
+        assert!((snap.primary.used_percent - 1.0).abs() < 0.001);
+        assert!((snap.secondary.unwrap().used_percent - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parses_fractional_windows() {
+        let provider = OpenCodeProvider::new();
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let payload = serde_json::json!({
+            "rollingUsage": { "usagePercent": 0.14, "resetInSec": 600 },
+            "weeklyUsage": { "usagePercent": 0.5, "resetInSec": 3600 },
+        });
+
+        let snap = provider.parse_usage_json(&payload, now).expect("snapshot");
+        assert!((snap.primary.used_percent - 14.0).abs() < 0.001);
+        assert!((snap.secondary.unwrap().used_percent - 50.0).abs() < 0.001);
     }
 
     #[test]

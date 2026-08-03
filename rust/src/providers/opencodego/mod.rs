@@ -131,15 +131,31 @@ impl OpenCodeGoProvider {
     fn parse_usage_text(text: &str) -> Result<UsageSnapshot, ProviderError> {
         let now = Utc::now();
 
-        let rolling = Self::extract_window(text, &["rollingUsage", "rolling_usage", "rolling"])
+        let raw_rolling = Self::extract_window(text, &["rollingUsage", "rolling_usage", "rolling"])
             .ok_or_else(|| ProviderError::Parse("Missing rolling usage window".to_string()))?;
-        let weekly = Self::extract_window(text, &["weeklyUsage", "weekly_usage", "weekly"]);
-        let monthly = Self::extract_window(text, &["monthlyUsage", "monthly_usage", "monthly"]);
+        let raw_weekly = Self::extract_window(text, &["weeklyUsage", "weekly_usage", "weekly"]);
+        let raw_monthly = Self::extract_window(text, &["monthlyUsage", "monthly_usage", "monthly"]);
+
+        // The page reports every window on one scale, either whole percentages
+        // (`23` = 23%) or fractions of the limit (`0.23` = 23%). A lone `1` is
+        // ambiguous, so resolve the scale from the whole response before
+        // converting any window.
+        let fraction_scale = crate::core::detect_fraction_scale(
+            std::iter::once(raw_rolling.0)
+                .chain(raw_weekly.map(|window| window.0))
+                .chain(raw_monthly.map(|window| window.0)),
+        );
+
+        let rolling = crate::core::to_percent(raw_rolling.0, fraction_scale);
+        let weekly =
+            raw_weekly.map(|window| (crate::core::to_percent(window.0, fraction_scale), window.1));
+        let monthly =
+            raw_monthly.map(|window| (crate::core::to_percent(window.0, fraction_scale), window.1));
 
         let primary = RateWindow::with_details(
-            rolling.0,
+            rolling,
             Some(300),
-            Some(now + chrono::Duration::seconds(rolling.1)),
+            Some(now + chrono::Duration::seconds(raw_rolling.1)),
             None,
         );
         let mut snap = UsageSnapshot::new(primary).with_login_method("OpenCode Go");
@@ -173,7 +189,8 @@ impl OpenCodeGoProvider {
         Ok(snap)
     }
 
-    /// Extract `(percent, resetInSec)` for a usage block by name.
+    /// Extract raw `(usage, resetInSec)` for a usage block by name, before any
+    /// percent-scale normalization.
     fn extract_window(text: &str, names: &[&str]) -> Option<(f64, i64)> {
         for name in names {
             let percent_pattern = format!(
@@ -190,8 +207,7 @@ impl OpenCodeGoProvider {
                 let reset = Self::extract_number(&reset_pattern, text)
                     .map(|n| n as i64)
                     .unwrap_or(0);
-                let p = if p <= 1.0 { p * 100.0 } else { p };
-                return Some((p.clamp(0.0, 100.0), reset.max(0)));
+                return Some((p, reset.max(0)));
             }
         }
         None
@@ -430,19 +446,52 @@ mod tests {
     }
 
     #[test]
-    fn parses_usage_blocks() {
+    fn parses_usage_blocks_as_whole_percentages() {
         let text = r#"
             rollingUsage: { usagePercent: 42.5, resetInSec: 3600 }
-            weeklyUsage: { usagePercent: 0.13, resetInSec: 86400 }
+            weeklyUsage: { usagePercent: 13, resetInSec: 86400 }
             monthlyUsage: { usagePercent: 7, resetInSec: 2592000 }
         "#;
         let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
         assert!((snap.primary.used_percent - 42.5).abs() < 0.001);
         let secondary = snap.secondary.expect("weekly");
-        // 0.13 normalized as fraction → 13%
         assert!((secondary.used_percent - 13.0).abs() < 0.001);
         let tertiary = snap.tertiary.expect("monthly");
         assert!((tertiary.used_percent - 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parses_usage_blocks_as_fractions() {
+        let text = r#"
+            rollingUsage: { usagePercent: 0.425, resetInSec: 3600 }
+            weeklyUsage: { usagePercent: 0.13, resetInSec: 86400 }
+            monthlyUsage: { usagePercent: 0.07, resetInSec: 2592000 }
+        "#;
+        let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
+        assert!((snap.primary.used_percent - 42.5).abs() < 0.001);
+        let secondary = snap.secondary.expect("weekly");
+        assert!((secondary.used_percent - 13.0).abs() < 0.001);
+        let tertiary = snap.tertiary.expect("monthly");
+        assert!((tertiary.used_percent - 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn one_percent_window_is_not_full() {
+        // The reported regression: a lightly used account sent `1` for its
+        // rolling window (1% on the whole-percent scale) with the other
+        // windows at `0`. The old per-window rule read that lone `1` as a
+        // fraction and rendered the rolling window as 100% used.
+        let text = r#"
+            rollingUsage: { usagePercent: 1, resetInSec: 3600 }
+            weeklyUsage: { usagePercent: 0, resetInSec: 86400 }
+            monthlyUsage: { usagePercent: 0, resetInSec: 2592000 }
+        "#;
+        let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
+        assert!((snap.primary.used_percent - 1.0).abs() < 0.001);
+        let secondary = snap.secondary.expect("weekly");
+        assert!((secondary.used_percent - 0.0).abs() < 0.001);
+        let tertiary = snap.tertiary.expect("monthly");
+        assert!((tertiary.used_percent - 0.0).abs() < 0.001);
     }
 
     #[test]

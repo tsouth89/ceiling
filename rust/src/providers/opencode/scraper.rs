@@ -452,8 +452,17 @@ impl OpenCodeUsageFetcher {
         let weekly = weekly_keys.iter().find_map(|k| json.get(k));
 
         if let (Some(rolling), Some(weekly)) = (rolling, weekly) {
-            let rolling_window = Self::parse_window(rolling, now)?;
-            let weekly_window = Self::parse_window(weekly, now)?;
+            // A window reports either a whole percentage (23 = 23%) or a
+            // fraction of the limit (0.23 = 23%). Resolve the scale from every
+            // window in this response before converting.
+            let fraction_scale =
+                crate::core::detect_fraction_scale([rolling, weekly].iter().filter_map(|obj| {
+                    PERCENT_KEYS
+                        .iter()
+                        .find_map(|k| obj.get(*k).and_then(|v| v.as_f64()))
+                }));
+            let rolling_window = Self::parse_window(rolling, fraction_scale, now)?;
+            let weekly_window = Self::parse_window(weekly, fraction_scale, now)?;
 
             return Some(OpenCodeUsageSnapshot {
                 rolling_usage_percent: rolling_window.0,
@@ -469,7 +478,11 @@ impl OpenCodeUsageFetcher {
     }
 
     /// Parse a window object into (percent, reset_in_sec)
-    fn parse_window(json: &serde_json::Value, _now: DateTime<Utc>) -> Option<(f64, i64)> {
+    fn parse_window(
+        json: &serde_json::Value,
+        fraction_scale: bool,
+        _now: DateTime<Utc>,
+    ) -> Option<(f64, i64)> {
         let percent = PERCENT_KEYS
             .iter()
             .find_map(|k| json.get(k).and_then(|v| v.as_f64()));
@@ -479,14 +492,7 @@ impl OpenCodeUsageFetcher {
             .find_map(|k| json.get(k).and_then(|v| v.as_i64()));
 
         match (percent, reset_in) {
-            (Some(p), Some(r)) => {
-                let normalized_percent = if (0.0..=1.0).contains(&p) {
-                    p * 100.0
-                } else {
-                    p.clamp(0.0, 100.0)
-                };
-                Some((normalized_percent, r.max(0)))
-            }
+            (Some(p), Some(r)) => Some((crate::core::to_percent(p, fraction_scale), r.max(0))),
             _ => None,
         }
     }
@@ -688,5 +694,17 @@ mod tests {
         assert!((snapshot.weekly_usage_percent - 20.0).abs() < 0.01);
         assert_eq!(snapshot.rolling_reset_in_sec, 3600);
         assert_eq!(snapshot.weekly_reset_in_sec, 604800);
+    }
+
+    #[test]
+    fn one_percent_window_is_not_full() {
+        let json = r#"{
+            "rollingUsage": {"usagePercent": 1, "resetInSec": 3600},
+            "weeklyUsage": {"usagePercent": 0, "resetInSec": 604800}
+        }"#;
+
+        let snapshot = OpenCodeUsageFetcher::parse_subscription(json, Utc::now()).unwrap();
+        assert!((snapshot.rolling_usage_percent - 1.0).abs() < 0.01);
+        assert!((snapshot.weekly_usage_percent - 0.0).abs() < 0.01);
     }
 }
