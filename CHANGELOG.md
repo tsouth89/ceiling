@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## [Ceiling] 1.5.22 - 2026-08-03
 
 ### Fixed
 - A lightly used OpenCode Go account could report its rolling window as 100% used while the dashboard showed 1%. The usage page reports each window as either whole percentages or fractions of the limit, and a lone `1` means 1% in one and 100% in the other. The old rule scaled any value at or below 1 by 100 window-by-window, so the first 1% of use rendered as a maxed-out rolling window. The scale is now resolved once per response, and only read as fractions when a window actually contains a fractional value, which is the case that proves it.
 - The same 1%-reads-as-100% scale bug affected the OpenCode, Qoder, Chutes, and Sakana providers, all of which scaled values at or below 1 by 100 window-by-window. OpenCode (same backend as OpenCode Go), Qoder, and Chutes now resolve the scale once per response like OpenCode Go. Sakana no longer scales literal percent text at all (a page showing "1%" cannot mean 100% used), and only its JSON percent keys use the evidence-based scale.
+- The OpenCode Go card now names its monthly bar "Monthly" instead of the generic "Extra", so the third usage window on that card is no longer anonymous.
+- The Microsoft Store submission for 1.5.21 was rejected because Partner Center limits installer parameters to 40 characters and the inherited value was longer. The parameters are now normalized to that limit, startup-prompt suppression and the restart-required exit code are preserved in the Inno installer, and a deterministic Store-package preparation test guards it in CI.
 
 ## [Ceiling] 1.5.21 - 2026-08-01
 
