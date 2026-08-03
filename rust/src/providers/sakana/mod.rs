@@ -107,56 +107,98 @@ fn looks_signed_out(text: &str) -> bool {
 }
 
 fn snapshot_from_html(text: &str) -> Result<UsageSnapshot, ProviderError> {
-    let primary = extract_window(text, &["5-hour", "5 hour", "five-hour", "session"])
+    let raw_primary = extract_raw_window(text, &["5-hour", "5 hour", "five-hour", "session"])
         .ok_or_else(|| ProviderError::Parse("Missing Sakana 5-hour quota".into()))?;
+    let raw_weekly = extract_raw_window(text, &["weekly", "week"]);
+
+    // Only values read from a JSON percent key are ambiguous between whole
+    // percentages and fractions of a limit. Literal "%" text is always a whole
+    // percentage. Resolve the scale from the ambiguous values in this response.
+    let fraction_scale = crate::core::detect_fraction_scale(
+        std::iter::once(&raw_primary)
+            .chain(raw_weekly.iter())
+            .filter_map(|window| window.from_json.then_some(window.percent)),
+    );
+
+    let primary = raw_primary.into_window(fraction_scale);
     let mut snapshot = UsageSnapshot::new(primary).with_login_method("Sakana Console");
-    if let Some(weekly) = extract_window(text, &["weekly", "week"]) {
-        snapshot = snapshot.with_secondary(weekly);
+    if let Some(weekly) = raw_weekly {
+        snapshot = snapshot.with_secondary(weekly.into_window(fraction_scale));
     }
     Ok(snapshot)
 }
 
-fn extract_window(text: &str, labels: &[&str]) -> Option<RateWindow> {
+struct RawWindow {
+    percent: f64,
+    from_json: bool,
+    reset: Option<DateTime<Utc>>,
+    reset_description: Option<String>,
+    minutes: Option<u32>,
+}
+
+impl RawWindow {
+    fn into_window(self, fraction_scale: bool) -> RateWindow {
+        let percent = if self.from_json {
+            crate::core::to_percent(self.percent, fraction_scale)
+        } else {
+            self.percent
+        };
+        let mut window = RateWindow::with_details(percent, self.minutes, self.reset, None);
+        if let Some(reset_text) = self.reset_description {
+            window.reset_description = Some(reset_text);
+        }
+        window
+    }
+}
+
+fn extract_raw_window(text: &str, labels: &[&str]) -> Option<RawWindow> {
     let lower = text.to_ascii_lowercase();
     let anchor = labels
         .iter()
         .find_map(|label| lower.find(label).map(|idx| (idx, *label)))?;
     let end = (anchor.0 + 1400).min(text.len());
     let segment = &text[anchor.0..end];
-    let percent = extract_percent(segment)?;
+    let (percent, from_json) = extract_percent(segment)?;
     let reset = extract_reset(segment);
-    let mut window = RateWindow::with_details(
+    let reset_description = extract_reset_text(segment);
+    let minutes = if anchor.1.contains("week") {
+        Some(7 * 24 * 60)
+    } else {
+        Some(5 * 60)
+    };
+    Some(RawWindow {
         percent,
-        if anchor.1.contains("week") {
-            Some(7 * 24 * 60)
-        } else {
-            Some(5 * 60)
-        },
+        from_json,
         reset,
-        None,
-    );
-    if let Some(reset_text) = extract_reset_text(segment) {
-        window.reset_description = Some(reset_text);
-    }
-    Some(window)
+        reset_description,
+        minutes,
+    })
 }
 
-fn extract_percent(segment: &str) -> Option<f64> {
-    let patterns = [
+fn extract_percent(segment: &str) -> Option<(f64, bool)> {
+    // Values with a literal "%" are whole percentages by construction.
+    let literal_patterns = [
         r#"(?i)([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:used|usage)?"#,
         r#"(?i)(?:used|usage)[^0-9]{0,40}([0-9]+(?:\.[0-9]+)?)\s*%"#,
-        r#"(?i)"(?:usedPercent|used_percent|percent)"\s*:\s*([0-9]+(?:\.[0-9]+)?)"#,
     ];
-    patterns.iter().find_map(|pattern| {
-        Regex::new(pattern)
-            .ok()?
-            .captures(segment)?
-            .get(1)?
-            .as_str()
-            .parse::<f64>()
-            .ok()
-            .map(|value| if value <= 1.0 { value * 100.0 } else { value })
-    })
+    for pattern in literal_patterns {
+        if let Some(value) = capture_number(pattern, segment) {
+            return Some((value, false));
+        }
+    }
+    // A JSON percent key can be either scale.
+    let json_pattern = r#"(?i)"(?:usedPercent|used_percent|percent)"\s*:\s*([0-9]+(?:\.[0-9]+)?)"#;
+    capture_number(json_pattern, segment).map(|value| (value, true))
+}
+
+fn capture_number(pattern: &str, segment: &str) -> Option<f64> {
+    Regex::new(pattern)
+        .ok()?
+        .captures(segment)?
+        .get(1)?
+        .as_str()
+        .parse::<f64>()
+        .ok()
 }
 
 fn extract_reset(segment: &str) -> Option<DateTime<Utc>> {
@@ -237,6 +279,20 @@ mod tests {
             snapshot.primary.resets_at.unwrap().to_rfc3339(),
             "2026-07-03T16:30:00+00:00"
         );
+    }
+
+    #[test]
+    fn one_percent_usage_is_not_full() {
+        // A lightly used account's billing page shows "1%" literally. The old
+        // rule scaled any value at or below 1 by 100 per window, so a real 1%
+        // rendered as 100% used.
+        let html = r#"
+            <section>5-hour quota <span>1%</span> resets July 3, 2026 at 4:30 PM</section>
+            <section>Weekly usage <span>0% used</span> resets July 8, 2026 at 12:00 AM</section>
+        "#;
+        let snapshot = snapshot_from_html(html).unwrap();
+        assert_eq!(snapshot.primary.used_percent, 1.0);
+        assert_eq!(snapshot.secondary.unwrap().used_percent, 0.0);
     }
 
     #[test]

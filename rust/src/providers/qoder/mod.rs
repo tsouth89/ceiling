@@ -290,32 +290,66 @@ fn string_from_value_keys(value: &Value, keys: &[&str]) -> Option<String> {
 }
 
 fn collect_credit_windows(value: &Value) -> Vec<RateWindow> {
+    let mut raw_percents = Vec::new();
+    collect_reported_percents(value, &mut raw_percents);
+    let fraction_scale = crate::core::detect_fraction_scale(raw_percents);
     let mut out = Vec::new();
-    collect_credit_windows_inner(value, &mut out);
+    collect_credit_windows_inner(value, fraction_scale, &mut out);
     out.sort_by(|a, b| b.used_percent.total_cmp(&a.used_percent));
     out
 }
 
-fn collect_credit_windows_inner(value: &Value, out: &mut Vec<RateWindow>) {
+fn collect_reported_percents(value: &Value, out: &mut Vec<f64>) {
     match value {
         Value::Object(map) => {
-            if let Some(window) = rate_window_from_object(map) {
-                out.push(window);
+            if let Some(percent) = number_from_keys(
+                map,
+                &[
+                    "usedPercent",
+                    "used_percent",
+                    "usagePercent",
+                    "usage_percent",
+                    "percent",
+                ],
+            ) {
+                out.push(percent);
             }
             for value in map.values() {
-                collect_credit_windows_inner(value, out);
+                collect_reported_percents(value, out);
             }
         }
         Value::Array(items) => {
             for value in items {
-                collect_credit_windows_inner(value, out);
+                collect_reported_percents(value, out);
             }
         }
         _ => {}
     }
 }
 
-fn rate_window_from_object(map: &serde_json::Map<String, Value>) -> Option<RateWindow> {
+fn collect_credit_windows_inner(value: &Value, fraction_scale: bool, out: &mut Vec<RateWindow>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(window) = rate_window_from_object(map, fraction_scale) {
+                out.push(window);
+            }
+            for value in map.values() {
+                collect_credit_windows_inner(value, fraction_scale, out);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                collect_credit_windows_inner(value, fraction_scale, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rate_window_from_object(
+    map: &serde_json::Map<String, Value>,
+    fraction_scale: bool,
+) -> Option<RateWindow> {
     let used = number_from_keys(
         map,
         &[
@@ -349,6 +383,7 @@ fn rate_window_from_object(map: &serde_json::Map<String, Value>) -> Option<RateW
             "percent",
         ],
     )
+    .map(|value| crate::core::to_percent(value, fraction_scale))
     .or_else(|| match (used, total) {
         (Some(used), Some(total)) if total > 0.0 => Some(used / total * 100.0),
         _ => None,
@@ -363,12 +398,7 @@ fn rate_window_from_object(map: &serde_json::Map<String, Value>) -> Option<RateW
         (Some(used), None) => Some(format!("{used:.0} credits used")),
         _ => None,
     };
-    Some(RateWindow::with_details(
-        normalized_percent(percent),
-        None,
-        reset,
-        description,
-    ))
+    Some(RateWindow::with_details(percent, None, reset, description))
 }
 
 fn number_from_keys(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<f64> {
@@ -385,10 +415,6 @@ fn string_from_keys(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Opti
         Value::Number(n) => Some(n.to_string()),
         _ => None,
     })
-}
-
-fn normalized_percent(value: f64) -> f64 {
-    if value <= 1.0 { value * 100.0 } else { value }
 }
 
 fn parse_datetime(raw: String) -> Option<DateTime<Utc>> {
@@ -490,6 +516,20 @@ mod tests {
             Some("75/300 credits used, 225 remaining")
         );
         assert!(snapshot.primary.resets_at.is_some());
+    }
+
+    #[test]
+    fn one_percent_credit_window_is_not_full() {
+        let payload = serde_json::json!({
+            "data": {
+                "credits": [
+                    { "usedPercent": 1, "totalCredits": 1000 },
+                    { "usedPercent": 0, "totalCredits": 1000 }
+                ]
+            }
+        });
+        let snapshot = snapshot_from_payload(&payload, "Qoder").unwrap();
+        assert!((snapshot.primary.used_percent - 1.0).abs() < 0.001);
     }
 
     #[test]
