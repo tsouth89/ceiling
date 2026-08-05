@@ -14,6 +14,8 @@ Puts the pace answer on the usage bars themselves, in the main window.
 
 ## [Ceiling] 1.5.23 - 2026-08-05
 
+Superseded by 1.5.24 and never published. Its changes shipped in 1.5.24.
+
 Adds a pace verdict and Cursor on-demand spend, both from user feature requests.
 
 ### Added
