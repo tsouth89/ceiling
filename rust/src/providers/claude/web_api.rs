@@ -6,12 +6,10 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 use super::UtilizationScale;
+use super::usage_api::{ClaudeExtraUsage, ClaudeUsageResponse, ClaudeUsageWindow};
 use crate::browser::cookies::{get_cookie_header, get_cookie_header_from_browser};
 use crate::browser::detection::{BrowserProfile, BrowserType, DetectedBrowser};
-use crate::core::{
-    CostSnapshot, NamedRateWindow, PromoSignal, ProviderError, ProviderFetchResult, RateWindow,
-    UsageSnapshot,
-};
+use crate::core::{PromoSignal, ProviderError, ProviderFetchResult, RateWindow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaudeDesktopSessionStatus {
@@ -185,130 +183,6 @@ struct Organization {
     name: Option<String>,
 }
 
-/// Usage response from Claude API.
-///
-/// Anthropic ships overlapping field names for the design and routines
-/// windows (e.g. both `seven_day_design` and `seven_day_omelette` may appear
-/// in the same payload). Serde aliases can't accept that — it errors with
-/// "duplicate field" if more than one alias is present. We deserialize into
-/// a generic map and pick the first alias that yields a non-null value.
-#[derive(Debug)]
-struct UsageResponse {
-    five_hour: Option<UsageWindow>,
-    seven_day: Option<UsageWindow>,
-    seven_day_opus: Option<UsageWindow>,
-    seven_day_sonnet: Option<UsageWindow>,
-    seven_day_oauth_apps: Option<UsageWindow>,
-    seven_day_design: Option<UsageWindow>,
-    /// Temporary promotional weekly pool when Anthropic reports omelette fields.
-    seven_day_promotional: Option<UsageWindow>,
-    seven_day_routines: Option<UsageWindow>,
-    extra_usage: Option<ExtraUsageResponse>,
-    limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
-}
-
-impl<'de> Deserialize<'de> for UsageResponse {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut map: std::collections::HashMap<String, serde_json::Value> =
-            std::collections::HashMap::deserialize(deserializer)?;
-
-        let take = |map: &mut std::collections::HashMap<String, serde_json::Value>,
-                    keys: &[&str]|
-         -> Result<Option<UsageWindow>, D::Error> {
-            for key in keys {
-                if let Some(value) = map.remove(*key) {
-                    if value.is_null() {
-                        continue;
-                    }
-                    let window: UsageWindow =
-                        serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                    return Ok(Some(window));
-                }
-            }
-            Ok(None)
-        };
-
-        Ok(UsageResponse {
-            five_hour: take(&mut map, &["five_hour"])?,
-            seven_day: take(&mut map, &["seven_day"])?,
-            seven_day_opus: take(&mut map, &["seven_day_opus"])?,
-            seven_day_sonnet: take(&mut map, &["seven_day_sonnet"])?,
-            seven_day_oauth_apps: take(
-                &mut map,
-                &[
-                    "seven_day_oauth_apps",
-                    "seven_day_claude_oauth_apps",
-                    "oauth_apps",
-                    "oauth",
-                ],
-            )?,
-            seven_day_design: take(
-                &mut map,
-                &[
-                    "seven_day_design",
-                    "seven_day_claude_design",
-                    "claude_design",
-                    "design",
-                ],
-            )?,
-            seven_day_promotional: take(
-                &mut map,
-                &["omelette_promotional", "omelette", "seven_day_omelette"],
-            )?,
-            seven_day_routines: take(
-                &mut map,
-                &[
-                    "seven_day_routines",
-                    "seven_day_claude_routines",
-                    "claude_routines",
-                    "routines",
-                    "routine",
-                    "seven_day_cowork",
-                    "cowork",
-                ],
-            )?,
-            limits: map
-                .get("limits")
-                .filter(|value| !value.is_null())
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(serde::de::Error::custom)?
-                .unwrap_or_default(),
-            extra_usage: map
-                .remove("extra_usage")
-                .filter(|value| !value.is_null())
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-        })
-    }
-}
-
-/// A usage window from the API
-#[derive(Debug, Deserialize)]
-struct UsageWindow {
-    utilization: Option<f64>,
-
-    #[serde(rename = "resets_at")]
-    resets_at: Option<String>,
-}
-
-/// Extra usage (credits) response
-#[derive(Debug, Clone, Deserialize)]
-struct ExtraUsageResponse {
-    #[serde(rename = "monthly_credit_limit")]
-    monthly_credit_limit: Option<f64>,
-
-    #[serde(rename = "used_credits")]
-    used_credits: Option<f64>,
-
-    currency: Option<String>,
-
-    #[serde(rename = "is_enabled")]
-    is_enabled: Option<bool>,
-}
-
 /// Account info response
 #[derive(Debug, Deserialize)]
 struct AccountResponse {
@@ -435,79 +309,11 @@ impl ClaudeWebApiFetcher {
         // Step 4: Fetch account info - optional
         let account = self.get_account_info(&headers).await.ok();
 
-        // Build the result. Anthropic mixes fractions and percentages between
-        // payloads, so settle the unit once from the whole response first.
-        let scale = usage.utilization_scale();
-
-        let primary = usage
-            .five_hour
-            .as_ref()
-            .map(|w| self.to_rate_window(w, Some(300), scale)) // 5 hours = 300 minutes
-            .unwrap_or_else(|| RateWindow::new(0.0));
-
-        let secondary = usage
-            .seven_day
-            .as_ref()
-            .map(|w| self.to_rate_window(w, Some(10080), scale)); // 7 days = 10080 minutes
-
-        let model_specific = usage
-            .seven_day_opus
-            .as_ref()
-            .map(|w| self.to_rate_window(w, Some(10080), scale));
-
-        let mut snapshot = UsageSnapshot::new(primary);
-
-        if let Some(s) = secondary {
-            snapshot = snapshot.with_secondary(s);
-        }
-
-        if let Some(m) = model_specific {
-            snapshot = snapshot.with_model_specific(m);
-        }
-
-        for (id, title, window) in [
-            (
-                "claude-oauth-apps",
-                "OAuth apps",
-                usage
-                    .seven_day_oauth_apps
-                    .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
-            ),
-            (
-                "claude-routines",
-                "Daily Routines",
-                usage
-                    .seven_day_routines
-                    .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
-            ),
-            (
-                "claude-design",
-                "Design",
-                usage
-                    .seven_day_design
-                    .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
-            ),
-            (
-                "claude-weekly-promo",
-                "Weekly promo",
-                usage
-                    .seven_day_promotional
-                    .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080), scale)),
-            ),
-        ] {
-            if let Some(window) = window {
-                snapshot
-                    .extra_rate_windows
-                    .push(NamedRateWindow::new(id, title, window));
-            }
-        }
-        snapshot
-            .extra_rate_windows
-            .extend(super::scoped_weekly::scoped_weekly_windows(&usage.limits));
+        // Build every common Claude usage lane through one normalized path so
+        // OAuth and web cannot silently drop fields the other source renders.
+        let mut snapshot = usage.build_snapshot(|window, minutes, scale| {
+            Some(self.to_rate_window(window, minutes, scale))
+        });
 
         if let Some(promo) = usage.seven_day_promotional.as_ref() {
             let ends_at = promo
@@ -534,24 +340,13 @@ impl ClaudeWebApiFetcher {
 
         let mut result = ProviderFetchResult::new(snapshot, "web");
 
-        // Add cost info if available
-        if let Some(extra) = extra_usage
-            && extra.is_enabled.unwrap_or(false)
-        {
-            let used_cents = extra.used_credits.unwrap_or(0.0);
-            let limit_cents = extra.monthly_credit_limit;
-            let currency = extra.currency.unwrap_or_else(|| "USD".to_string());
-
-            let mut cost = CostSnapshot::new(
-                used_cents / 100.0, // Convert cents to dollars
-                currency,
-                "Monthly",
-            );
-
-            if let Some(limit) = limit_cents {
-                cost = cost.with_limit(limit / 100.0);
-            }
-
+        // Prefer the dedicated extra-usage endpoint; the embedded payload is
+        // the fallback. Both use the same cents-to-dollars conversion as OAuth.
+        let cost = extra_usage
+            .as_ref()
+            .and_then(ClaudeExtraUsage::cost_snapshot)
+            .or_else(|| usage.extra_usage_cost());
+        if let Some(cost) = cost {
             result = result.with_cost(cost);
         }
 
@@ -658,7 +453,7 @@ impl ClaudeWebApiFetcher {
         &self,
         org_id: &str,
         headers: &reqwest::header::HeaderMap,
-    ) -> Result<UsageResponse, ProviderError> {
+    ) -> Result<ClaudeUsageResponse, ProviderError> {
         let url = format!("{}/organizations/{}/usage", Self::BASE_URL, org_id);
 
         let response = self
@@ -683,7 +478,7 @@ impl ClaudeWebApiFetcher {
         &self,
         org_id: &str,
         headers: &reqwest::header::HeaderMap,
-    ) -> Result<ExtraUsageResponse, ProviderError> {
+    ) -> Result<ClaudeExtraUsage, ProviderError> {
         let url = format!(
             "{}/organizations/{}/overage_spend_limit",
             Self::BASE_URL,
@@ -734,7 +529,7 @@ impl ClaudeWebApiFetcher {
     /// Convert a usage window to a RateWindow
     fn to_rate_window(
         &self,
-        window: &UsageWindow,
+        window: &ClaudeUsageWindow,
         window_minutes: Option<u32>,
         scale: UtilizationScale,
     ) -> RateWindow {
@@ -779,27 +574,6 @@ impl Default for ClaudeWebApiFetcher {
     }
 }
 
-impl UsageResponse {
-    /// Decide the utilization unit from every window this response carries.
-    fn utilization_scale(&self) -> UtilizationScale {
-        UtilizationScale::detect(
-            [
-                self.five_hour.as_ref(),
-                self.seven_day.as_ref(),
-                self.seven_day_opus.as_ref(),
-                self.seven_day_sonnet.as_ref(),
-                self.seven_day_oauth_apps.as_ref(),
-                self.seven_day_design.as_ref(),
-                self.seven_day_promotional.as_ref(),
-                self.seven_day_routines.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            .filter_map(|window| window.utilization),
-        )
-    }
-}
-
 fn cookie_value(cookie_header: &str, name: &str) -> Option<String> {
     cookie_header.split(';').find_map(|part| {
         let (key, value) = part.trim().split_once('=')?;
@@ -818,8 +592,8 @@ fn cookie_value(cookie_header: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountResponse, ClaudeWebApiFetcher, UsageWindow, UtilizationScale,
-        claude_desktop_data_dirs_from, cookie_value,
+        AccountResponse, ClaudeUsageResponse, ClaudeUsageWindow, ClaudeWebApiFetcher,
+        UtilizationScale, claude_desktop_data_dirs_from, cookie_value,
     };
     use reqwest::header;
     use std::path::PathBuf;
@@ -832,7 +606,7 @@ mod tests {
 
     #[test]
     fn converts_fractional_utilization_to_percent() {
-        let window = UsageWindow {
+        let window = ClaudeUsageWindow {
             utilization: Some(0.23),
             resets_at: None,
         };
@@ -848,7 +622,7 @@ mod tests {
 
     #[test]
     fn preserves_existing_percentage_utilization() {
-        let window = UsageWindow {
+        let window = ClaudeUsageWindow {
             utilization: Some(23.0),
             resets_at: None,
         };
@@ -998,7 +772,7 @@ mod tests {
 
     #[test]
     fn parses_extra_design_and_routines_aliases() {
-        let usage: super::UsageResponse = serde_json::from_str(
+        let usage: ClaudeUsageResponse = serde_json::from_str(
             r#"{
                 "five_hour": { "utilization": 0.1 },
                 "seven_day_design": { "utilization": 31 },
@@ -1032,7 +806,7 @@ mod tests {
 
     #[test]
     fn maps_scoped_weekly_limits_even_when_inactive() {
-        let usage: super::UsageResponse = serde_json::from_str(
+        let usage: ClaudeUsageResponse = serde_json::from_str(
             r#"{
                 "limits": [{
                     "kind": "weekly_scoped",
@@ -1054,7 +828,7 @@ mod tests {
 
     #[test]
     fn parses_duplicate_design_and_routines_aliases_with_preferred_key() {
-        let usage: super::UsageResponse = serde_json::from_str(
+        let usage: ClaudeUsageResponse = serde_json::from_str(
             r#"{
                 "seven_day_design": { "utilization": 31 },
                 "seven_day_omelette": { "utilization": 26 },
@@ -1082,7 +856,7 @@ mod tests {
 
     #[test]
     fn parses_oauth_apps_window_and_embedded_extra_usage() {
-        let usage: super::UsageResponse = serde_json::from_str(
+        let usage: ClaudeUsageResponse = serde_json::from_str(
             r#"{
                 "five_hour": { "utilization": 0.1 },
                 "seven_day_oauth_apps": { "utilization": 42 },
@@ -1106,7 +880,7 @@ mod tests {
 
         assert!((oauth_apps.used_percent - 42.0).abs() < f64::EPSILON);
         assert_eq!(extra.is_enabled, Some(true));
-        assert_eq!(extra.monthly_credit_limit, Some(2000.0));
+        assert_eq!(extra.monthly_limit, Some(2000.0));
         assert_eq!(extra.used_credits, Some(550.0));
     }
 }

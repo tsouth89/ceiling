@@ -5,13 +5,13 @@
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use reqwest::header::{HeaderValue, RETRY_AFTER};
-use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::UtilizationScale;
-use crate::core::{NamedRateWindow, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
+use super::usage_api::{ClaudeUsageResponse, ClaudeUsageWindow};
+use crate::core::{ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
 
 mod credentials_store;
 mod refresh;
@@ -53,65 +53,9 @@ impl ClaudeOAuthCredentials {
     }
 }
 
-/// OAuth usage response from Claude API
-#[derive(Debug, Deserialize)]
-pub struct OAuthUsageResponse {
-    #[serde(rename = "fiveHour", alias = "five_hour")]
-    pub five_hour: Option<UsageWindow>,
-
-    #[serde(rename = "sevenDay", alias = "seven_day")]
-    pub seven_day: Option<UsageWindow>,
-
-    #[serde(rename = "sevenDaySonnet", alias = "seven_day_sonnet")]
-    pub seven_day_sonnet: Option<UsageWindow>,
-
-    #[serde(rename = "sevenDayOpus", alias = "seven_day_opus")]
-    pub seven_day_opus: Option<UsageWindow>,
-
-    #[serde(
-        rename = "sevenDayDesign",
-        alias = "seven_day_design",
-        alias = "seven_day_oauth_apps"
-    )]
-    pub seven_day_design: Option<UsageWindow>,
-
-    #[serde(
-        rename = "sevenDayRoutines",
-        alias = "seven_day_routines",
-        alias = "seven_day_omelette"
-    )]
-    pub seven_day_routines: Option<UsageWindow>,
-
-    #[serde(rename = "extraUsage", alias = "extra_usage")]
-    pub extra_usage: Option<ExtraUsage>,
-
-    #[serde(default)]
-    limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
-}
-
-/// A usage window from the OAuth API
-#[derive(Debug, Deserialize)]
-pub struct UsageWindow {
-    pub utilization: Option<f64>,
-
-    #[serde(rename = "resetsAt", alias = "resets_at")]
-    pub resets_at: Option<String>,
-}
-
-/// Extra usage (credits) info
-#[derive(Debug, Deserialize)]
-pub struct ExtraUsage {
-    #[serde(rename = "isEnabled", alias = "is_enabled")]
-    pub is_enabled: Option<bool>,
-
-    #[serde(rename = "usedCredits", alias = "used_credits")]
-    pub used_credits: Option<f64>,
-
-    #[serde(rename = "monthlyLimit", alias = "monthly_limit")]
-    pub monthly_limit: Option<f64>,
-
-    pub currency: Option<String>,
-}
+/// OAuth and web usage now share one normalized response shape.
+pub type OAuthUsageResponse = ClaudeUsageResponse;
+pub type UsageWindow = ClaudeUsageWindow;
 
 /// Claude OAuth fetcher
 pub struct ClaudeOAuthFetcher {
@@ -208,7 +152,11 @@ impl ClaudeOAuthFetcher {
             }
         }
 
-        Ok(ProviderFetchResult::new(usage, "oauth"))
+        let mut result = ProviderFetchResult::new(usage, "oauth");
+        if let Some(cost) = usage_response.extra_usage_cost() {
+            result = result.with_cost(cost);
+        }
+        Ok(result)
     }
 
     /// Identity of the account this fetcher reads, for labeling and scoping.
@@ -416,63 +364,7 @@ impl ClaudeOAuthFetcher {
         response: &OAuthUsageResponse,
         credentials: &ClaudeOAuthCredentials,
     ) -> UsageSnapshot {
-        // Anthropic mixes fractions and percentages between payloads, so settle
-        // the unit once from the whole response before reading any window.
-        let scale = response.utilization_scale();
-
-        // Primary: 5-hour session window
-        let primary = response
-            .five_hour
-            .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(300), scale))
-            .unwrap_or_else(|| RateWindow::new(0.0));
-
-        let mut usage = UsageSnapshot::new(primary);
-
-        // Secondary: 7-day window
-        if let Some(weekly) = response
-            .seven_day
-            .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(10080), scale))
-        {
-            usage = usage.with_secondary(weekly);
-        }
-
-        // Model-specific: Opus or Sonnet
-        if let Some(opus) = response
-            .seven_day_opus
-            .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(10080), scale))
-        {
-            usage = usage.with_model_specific(opus);
-        } else if let Some(sonnet) = response
-            .seven_day_sonnet
-            .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(10080), scale))
-        {
-            usage = usage.with_model_specific(sonnet);
-        }
-
-        let extra_windows = [(
-            "claude-routines",
-            "Daily Routines",
-            response
-                .seven_day_routines
-                .as_ref()
-                .and_then(|w| Self::to_rate_window(w, Some(10080), scale)),
-        )];
-        for (id, title, window) in extra_windows {
-            if let Some(window) = window {
-                usage
-                    .extra_rate_windows
-                    .push(NamedRateWindow::new(id, title, window));
-            }
-            usage
-                .extra_rate_windows
-                .extend(super::scoped_weekly::scoped_weekly_windows(
-                    &response.limits,
-                ));
-        }
+        let mut usage = response.build_snapshot(Self::to_rate_window);
 
         // Plan name from the rate limit tier, falling back to the subscription
         // type when the tier is shared across plans (Pro and Free both report
@@ -515,25 +407,6 @@ impl ClaudeOAuthFetcher {
 impl Default for ClaudeOAuthFetcher {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl OAuthUsageResponse {
-    /// Decide the utilization unit from every window this response carries.
-    fn utilization_scale(&self) -> UtilizationScale {
-        UtilizationScale::detect(
-            [
-                self.five_hour.as_ref(),
-                self.seven_day.as_ref(),
-                self.seven_day_sonnet.as_ref(),
-                self.seven_day_opus.as_ref(),
-                self.seven_day_design.as_ref(),
-                self.seven_day_routines.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            .filter_map(|window| window.utilization),
-        )
     }
 }
 
