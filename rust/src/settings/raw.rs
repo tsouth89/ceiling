@@ -528,10 +528,7 @@ impl From<RawSettings> for Settings {
             enable_animations: raw.enable_animations,
             reset_time_relative: raw.reset_time_relative,
             show_reset_when_exhausted: raw.show_reset_when_exhausted,
-            // Predictive warnings were experimental and are no longer exposed.
-            // Keep the serialized field for compatibility, but do not leave a
-            // hidden alert source enabled after upgrading.
-            predictive_pace_warning_enabled: false,
+            predictive_pace_warning_enabled: raw.predictive_pace_warning_enabled,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             show_all_token_accounts_in_menu: raw.show_all_token_accounts_in_menu,
             provider_configs,

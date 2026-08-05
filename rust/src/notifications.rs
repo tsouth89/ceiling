@@ -32,6 +32,7 @@ pub enum NotificationType {
 pub enum PredictiveWarningWindow {
     Session,
     Weekly,
+    Monthly,
 }
 
 impl PredictiveWarningWindow {
@@ -41,6 +42,7 @@ impl PredictiveWarningWindow {
             match self {
                 Self::Session => LocaleKey::ProviderSession,
                 Self::Weekly => LocaleKey::ProviderWeekly,
+                Self::Monthly => LocaleKey::ProviderMonthly,
             },
         )
     }

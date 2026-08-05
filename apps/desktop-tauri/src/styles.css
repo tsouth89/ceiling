@@ -4217,9 +4217,10 @@ html:has(.menu-surface--tray) {
   font-size: 10px;
 }
 /* Hide pace section in tray — macOS doesn't show pace in the compact popover */
-.menu-surface--tray .menu-card__pace,
-.menu-surface--tray .menu-card__pace + .menu-card__divider,
-.menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__pace) {
+/* The tray keeps the pace verdict but drops the taller expected-vs-actual
+   breakdown, which is what made this section too heavy for the tray before. */
+.menu-surface--tray .menu-card__pace-header,
+.menu-surface--tray .menu-card__pace-bars {
   display: none;
 }
 /* Hide large charts in tray; keep the compact local token/cost summary visible. */
@@ -5049,6 +5050,75 @@ html:has(.menu-surface--tray) {
 .menu-card__pace-label[data-pace="steady"] { color: var(--pace-steady-fg); }
 .menu-card__pace-label[data-pace="racing"] { color: var(--pace-racing-fg); }
 .menu-card__pace-label[data-pace="burning"] { color: var(--pace-burning-fg); }
+
+.menu-card__pace-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.menu-card__pace-verdict-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu-card__pace-verdict-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.menu-card__pace-verdict-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.menu-card__pace-verdict-detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.menu-card__pace-verdict-track {
+  position: relative;
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: var(--usage-bar-track);
+}
+
+.menu-card__pace-verdict-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Where usage should be by this point in the window. */
+.menu-card__pace-verdict-tick {
+  position: absolute;
+  top: -3px;
+  width: 1.5px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  opacity: 0.75;
+  transform: translateX(-50%);
+}
+
+.menu-card__pace-verdict-dot[data-pace="slow"],
+.menu-card__pace-verdict-fill[data-pace="slow"] { background: var(--pace-slow-fg); }
+.menu-card__pace-verdict-dot[data-pace="steady"],
+.menu-card__pace-verdict-fill[data-pace="steady"] { background: var(--pace-steady-fg); }
+.menu-card__pace-verdict-dot[data-pace="racing"],
+.menu-card__pace-verdict-fill[data-pace="racing"] { background: var(--pace-racing-fg); }
+.menu-card__pace-verdict-dot[data-pace="burning"],
+.menu-card__pace-verdict-fill[data-pace="burning"] { background: var(--pace-burning-fg); }
+
+.menu-card__pace-verdict-title[data-pace="slow"] { color: var(--pace-slow-fg); }
+.menu-card__pace-verdict-title[data-pace="steady"] { color: var(--pace-steady-fg); }
+.menu-card__pace-verdict-title[data-pace="racing"] { color: var(--pace-racing-fg); }
+.menu-card__pace-verdict-title[data-pace="burning"] { color: var(--pace-burning-fg); }
 
 .menu-card__pace-bars {
   display: flex;

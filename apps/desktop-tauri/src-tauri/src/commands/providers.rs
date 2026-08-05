@@ -960,7 +960,7 @@ fn notify_predictive_pace(
 ) {
     let enabled = settings.show_notifications && settings.predictive_pace_warning_enabled;
     manager.set_predictive_warnings_enabled(provider, enabled);
-    if !enabled || !matches!(provider, ProviderId::Claude | ProviderId::Codex) {
+    if !enabled {
         return;
     }
 
@@ -969,7 +969,6 @@ fn notify_predictive_pace(
         .and_then(ProviderAccountData::active_account)
         .map(|account| account.id);
     let Some(identity) = predictive_warning_identity(
-        provider,
         &snapshot.source_label,
         snapshot.account_email.as_deref(),
         token_account_id,
@@ -980,21 +979,27 @@ fn notify_predictive_pace(
         .ok()
         .map(|date| date.with_timezone(&chrono::Utc));
 
-    for (warning_window, window, default_window_minutes) in [
+    for (fallback_window, window, default_window_minutes) in [
         (
             codexbar::notifications::PredictiveWarningWindow::Session,
             Some(&snapshot.primary),
-            300,
+            300u32,
         ),
         (
             codexbar::notifications::PredictiveWarningWindow::Weekly,
             snapshot.secondary.as_ref(),
-            10080,
+            10080u32,
         ),
     ] {
         let Some(window) = window else {
             continue;
         };
+        // Name the window by its real cadence; fall back to the slot's meaning
+        // only when the provider does not state a duration.
+        let warning_window = window
+            .window_minutes
+            .map(predictive_window_for)
+            .unwrap_or(fallback_window);
         let rate_window = RateWindow::with_details(
             window.used_percent,
             window.window_minutes,
@@ -1021,24 +1026,41 @@ fn notify_predictive_pace(
     }
 }
 
+/// Identifies the account a pace warning belongs to, so a warning fires once
+/// per cycle per account rather than once per refresh.
+///
+/// The dedupe key already carries the provider, so this only has to separate
+/// accounts within one. Providers that never report an account are still
+/// warnable: one unnamed account is still an account.
 fn predictive_warning_identity(
-    provider: ProviderId,
     source_label: &str,
     account_email: Option<&str>,
     token_account_id: Option<uuid::Uuid>,
 ) -> Option<String> {
-    if !matches!(provider, ProviderId::Claude | ProviderId::Codex) {
-        return None;
-    }
     if let Some(id) = token_account_id {
         return Some(format!("token-account:{}", id.as_hyphenated()));
     }
     let source = source_label.trim().to_ascii_lowercase();
-    let account = account_email?.trim().to_ascii_lowercase();
-    if source.is_empty() || account.is_empty() {
-        return None;
+    let account = account_email
+        .map(|email| email.trim().to_ascii_lowercase())
+        .filter(|email| !email.is_empty());
+    match (source.is_empty(), account) {
+        (false, Some(account)) => Some(format!("{source}:{account}")),
+        (false, None) => Some(source),
+        (true, Some(account)) => Some(account),
+        (true, None) => None,
     }
-    Some(format!("{source}:{account}"))
+}
+
+/// Which cadence a window represents, so the warning names the right thing.
+/// Without this a monthly quota would be announced as a "Session" limit.
+fn predictive_window_for(window_minutes: u32) -> codexbar::notifications::PredictiveWarningWindow {
+    use codexbar::notifications::PredictiveWarningWindow as W;
+    match window_minutes {
+        0..=720 => W::Session,
+        721..=20_160 => W::Weekly,
+        _ => W::Monthly,
+    }
 }
 
 #[tauri::command]
@@ -1076,47 +1098,42 @@ mod predictive_warning_tests {
         let account_id = uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
 
         assert_eq!(
-            predictive_warning_identity(
-                ProviderId::Claude,
-                "cli",
-                Some("Person@Example.com"),
-                None,
-            )
-            .as_deref(),
+            predictive_warning_identity("cli", Some("Person@Example.com"), None).as_deref(),
             Some("cli:person@example.com")
         );
         assert_eq!(
-            predictive_warning_identity(
-                ProviderId::Claude,
-                "oauth",
-                Some("Person@Example.com"),
-                None,
-            )
-            .as_deref(),
+            predictive_warning_identity("oauth", Some("Person@Example.com"), None).as_deref(),
             Some("oauth:person@example.com")
         );
         assert_eq!(
-            predictive_warning_identity(
-                ProviderId::Claude,
-                "oauth",
-                Some("Person@Example.com"),
-                Some(account_id),
-            )
-            .as_deref(),
+            predictive_warning_identity("oauth", Some("Person@Example.com"), Some(account_id))
+                .as_deref(),
             Some("token-account:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         );
     }
 
     #[test]
-    fn predictive_warning_identity_skips_unidentified_accounts() {
+    fn predictive_warning_identity_falls_back_to_the_source_alone() {
+        // Providers that never report an account still get one stable identity,
+        // so they can be warned instead of silently skipped.
         assert_eq!(
-            predictive_warning_identity(ProviderId::Claude, "oauth", None, None),
-            None
+            predictive_warning_identity("oauth", None, None).as_deref(),
+            Some("oauth")
         );
         assert_eq!(
-            predictive_warning_identity(ProviderId::Codex, "cli", Some("  "), None),
-            None
+            predictive_warning_identity("cli", Some("  "), None).as_deref(),
+            Some("cli")
         );
+        assert_eq!(predictive_warning_identity("  ", None, None), None);
+    }
+
+    #[test]
+    fn predictive_window_is_named_by_its_real_cadence() {
+        use codexbar::notifications::PredictiveWarningWindow as W;
+        assert_eq!(predictive_window_for(300), W::Session);
+        assert_eq!(predictive_window_for(10_080), W::Weekly);
+        // A monthly quota must not be announced as a session limit.
+        assert_eq!(predictive_window_for(44_640), W::Monthly);
     }
 
     fn rw(window_minutes: Option<u32>, used_percent: f64) -> RateWindowSnapshot {

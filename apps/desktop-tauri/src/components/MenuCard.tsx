@@ -16,6 +16,7 @@ import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import { getPaceBudget } from "../lib/paceBudget";
+import PaceVerdict from "./PaceVerdict";
 import {
   activePromoBoosts,
   activePromoInclusions,
@@ -737,20 +738,7 @@ export default function MenuCard({
                   />
                 </div>
               </div>
-              {provider.pace.etaSeconds != null && !provider.pace.willLastToReset && (
-                <div className="menu-card__pace-eta">
-                  ⚠{" "}
-                  {t("DetailPaceRunsOutIn").replace(
-                    "{}",
-                    String(Math.round(provider.pace.etaSeconds / 3600)),
-                  )}
-                </div>
-              )}
-              {provider.pace.willLastToReset && (
-                <div className="menu-card__pace-ok">
-                  ✓ {t("DetailPaceWillLastToReset")}
-                </div>
-              )}
+              <PaceVerdict pace={provider.pace} />
             </section>
           )}
 
