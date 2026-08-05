@@ -36,7 +36,18 @@ function codex(): ProviderUsageSnapshot {
     tertiary: null,
     extraRateWindows: [
       { id: "spark", title: "Codex Spark", window: rate(0) },
-      { id: "promo", title: "Promotional", window: rate(100) },
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: rate(35),
+        amount: {
+          used: 3.5,
+          limit: 10,
+          currencyCode: "USD",
+          formattedUsed: "$3.50",
+          formattedLimit: "$10.00",
+        },
+      },
     ],
     inactiveRateWindows: [
       {
@@ -124,7 +135,11 @@ describe("ProviderDetailView", () => {
     // A window that dropped out of a successful response reads as Unavailable,
     // never as "not currently enforced" or a fabricated percentage.
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("Promotional")).toBeNull();
+    // On-demand used to be filtered out of this view. It is the only Cursor
+    // lane that bills real money, and it now carries that money beside its
+    // bar, so it belongs here.
+    expect(screen.getByText("On-demand")).toBeInTheDocument();
+    expect(screen.getByText("$3.50 of $10.00")).toBeInTheDocument();
     expect(screen.getAllByText(/Weekly pace/)).toHaveLength(2);
     expect(screen.getAllByText(/Far ahead of budget/)).toHaveLength(2);
     expect(container.querySelector(".provider-focus__pace-fill")?.getAttribute("data-tone"))

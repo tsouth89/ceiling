@@ -492,6 +492,7 @@ PanelUsedSuffix = 已用
 PanelLeftSuffix = 剩余
 PanelOnPaceBudget = 按节奏预算
 PanelAmountOf = 共
+UsageExpectedByNow = 按当前时间应已用 { "{}" }%
 PaceVerdictOnTrack = 按计划
 PaceVerdictAhead = 超出节奏
 PaceVerdictPlenty = 余量充足

@@ -492,6 +492,7 @@ PanelUsedSuffix = used
 PanelLeftSuffix = left
 PanelOnPaceBudget = On-pace budget
 PanelAmountOf = of
+UsageExpectedByNow = Expected { "{}" }% used by now
 PaceVerdictOnTrack = On track
 PaceVerdictAhead = Ahead of pace
 PaceVerdictPlenty = Plenty left
