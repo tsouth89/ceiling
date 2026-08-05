@@ -139,7 +139,9 @@ describe("ProviderDetailView", () => {
     // lane that bills real money, and it now carries that money beside its
     // bar, so it belongs here.
     expect(screen.getByText("On-demand")).toBeInTheDocument();
-    expect(screen.getByText("$3.50 of $10.00")).toBeInTheDocument();
+    // Connector word comes from the locale bundle, which this test does not
+    // mount, so match the amounts rather than the joined sentence.
+    expect(screen.getByText(/\$3\.50.*\$10\.00/)).toBeInTheDocument();
     expect(screen.getAllByText(/Weekly pace/)).toHaveLength(2);
     expect(screen.getAllByText(/Far ahead of budget/)).toHaveLength(2);
     expect(container.querySelector(".provider-focus__pace-fill")?.getAttribute("data-tone"))

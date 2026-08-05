@@ -91,6 +91,7 @@ function DetailProgress({
   window: RateWindowSnapshot;
   showAsUsed: boolean;
 }) {
+  const { t } = useLocale();
   // Where usage should be by this point in the window. Long windows only:
   // see `expectedUsedPercent`.
   const expected = expectedOverlay(window, showAsUsed);
@@ -100,7 +101,10 @@ function DetailProgress({
       aria-hidden
       title={
         expected
-          ? `Expected ${Math.round(expected.expectedUsedPercent)}% used by now`
+          ? t("UsageExpectedByNow").replace(
+              "{}",
+              String(Math.round(expected.expectedUsedPercent)),
+            )
           : undefined
       }
     >
@@ -145,6 +149,7 @@ function SecondaryWindow({
     metric.window.resetDescription,
     resetTimeRelative,
   );
+  const { t } = useLocale();
   const percent = Math.round(percentFor(metric.window, showAsUsed));
   return (
     <div className="provider-focus__limit-row">
@@ -158,7 +163,7 @@ function SecondaryWindow({
       {metric.amount && (
         <div className="provider-focus__limit-amount">
           {metric.amount.formattedLimit
-            ? `${metric.amount.formattedUsed} of ${metric.amount.formattedLimit}`
+            ? `${metric.amount.formattedUsed} ${t("PanelAmountOf")} ${metric.amount.formattedLimit}`
             : metric.amount.formattedUsed}
         </div>
       )}
