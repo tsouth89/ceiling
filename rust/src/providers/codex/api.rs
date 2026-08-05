@@ -354,6 +354,15 @@ impl CodexApi {
 
         // Extract credits if present
         let cost = self.extract_credits(json);
+        if let Some(balance) = Self::credit_balance(json) {
+            // `balance` is credit remaining, not money spent, so it gets its own
+            // info-only line rather than being passed off as cost.
+            usage = usage.with_extra_rate_window(
+                "codex-credit-balance",
+                "Credits",
+                RateWindow::with_details(0.0, None, None, Some(format!("${balance:.2} left"))),
+            );
+        }
 
         Ok((usage, cost))
     }
@@ -491,33 +500,45 @@ impl CodexApi {
         ))
     }
 
-    fn extract_credits(&self, json: &serde_json::Value) -> Option<CostSnapshot> {
+    /// The remaining credit balance, when the account has metered credits.
+    ///
+    /// This is what is *left*, never what was spent. Callers must not put it in
+    /// a `CostSnapshot`'s `used` slot.
+    fn credit_balance(json: &serde_json::Value) -> Option<f64> {
         let credits = json.get("credits")?;
-
-        let has_credits = credits
+        if !credits
             .get("has_credits")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if !has_credits {
+            .unwrap_or(false)
+        {
             return None;
         }
-
-        let unlimited = credits
+        if credits
             .get("unlimited")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if unlimited {
+            .unwrap_or(false)
+        {
             return None;
         }
+        credits.get("balance").and_then(|v| v.as_f64())
+    }
 
-        let balance = credits
-            .get("balance")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-
-        Some(CostSnapshot::new(balance, "USD", "Credits"))
+    /// Money actually spent against a credit allowance.
+    ///
+    /// Spend is only knowable when the account also reports a spend-control
+    /// limit: `used = limit - balance`. A balance on its own says how much is
+    /// left, so reporting it as `used` inverts the number — it would fall as
+    /// the user spends and read $0 exactly when the account is exhausted. The
+    /// balance is surfaced separately as its own line instead.
+    fn extract_credits(&self, json: &serde_json::Value) -> Option<CostSnapshot> {
+        let balance = Self::credit_balance(json)?;
+        let limit = json.get("individual_limit").or_else(|| {
+            json.get("rate_limit")
+                .and_then(|r| r.get("individual_limit"))
+        })?;
+        serde_json::from_value::<SpendControlLimitSnapshot>(limit.clone())
+            .ok()?
+            .to_cost_snapshot(balance)
     }
 
     fn build_result(
@@ -596,12 +617,10 @@ impl CodexApi {
                 let balance = credits.balance.unwrap_or(0.0);
                 if credits.unlimited() {
                     None // Unlimited credits, no need to show
-                } else if let Some(limit) =
-                    credit_limit.and_then(|limit| limit.to_cost_snapshot(balance))
-                {
-                    Some(limit)
                 } else {
-                    Some(CostSnapshot::new(balance, "USD", "Credits"))
+                    // Without a limit there is no way to know what was spent;
+                    // `balance` is what remains. Never report it as `used`.
+                    credit_limit.and_then(|limit| limit.to_cost_snapshot(balance))
                 }
             } else {
                 None
@@ -1216,6 +1235,75 @@ mod tests {
             Some(10_080)
         );
         assert!(!lifted);
+    }
+
+    #[test]
+    fn credit_balance_is_never_reported_as_money_spent() {
+        // `balance` is what is LEFT. Reporting it as `used` inverted the
+        // number: it fell as the user spent and read $0 at exhaustion.
+        let api = CodexApi::new();
+        let (usage, cost) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {
+                    "primary_window": { "used_percent": 10, "limit_window_seconds": 18000 }
+                },
+                "credits": { "has_credits": true, "unlimited": false, "balance": 10.0 }
+            }))
+            .expect("codex usage");
+
+        // No spend-control limit, so spend is unknowable and none is claimed.
+        assert!(cost.is_none(), "a balance alone is not spend");
+        // The balance is still shown, as its own line.
+        let credits = usage
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "codex-credit-balance")
+            .expect("credit balance line");
+        assert_eq!(credits.title, "Credits");
+        assert_eq!(
+            credits.window.reset_description.as_deref(),
+            Some("$10.00 left")
+        );
+    }
+
+    #[test]
+    fn credit_spend_is_derived_from_the_spend_control_limit() {
+        // With a limit, real spend is limit - balance: $40 of $50.
+        let api = CodexApi::new();
+        let (_, cost) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {
+                    "primary_window": { "used_percent": 10, "limit_window_seconds": 18000 }
+                },
+                "credits": { "has_credits": true, "unlimited": false, "balance": 10.0 },
+                "individual_limit": { "limit": 50.0 }
+            }))
+            .expect("codex usage");
+
+        let cost = cost.expect("cost from spend-control limit");
+        assert!((cost.used - 40.0).abs() < 0.01, "used = limit - balance");
+        assert_eq!(cost.limit, Some(50.0));
+    }
+
+    #[test]
+    fn unlimited_credits_report_neither_spend_nor_balance() {
+        let api = CodexApi::new();
+        let (usage, cost) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {
+                    "primary_window": { "used_percent": 10, "limit_window_seconds": 18000 }
+                },
+                "credits": { "has_credits": true, "unlimited": true, "balance": 10.0 }
+            }))
+            .expect("codex usage");
+
+        assert!(cost.is_none());
+        assert!(
+            !usage
+                .extra_rate_windows
+                .iter()
+                .any(|w| w.id == "codex-credit-balance")
+        );
     }
 
     #[test]
