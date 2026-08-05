@@ -344,9 +344,16 @@ impl OpenCodeGoProvider {
             None => self.fetch_workspace_id(cookie_header).await?,
         };
         let page = self.fetch_usage_page(&workspace_id, cookie_header).await?;
-        let mut usage = Self::parse_usage_text(&page)?;
-        let balance = Self::parse_zen_balance(&page);
-        if let Some(balance) = balance {
+        Self::result_from_page(&page)
+    }
+
+    /// Build the snapshot from an already-fetched usage page.
+    ///
+    /// Split out from the fetch so the balance handling is testable without a
+    /// network round trip.
+    fn result_from_page(page: &str) -> Result<ProviderFetchResult, ProviderError> {
+        let mut usage = Self::parse_usage_text(page)?;
+        if let Some(balance) = Self::parse_zen_balance(page) {
             usage = usage.with_extra_rate_window(
                 "zen-balance",
                 "Zen balance",
@@ -430,9 +437,20 @@ mod tests {
         // `currentBalance` is credit left. It used to be reported as
         // CostSnapshot.used, which inverted it: spend fell as the user spent
         // and read $0 exactly when the balance ran out.
-        let balance =
-            OpenCodeGoProvider::parse_zen_balance(r#"{"currentBalance": 12.5, "other": 1}"#);
-        assert_eq!(balance, Some(12.5));
+        // Shaped like the real page: unquoted JS keys for the windows, and the
+        // balance rendered as display text.
+        let page = r#"{rollingUsage: {usedPercent: 40, resetInSec: 3600}} Current balance $12.50"#;
+        let result = OpenCodeGoProvider::result_from_page(page).expect("usage");
+
+        assert!(result.cost.is_none(), "a balance is not money spent");
+        let zen = result
+            .usage
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "zen-balance")
+            .expect("zen balance line");
+        assert_eq!(zen.window.reset_description.as_deref(), Some("$12.50"));
+        assert_eq!(zen.window.used_percent, 0.0, "info-only, not a meter");
     }
 
     #[test]
