@@ -2,34 +2,28 @@
 
 ## [Ceiling] 1.5.24 - 2026-08-05
 
-Puts the pace answer on the usage bars themselves, in the main window.
+Answers "am I going to run out before this resets?" on the usage bars themselves, and makes Cursor's on-demand spend visible in dollars. Both came from user feature requests (#190, #191).
+
+Supersedes 1.5.23, which was built but never published; everything from it is included here.
 
 ### Added
-- Every weekly and monthly bar in the overview and in a provider's detail view now carries a marker showing where usage *should* be at this point in the window. The rule is the same wherever it appears: the marker is where the bar's edge should be right now. Run past it and the overspend shows as a striped band, so "how far ahead am I" reads as a distance rather than as a line to decode. Bars shown as remaining mirror the marker so it keeps the same meaning either way.
-- The marker is derived from elapsed time against the window's own duration, so it needs no provider support and appears on every long window at once, rather than on the single window pace prediction is calculated for.
-- Short windows are left alone. A five-hour session is not spent evenly, so a marker there would sweep across the bar and mean nothing; anything under twelve hours is skipped.
+- **Expected usage is marked on the bars.** Every weekly and monthly bar, in the Overview and in a provider's detail view, now shows where usage should be at this point in the window. One rule everywhere: the marker is where the bar's edge should be right now. Overspending fills the span between the edge and the marker with a striped band, so the question reads as "how far ahead am I" rather than "which side of a line am I on". Bars that show remaining capacity mirror the marker so it keeps the same meaning either way.
+- The marker is derived from elapsed time against the window's own duration, so it needs nothing from the provider and appears on every long window at once, rather than only on the single window a pace prediction is calculated for. Windows shorter than twelve hours are skipped: a five-hour session is not spent evenly, so a marker there would sweep across the bar and mean nothing.
+- **The tray card carries a pace verdict.** It names the outcome (on track, ahead of pace, plenty left, or running out early) and states the consequence. The detailed expected-versus-actual breakdown was hidden in the tray for being too tall, so the prediction Ceiling already computed was invisible exactly where people look for it. The taller breakdown still appears in the main window.
+- **Predictive pace warnings are available again**, as an opt-in under Settings > Notifications, alerting when a window is on course to be exhausted before it resets. The setting had been pinned off on every load with no way to enable it, and was additionally restricted to Claude and Codex. Any provider that reports a reset can raise one now, and warnings are named by the window's real cadence, so a monthly quota is no longer announced as a "Session" limit.
+- **A metered window can carry the money behind it.** Cursor's on-demand lane shows its dollars beside its bar, which is what makes an overdraft readable once the plan is at 100%.
 
 ### Fixed
-- Cursor's on-demand lane now appears in the app window, with the money beside it. It is the only Cursor lane that bills real money, and the detail view was filtering it out by name, so 1.5.23's work to surface overdraft spend could not reach the surface most people actually look at.
-
-## [Ceiling] 1.5.23 - 2026-08-05
-
-Superseded by 1.5.24 and never published. Its changes shipped in 1.5.24.
-
-Adds a pace verdict and Cursor on-demand spend, both from user feature requests.
-
-### Added
-- The tray now answers "am I going to run out before this resets?" directly. A verdict line names the outcome (on track, ahead of pace, plenty left, or running out early), states the consequence, and draws one slim bar with a tick showing where usage should be by this point in the window. The detailed expected-vs-actual breakdown was hidden in the tray because it was too tall, so the prediction Ceiling already computed was invisible exactly where people look for it. The taller breakdown still appears in the main window.
-- Predictive pace warnings are available again, as an opt-in under Settings > Notifications. They alert when a window is on course to be exhausted before it resets. The setting had been pinned off on every load with no way to enable it, and was additionally restricted to Claude and Codex; any provider that reports a reset can raise one now. Warnings are named by the window's real cadence, so a monthly quota is no longer announced as a "Session" limit.
-- A metered window can carry the money behind it. Cursor's on-demand lane now shows its dollars beside its bar, which is what makes the overdraft readable at 100% of plan.
-
-### Fixed
-- Cursor on-demand usage could disappear entirely. It was only read when the account reported a `plan` object, so accounts reporting `overall` lost the overdraft meter; and deriving a percentage needs a cap, so anyone running on-demand uncapped got no meter and their spend was dropped. Uncapped spend is now reported as an explicit non-metering line rather than being discarded for want of a denominator.
-- Cursor on-demand is the only lane on that provider that bills real money, so it now takes the cost slot ahead of plan and pooled-team usage, and is labelled "On-demand" instead of being folded into a generic "Monthly".
-- Removed the Cursor "Promotional" meter and its badge. The percentage was computed as plan usage minus the included allotment, and the included lane is its own closed set, so the subtraction was always zero and the meter read 0% permanently. The badge alongside it claimed the bonus expired at the end of the billing cycle, while Cursor credits expire on their own schedule. Both numbers were wrong and neither can be derived from what the API reports, so the lane is gone rather than guessed at.
+- **Cursor on-demand could disappear entirely.** It was only read when the account reported a `plan` object, so accounts reporting `overall` lost the overdraft meter; and deriving a percentage needs a cap, so anyone running on-demand uncapped got no meter at all and their spend was dropped. Uncapped spend is now reported as an explicit non-metering line rather than discarded for want of a denominator.
+- On-demand is the only Cursor lane that bills real money, so it takes the cost slot ahead of plan and pooled-team usage, and is labelled "On-demand" rather than folded into a generic "Monthly". It also no longer gets filtered out of the app window by name, which had kept it off the surface most people actually use.
+- **Removed the Cursor "Promotional" meter and its badge.** The percentage was plan usage minus the included allotment, and the included lane is its own closed set, so the subtraction was always zero and the meter read 0% permanently. The badge beside it claimed the bonus expired at the end of the billing cycle, while Cursor credits expire on their own schedule. Both numbers were wrong and neither can be derived from what the API reports, so the lane is gone rather than guessed at.
+- Claude's Opus model pool can raise usage alerts alongside the session and weekly windows; it could previously sit at 99% in silence. Monthly windows stay excluded on purpose, since crossing a threshold mid-cycle is normal there rather than news.
+- Threshold alerts are keyed by cadence rather than by slot, so a weekly window promoted into the primary slot is no longer reported as a session.
+- Devin resolves its usage percentages across every reported window at once, so a response holding `0.4` beside `32` reads the `0.4` as 0.4% instead of rescaling it to 40%.
 
 ### Internal
-- Cost-scanner tests no longer mutate `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME`. Changing process environment while another thread reads it is undefined behaviour, and nine other modules read those variables constantly, so unrelated scans intermittently resolved the wrong home. One failure also poisoned the shared mutex and cascaded into three more, which disguised a single fault as four. The scanner now accepts an injected ambient home; the suite went from failing roughly one run in five to twelve clean runs.
+- Release binaries are built with link-time optimization, a single codegen unit, and symbol stripping for the first time. Cargo only reads profiles from the workspace root, and this one lived where cargo ignored it and warned about it on every build, so shipped binaries were larger and slower than intended. `panic = "abort"` was in that ignored block and is deliberately not carried over: it has never applied to a shipped build, and would turn a panic in a background refresh into an immediate process kill.
+- Cost-scanner tests no longer mutate `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME`. Changing process environment while another thread reads it is undefined behaviour, and nine other modules read those variables constantly, so unrelated scans intermittently resolved the wrong home. One such failure also poisoned a shared mutex and cascaded into three more, which disguised a single fault as four. The scanner now takes an injected ambient home; the suite went from failing roughly one run in five to twelve consecutive clean runs.
 
 ## [Ceiling] 1.5.22 - 2026-08-03
 
