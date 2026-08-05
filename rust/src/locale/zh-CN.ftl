@@ -491,6 +491,7 @@ PanelActual = 实际
 PanelUsedSuffix = 已用
 PanelLeftSuffix = 剩余
 PanelOnPaceBudget = 按节奏预算
+PanelAmountOf = 共
 PanelNow = 现在
 PanelOneHour = 1 小时
 PanelFiveHours = 5 小时

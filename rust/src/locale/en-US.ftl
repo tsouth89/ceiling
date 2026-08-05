@@ -491,6 +491,7 @@ PanelActual = Actual
 PanelUsedSuffix = used
 PanelLeftSuffix = left
 PanelOnPaceBudget = On-pace budget
+PanelAmountOf = of
 PanelNow = now
 PanelOneHour = 1h
 PanelFiveHours = 5h

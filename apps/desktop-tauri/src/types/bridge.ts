@@ -399,6 +399,18 @@ export interface RateWindowSnapshot {
   reserveEtaSeconds?: number | null;
 }
 
+/**
+ * Money behind a single metered lane. Distinct from CostSnapshotBridge, which
+ * is one figure for the whole provider and cannot describe individual windows.
+ */
+export interface WindowAmountBridge {
+  used: number;
+  limit: number | null;
+  currencyCode: string;
+  formattedUsed: string;
+  formattedLimit: string | null;
+}
+
 export interface CostSnapshotBridge {
   used: number;
   limit: number | null;
@@ -434,6 +446,7 @@ export interface ProviderUsageSnapshot {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    amount?: WindowAmountBridge | null;
   }>;
   inactiveRateWindows?: Array<{
     id: string;
@@ -1006,6 +1019,7 @@ export interface ProviderDetail {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    amount?: WindowAmountBridge | null;
   }>;
 
   cost: CostSnapshotBridge | null;

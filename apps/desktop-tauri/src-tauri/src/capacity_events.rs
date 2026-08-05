@@ -1000,8 +1000,66 @@ mod tests {
             id: id.into(),
             title: title.into(),
             window: window(used, reset),
+            amount: None,
         });
         snapshot
+    }
+
+    #[test]
+    fn third_and_model_windows_are_observed_without_displacing_core_slots() {
+        // Neither slot reached this map before, so their resets and exhaustions
+        // were invisible to events. Both share a cadence with a core window in
+        // the wild (Claude's model pool is 7 days like its weekly), and the map
+        // is keyed by id — a shared key silently drops one of the two.
+        let now = Utc::now();
+        let reset = now + Duration::hours(3);
+        let mut snapshot = snapshot(now, 10.0, reset);
+        snapshot.secondary = Some(RateWindowSnapshot {
+            window_minutes: Some(10_080),
+            ..window(20.0, reset)
+        });
+        snapshot.secondary_label = Some("Weekly".into());
+        snapshot.model_specific = Some(RateWindowSnapshot {
+            window_minutes: Some(10_080),
+            ..window(96.0, reset)
+        });
+        snapshot.tertiary = Some(RateWindowSnapshot {
+            window_minutes: Some(43_200),
+            ..window(57.0, reset)
+        });
+        snapshot.tertiary_label = Some("Monthly".into());
+
+        let (windows, extra_ids) = observed_windows(&snapshot);
+
+        assert_eq!(windows["weekly"].used_percent, 20.0);
+        assert_eq!(windows["model"].used_percent, 96.0);
+        assert_eq!(windows["monthly"].used_percent, 57.0);
+        assert_eq!(windows["monthly"].label, "Monthly");
+        // Not "extras": an extra id appearing for the first time announces a
+        // granted allowance, and these windows have been there all along.
+        assert!(!extra_ids.contains("model"));
+        assert!(!extra_ids.contains("monthly"));
+    }
+
+    #[test]
+    fn a_third_window_sharing_a_cadence_falls_back_to_its_own_id() {
+        let now = Utc::now();
+        let reset = now + Duration::hours(3);
+        let mut snapshot = snapshot(now, 10.0, reset);
+        snapshot.secondary = Some(RateWindowSnapshot {
+            window_minutes: Some(10_080),
+            ..window(20.0, reset)
+        });
+        snapshot.secondary_label = Some("Weekly".into());
+        snapshot.tertiary = Some(RateWindowSnapshot {
+            window_minutes: Some(10_080),
+            ..window(80.0, reset)
+        });
+
+        let (windows, _) = observed_windows(&snapshot);
+
+        assert_eq!(windows["weekly"].used_percent, 20.0);
+        assert_eq!(windows["tertiary"].used_percent, 80.0);
     }
 
     fn with_inactive(

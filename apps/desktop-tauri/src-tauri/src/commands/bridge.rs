@@ -67,6 +67,30 @@ pub struct NamedRateWindowSnapshot {
     pub id: String,
     pub title: String,
     pub window: RateWindowSnapshot,
+    /// Money behind this lane, for providers that denominate it that way.
+    pub amount: Option<WindowAmountBridge>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowAmountBridge {
+    pub used: f64,
+    pub limit: Option<f64>,
+    pub currency_code: String,
+    pub formatted_used: String,
+    pub formatted_limit: Option<String>,
+}
+
+impl WindowAmountBridge {
+    fn from_amount(amount: &codexbar::core::WindowAmount) -> Self {
+        Self {
+            used: amount.used,
+            limit: amount.limit,
+            currency_code: amount.currency_code.clone(),
+            formatted_used: amount.format_used(),
+            formatted_limit: amount.format_limit(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -283,6 +307,7 @@ impl ProviderUsageSnapshot {
                     id: extra.id.clone(),
                     title: extra.title.clone(),
                     window: RateWindowSnapshot::from_rate_window(&extra.window),
+                    amount: extra.amount.as_ref().map(WindowAmountBridge::from_amount),
                 })
                 .collect(),
             inactive_rate_windows: usage

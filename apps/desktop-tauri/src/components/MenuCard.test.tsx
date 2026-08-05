@@ -112,6 +112,7 @@ describe("MenuCard", () => {
         PanelOneHour: "1h",
         PanelFiveHours: "5h",
         PanelOnPaceBudget: "On-pace budget",
+        PanelAmountOf: "of",
         PanelReserveSuffix: "in reserve",
         PanelThirtyDayCost: "30d cost",
         PanelThirtyDayTokens: "30d tokens",
@@ -232,6 +233,52 @@ describe("MenuCard", () => {
 
     expect(await screen.findByText("Additional Budget")).toBeInTheDocument();
     expect(screen.getByText("58% left")).toBeInTheDocument();
+  });
+
+  it("shows the money behind a lane that is denominated in currency", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.providerId = "cursor";
+    snapshot.extraRateWindows = [
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: rateWindow(35),
+        amount: {
+          used: 3.5,
+          limit: 10,
+          currencyCode: "USD",
+          formattedUsed: "$3.50",
+          formattedLimit: "$10.00",
+        },
+      },
+    ];
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("On-demand")).toBeInTheDocument();
+    expect(screen.getByText("$3.50 of $10.00")).toBeInTheDocument();
+  });
+
+  it("shows a lane's spend alone when it has no limit", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.extraRateWindows = [
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: rateWindow(0),
+        amount: {
+          used: 12.34,
+          limit: null,
+          currencyCode: "USD",
+          formattedUsed: "$12.34",
+          formattedLimit: null,
+        },
+      },
+    ];
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("$12.34")).toBeInTheDocument();
   });
 
   it("renders inactive windows as text without inventing a percentage", async () => {

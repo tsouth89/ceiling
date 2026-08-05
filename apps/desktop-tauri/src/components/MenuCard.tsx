@@ -5,6 +5,7 @@ import type {
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
+  WindowAmountBridge,
 } from "../types/bridge";
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
@@ -246,6 +247,8 @@ interface MetricEntry {
   id: string;
   label: string;
   snap: RateWindowSnapshot;
+  /** Money behind this lane, for providers that meter in currency. */
+  amount?: WindowAmountBridge | null;
 }
 
 interface InactiveMetricEntry {
@@ -284,6 +287,7 @@ function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
 function MetricRow({
   title,
   snap,
+  amount,
   exhaustedLabel,
   resetTimeRelative,
   showResetWhenExhausted,
@@ -293,6 +297,7 @@ function MetricRow({
 }: {
   title: string;
   snap: RateWindowSnapshot;
+  amount?: WindowAmountBridge | null;
   exhaustedLabel: string;
   resetTimeRelative: boolean;
   showResetWhenExhausted: boolean;
@@ -338,6 +343,13 @@ function MetricRow({
           <span className="menu-metric__reset">{resetText}</span>
         )}
       </div>
+      {amount && (
+        <div className="menu-metric__amount">
+          {amount.formattedLimit
+            ? `${amount.formattedUsed} ${t("PanelAmountOf")} ${amount.formattedLimit}`
+            : amount.formattedUsed}
+        </div>
+      )}
       {snap.isExhausted && (
         <div className="menu-metric__exhausted">{exhaustedLabel}</div>
       )}
@@ -496,6 +508,7 @@ export default function MenuCard({
       id: `extra-${extra.id}`,
       label: extra.title,
       snap: extra.window,
+      amount: extra.amount,
     });
   }
   for (const inactive of provider.inactiveRateWindows ?? []) {
@@ -635,6 +648,7 @@ export default function MenuCard({
                     key={m.id}
                     title={m.label}
                     snap={m.snap}
+                    amount={m.amount}
                     exhaustedLabel={t("DetailWindowExhausted")}
                     resetTimeRelative={resetTimeRelative}
                     showResetWhenExhausted={showResetWhenExhausted}
