@@ -1,0 +1,110 @@
+name: Delete pending Microsoft Store submission
+
+# Ceiling ships to the Store as a flat MSI/EXE product, and Partner Center does
+# not offer a delete control for an in-progress submission on that product type.
+# The Store allows one active submission at a time, so a submission still in
+# certification blocks every later release with:
+#
+#   error - Product already has One Active Submission In-Progress
+#
+# This clears that block. It deletes the pending submission only; the listing
+# that is already live in the Store is untouched.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_product_id:
+        description: Type the Partner Center product ID to confirm the deletion
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: microsoft-store-submission
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    name: Delete the pending submission
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # Shares the manual-dispatch environment with the validation workflow, which
+    # is kept apart from the tag-only release environment holding the signing
+    # and R2 credentials.
+    environment: store-validation
+
+    steps:
+      - name: Set up Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      - name: Configure Partner Center credentials
+        shell: pwsh
+        env:
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          foreach ($name in @(
+            "PARTNER_CENTER_TENANT_ID",
+            "PARTNER_CENTER_SELLER_ID",
+            "PARTNER_CENTER_CLIENT_ID",
+            "PARTNER_CENTER_CLIENT_SECRET"
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The store-validation environment is missing secret $name."
+            }
+          }
+          msstore settings --enableTelemetry false
+          msstore reconfigure `
+            --tenantId $env:PARTNER_CENTER_TENANT_ID `
+            --sellerId $env:PARTNER_CENTER_SELLER_ID `
+            --clientId $env:PARTNER_CENTER_CLIENT_ID `
+            --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store CLI authentication failed."
+          }
+
+      - name: Confirm the product ID
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+          CONFIRM_PRODUCT_ID: ${{ inputs.confirm_product_id }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PARTNER_CENTER_PRODUCT_ID)) {
+            throw "The store-validation environment is missing variable PARTNER_CENTER_PRODUCT_ID."
+          }
+          # Deleting a submission cannot be undone, so a stray dispatch must not
+          # be enough on its own to do it.
+          if ($env:CONFIRM_PRODUCT_ID.Trim() -ne $env:PARTNER_CENTER_PRODUCT_ID.Trim()) {
+            throw "The confirmation value does not match the configured product ID. Nothing was deleted."
+          }
+
+      - name: Record the submission before deleting it
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+        run: |
+          # Leaves the status in the log so the run itself says what was removed.
+          msstore submission status $env:PARTNER_CENTER_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the current submission status."
+          }
+
+      - name: Delete the pending submission
+        shell: pwsh
+        env:
+          PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
+        run: |
+          msstore submission delete $env:PARTNER_CENTER_PRODUCT_ID --no-confirm
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Store submission delete failed."
+          }
+          "### Deleted the pending Microsoft Store submission" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Product: $env:PARTNER_CENTER_PRODUCT_ID" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "The published listing is unchanged. A new submission can now be started." |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

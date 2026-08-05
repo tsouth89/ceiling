@@ -88,6 +88,31 @@ submit it for certification. Leave the enable variable `false` if Store
 submission should temporarily remain manual. Never reuse or overwrite a
 versioned R2 URL after Microsoft has certified it.
 
+### When a release is blocked by an in-flight submission
+
+The Store allows one active submission per product, so a release tagged while
+the previous one is still in certification fails its Store step with:
+
+```
+error - Product already has One Active Submission In-Progress. SubmissionId: <id>
+```
+
+Ceiling is a flat MSI/EXE product, and Partner Center does not offer a delete
+control for a pending submission on that product type, so this cannot be
+cleared from the Partner Center UI. Two ways out:
+
+- **Wait.** Once certification finishes, the slot frees itself and the release
+  can be rerun with no further action.
+- **Delete the pending submission.** Run **Delete pending Microsoft Store
+  submission** from GitHub Actions, typing the Partner Center product ID as the
+  confirmation. It runs `msstore submission delete` against the same
+  `store-validation` environment as the validation workflow. Only the pending
+  submission is removed; the listing already live in the Store is untouched.
+
+Either way, resume the blocked release with `gh run rerun <run-id> --failed`,
+which restarts at the Store step and reuses the already-signed binaries rather
+than rebuilding them.
+
 For a local unsigned packaging rehearsal, use the managed Windows checkout:
 
 ```powershell
