@@ -340,13 +340,13 @@ impl ClaudeWebApiFetcher {
 
         let mut result = ProviderFetchResult::new(snapshot, "web");
 
-        // Prefer the dedicated extra-usage endpoint; the embedded payload is
-        // the fallback. Both use the same cents-to-dollars conversion as OAuth.
-        let cost = extra_usage
+        // `extra_usage` already fell back to the embedded payload when the
+        // dedicated endpoint failed, so a `None` here means the endpoint was
+        // read and reported overage as disabled. Do not claim a cost for it.
+        if let Some(cost) = extra_usage
             .as_ref()
             .and_then(ClaudeExtraUsage::cost_snapshot)
-            .or_else(|| usage.extra_usage_cost());
-        if let Some(cost) = cost {
+        {
             result = result.with_cost(cost);
         }
 
