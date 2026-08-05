@@ -10,8 +10,8 @@ use reqwest::Client;
 use uuid::Uuid;
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
+    RateWindow, SourceMode, UsageSnapshot,
 };
 
 const BASE_URL: &str = "https://opencode.ai";
@@ -353,11 +353,11 @@ impl OpenCodeGoProvider {
                 RateWindow::with_details(0.0, None, None, Some(format!("${balance:.2}"))),
             );
         }
-        let mut result = ProviderFetchResult::new(usage, "web");
-        if let Some(balance) = balance {
-            result = result.with_cost(CostSnapshot::new(balance, "USD", "Zen balance"));
-        }
-        Ok(result)
+        // The Zen balance is credit *remaining*, so it is shown above as an
+        // info-only line and deliberately not reported as cost: putting it in
+        // `CostSnapshot.used` would make spend fall as the user spends, and
+        // read $0 at exactly the moment the balance runs out.
+        Ok(ProviderFetchResult::new(usage, "web"))
     }
 }
 
@@ -424,6 +424,16 @@ impl Provider for OpenCodeGoProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zen_balance_is_shown_as_remaining_not_as_spend() {
+        // `currentBalance` is credit left. It used to be reported as
+        // CostSnapshot.used, which inverted it: spend fell as the user spent
+        // and read $0 exactly when the balance ran out.
+        let balance =
+            OpenCodeGoProvider::parse_zen_balance(r#"{"currentBalance": 12.5, "other": 1}"#);
+        assert_eq!(balance, Some(12.5));
+    }
 
     #[test]
     fn parses_workspace_ids() {
