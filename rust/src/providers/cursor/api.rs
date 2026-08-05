@@ -3,8 +3,8 @@
 //! Uses browser cookies to authenticate with cursor.com API
 
 use crate::core::{
-    CostSnapshot, InactiveRateWindow, NamedRateWindow, PromoSignal, ProviderError, RateWindow,
-    UsageSnapshot, WindowAmount,
+    CostSnapshot, InactiveRateWindow, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot,
+    WindowAmount,
 };
 use crate::providers::browser_cookie_header;
 use chrono::{DateTime, Utc};
@@ -162,10 +162,6 @@ impl CursorApi {
                     ));
                 }
 
-                if let Some(promo) = promotional_window(plan, window_minutes, billing_end) {
-                    extras.push(promo);
-                }
-
                 // When Cursor reports the modern percent-lane payload, omitted Auto/API
                 // lanes are explicit absences — not fabricated 0% meters.
                 if uses_percent_lanes(plan) {
@@ -255,21 +251,6 @@ impl CursorApi {
         }
         usage.extra_rate_windows = extras;
         usage.inactive_rate_windows = inactives;
-
-        if let Some(promo) = usage
-            .extra_rate_windows
-            .iter()
-            .find(|w| w.id == "cursor-promotional")
-        {
-            let ends_at = promo.window.resets_at;
-            usage = usage.with_promo_signal(PromoSignal::boost(
-                "cursor-promotional",
-                "Promotional",
-                "Bonus promotional capacity reported by Cursor",
-                Some("cursor-promotional".to_string()),
-                ends_at,
-            ));
-        }
 
         if let Some(email) = user_info.as_ref().and_then(|u| u.email.clone()) {
             usage = usage.with_email(email);
@@ -434,25 +415,6 @@ fn uses_percent_lanes(plan: &PlanUsage) -> bool {
     plan.total_percent_used.is_some()
         || plan.auto_percent_used.is_some()
         || plan.api_percent_used.is_some()
-}
-
-fn promotional_window(
-    plan: &PlanUsage,
-    window_minutes: Option<u32>,
-    billing_end: Option<DateTime<Utc>>,
-) -> Option<NamedRateWindow> {
-    let breakdown = plan.breakdown.as_ref()?;
-    let bonus = breakdown.bonus.filter(|&b| b > 0)? as f64;
-    let included = breakdown.included.filter(|&v| v >= 0)? as f64;
-    let used = plan.used.filter(|&v| v >= 0)? as f64;
-    let promo_used = (used - included).clamp(0.0, bonus);
-    let percent = promo_used / bonus * 100.0;
-
-    Some(NamedRateWindow::new(
-        "cursor-promotional",
-        "Promotional",
-        RateWindow::with_details(percent, window_minutes, billing_end, None),
-    ))
 }
 
 /// Cursor reports on-demand two ways: as a capped pool that can be metered, or
@@ -676,10 +638,14 @@ mod tests {
         assert!((usage.secondary.as_ref().unwrap().used_percent - 17.2).abs() < 0.01);
         assert!((extra(&usage, "cursor-api").window.used_percent - 0.0).abs() < 0.01);
 
-        let promo = extra(&usage, "cursor-promotional");
-        assert_eq!(promo.title, "Promotional");
-        // used == included, so promotional pool is untouched
-        assert!((promo.window.used_percent - 0.0).abs() < 0.01);
+        // No Promotional lane: `breakdown.bonus` is bonus *consumed*, and the
+        // grant it would be metered against is nowhere in the payload.
+        assert!(
+            !usage
+                .extra_rate_windows
+                .iter()
+                .any(|w| w.id == "cursor-promotional")
+        );
 
         let cost = cost.expect("plan usage should still produce cost snapshot");
         assert!((cost.used - 20.0).abs() < 0.01);
@@ -688,20 +654,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cursor_promotional_partial_consumption() {
+    fn test_cursor_reports_no_promotional_meter() {
+        // The old meter computed `plan.used - breakdown.included`, which is
+        // structurally zero: the included lane is its own closed set, so it
+        // read 0% forever. `breakdown.bonus` is bonus consumed, not a grant,
+        // so there is nothing honest to meter it against.
         let json = r#"{
             "billingCycleEnd": "2026-04-01T00:00:00Z",
             "membershipType": "pro",
             "individualUsage": {
                 "plan": {
-                    "used": 2300,
-                    "limit": 2580,
+                    "used": 2000,
+                    "limit": 2000,
+                    "remaining": 0,
                     "breakdown": {
                         "included": 2000,
-                        "bonus": 580,
-                        "total": 2580
+                        "bonus": 23466,
+                        "total": 25466
                     },
-                    "totalPercentUsed": 89.14728682170542
+                    "totalPercentUsed": 73.81449275362318
                 }
             }
         }"#;
@@ -709,125 +680,17 @@ mod tests {
         let summary = parse_summary(json);
         let (usage, _) = api().build_result(summary, None).unwrap();
 
-        let promo = extra(&usage, "cursor-promotional");
-        assert!((promo.window.used_percent - (300.0 / 580.0 * 100.0)).abs() < 0.01);
-        assert!(promo.window.resets_at.is_some());
-
-        // Lane format with only totalPercentUsed → Auto/API not enforced
-        assert_eq!(inactive(&usage, "cursor-auto").description, NOT_ENFORCED);
-        assert_eq!(inactive(&usage, "cursor-api").description, NOT_ENFORCED);
-        assert!(usage.secondary.is_none());
         assert!(
             !usage
                 .extra_rate_windows
                 .iter()
-                .any(|w| w.id == "cursor-api")
+                .any(|w| w.id == "cursor-promotional")
         );
-    }
-
-    #[test]
-    fn test_cursor_build_result_cents_only() {
-        let json = r#"{
-            "billingCycleEnd": "2026-04-01T00:00:00Z",
-            "membershipType": "pro",
-            "individualUsage": {
-                "plan": {
-                    "used": 2500,
-                    "limit": 5000
-                }
-            }
-        }"#;
-
-        let summary = parse_summary(json);
-        let (usage, cost) = api().build_result(summary, None).unwrap();
-
-        assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
-        assert!(usage.secondary.is_none(), "no autoPercentUsed in payload");
-        assert!(usage.extra_rate_windows.is_empty());
-        assert!(
-            usage.inactive_rate_windows.is_empty(),
-            "cents-only payloads are not the percent-lane format"
-        );
-        assert!(cost.is_some());
-    }
-
-    #[test]
-    fn test_cursor_build_result_missing_plan() {
-        let json = r#"{
-            "membershipType": "hobby",
-            "individualUsage": {}
-        }"#;
-
-        let summary = parse_summary(json);
-        let (usage, cost) = api().build_result(summary, None).unwrap();
-
-        assert!((usage.primary.used_percent).abs() < 0.01);
-        assert!(usage.secondary.is_none());
-        assert!(usage.extra_rate_windows.is_empty());
-        assert!(usage.inactive_rate_windows.is_empty());
-        assert!(cost.is_none());
-    }
-
-    #[test]
-    fn test_cursor_unlimited_without_monthly_meter() {
-        let json = r#"{
-            "membershipType": "hobby",
-            "isUnlimited": true,
-            "individualUsage": {}
-        }"#;
-
-        let summary = parse_summary(json);
-        let (usage, _) = api().build_result(summary, None).unwrap();
-
-        let monthly = inactive(&usage, "cursor-monthly");
-        assert_eq!(monthly.title, "Monthly");
-        assert_eq!(monthly.description, NOT_ENFORCED);
-    }
-
-    #[test]
-    fn test_cursor_on_demand_as_named_extra_and_cost() {
-        let json = r#"{
-            "billingCycleEnd": "2026-04-01T00:00:00Z",
-            "membershipType": "pro",
-            "individualUsage": {
-                "plan": {
-                    "used": 800,
-                    "limit": 5000,
-                    "totalPercentUsed": 16.0
-                },
-                "onDemand": {
-                    "enabled": true,
-                    "used": 350,
-                    "limit": 1000
-                }
-            }
-        }"#;
-
-        let summary = parse_summary(json);
-        let (usage, cost) = api().build_result(summary, None).unwrap();
-
-        assert!((usage.primary.used_percent - 16.0).abs() < 0.01);
-
-        let on_demand = extra(&usage, "cursor-on-demand");
-        assert_eq!(on_demand.title, "On-demand");
-        assert!((on_demand.window.used_percent - 35.0).abs() < 0.01);
-        assert!(on_demand.window.resets_at.is_some());
-
-        // The overdraft meter carries its own dollars, so it stays visible even
-        // though the single cost slot belongs to plan spend.
-        let amount = on_demand.amount.as_ref().expect("on-demand carries money");
-        assert!((amount.used - 3.50).abs() < 0.01);
-        assert_eq!(amount.limit, Some(10.0));
-        assert_eq!(amount.format_used(), "$3.50");
-
-        // Lane format with only total → Auto/API inactive
-        assert_eq!(usage.inactive_rate_windows.len(), 2);
-
-        // On-demand is the only real-money lane, so it owns the cost slot.
-        let cost = cost.expect("on-demand cost");
-        assert!((cost.used - 3.5).abs() < 0.01);
-        assert_eq!(cost.limit, Some(10.0));
-        assert_eq!(cost.period, "On-demand");
+        // And no promo badge, which carried a billing-cycle end date while
+        // Cursor credits expire on their own schedule.
+        assert!(usage.promo_signals.is_empty());
+        // The primary meter is unaffected: it reads totalPercentUsed directly.
+        assert!((usage.primary.used_percent - 73.81449275362318).abs() < 0.01);
     }
 
     #[test]
@@ -1010,34 +873,5 @@ mod tests {
         assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
         assert_eq!(cost.unwrap().used, 50.0);
         assert!(usage.extra_rate_windows.is_empty());
-    }
-
-    #[test]
-    fn test_cursor_does_not_invent_promotional_without_bonus() {
-        let json = r#"{
-            "individualUsage": {
-                "plan": {
-                    "used": 1000,
-                    "limit": 2000,
-                    "breakdown": {
-                        "included": 2000,
-                        "bonus": 0,
-                        "total": 2000
-                    },
-                    "totalPercentUsed": 50.0,
-                    "autoPercentUsed": 40.0,
-                    "apiPercentUsed": 10.0
-                }
-            }
-        }"#;
-
-        let summary = parse_summary(json);
-        let (usage, _) = api().build_result(summary, None).unwrap();
-        assert!(
-            !usage
-                .extra_rate_windows
-                .iter()
-                .any(|w| w.id == "cursor-promotional")
-        );
     }
 }

@@ -1,5 +1,22 @@
 # Changelog
 
+## [Ceiling] 1.5.23 - 2026-08-05
+
+Adds a pace verdict and Cursor on-demand spend, both from user feature requests.
+
+### Added
+- The tray now answers "am I going to run out before this resets?" directly. A verdict line names the outcome (on track, ahead of pace, plenty left, or running out early), states the consequence, and draws one slim bar whose tick marks where usage should be by this point in the window. The detailed expected-vs-actual breakdown was hidden in the tray because it was too tall, so the prediction Ceiling already computed was invisible exactly where people look for it. The taller breakdown still appears in the main window.
+- Predictive pace warnings are available again, as an opt-in under Settings > Notifications. They alert when a window is on course to be exhausted before it resets. The setting had been pinned off on every load with no way to enable it, and was additionally restricted to Claude and Codex; any provider that reports a reset can raise one now. Warnings are named by the window's real cadence, so a monthly quota is no longer announced as a "Session" limit.
+- A metered window can carry the money behind it. Cursor's on-demand lane now shows its dollars beside its bar, which is what makes the overdraft readable at 100% of plan.
+
+### Fixed
+- Cursor on-demand usage could disappear entirely. It was only read when the account reported a `plan` object, so accounts reporting `overall` lost the overdraft meter; and deriving a percentage needs a cap, so anyone running on-demand uncapped got no meter and their spend was dropped. Uncapped spend is now reported as an explicit non-metering line rather than being discarded for want of a denominator.
+- Cursor on-demand is the only lane on that provider that bills real money, so it now takes the cost slot ahead of plan and pooled-team usage, and is labelled "On-demand" instead of being folded into a generic "Monthly".
+- Removed the Cursor "Promotional" meter and its badge. The percentage was computed as plan usage minus the included allotment, and the included lane is its own closed set, so the subtraction was always zero and the meter read 0% permanently. The badge alongside it claimed the bonus expired at the end of the billing cycle, while Cursor credits expire on their own schedule. Both numbers were wrong and neither can be derived from what the API reports, so the lane is gone rather than guessed at.
+
+### Internal
+- Cost-scanner tests no longer mutate `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME`. Changing process environment while another thread reads it is undefined behaviour, and nine other modules read those variables constantly, so unrelated scans intermittently resolved the wrong home. One failure also poisoned the shared mutex and cascaded into three more, which disguised a single fault as four. The scanner now accepts an injected ambient home; the suite went from failing roughly one run in five to twelve clean runs.
+
 ## [Ceiling] 1.5.22 - 2026-08-03
 
 ### Fixed

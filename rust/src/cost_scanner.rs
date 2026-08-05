@@ -593,6 +593,14 @@ pub struct CostScanner {
     /// [`ConfiguredAccounts`] (unit tests inject temp dirs). Production leaves
     /// this `None` so live multi-account setup is always read at scan time.
     account_homes_override: Option<Vec<PathBuf>>,
+    /// When set, stands in for the ambient `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    ///
+    /// Tests used to `set_var` these instead. Mutating process environment is
+    /// undefined behaviour while any other thread reads it, and the rest of the
+    /// suite reads both constantly, which made unrelated scans intermittently
+    /// resolve the wrong home. Injecting the value keeps it thread-local to the
+    /// scanner. Production leaves this `None` and reads the real environment.
+    ambient_home_override: Option<PathBuf>,
 }
 
 impl CostScanner {
@@ -609,6 +617,7 @@ impl CostScanner {
             scoped_home: None,
             codex_speed: CodexCostSpeed::resolve(None),
             account_homes_override: None,
+            ambient_home_override: None,
         }
     }
 
@@ -619,6 +628,7 @@ impl CostScanner {
             scoped_home: None,
             codex_speed: CodexCostSpeed::resolve(speed_override),
             account_homes_override: None,
+            ambient_home_override: None,
         }
     }
 
@@ -629,18 +639,27 @@ impl CostScanner {
             scoped_home: Some(home),
             codex_speed: CodexCostSpeed::resolve(None),
             account_homes_override: None,
+            ambient_home_override: None,
         }
     }
 
-    /// Unscoped scanner that treats `homes` as the only configured account
-    /// directories (no live [`ConfiguredAccounts`] load). Used by tests.
+    /// Stand in for the ambient config home on an already-built scanner.
     #[cfg(test)]
-    fn with_account_homes(days: u32, homes: Vec<PathBuf>) -> Self {
+    fn with_ambient_home(mut self, home: PathBuf) -> Self {
+        self.ambient_home_override = Some(home);
+        self
+    }
+
+    /// Like [`Self::with_account_homes`], but also standing in for the ambient
+    /// config directory instead of mutating the process environment.
+    #[cfg(test)]
+    fn with_ambient_and_account_homes(days: u32, ambient: PathBuf, homes: Vec<PathBuf>) -> Self {
         Self {
             days,
             scoped_home: None,
             codex_speed: CodexCostSpeed::resolve(None),
             account_homes_override: Some(homes),
+            ambient_home_override: Some(ambient),
         }
     }
 
@@ -784,7 +803,10 @@ impl CostScanner {
             );
         }
         let settings = Settings::load();
-        let codex_home = std::env::var("CODEX_HOME").ok();
+        let codex_home = match &self.ambient_home_override {
+            Some(home) => Some(home.to_string_lossy().into_owned()),
+            None => std::env::var("CODEX_HOME").ok(),
+        };
         // Merge custom session roots with every configured multi-account
         // CODEX_HOME. `codex_sessions_dir_candidates` dedups by path so an
         // account that is also ambient / listed in custom dirs is not double
@@ -903,7 +925,11 @@ impl CostScanner {
             }
         };
 
-        if let Ok(claude_config) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let ambient = match &self.ambient_home_override {
+            Some(home) => Ok(home.to_string_lossy().into_owned()),
+            None => std::env::var("CLAUDE_CONFIG_DIR"),
+        };
+        if let Ok(claude_config) = ambient {
             let trimmed = claude_config.trim();
             if !trimmed.is_empty() {
                 push(
@@ -1759,10 +1785,11 @@ fn scan_grok_report(
     days: u32,
     windows: &[CurrentUsageWindow],
 ) -> CostUsageReport {
-    let _ = scanner;
     let mut daily = empty_daily_summaries(days);
     let mut current_windows = empty_current_window_summaries(windows);
-    let Some(sessions_root) = grok_sessions_dir(None) else {
+    // Honour an injected home so tests need not export `GROK_HOME`.
+    let ambient = scanner.ambient_home_override.clone();
+    let Some(sessions_root) = grok_sessions_dir(ambient.as_deref()) else {
         return finish_report(daily, days, None, (0, 0, 0), None, current_windows);
     };
     if !sessions_root.exists() {
@@ -2098,11 +2125,6 @@ mod tests {
         ));
     }
 
-    fn codex_home_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
-
     /// SOU-296: the report scanner behind the Charts page, the reset windows,
     /// and the API value card only walked `sessions/`. Archiving a Codex task
     /// therefore shrank every total, while the summary scanner still counted
@@ -2177,7 +2199,6 @@ mod tests {
     /// dirs were walked).
     #[test]
     fn unscoped_scan_sums_configured_account_homes() {
-        let _guard = codex_home_lock().lock().expect("codex home lock");
         let today = Local::now().date_naive();
         let day = today.format("%Y-%m-%d").to_string();
         let ts = format!("{day}T10:00:00.000Z");
@@ -2215,19 +2236,26 @@ mod tests {
         )
         .unwrap();
 
-        let previous = std::env::var("CODEX_HOME").ok();
         // Ambient home is personal; work is only present as a configured account.
-        // SAFETY: serialized by `codex_home_lock`, and restored below.
-        unsafe { std::env::set_var("CODEX_HOME", personal.path()) };
+        // Injected rather than exported: mutating process env races the readers
+        // in every other test module.
+        let ambient = personal.path().to_path_buf();
 
         // Without account homes, only ambient (personal) is scanned.
-        let ambient_only =
-            scan_codex_report(&CostScanner::with_account_homes(2, Vec::new()), 2, &[]);
+        let ambient_only = scan_codex_report(
+            &CostScanner::with_ambient_and_account_homes(2, ambient.clone(), Vec::new()),
+            2,
+            &[],
+        );
         assert_eq!(ambient_only.thirty_days.input_tokens, 1000);
 
         // With the work account configured, totals include both homes.
         let both = scan_codex_report(
-            &CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]),
+            &CostScanner::with_ambient_and_account_homes(
+                2,
+                ambient.clone(),
+                vec![work.path().to_path_buf()],
+            ),
             2,
             &[],
         );
@@ -2239,8 +2267,9 @@ mod tests {
 
         // Listing the ambient home again as an "account" must not double-count.
         let with_dup_home = scan_codex_report(
-            &CostScanner::with_account_homes(
+            &CostScanner::with_ambient_and_account_homes(
                 2,
+                ambient,
                 vec![personal.path().to_path_buf(), work.path().to_path_buf()],
             ),
             2,
@@ -2250,19 +2279,11 @@ mod tests {
             with_dup_home.thirty_days.input_tokens, 8000,
             "same config dir listed as ambient and account must not inflate"
         );
-
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("CODEX_HOME", value),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-        }
     }
 
     /// A rollout copied into two homes still counts once (filename dedup).
     #[test]
     fn unscoped_scan_dedups_same_rollout_across_account_homes() {
-        let _guard = codex_home_lock().lock().expect("codex home lock");
         let today = Local::now().date_naive();
         let day = today.format("%Y-%m-%d").to_string();
         let ts = format!("{day}T10:00:00.000Z");
@@ -2287,11 +2308,12 @@ mod tests {
         std::fs::write(pd.join(&shared), &token_line).unwrap();
         std::fs::write(wd.join(&shared), &token_line).unwrap();
 
-        let previous = std::env::var("CODEX_HOME").ok();
-        unsafe { std::env::set_var("CODEX_HOME", personal.path()) };
-
         let report = scan_codex_report(
-            &CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]),
+            &CostScanner::with_ambient_and_account_homes(
+                2,
+                personal.path().to_path_buf(),
+                vec![work.path().to_path_buf()],
+            ),
             2,
             &[],
         );
@@ -2300,18 +2322,10 @@ mod tests {
             "identical rollout name across homes must count once"
         );
         assert_eq!(report.thirty_days.sessions_count, 1);
-
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("CODEX_HOME", value),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-        }
     }
 
     #[test]
     fn codex_report_counts_archived_rollouts_exactly_once() {
-        let _guard = codex_home_lock().lock().expect("codex home lock");
         let today = Local::now().date_naive();
         let day = today.format("%Y-%m-%d").to_string();
         let ts = format!("{day}T10:00:00.000Z");
@@ -2336,16 +2350,11 @@ mod tests {
         std::fs::write(archived.join(&shared), &token_line).unwrap();
         std::fs::write(archived.join(&archived_only), &token_line).unwrap();
 
-        let previous = std::env::var("CODEX_HOME").ok();
-        // SAFETY: serialized by `codex_home_lock`, and restored below.
-        unsafe { std::env::set_var("CODEX_HOME", tmp.path()) };
-        let report = scan_codex_report(&CostScanner::new(2), 2, &[]);
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("CODEX_HOME", value),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-        }
+        let report = scan_codex_report(
+            &CostScanner::with_ambient_and_account_homes(2, tmp.path().to_path_buf(), Vec::new()),
+            2,
+            &[],
+        );
 
         assert_eq!(
             report.thirty_days.sessions_count, 2,
@@ -2568,11 +2577,6 @@ mod tests {
         )
         .unwrap();
 
-        let _guard = codex_home_lock().lock().expect("codex home lock");
-        let previous = std::env::var("CODEX_HOME").ok();
-        // SAFETY: serialized by `codex_home_lock`, and restored below.
-        unsafe { std::env::set_var("CODEX_HOME", tmp.path()) };
-
         let starts_at = Utc::now() - Duration::hours(1);
         let ends_at = Utc::now() + Duration::hours(1);
         let windows = [CurrentUsageWindow {
@@ -2581,17 +2585,12 @@ mod tests {
             ends_at,
         }];
 
-        let standard = CostScanner::with_codex_speed(2, Some("standard"));
-        let fast = CostScanner::with_codex_speed(2, Some("fast"));
+        let ambient = tmp.path().to_path_buf();
+        let standard =
+            CostScanner::with_codex_speed(2, Some("standard")).with_ambient_home(ambient.clone());
+        let fast = CostScanner::with_codex_speed(2, Some("fast")).with_ambient_home(ambient);
         let std_report = scan_codex_report(&standard, 2, &windows);
         let fast_report = scan_codex_report(&fast, 2, &windows);
-
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("CODEX_HOME", value),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-        }
 
         let std_window = std_report
             .current_windows
@@ -2701,7 +2700,6 @@ mod tests {
 
     #[test]
     fn unscoped_claude_scan_sums_account_homes_and_dedups_records() {
-        let _guard = codex_home_lock().lock().expect("environment lock");
         let personal = tempfile::tempdir().expect("personal home");
         let work = tempfile::tempdir().expect("work home");
         let personal_projects = personal.path().join("projects").join("personal");
@@ -2730,25 +2728,20 @@ mod tests {
         )
         .expect("work transcript");
 
-        let previous = std::env::var("CLAUDE_CONFIG_DIR").ok();
-        // SAFETY: serialized by the environment lock and restored below.
-        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", personal.path()) };
-
-        let summary =
-            CostScanner::with_account_homes(2, vec![work.path().to_path_buf()]).scan_claude();
+        // The ambient home is injected rather than exported: mutating the
+        // process environment races every other test that reads it.
+        let summary = CostScanner::with_ambient_and_account_homes(
+            2,
+            personal.path().to_path_buf(),
+            vec![work.path().to_path_buf()],
+        )
+        .scan_claude();
         assert_eq!(
             summary.input_tokens, 1000,
             "shared 100 + personal 200 + work 700"
         );
         assert_eq!(summary.output_tokens, 100);
         assert_eq!(summary.sessions_count, 2);
-
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
-                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
-            }
-        }
     }
 
     #[test]
@@ -2920,16 +2913,11 @@ mod tests {
         .unwrap();
 
         // SAFETY: test-only env override; restored after the scan.
-        let prev = std::env::var_os("GROK_HOME");
-        // SAFETY: single-threaded test isolation for GROK_HOME.
-        unsafe {
-            std::env::set_var("GROK_HOME", home.path());
-        }
-        let report = scan_grok_report(&CostScanner::new(7), 7, &[]);
-        match prev {
-            Some(value) => unsafe { std::env::set_var("GROK_HOME", value) },
-            None => unsafe { std::env::remove_var("GROK_HOME") },
-        }
+        let report = scan_grok_report(
+            &CostScanner::new(7).with_ambient_home(home.path().to_path_buf()),
+            7,
+            &[],
+        );
 
         assert_eq!(report.thirty_days.sessions_count, 1);
         assert_eq!(report.thirty_days.input_tokens, 1000);
@@ -2984,16 +2972,11 @@ mod tests {
         )
         .unwrap();
 
-        // SAFETY: same test-only GROK_HOME isolation as above.
-        let prev = std::env::var_os("GROK_HOME");
-        unsafe {
-            std::env::set_var("GROK_HOME", home.path());
-        }
-        let mixed = scan_grok_report(&CostScanner::new(7), 7, &[]);
-        match prev {
-            Some(value) => unsafe { std::env::set_var("GROK_HOME", value) },
-            None => unsafe { std::env::remove_var("GROK_HOME") },
-        }
+        let mixed = scan_grok_report(
+            &CostScanner::new(7).with_ambient_home(home.path().to_path_buf()),
+            7,
+            &[],
+        );
 
         assert_eq!(mixed.thirty_days.input_tokens, 51_000);
         // Only the priced turn contributes dollars.
