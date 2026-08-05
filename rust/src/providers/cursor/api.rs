@@ -217,15 +217,19 @@ impl CursorApi {
         } else if let Some(team) = &summary.team_usage {
             if let Some(pooled) = &team.pooled {
                 monthly_percent = Self::usage_percent(pooled);
-                cost_snapshot = Self::on_demand_cost(Some(pooled), billing_end, MONTHLY_PERIOD);
             }
             let (metered, notice) =
                 on_demand_windows(team.on_demand.as_ref(), window_minutes, billing_end);
             extras.extend(metered);
             inactives.extend(notice);
+            // Same rule as the individual branch: on-demand is the billed lane,
+            // so it takes the cost slot ahead of the pooled plan allowance.
+            cost_snapshot =
+                Self::on_demand_cost(team.on_demand.as_ref(), billing_end, ON_DEMAND_PERIOD);
             if cost_snapshot.is_none() {
-                cost_snapshot =
-                    Self::on_demand_cost(team.on_demand.as_ref(), billing_end, ON_DEMAND_PERIOD);
+                cost_snapshot = team.pooled.as_ref().and_then(|pooled| {
+                    Self::on_demand_cost(Some(pooled), billing_end, MONTHLY_PERIOD)
+                });
             }
         }
 
@@ -486,13 +490,11 @@ fn on_demand_windows(
     if used_cents <= 0 {
         return (None, None);
     }
+    let spent = WindowAmount::new(used_cents as f64 / 100.0, "USD").format_used();
     let notice = InactiveRateWindow::new(
         ON_DEMAND_ID,
         ON_DEMAND_TITLE,
-        format!(
-            "${:.2} spent, no spend limit set",
-            used_cents as f64 / 100.0
-        ),
+        format!("{spent} spent, no spend limit set"),
     );
     (None, Some(notice))
 }
@@ -529,7 +531,9 @@ fn plan_cost_snapshot(
 
 /// Dollars behind an on-demand lane, for display beside its meter.
 fn on_demand_amount(usage: &OnDemandUsage) -> Option<WindowAmount> {
-    let used = usage.used? as f64;
+    // Treat an omitted `used` as zero, the way `usage_percent` does, so a
+    // reported cap still renders instead of the amount vanishing entirely.
+    let used = usage.used.unwrap_or(0) as f64;
     let mut amount = WindowAmount::new(used / 100.0, "USD");
     if let Some(limit) = usage
         .limit
@@ -955,6 +959,48 @@ mod tests {
         assert!((usage.primary.used_percent - 25.0).abs() < 0.01);
         assert_eq!(cost.unwrap().limit, Some(100.0));
         assert!(usage.extra_rate_windows.is_empty());
+    }
+
+    #[test]
+    fn test_cursor_on_demand_cap_renders_without_a_used_field() {
+        // Cursor can report a cap with no `used`. That is zero spend against a
+        // real limit, not an absent amount.
+        let json = r#"{
+            "individualUsage": {
+                "plan": {"used": 100, "limit": 1000, "totalPercentUsed": 10.0},
+                "onDemand": {"enabled": true, "limit": 2000}
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, _) = api().build_result(summary, None).unwrap();
+
+        let amount = extra(&usage, "cursor-on-demand")
+            .amount
+            .as_ref()
+            .expect("a cap is still an amount");
+        assert_eq!(amount.used, 0.0);
+        assert_eq!(amount.limit, Some(20.0));
+    }
+
+    #[test]
+    fn test_cursor_team_on_demand_outranks_pooled_for_cost() {
+        // On-demand is the billed lane for teams too, so it must not be
+        // shadowed by the pooled plan allowance.
+        let json = r#"{
+            "teamUsage": {
+                "pooled": {"used": 5000, "limit": 10000},
+                "onDemand": {"enabled": true, "used": 750, "limit": 2000}
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, cost) = api().build_result(summary, None).unwrap();
+
+        assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
+        let cost = cost.expect("on-demand cost");
+        assert!((cost.used - 7.5).abs() < 0.01);
+        assert_eq!(cost.period, "On-demand");
     }
 
     #[test]
