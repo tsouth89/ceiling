@@ -18,7 +18,11 @@ export default function PaceVerdict({ pace }: { pace: PaceSnapshot }) {
   // before the window closes.
   const tone = runningOut && category !== "burning" ? "racing" : category;
 
-  const remaining = Math.max(0, Math.round(100 - pace.actualUsedPercent));
+  const actual = clampPercent(pace.actualUsedPercent);
+  const expected = clampPercent(pace.expectedUsedPercent);
+  // Derive from the clamped value, or a NaN off the bridge would render as
+  // "NaN% to spare" beside a bar that had already clamped it away.
+  const remaining = Math.round(100 - actual);
   const headline = runningOut
     ? t("PaceVerdictRunningOut")
     : t(
@@ -34,9 +38,6 @@ export default function PaceVerdict({ pace }: { pace: PaceSnapshot }) {
         formatEta(pace.etaSeconds as number),
       )
     : t("PaceVerdictLastsToReset").replace("{}", String(remaining));
-
-  const actual = clampPercent(pace.actualUsedPercent);
-  const expected = clampPercent(pace.expectedUsedPercent);
 
   return (
     <div className="menu-card__pace-verdict" data-pace={tone}>

@@ -118,6 +118,20 @@ describe("PaceVerdict", () => {
     expect(tick?.style.left).toBe("60%");
   });
 
+  it("never renders NaN in the spare-capacity line", async () => {
+    // The bar already clamped these; the copy must agree with it rather than
+    // rendering "NaN% to spare" beside a clamped bar.
+    renderVerdict(pace({ actualUsedPercent: Number.NaN }));
+
+    expect(await screen.findByText("Lasts to reset, 100% to spare")).toBeInTheDocument();
+  });
+
+  it("reports no spare capacity when usage overshoots the window", async () => {
+    renderVerdict(pace({ actualUsedPercent: 140 }));
+
+    expect(await screen.findByText("Lasts to reset, 0% to spare")).toBeInTheDocument();
+  });
+
   it("clamps out-of-range percentages instead of overflowing the track", async () => {
     const { container } = renderVerdict(
       pace({ actualUsedPercent: 140, expectedUsedPercent: -20 }),
