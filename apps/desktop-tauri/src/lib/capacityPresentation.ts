@@ -180,12 +180,24 @@ export function constrainingWindow(
 }
 
 /**
+ * Lanes that define a plan alongside its hero, listed in display order and
+ * shown on overview however quiet they are:
+ *  - Cursor's Auto and API are distinct allowances users need to compare.
+ *  - Claude's Weekly sits beside the 5-hour session; both cap the subscription.
+ *  - OpenCode Go bills against rolling, weekly, and monthly ceilings at once, so
+ *    hiding weekly leaves a gap between the two windows that do show.
+ */
+const PINNED_COMPANION_IDS: Record<string, string[]> = {
+  cursor: ["secondary", "extra-cursor-api"],
+  claude: ["secondary"],
+  opencodego: ["secondary", "tertiary"],
+};
+
+/**
  * Overview glance model: primary plan pool as hero, plus compact companion
- * lanes. Cursor always shows its reported Auto and API lanes because they are
- * distinct allowances users need to compare. Claude always shows Weekly beside
- * its 5-hour session because both limits define the subscription. Other
- * providers keep the single hottest materially constrained lane. Clicking
- * never toggles meters — detail mode lists every window.
+ * lanes. Providers in `PINNED_COMPANION_IDS` always show their defining lanes;
+ * every other provider keeps the single hottest materially constrained lane.
+ * Clicking never toggles meters — detail mode lists every window.
  */
 export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
   const primary: ConstrainingWindow = {
@@ -195,17 +207,16 @@ export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
   };
 
   const candidates = nonPrimaryWindows(provider);
-  if (provider.providerId === "cursor") {
-    const cursorCompanions = [
-      candidates.find((candidate) => candidate.id === "secondary"),
-      candidates.find((candidate) => candidate.id === "extra-cursor-api"),
-    ].filter((candidate): candidate is ConstrainingWindow => Boolean(candidate));
-    return { primary, companions: cursorCompanions };
-  }
-
-  if (provider.providerId === "claude") {
-    const weekly = candidates.find((candidate) => candidate.id === "secondary");
-    return { primary, companions: weekly ? [weekly] : [] };
+  const pinned = PINNED_COMPANION_IDS[provider.providerId];
+  if (pinned) {
+    return {
+      primary,
+      companions: pinned
+        .map((id) => candidates.find((candidate) => candidate.id === id))
+        .filter((candidate): candidate is ConstrainingWindow =>
+          Boolean(candidate),
+        ),
+    };
   }
 
   let companion: ConstrainingWindow | null = null;

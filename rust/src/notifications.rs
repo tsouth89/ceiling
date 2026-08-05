@@ -485,7 +485,12 @@ impl NotificationManager {
         used_percent: f64,
         settings: &Settings,
     ) {
-        if !settings.show_notifications || !matches!(window, "session" | "weekly") {
+        // A model pool is a hard ceiling on the work you can do right now — a
+        // maxed Opus allowance stops Opus — so it warns like the session and
+        // weekly windows. Monthly stays out on purpose: it moves slowly enough
+        // that crossing a threshold mid-cycle is normal, not news. See
+        // `monthly_and_unknown_windows_never_raise_usage_toasts`.
+        if !settings.show_notifications || !matches!(window, "session" | "weekly" | "model") {
             return;
         }
 
@@ -1714,6 +1719,24 @@ mod tests {
             manager.toasts_shown, 1,
             "quiet weekly must not clear session high-usage alert"
         );
+    }
+
+    #[test]
+    fn a_model_pool_can_warn_like_the_windows_beside_it() {
+        // Claude's Opus allowance was filtered out of `check_and_notify`, so it
+        // could reach 99% in silence while the weekly window beside it warned.
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings::default();
+
+        // First reading is the baseline and never warns, by design.
+        manager.check_and_notify(ProviderId::Claude, None, "model", 20.0, &settings);
+        // A crossing waits for a second reading to confirm it, like every other
+        // window: one anomalous refresh must not raise a toast on its own.
+        manager.check_and_notify(ProviderId::Claude, None, "model", 92.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+
+        manager.check_and_notify(ProviderId::Claude, None, "model", 96.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
     }
 
     #[test]

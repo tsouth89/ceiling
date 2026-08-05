@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
 
-const STORE_VERSION: u8 = 2;
+const STORE_VERSION: u8 = 3;
 const RETENTION_DAYS: i64 = 30;
 const MIN_SAMPLE_INTERVAL_MINUTES: i64 = 5;
 
@@ -179,7 +179,14 @@ fn snapshot_windows(snapshot: &ProviderUsageSnapshot) -> Vec<UsageHistoryWindow>
         push_window(&mut windows, "model", Some("Model"), window);
     }
     if let Some(window) = snapshot.tertiary.as_ref() {
-        push_window(&mut windows, "tertiary", Some("API"), window);
+        // The window names itself when it can (OpenCode Go "Monthly"); "API" is
+        // the historical fallback from when Cursor was the only tertiary.
+        push_window(
+            &mut windows,
+            "tertiary",
+            snapshot.tertiary_label.as_deref().or(Some("API")),
+            window,
+        );
     }
     for extra in &snapshot.extra_rate_windows {
         push_window(&mut windows, &extra.id, Some(&extra.title), &extra.window);
@@ -273,10 +280,44 @@ fn load_store() -> UsageHistoryStore {
     let Some(path) = persistence_path() else {
         return UsageHistoryStore::default();
     };
-    fs::read(&path)
+    let mut store: UsageHistoryStore = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    migrate_store(&mut store);
+    store
+}
+
+/// A window's series id comes from the label it carried when it was recorded,
+/// so renaming a label starts a second series and cuts the chart in two. Two
+/// OpenCode Go renames land together: the rolling window now states its 5-hour
+/// span, and the monthly window keeps its own name instead of the "API"
+/// fallback left over from when Cursor was the only provider with a third
+/// window. Points recorded under the old ids are relabelled in place so the
+/// retained 30 days stay one line each.
+fn migrate_store(store: &mut UsageHistoryStore) {
+    if store.version >= 3 {
+        return;
+    }
+    for (key, points) in store.series.iter_mut() {
+        if !key.starts_with("opencodego:") {
+            continue;
+        }
+        for point in points.iter_mut() {
+            for window in &mut point.windows {
+                let renamed = match window.id.as_str() {
+                    "rolling" => Some(("rolling-5h", "Rolling (5h)")),
+                    "api" => Some(("monthly", "Monthly")),
+                    _ => None,
+                };
+                if let Some((id, label)) = renamed {
+                    window.id = id.to_string();
+                    window.label = label.to_string();
+                }
+            }
+        }
+    }
+    store.version = STORE_VERSION;
 }
 
 fn persist_store(store: &UsageHistoryStore) {
@@ -307,6 +348,139 @@ mod tests {
     fn normalizes_window_labels_for_stable_series() {
         assert_eq!(normalize_id("Session (5h)"), "session-5h");
         assert_eq!(normalize_id(" API "), "api");
+    }
+
+    fn window_snapshot(used_percent: f64) -> RateWindowSnapshot {
+        RateWindowSnapshot {
+            used_percent,
+            remaining_percent: 100.0 - used_percent,
+            window_minutes: None,
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: false,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+        }
+    }
+
+    #[test]
+    fn a_named_tertiary_window_charts_under_its_own_name() {
+        // OpenCode Go's third window is Monthly, not Cursor's API.
+        let mut snapshot = ProviderUsageSnapshot {
+            provider_id: "opencodego".into(),
+            display_name: "OpenCode Go".into(),
+            primary: window_snapshot(34.0),
+            primary_label: Some("Rolling (5h)".into()),
+            secondary: Some(window_snapshot(32.0)),
+            secondary_label: Some("Weekly".into()),
+            model_specific: None,
+            tertiary: Some(window_snapshot(57.0)),
+            tertiary_label: Some("Monthly".into()),
+            extra_rate_windows: Vec::new(),
+            inactive_rate_windows: Vec::new(),
+            promo_signals: Vec::new(),
+            reset_credits_available: None,
+            cost: None,
+            plan_name: None,
+            account_email: None,
+            source_label: "web".into(),
+            updated_at: "2026-08-04T00:00:00Z".into(),
+            error: None,
+            pace: None,
+            account_organization: None,
+            tray_status_label: None,
+            account_id: None,
+            account_label: None,
+            account_tint: None,
+            fetch_duration_ms: None,
+            wayfinder_usage: None,
+        };
+
+        let windows = snapshot_windows(&snapshot);
+        let named: Vec<_> = windows
+            .iter()
+            .map(|window| (window.id.as_str(), window.label.as_str()))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("rolling-5h", "Rolling (5h)"),
+                ("weekly", "Weekly"),
+                ("monthly", "Monthly"),
+            ]
+        );
+
+        // An unnamed tertiary keeps the historical fallback.
+        snapshot.tertiary_label = None;
+        let windows = snapshot_windows(&snapshot);
+        assert_eq!(windows[2].id, "api");
+    }
+
+    #[test]
+    fn relabelled_opencode_go_windows_keep_one_series() {
+        // Recorded under the pre-rename ids; charting them as separate series
+        // would break the retained 30 days into two lines each.
+        let mut store = UsageHistoryStore {
+            version: 2,
+            series: HashMap::new(),
+        };
+        store.series.insert(
+            scope_key("opencodego", None, None, None),
+            vec![UsageHistoryPoint {
+                recorded_at: "2026-08-01T00:00:00Z".into(),
+                windows: vec![
+                    UsageHistoryWindow {
+                        id: "rolling".into(),
+                        label: "Rolling".into(),
+                        used_percent: 34.0,
+                    },
+                    UsageHistoryWindow {
+                        id: "weekly".into(),
+                        label: "Weekly".into(),
+                        used_percent: 32.0,
+                    },
+                    UsageHistoryWindow {
+                        id: "api".into(),
+                        label: "API".into(),
+                        used_percent: 57.0,
+                    },
+                ],
+            }],
+        );
+        let untouched = vec![UsageHistoryPoint {
+            recorded_at: "2026-08-01T00:00:00Z".into(),
+            windows: vec![UsageHistoryWindow {
+                id: "api".into(),
+                label: "API".into(),
+                used_percent: 12.0,
+            }],
+        }];
+        store
+            .series
+            .insert(scope_key("cursor", None, None, None), untouched.clone());
+
+        migrate_store(&mut store);
+
+        let migrated = &store.series[&scope_key("opencodego", None, None, None)][0].windows;
+        assert_eq!(
+            migrated
+                .iter()
+                .map(|window| (window.id.as_str(), window.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("rolling-5h", "Rolling (5h)"),
+                ("weekly", "Weekly"),
+                ("monthly", "Monthly"),
+            ]
+        );
+        // Cursor's API window is a real API allowance and must not be renamed.
+        assert_eq!(
+            store.series[&scope_key("cursor", None, None, None)],
+            untouched
+        );
+        assert_eq!(store.version, STORE_VERSION);
     }
 
     fn series_with(

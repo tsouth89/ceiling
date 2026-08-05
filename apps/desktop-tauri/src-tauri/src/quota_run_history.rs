@@ -666,7 +666,15 @@ fn live_windows(snapshot: &ProviderUsageSnapshot) -> Vec<LiveWindow> {
         push_live(&mut windows, snapshot, "model", Some("Model"), window);
     }
     if let Some(window) = snapshot.tertiary.as_ref() {
-        push_live(&mut windows, snapshot, "tertiary", Some("API"), window);
+        // Same fallback as usage history: use the window's own label when it has
+        // one, so an OpenCode Go monthly run is not filed as an API run.
+        push_live(
+            &mut windows,
+            snapshot,
+            "tertiary",
+            snapshot.tertiary_label.as_deref().or(Some("API")),
+            window,
+        );
     }
     for extra in &snapshot.extra_rate_windows {
         push_live(
@@ -699,6 +707,16 @@ fn push_live(
     if id.is_empty() {
         return;
     }
+    // Cadence alone does not separate every slot: Claude's model pool is 7 days
+    // like its weekly window, so both resolved to "weekly" and the model reading
+    // took over the weekly run — same open key, wrong numbers and label. Slots
+    // are pushed core-first, so an id already taken belongs to the core window
+    // and this one falls back to its own slot name.
+    let id = if windows.iter().any(|existing| existing.id == id) {
+        fallback_id.to_string()
+    } else {
+        id
+    };
     windows.push(LiveWindow {
         id,
         label: label.to_string(),
@@ -1039,6 +1057,49 @@ mod tests {
             1
         );
         assert!(list_runs(provider, Some("me@job.test"), Some("acct-personal")).is_empty());
+    }
+
+    #[test]
+    fn a_model_window_does_not_take_over_the_weekly_run() {
+        // Claude's model pool is 7 days, the same cadence as its weekly window,
+        // so both resolved to the "weekly" id. Sharing one open key meant the
+        // model reading overwrote the weekly run's numbers and its label.
+        let now = Utc::now();
+        let reset = now + Duration::hours(6);
+        let mut snap = snapshot("claude", "person@example.com", now, 10.0, reset);
+        snap.secondary = Some(rate(20.0, 10_080, reset));
+        snap.secondary_label = Some("Weekly".into());
+        snap.model_specific = Some(rate(96.0, 10_080, reset));
+
+        let windows = live_windows(&snap);
+        let weekly = windows
+            .iter()
+            .find(|window| window.id == "weekly")
+            .expect("weekly window");
+        assert_eq!(weekly.used_percent, 20.0);
+        assert_eq!(weekly.label, "Weekly");
+        let model = windows
+            .iter()
+            .find(|window| window.id == "model")
+            .expect("model window keeps its own run");
+        assert_eq!(model.used_percent, 96.0);
+    }
+
+    #[test]
+    fn a_named_third_window_runs_under_its_own_name() {
+        let now = Utc::now();
+        let reset = now + Duration::hours(6);
+        let mut snap = snapshot("opencodego", "person@example.com", now, 34.0, reset);
+        snap.tertiary = Some(rate(57.0, 43_200, reset));
+        snap.tertiary_label = Some("Monthly".into());
+
+        let windows = live_windows(&snap);
+        let monthly = windows
+            .iter()
+            .find(|window| window.id == "monthly")
+            .expect("monthly window");
+        assert_eq!(monthly.label, "Monthly");
+        assert_eq!(monthly.used_percent, 57.0);
     }
 
     #[test]

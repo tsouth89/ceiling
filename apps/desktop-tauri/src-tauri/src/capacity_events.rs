@@ -751,6 +751,27 @@ fn observed_windows(
             window,
         );
     }
+    // The model lane shares a cadence with the weekly window (Claude's 7-day
+    // Opus pool is also 10080 minutes), so a cadence-derived id would land on
+    // "weekly" and one window would silently replace the other in this map.
+    if let Some(window) = snapshot.model_specific.as_ref()
+        && let Some(mut observed) = to_observed_window("Model", window)
+    {
+        observed.id = "model".to_string();
+        windows.insert(observed.id.clone(), observed);
+    }
+    // Same hazard for the third window: most are monthly, but a provider whose
+    // tertiary matches its secondary cadence must not overwrite it. Core slots
+    // are already in the map, so an id they hold means this one needs its own.
+    if let Some(window) = snapshot.tertiary.as_ref() {
+        let label = snapshot.tertiary_label.as_deref().unwrap_or("Extra");
+        if let Some(mut observed) = to_observed_window(label, window) {
+            if windows.contains_key(&observed.id) {
+                observed.id = "tertiary".to_string();
+            }
+            windows.insert(observed.id.clone(), observed);
+        }
+    }
     for extra in &snapshot.extra_rate_windows {
         if ignored_capacity_window(snapshot, &extra.id, &extra.title) {
             continue;

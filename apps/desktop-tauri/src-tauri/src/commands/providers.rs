@@ -833,27 +833,75 @@ fn window_notify_key(
     }
 }
 
-/// Plan per-window threshold alerts for a snapshot's primary/secondary windows.
+/// Plan per-window threshold alerts for every measured window on a snapshot.
 ///
 /// Returns stable, cadence-based window keys (so a primary/secondary swap cannot
 /// masquerade as a new crossing) and the used-percent of the true 5-hour session
 /// window *only when it is actually present this refresh* — a promoted weekly is
 /// never reported as the session.
+///
+/// The third and model windows are real subscription ceilings (OpenCode Go
+/// Monthly, Claude's Opus pool), so they are offered to the notifier too — which
+/// keeps its own policy about what deserves a toast and still declines monthly
+/// keys. The model window carries its own key rather than a cadence one:
+/// Claude's is 7 days like the weekly window, and a shared key would let
+/// whichever came second be dropped as a duplicate.
+/// The measured windows of one snapshot, borrowed for alert planning. Grouped
+/// so adding a slot does not grow every signature along the way.
+struct ThresholdWindows<'a> {
+    primary_label: Option<&'a str>,
+    primary: &'a RateWindowSnapshot,
+    secondary_label: Option<&'a str>,
+    secondary: Option<&'a RateWindowSnapshot>,
+    tertiary_label: Option<&'a str>,
+    tertiary: Option<&'a RateWindowSnapshot>,
+    model_specific: Option<&'a RateWindowSnapshot>,
+}
+
+impl<'a> ThresholdWindows<'a> {
+    fn of(snapshot: &'a ProviderUsageSnapshot) -> Self {
+        Self {
+            primary_label: snapshot.primary_label.as_deref(),
+            primary: &snapshot.primary,
+            secondary_label: snapshot.secondary_label.as_deref(),
+            secondary: snapshot.secondary.as_ref(),
+            tertiary_label: snapshot.tertiary_label.as_deref(),
+            tertiary: snapshot.tertiary.as_ref(),
+            model_specific: snapshot.model_specific.as_ref(),
+        }
+    }
+}
+
 fn plan_threshold_alerts(
     provider: ProviderId,
-    primary_label: Option<&str>,
-    primary: &RateWindowSnapshot,
-    secondary_label: Option<&str>,
-    secondary: Option<&RateWindowSnapshot>,
+    windows: ThresholdWindows<'_>,
 ) -> (Vec<(&'static str, f64)>, Option<f64>) {
     let mut alerts: Vec<(&'static str, f64)> = Vec::new();
     let mut session_percent: Option<f64> = None;
     let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
-    for (label, window) in std::iter::once((primary_label, primary))
-        .chain(secondary.map(|window| (secondary_label, window)))
+    for (key, window) in std::iter::once((
+        window_notify_key(
+            provider,
+            windows.primary_label,
+            windows.primary.window_minutes,
+        ),
+        windows.primary,
+    ))
+    .chain(windows.secondary.map(|window| {
+        (
+            window_notify_key(provider, windows.secondary_label, window.window_minutes),
+            window,
+        )
+    }))
+    .chain(windows.tertiary.map(|window| {
+        (
+            window_notify_key(provider, windows.tertiary_label, window.window_minutes),
+            window,
+        )
+    }))
+    .chain(windows.model_specific.map(|window| ("model", window)))
     {
-        let key = window_notify_key(provider, label, window.window_minutes);
         if key == "session" {
             session_percent = Some(window.used_percent);
         }
@@ -877,13 +925,8 @@ fn notify_usage_thresholds(
             if snapshot.error.is_none()
                 && let Some(&provider) = cli_map.get(snapshot.provider_id.as_str())
             {
-                let (alerts, _session_percent) = plan_threshold_alerts(
-                    provider,
-                    snapshot.primary_label.as_deref(),
-                    &snapshot.primary,
-                    snapshot.secondary_label.as_deref(),
-                    snapshot.secondary.as_ref(),
-                );
+                let (alerts, _session_percent) =
+                    plan_threshold_alerts(provider, ThresholdWindows::of(snapshot));
                 for (window_key, used_percent) in alerts {
                     guard.notification_manager.check_and_notify(
                         provider,
@@ -1122,10 +1165,15 @@ mod predictive_warning_tests {
         // 5-hour present: primary = 5h (100%), secondary = weekly (75%).
         let (alerts, session) = plan_threshold_alerts(
             ProviderId::Codex,
-            Some("Session"),
-            &rw(Some(300), 100.0),
-            Some("Weekly"),
-            Some(&rw(Some(10_080), 75.0)),
+            ThresholdWindows {
+                primary_label: Some("Session"),
+                primary: &rw(Some(300), 100.0),
+                secondary_label: Some("Weekly"),
+                secondary: Some(&rw(Some(10_080), 75.0)),
+                tertiary_label: None,
+                tertiary: None,
+                model_specific: None,
+            },
         );
         assert_eq!(session, Some(100.0));
         assert!(alerts.contains(&("session", 100.0)));
@@ -1135,16 +1183,59 @@ mod predictive_warning_tests {
         // It must NOT be reported as the session, and it keeps the "weekly" key.
         let (alerts, session) = plan_threshold_alerts(
             ProviderId::Codex,
-            Some("Weekly"),
-            &rw(Some(10_080), 75.0),
-            None,
-            None,
+            ThresholdWindows {
+                primary_label: Some("Weekly"),
+                primary: &rw(Some(10_080), 75.0),
+                secondary_label: None,
+                secondary: None,
+                tertiary_label: None,
+                tertiary: None,
+                model_specific: None,
+            },
         );
         assert_eq!(
             session, None,
             "a promoted weekly must not be read as the session"
         );
         assert_eq!(alerts, vec![("weekly", 75.0)]);
+    }
+
+    /// The third and model windows are real ceilings. They were never handed to
+    /// the notifier, so an OpenCode Go monthly pool or a Claude Opus pool could
+    /// sit at 99% without a word.
+    #[test]
+    fn third_and_model_windows_alert_too() {
+        let (alerts, _) = plan_threshold_alerts(
+            ProviderId::OpenCodeGo,
+            ThresholdWindows {
+                primary_label: Some("Rolling (5h)"),
+                primary: &rw(Some(300), 34.0),
+                secondary_label: Some("Weekly"),
+                secondary: Some(&rw(Some(10_080), 32.0)),
+                tertiary_label: Some("Monthly"),
+                tertiary: Some(&rw(Some(43_200), 97.0)),
+                model_specific: None,
+            },
+        );
+        assert!(alerts.contains(&("monthly", 97.0)));
+
+        // Claude's model pool runs on the same 7-day cadence as its weekly
+        // window, so a cadence key would collide and the second one would be
+        // dropped as a duplicate. The model window carries its own key.
+        let (alerts, _) = plan_threshold_alerts(
+            ProviderId::Claude,
+            ThresholdWindows {
+                primary_label: Some("Session (5h)"),
+                primary: &rw(Some(300), 4.0),
+                secondary_label: Some("Weekly"),
+                secondary: Some(&rw(Some(10_080), 20.0)),
+                tertiary_label: None,
+                tertiary: None,
+                model_specific: Some(&rw(Some(10_080), 96.0)),
+            },
+        );
+        assert!(alerts.contains(&("weekly", 20.0)));
+        assert!(alerts.contains(&("model", 96.0)));
     }
 
     /// A payload for eligibility checks only; the numbers do not matter.

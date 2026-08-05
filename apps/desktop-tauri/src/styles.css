@@ -1341,10 +1341,13 @@ body:has(.taskbar-flyout-frame) #root {
   min-width: 0;
 }
 
+/* Name first, then any chips it owns. `space-between` would have parked a lone
+   chip on the right and a second one mid-row, so two rows of the same provider
+   never lined up; the strip marker instead claims the right edge on its own. */
 .taskbar-flyout__provider-topline {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -1359,9 +1362,11 @@ body:has(.taskbar-flyout-frame) #root {
   white-space: nowrap;
 }
 
-/* Secondary to banked-resets: identity cue only, keep it quieter and smaller. */
+/* Identity cue only, so it stays the quietest chip — but it holds the right
+   edge, which is the one position that repeats in the same place every row. */
 .taskbar-flyout__on-strip {
   flex-shrink: 0;
+  margin-left: auto;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -1388,17 +1393,18 @@ body:has(.taskbar-flyout-frame) #root {
   font-weight: 600;
 }
 
-/* Primary action cue: slightly larger than the On strip marker. */
+/* Action cue: sized close to the strip marker so the row reads as one line of
+   chips, and kept ahead of it on tint rather than on size. */
 .taskbar-flyout__reset-credit {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border: 1px solid rgba(128, 221, 255, 0.28);
   border-radius: 999px;
   background: rgba(91, 201, 238, 0.12);
   color: rgba(224, 247, 255, 0.94);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  line-height: 15px;
+  line-height: 14px;
 }
 
 /* No banked resets: keep the indicator visible but quiet — nothing to act on. */
@@ -1433,9 +1439,12 @@ body:has(.taskbar-flyout-frame) #root {
   min-width: 0;
 }
 
+/* The reset column holds a floor width so "4h 9m" and "3d 23h" end at the same
+   edge. Without it every row sized that column to its own text and the percent
+   beside it landed somewhere different on each line. */
 .taskbar-flyout__meter-meta {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(52px, auto);
   align-items: baseline;
   gap: 7px;
   margin-bottom: 3px;
@@ -1495,6 +1504,7 @@ body:has(.taskbar-flyout-frame) #root {
   font-size: 10px;
   line-height: 13px;
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
 

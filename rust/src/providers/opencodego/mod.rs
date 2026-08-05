@@ -31,7 +31,7 @@ impl OpenCodeGoProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::OpenCodeGo,
                 display_name: "OpenCode Go",
-                session_label: "Rolling",
+                session_label: "Rolling (5h)",
                 weekly_label: "Weekly",
                 supports_opus: false,
                 supports_credits: false,

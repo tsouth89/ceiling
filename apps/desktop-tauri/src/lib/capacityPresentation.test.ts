@@ -261,6 +261,30 @@ describe("capacityPresentation", () => {
     expect(meters.companions[0].window.usedPercent).toBe(20);
   });
 
+  it("keeps OpenCode Go weekly beside its rolling and monthly ceilings", () => {
+    // The three windows are one plan: a quiet weekly must not drop out and
+    // leave a gap between the rolling hero and the monthly lane.
+    const meters = glanceMeters(
+      provider({
+        providerId: "opencodego",
+        displayName: "OpenCode Go",
+        primary: window(34),
+        primaryLabel: "Rolling (5h)",
+        secondary: window(32),
+        secondaryLabel: "Weekly",
+        tertiary: window(57),
+        tertiaryLabel: "Monthly",
+      }),
+    );
+    expect(meters.companions.map((meter) => meter.label)).toEqual([
+      "Weekly",
+      "Monthly",
+    ]);
+    expect(meters.companions.map((meter) => meter.window.usedPercent)).toEqual([
+      32, 57,
+    ]);
+  });
+
   it("reports glance status from constraining pressure", () => {
     expect(providerGlanceStatus(provider({ error: "nope" }))).toBe("error");
     expect(
