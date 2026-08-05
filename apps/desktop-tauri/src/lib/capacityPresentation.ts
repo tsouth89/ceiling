@@ -2,6 +2,7 @@ import type {
   PaceSnapshot,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
+  WindowAmountBridge,
 } from "../types/bridge";
 
 export type CapacityFreshness = "live" | "stale" | "error";
@@ -10,6 +11,8 @@ export type ConstrainingWindow = {
   id: string;
   label: string;
   window: RateWindowSnapshot;
+  /** Money behind this lane, when the provider meters it in currency. */
+  amount?: WindowAmountBridge | null;
 };
 
 export type GlanceMeters = {
@@ -252,12 +255,14 @@ function nonPrimaryWindows(
     label: string | null | undefined,
     window: RateWindowSnapshot | null | undefined,
     fallback: string,
+    amount?: WindowAmountBridge | null,
   ) => {
     if (!window) return;
     out.push({
       id,
       label: label?.trim() || fallback,
       window,
+      amount,
     });
   };
 
@@ -266,7 +271,7 @@ function nonPrimaryWindows(
   push("tertiary", provider.tertiaryLabel, provider.tertiary, "Extra");
   for (const extra of provider.extraRateWindows ?? []) {
     if (extra.id === "reset-credits") continue;
-    push(`extra-${extra.id}`, extra.title, extra.window, extra.title);
+    push(`extra-${extra.id}`, extra.title, extra.window, extra.title, extra.amount);
   }
   return out;
 }

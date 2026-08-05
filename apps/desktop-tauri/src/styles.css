@@ -4638,6 +4638,7 @@ html:has(.menu-surface--tray) {
 }
 
 .plan-status-card__bar {
+  position: relative;
   height: 5px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.18);
@@ -6924,11 +6925,55 @@ body:has(.dashboard-shell) #root {
   font-size: 13px;
 }
 .provider-focus__progress {
+  position: relative;
   height: 5px;
   margin-top: 10px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+}
+
+/* Expected-usage overlay.
+
+   The bar itself stays clipped and rounded; the marker lives in this wrapper
+   instead, so it can stand proud of the bar. That matters twice over: it stops
+   the marker reading as the fill's own edge when usage is exactly on pace, and
+   it keeps part of the marker on the card background, where `--text-primary`
+   is guaranteed to contrast whatever colour the fill happens to be. */
+.pace-overlay {
+  position: relative;
+}
+
+/* Where the bar's edge should be by this point in the window. */
+.pace-overlay__tick {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.pace-overlay__tick[data-ahead="true"] {
+  opacity: 0.95;
+}
+
+/* Overspending reads as a band, not as "which side of a line am I on".
+   Striped in the text colour rather than red: an exhausted bar is already red,
+   and red-on-red made both the band and the marker disappear. */
+.pace-overlay__gap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--text-primary) 42%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+  pointer-events: none;
 }
 .provider-focus__progress-fill {
   height: 100%;

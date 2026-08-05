@@ -497,6 +497,7 @@ export const ALL_LOCALE_KEYS = [
   "PanelLeftSuffix",
   "PanelOnPaceBudget",
   "PanelAmountOf",
+  "UsageExpectedByNow",
   "PaceVerdictOnTrack",
   "PaceVerdictAhead",
   "PaceVerdictPlenty",

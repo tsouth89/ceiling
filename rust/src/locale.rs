@@ -737,6 +737,7 @@ locale_keys! {
     PanelLeftSuffix,
     PanelOnPaceBudget,
     PanelAmountOf,
+    UsageExpectedByNow,
     PaceVerdictOnTrack,
     PaceVerdictAhead,
     PaceVerdictPlenty,

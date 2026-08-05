@@ -3,6 +3,7 @@ import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge"
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { accountIdentityLabel } from "../lib/providerRow";
 import { getProviderIcon } from "./providers/providerIcons";
+import { expectedOverlay } from "../lib/expectedPace";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
 import {
@@ -89,6 +90,8 @@ function MeterRow({
   const awaitingReset = snap.isExhausted && showReset;
   // Optional setting: promote reset into the hero slot when depleted.
   const resetAsHero = awaitingReset && showResetWhenExhausted;
+  // Where usage should be by now, on long windows only.
+  const expected = expectedOverlay(snap, showAsUsed);
 
   return (
     <div
@@ -140,12 +143,41 @@ function MeterRow({
           </>
         )}
       </div>
-      <div className="plan-status-card__bar" aria-hidden>
-        <div
-          className="plan-status-card__bar-fill"
-          data-level={level}
-          style={{ width: `${barPct}%` }}
-        />
+      <div
+        className="pace-overlay"
+        aria-hidden
+        title={
+          expected
+            ? t("UsageExpectedByNow").replace(
+                "{}",
+                String(Math.round(expected.expectedUsedPercent)),
+              )
+            : undefined
+        }
+      >
+        <div className="plan-status-card__bar">
+          <div
+            className="plan-status-card__bar-fill"
+            data-level={level}
+            style={{ width: `${barPct}%` }}
+          />
+          {expected?.gap && (
+            <div
+              className="pace-overlay__gap"
+              style={{
+                left: `${expected.gap.left.toFixed(1)}%`,
+                width: `${expected.gap.width.toFixed(1)}%`,
+              }}
+            />
+          )}
+        </div>
+        {expected && (
+          <div
+            className="pace-overlay__tick"
+            data-ahead={expected.ahead ? "true" : "false"}
+            style={{ left: `${expected.tickPercent.toFixed(1)}%` }}
+          />
+        )}
       </div>
     </div>
   );

@@ -5,8 +5,10 @@ import type {
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
+  WindowAmountBridge,
 } from "../types/bridge";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
+import { expectedOverlay } from "../lib/expectedPace";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
@@ -23,6 +25,7 @@ type DetailWindow = {
   id: string;
   label: string;
   window: RateWindowSnapshot;
+  amount?: WindowAmountBridge | null;
 };
 
 interface ProviderDetailViewProps {
@@ -88,13 +91,46 @@ function DetailProgress({
   window: RateWindowSnapshot;
   showAsUsed: boolean;
 }) {
+  const { t } = useLocale();
+  // Where usage should be by this point in the window. Long windows only:
+  // see `expectedUsedPercent`.
+  const expected = expectedOverlay(window, showAsUsed);
   return (
-    <div className="provider-focus__progress" aria-hidden>
-      <div
-        className="provider-focus__progress-fill"
-        data-level={usageLevel(window)}
-        style={{ width: `${percentFor(window, showAsUsed)}%` }}
-      />
+    <div
+      className="pace-overlay"
+      aria-hidden
+      title={
+        expected
+          ? t("UsageExpectedByNow").replace(
+              "{}",
+              String(Math.round(expected.expectedUsedPercent)),
+            )
+          : undefined
+      }
+    >
+      <div className="provider-focus__progress">
+        <div
+          className="provider-focus__progress-fill"
+          data-level={usageLevel(window)}
+          style={{ width: `${percentFor(window, showAsUsed)}%` }}
+        />
+        {expected?.gap && (
+          <div
+            className="pace-overlay__gap"
+            style={{
+              left: `${expected.gap.left.toFixed(1)}%`,
+              width: `${expected.gap.width.toFixed(1)}%`,
+            }}
+          />
+        )}
+      </div>
+      {expected && (
+        <div
+          className="pace-overlay__tick"
+          data-ahead={expected.ahead ? "true" : "false"}
+          style={{ left: `${expected.tickPercent.toFixed(1)}%` }}
+        />
+      )}
     </div>
   );
 }
@@ -113,6 +149,7 @@ function SecondaryWindow({
     metric.window.resetDescription,
     resetTimeRelative,
   );
+  const { t } = useLocale();
   const percent = Math.round(percentFor(metric.window, showAsUsed));
   return (
     <div className="provider-focus__limit-row">
@@ -123,6 +160,13 @@ function SecondaryWindow({
         </span>
         {reset && <span className="provider-focus__limit-reset">{reset}</span>}
       </div>
+      {metric.amount && (
+        <div className="provider-focus__limit-amount">
+          {metric.amount.formattedLimit
+            ? `${metric.amount.formattedUsed} ${t("PanelAmountOf")} ${metric.amount.formattedLimit}`
+            : metric.amount.formattedUsed}
+        </div>
+      )}
       <DetailProgress window={metric.window} showAsUsed={showAsUsed} />
     </div>
   );
@@ -254,9 +298,10 @@ export default function ProviderDetailView({
   );
   const metrics = useMemo(
     () =>
-      allMeasuredWindows(provider)
-        .slice(1)
-        .filter((metric) => !/promotional|on-demand/i.test(metric.label)),
+      // On-demand is the only Cursor lane that bills real money, and it now
+      // carries that money beside its bar, so it is the most actionable row
+      // here rather than noise. (Promotional no longer exists at all.)
+      allMeasuredWindows(provider).slice(1),
     [provider],
   );
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));

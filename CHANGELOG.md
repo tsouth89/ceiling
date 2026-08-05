@@ -1,5 +1,17 @@
 # Changelog
 
+## [Ceiling] 1.5.24 - 2026-08-05
+
+Puts the pace answer on the usage bars themselves, in the main window.
+
+### Added
+- Every weekly and monthly bar in the overview and in a provider's detail view now carries a marker showing where usage *should* be at this point in the window. The rule is the same wherever it appears: the marker is where the bar's edge should be right now. Run past it and the overspend shows as a striped band, so "how far ahead am I" reads as a distance rather than as a line to decode. Bars shown as remaining mirror the marker so it keeps the same meaning either way.
+- The marker is derived from elapsed time against the window's own duration, so it needs no provider support and appears on every long window at once, rather than on the single window pace prediction is calculated for.
+- Short windows are left alone. A five-hour session is not spent evenly, so a marker there would sweep across the bar and mean nothing; anything under twelve hours is skipped.
+
+### Fixed
+- Cursor's on-demand lane now appears in the app window, with the money beside it. It is the only Cursor lane that bills real money, and the detail view was filtering it out by name, so 1.5.23's work to surface overdraft spend could not reach the surface most people actually look at.
+
 ## [Ceiling] 1.5.23 - 2026-08-05
 
 Adds a pace verdict and Cursor on-demand spend, both from user feature requests.
