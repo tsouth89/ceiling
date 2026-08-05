@@ -279,6 +279,7 @@ mod tests {
                 id: "claude-routines".to_string(),
                 title: "Daily Routines".to_string(),
                 window: window_resetting_at(Some("2026-07-21T03:00:00Z")),
+                amount: None,
             });
 
         let mut times = snapshot_reset_times(&snapshot);

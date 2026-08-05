@@ -4854,6 +4854,17 @@ html:has(.menu-surface--tray) {
   color: var(--provider-status-error);
 }
 
+/* Money behind a lane that is natively denominated in currency. */
+.menu-metric__amount {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.menu-surface--tray .menu-metric__amount {
+  font-size: 10px;
+}
+
 .menu-metric--inactive {
   gap: 2px;
   padding: 6px 8px;

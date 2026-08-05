@@ -380,6 +380,7 @@ mod tests {
             id: "codex-spark-weekly".into(),
             title: "Codex Spark Weekly".into(),
             window: window(Some(10_080)),
+            amount: None,
         });
         tracker.annotate(&mut with_spark);
 
@@ -399,6 +400,7 @@ mod tests {
             id: "codex-spark-weekly".into(),
             title: "Codex Spark Weekly".into(),
             window: window(Some(10_080)),
+            amount: None,
         });
         tracker.annotate(&mut with_spark);
 

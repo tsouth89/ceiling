@@ -1367,6 +1367,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             },
+            amount: None,
         }
     }
 

@@ -38,12 +38,56 @@ pub struct WayfinderRouteSummary {
     pub saved: f64,
 }
 
+/// A monetary reading attached to a metered window.
+///
+/// Some providers meter lanes that are natively denominated in money rather
+/// than percent (Cursor's on-demand overdraft, bonus credit pools). The
+/// percentage still drives the bar, but the amount is the number the user
+/// actually cares about, and it has nowhere else to live: `CostSnapshot` is a
+/// single slot per provider and cannot describe individual lanes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowAmount {
+    /// Amount consumed in this window.
+    pub used: f64,
+    /// Amount the window is metered against, when the provider states one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+    /// Currency code (e.g. "USD").
+    pub currency_code: String,
+}
+
+impl WindowAmount {
+    pub fn new(used: f64, currency_code: impl Into<String>) -> Self {
+        Self {
+            used: finite_amount(used).unwrap_or(0.0),
+            limit: None,
+            currency_code: currency_code.into(),
+        }
+    }
+
+    pub fn with_limit(mut self, limit: f64) -> Self {
+        self.limit = finite_amount(limit);
+        self
+    }
+
+    pub fn format_used(&self) -> String {
+        format_currency(self.used, &self.currency_code)
+    }
+
+    pub fn format_limit(&self) -> Option<String> {
+        self.limit.map(|l| format_currency(l, &self.currency_code))
+    }
+}
+
 /// A labeled extra usage window surfaced by provider APIs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedRateWindow {
     pub id: String,
     pub title: String,
     pub window: RateWindow,
+    /// Money behind this lane, when the provider denominates it that way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<WindowAmount>,
 }
 
 /// Explicit enforcement state for a known limit window, so surfaces never have
@@ -129,7 +173,14 @@ impl NamedRateWindow {
             id: id.into(),
             title: title.into(),
             window,
+            amount: None,
         }
+    }
+
+    /// Attach the money this lane is denominated in.
+    pub fn with_amount(mut self, amount: WindowAmount) -> Self {
+        self.amount = Some(amount);
+        self
     }
 }
 

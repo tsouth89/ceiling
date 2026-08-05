@@ -736,6 +736,7 @@ locale_keys! {
     PanelUsedSuffix,
     PanelLeftSuffix,
     PanelOnPaceBudget,
+    PanelAmountOf,
     PanelNow,
     PanelOneHour,
     PanelFiveHours,

@@ -496,6 +496,7 @@ export const ALL_LOCALE_KEYS = [
   "PanelUsedSuffix",
   "PanelLeftSuffix",
   "PanelOnPaceBudget",
+  "PanelAmountOf",
   "PanelNow",
   "PanelOneHour",
   "PanelFiveHours",

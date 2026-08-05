@@ -993,11 +993,13 @@ fn hiding_codex_spark_rows_preserves_other_extra_usage() {
             id: "codex-spark".to_string(),
             title: "Codex Spark 5-hour".to_string(),
             window: snapshot.primary.clone(),
+            amount: None,
         },
         NamedRateWindowSnapshot {
             id: "credits".to_string(),
             title: "Credits".to_string(),
             window: snapshot.primary.clone(),
+            amount: None,
         },
     ];
 

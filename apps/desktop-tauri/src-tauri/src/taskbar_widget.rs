@@ -2228,6 +2228,7 @@ mod tests {
                 id: "cursor-api".into(),
                 title: "API".into(),
                 window: rate_window(100.0, Some(10_080)),
+                amount: None,
             });
 
         let readout = constraining_readout(&snapshot);
@@ -2247,6 +2248,7 @@ mod tests {
                 id: "cursor-api".into(),
                 title: "API".into(),
                 window: rate_window(40.0, Some(10_080)),
+                amount: None,
             });
 
         let readout = constraining_readout(&snapshot);
@@ -2265,6 +2267,7 @@ mod tests {
                 id: "cursor-api".into(),
                 title: "   ".into(),
                 window: rate_window(70.0, Some(10_080)),
+                amount: None,
             });
 
         let readout = constraining_readout(&snapshot);
@@ -2291,6 +2294,7 @@ mod tests {
                 id: "cursor-api".into(),
                 title: "API".into(),
                 window: rate_window(30.0, Some(10_080)),
+                amount: None,
             });
 
         let readout = constraining_readout(&snapshot);
@@ -2315,6 +2319,7 @@ mod tests {
                 id: "cursor-api".into(),
                 title: "API".into(),
                 window: soon,
+                amount: None,
             });
 
         let readout = constraining_readout(&snapshot);
