@@ -212,12 +212,38 @@ describe("GeneralTab", () => {
     );
 
     expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
-    expect(screen.queryByText("PredictivePaceWarnings")).not.toBeInTheDocument();
     expect(screen.queryByText("CriticalUsageAlert")).not.toBeInTheDocument();
     expect(screen.queryByText("Codex · ProviderSession")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "80" } });
     expect(set).toHaveBeenCalledWith({ highUsageThreshold: 80 });
+  });
+
+  it("offers predictive pace warnings as an opt-in", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
+    );
+
+    const toggle = screen.getByRole("checkbox", { name: "PredictivePaceWarnings" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith({ predictivePaceWarningEnabled: true });
+  });
+
+  it("disables predictive pace warnings when notifications are off", () => {
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, showNotifications: false }}
+        set={vi.fn()}
+        saving={false}
+      />,
+    );
+
+    expect(
+      screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }),
+    ).toBeDisabled();
   });
 
   it("configures a daily or month-to-date estimated API value budget", () => {

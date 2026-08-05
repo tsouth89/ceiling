@@ -35,6 +35,20 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 }
 
 #[test]
+fn predictive_pace_warning_opt_in_survives_the_raw_round_trip() {
+    // This was previously pinned to false on every load, which made the
+    // setting unreachable. Opting in must now stick.
+    let s = Settings {
+        predictive_pace_warning_enabled: true,
+        ..Settings::default()
+    };
+
+    let json = serde_json::to_string(&s).expect("serialize");
+    let back: Settings = serde_json::from_str(&json).expect("deserialize");
+    assert!(back.predictive_pace_warning_enabled);
+}
+
+#[test]
 fn raw_settings_clamp_spend_budget_warning_to_cap() {
     let loaded: Settings = serde_json::from_str(
         r#"{

@@ -125,6 +125,18 @@ export default function GeneralTab({
             />
           </Field>
           <Field
+            label={t("PredictivePaceWarnings")}
+            description={t("PredictivePaceWarningsHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.predictivePaceWarningEnabled}
+              ariaLabel={t("PredictivePaceWarnings")}
+              disabled={saving || !settings.showNotifications}
+              onChange={(v) => set({ predictivePaceWarningEnabled: v })}
+            />
+          </Field>
+          <Field
             label={t("NotificationTest")}
             description={t("NotificationTestHelper")}
             leading

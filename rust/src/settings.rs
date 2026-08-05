@@ -130,7 +130,8 @@ pub struct Settings {
     #[serde(default)]
     pub show_reset_when_exhausted: bool,
 
-    /// Warn when Codex or Claude pace predicts exhaustion before reset.
+    /// Warn when a provider's pace predicts exhaustion before its reset.
+    /// Opt-in: this is a prediction, so it stays off until asked for.
     #[serde(default)]
     pub predictive_pace_warning_enabled: bool,
 

@@ -32,6 +32,7 @@ pub enum NotificationType {
 pub enum PredictiveWarningWindow {
     Session,
     Weekly,
+    Monthly,
 }
 
 impl PredictiveWarningWindow {
@@ -41,6 +42,7 @@ impl PredictiveWarningWindow {
             match self {
                 Self::Session => LocaleKey::ProviderSession,
                 Self::Weekly => LocaleKey::ProviderWeekly,
+                Self::Monthly => LocaleKey::ProviderMonthly,
             },
         )
     }
@@ -377,7 +379,9 @@ impl NotificationManager {
                 .retain(|key| key.provider != provider);
             return false;
         }
-        if !matches!(provider, ProviderId::Claude | ProviderId::Codex) || identity.is_empty() {
+        // Any provider that reports a reset can be paced; the caller supplies
+        // the identity that separates accounts within one.
+        if identity.is_empty() {
             return false;
         }
         let Some(resets_at) = rate_window.resets_at else {
@@ -1552,6 +1556,53 @@ mod tests {
             ProviderId::Claude,
             "oauth:person@example.com",
             PredictiveWarningWindow::Session,
+            &window,
+            &risk,
+        ));
+    }
+
+    #[test]
+    fn any_provider_can_raise_a_predictive_warning() {
+        // This was gated to Claude and Codex, so enabling the setting could
+        // never warn a Cursor or Copilot user no matter what their pace said.
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let window = window(now, Duration::days(3), 10080);
+        let risk = pace(false, Some(3600.0));
+        let recovery = pace(true, None);
+        let mut manager = NotificationManager::new_armed();
+
+        // First reading is the silent baseline, as for every provider.
+        assert!(!manager.record_predictive_observation(
+            true,
+            ProviderId::Cursor,
+            "web",
+            PredictiveWarningWindow::Monthly,
+            &window,
+            &recovery,
+        ));
+        // The second confirms it and must be allowed through.
+        assert!(manager.record_predictive_observation(
+            true,
+            ProviderId::Cursor,
+            "web",
+            PredictiveWarningWindow::Monthly,
+            &window,
+            &risk,
+        ));
+    }
+
+    #[test]
+    fn predictive_warnings_still_need_an_identity() {
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let window = window(now, Duration::days(3), 10080);
+        let risk = pace(false, Some(3600.0));
+        let mut manager = NotificationManager::new_armed();
+
+        assert!(!manager.record_predictive_observation(
+            true,
+            ProviderId::Cursor,
+            "",
+            PredictiveWarningWindow::Monthly,
             &window,
             &risk,
         ));
