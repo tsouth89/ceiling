@@ -120,8 +120,19 @@ has no delete or cancel operation at all, so Partner Center is the only way to
 retract a submission. Cancelling stays available through certification and is
 lost once publishing begins.
 
-Then resume a blocked release with `gh run rerun <run-id> --failed`, which
-restarts at the Store step and reuses the already-signed binaries.
+Do **not** try to resume the blocked release with `gh run rerun --failed`. A
+rerun restarts the whole job rather than resuming at the failed step, so it
+rebuilds and re-signs. Signing embeds an RFC 3161 timestamp, so the new
+installer never matches the bytes already published for that version, and
+`publish-store-installer.ps1` refuses to overwrite an immutable release object.
+The rerun dies at the R2 step, long before reaching the Store.
+
+Submit the deferred version with the validation workflow instead, which reuses
+the installer already in R2 and rebuilds nothing:
+
+```powershell
+gh workflow run validate-store-submission.yml -f version=<version> -f publish=true
+```
 
 For a local unsigned packaging rehearsal, use the managed Windows checkout:
 
