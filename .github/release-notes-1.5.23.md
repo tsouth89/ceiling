@@ -4,7 +4,7 @@
 
 Ceiling already predicted whether a quota would outlast its window. It just never said so anywhere you'd see it: the expected-vs-actual breakdown is too tall for the tray, so it was hidden there, which is exactly where people look.
 
-The tray now carries a verdict. It names the outcome (on track, ahead of pace, plenty left, or running out early), says what that means for you, and draws one slim bar whose tick marks where your usage *should* be by this point in the window. If you're burning through it, it tells you roughly how long you have left. The detailed breakdown is still there in the main window.
+The tray now carries a verdict. It names the outcome (on track, ahead of pace, plenty left, or running out early), says what that means for you, and draws one slim bar with a tick showing where your usage *should* be by this point in the window. If you're burning through it, it tells you roughly how long you have left. The detailed breakdown is still there in the main window.
 
 ### Predictive pace warnings are back, if you want them
 

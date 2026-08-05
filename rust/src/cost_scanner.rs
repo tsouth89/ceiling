@@ -593,7 +593,8 @@ pub struct CostScanner {
     /// [`ConfiguredAccounts`] (unit tests inject temp dirs). Production leaves
     /// this `None` so live multi-account setup is always read at scan time.
     account_homes_override: Option<Vec<PathBuf>>,
-    /// When set, stands in for the ambient `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    /// When set, stands in for the ambient config home of whichever provider is
+    /// being scanned: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME`.
     ///
     /// Tests used to `set_var` these instead. Mutating process environment is
     /// undefined behaviour while any other thread reads it, and the rest of the
@@ -650,8 +651,9 @@ impl CostScanner {
         self
     }
 
-    /// Like [`Self::with_account_homes`], but also standing in for the ambient
-    /// config directory instead of mutating the process environment.
+    /// Treats `homes` as the only configured account directories (no live
+    /// [`ConfiguredAccounts`] load) and stands in for the ambient config
+    /// directory, instead of mutating the process environment.
     #[cfg(test)]
     fn with_ambient_and_account_homes(days: u32, ambient: PathBuf, homes: Vec<PathBuf>) -> Self {
         Self {

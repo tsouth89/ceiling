@@ -654,6 +654,129 @@ mod tests {
     }
 
     #[test]
+    fn test_cursor_build_result_cents_only() {
+        let json = r#"{
+            "billingCycleEnd": "2026-04-01T00:00:00Z",
+            "membershipType": "pro",
+            "individualUsage": {
+                "plan": {
+                    "used": 2500,
+                    "limit": 5000
+                }
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, cost) = api().build_result(summary, None).unwrap();
+
+        assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
+        assert!(usage.secondary.is_none(), "no autoPercentUsed in payload");
+        assert!(usage.extra_rate_windows.is_empty());
+        assert!(
+            usage.inactive_rate_windows.is_empty(),
+            "cents-only payloads are not the percent-lane format"
+        );
+        assert!(cost.is_some());
+    }
+
+    #[test]
+    fn test_cursor_percent_falls_back_to_the_breakdown_total_limit() {
+        // No `totalPercentUsed` and no `plan.limit`: the percentage falls back
+        // to metering `used` against `breakdown.total`.
+        let json = r#"{
+            "individualUsage": {
+                "plan": {
+                    "used": 1250,
+                    "breakdown": {"included": 5000, "bonus": 0, "total": 5000}
+                }
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, _) = api().build_result(summary, None).unwrap();
+        assert!((usage.primary.used_percent - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cursor_build_result_missing_plan() {
+        let json = r#"{
+            "membershipType": "hobby",
+            "individualUsage": {}
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, cost) = api().build_result(summary, None).unwrap();
+
+        assert!((usage.primary.used_percent).abs() < 0.01);
+        assert!(usage.secondary.is_none());
+        assert!(usage.extra_rate_windows.is_empty());
+        assert!(usage.inactive_rate_windows.is_empty());
+        assert!(cost.is_none());
+    }
+
+    #[test]
+    fn test_cursor_on_demand_as_named_extra_and_cost() {
+        let json = r#"{
+            "billingCycleEnd": "2026-04-01T00:00:00Z",
+            "membershipType": "pro",
+            "individualUsage": {
+                "plan": {
+                    "used": 800,
+                    "limit": 5000,
+                    "totalPercentUsed": 16.0
+                },
+                "onDemand": {
+                    "enabled": true,
+                    "used": 350,
+                    "limit": 1000
+                }
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, cost) = api().build_result(summary, None).unwrap();
+
+        assert!((usage.primary.used_percent - 16.0).abs() < 0.01);
+
+        let on_demand = extra(&usage, "cursor-on-demand");
+        assert_eq!(on_demand.title, "On-demand");
+        assert!((on_demand.window.used_percent - 35.0).abs() < 0.01);
+        assert!(on_demand.window.resets_at.is_some());
+
+        // The overdraft meter carries its own dollars, so it stays visible even
+        // though the single cost slot belongs to plan spend.
+        let amount = on_demand.amount.as_ref().expect("on-demand carries money");
+        assert!((amount.used - 3.50).abs() < 0.01);
+        assert_eq!(amount.limit, Some(10.0));
+        assert_eq!(amount.format_used(), "$3.50");
+
+        // Lane format with only total â†’ Auto/API inactive
+        assert_eq!(usage.inactive_rate_windows.len(), 2);
+
+        // On-demand is the only real-money lane, so it owns the cost slot.
+        let cost = cost.expect("on-demand cost");
+        assert!((cost.used - 3.5).abs() < 0.01);
+        assert_eq!(cost.limit, Some(10.0));
+        assert_eq!(cost.period, "On-demand");
+    }
+
+    #[test]
+    fn test_cursor_unlimited_without_monthly_meter() {
+        let json = r#"{
+            "membershipType": "hobby",
+            "isUnlimited": true,
+            "individualUsage": {}
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, _) = api().build_result(summary, None).unwrap();
+
+        let monthly = inactive(&usage, "cursor-monthly");
+        assert_eq!(monthly.title, "Monthly");
+        assert_eq!(monthly.description, NOT_ENFORCED);
+    }
+
+    #[test]
     fn test_cursor_reports_no_promotional_meter() {
         // The old meter computed `plan.used - breakdown.included`, which is
         // structurally zero: the included lane is its own closed set, so it

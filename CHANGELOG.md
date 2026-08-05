@@ -5,7 +5,7 @@
 Adds a pace verdict and Cursor on-demand spend, both from user feature requests.
 
 ### Added
-- The tray now answers "am I going to run out before this resets?" directly. A verdict line names the outcome (on track, ahead of pace, plenty left, or running out early), states the consequence, and draws one slim bar whose tick marks where usage should be by this point in the window. The detailed expected-vs-actual breakdown was hidden in the tray because it was too tall, so the prediction Ceiling already computed was invisible exactly where people look for it. The taller breakdown still appears in the main window.
+- The tray now answers "am I going to run out before this resets?" directly. A verdict line names the outcome (on track, ahead of pace, plenty left, or running out early), states the consequence, and draws one slim bar with a tick showing where usage should be by this point in the window. The detailed expected-vs-actual breakdown was hidden in the tray because it was too tall, so the prediction Ceiling already computed was invisible exactly where people look for it. The taller breakdown still appears in the main window.
 - Predictive pace warnings are available again, as an opt-in under Settings > Notifications. They alert when a window is on course to be exhausted before it resets. The setting had been pinned off on every load with no way to enable it, and was additionally restricted to Claude and Codex; any provider that reports a reset can raise one now. Warnings are named by the window's real cadence, so a monthly quota is no longer announced as a "Session" limit.
 - A metered window can carry the money behind it. Cursor's on-demand lane now shows its dollars beside its bar, which is what makes the overdraft readable at 100% of plan.
 
