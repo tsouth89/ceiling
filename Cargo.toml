@@ -5,3 +5,18 @@ members = [
 ]
 default-members = ["apps/desktop-tauri/src-tauri"]
 resolver = "3"
+
+# Cargo only reads profiles from the workspace root. These lived in
+# `rust/Cargo.toml`, where cargo ignored them and said so on every build, so
+# released binaries were built unoptimized-for-size: no LTO, no symbol
+# stripping, and 16 codegen units.
+#
+# `panic = "abort"` was in that ignored block and is deliberately not carried
+# over. It has never actually applied to a shipped build, and turning it on
+# would convert a panic in any background refresh task into an immediate
+# process kill — the failure 1.5.21 moved away from.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

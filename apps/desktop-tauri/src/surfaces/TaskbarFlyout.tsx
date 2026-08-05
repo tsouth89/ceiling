@@ -123,10 +123,10 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
         <div className="taskbar-flyout__provider-content">
           <div className="taskbar-flyout__provider-topline">
             <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
+            <span className="taskbar-flyout__provider-unavailable">Unavailable</span>
             {onStrip && (
               <span className="taskbar-flyout__on-strip">On strip</span>
             )}
-            <span className="taskbar-flyout__provider-unavailable">Unavailable</span>
           </div>
           {accountName && (
             <div className="taskbar-flyout__provider-account" title={accountName}>
@@ -153,15 +153,17 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
       <div className="taskbar-flyout__provider-content">
         <div className="taskbar-flyout__provider-topline">
           <span className="taskbar-flyout__provider-name">{provider.displayName}</span>
-          {onStrip && (
-            <span className="taskbar-flyout__on-strip">On strip</span>
-          )}
+          {/* Banked resets sit next to the name they belong to; the strip marker
+              holds the right edge so it lines up down the whole flyout. */}
           {resetCredits != null && (
             <span
               className={`taskbar-flyout__reset-credit${resetCredits === 0 ? " taskbar-flyout__reset-credit--empty" : ""}`}
             >
               ↻ {resetCredits} {resetCredits === 1 ? "reset ready" : "resets ready"}
             </span>
+          )}
+          {onStrip && (
+            <span className="taskbar-flyout__on-strip">On strip</span>
           )}
         </div>
         {accountName && (

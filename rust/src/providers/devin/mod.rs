@@ -125,11 +125,25 @@ fn normalized_org(raw: &str) -> String {
 }
 
 fn snapshot_from_quota(value: &Value, org: &str) -> UsageSnapshot {
-    let daily = percent(value, &["daily_percentage", "dailyPercentage"])
-        .unwrap_or_else(|| percent(value, &["used_percent", "usedPercent"]).unwrap_or(0.0));
+    // Devin reports each window as either whole percentages (`23` = 23%) or
+    // fractions of the limit (`0.23` = 23%), and one value cannot tell them
+    // apart on its own. Resolve the scale once from every reported window, so a
+    // response holding `0.4` next to `32` reads the `0.4` as 0.4% rather than
+    // rescaling it to 40% — the per-value rule the other providers dropped.
+    let raw_daily = reported_percent(value, &["daily_percentage", "dailyPercentage"])
+        .or_else(|| reported_percent(value, &["used_percent", "usedPercent"]));
+    let raw_weekly = reported_percent(value, &["weekly_percentage", "weeklyPercentage"]);
+    let fraction_scale =
+        crate::core::detect_fraction_scale(raw_daily.into_iter().chain(raw_weekly));
+
+    // A used/limit pair is already a true percentage and never gets rescaled.
+    let daily = raw_daily
+        .map(|raw| crate::core::to_percent(raw, fraction_scale))
+        .or_else(|| ratio_percent(value))
+        .unwrap_or(0.0);
     let mut snapshot =
         UsageSnapshot::new(RateWindow::new(daily)).with_organization(org.to_string());
-    if let Some(weekly) = percent(value, &["weekly_percentage", "weeklyPercentage"]) {
+    if let Some(weekly) = raw_weekly.map(|raw| crate::core::to_percent(raw, fraction_scale)) {
         snapshot = snapshot.with_secondary(RateWindow::new(weekly));
     }
     snapshot
@@ -143,12 +157,17 @@ fn fetch_result_from_quota(value: &Value, org: &str) -> ProviderFetchResult {
     result
 }
 
-fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
-    for key in keys {
-        if let Some(v) = value.get(*key).and_then(Value::as_f64) {
-            return Some(if v < 1.0 { v * 100.0 } else { v });
-        }
-    }
+/// A window's reported value exactly as Devin sent it, before any scaling.
+fn reported_percent(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_f64))
+        .filter(|value| value.is_finite())
+}
+
+/// Percent derived from a used/limit pair. Only the daily window falls back to
+/// this: it describes the account as a whole, so reporting it as the weekly
+/// window too would invent a second ceiling out of the same number.
+fn ratio_percent(value: &Value) -> Option<f64> {
     let used = ["used", "usage", "used_count", "usedCount", "consumed"]
         .iter()
         .find_map(|k| value.get(*k).and_then(Value::as_f64));
@@ -196,6 +215,40 @@ mod tests {
         let snapshot =
             snapshot_from_quota(&serde_json::json!({"daily_percentage":1.0}), "org/demo");
         assert_eq!(snapshot.primary.used_percent, 1.0);
+    }
+
+    #[test]
+    fn a_whole_percent_sibling_settles_the_scale_for_the_response() {
+        // 32 can only be a percentage, which proves this response is not on the
+        // fraction scale — so 0.4 is 0.4% used, not 40%.
+        let snapshot = snapshot_from_quota(
+            &serde_json::json!({"daily_percentage": 0.4, "weekly_percentage": 32.0}),
+            "org/demo",
+        );
+        assert!((snapshot.primary.used_percent - 0.4).abs() < 0.001);
+        assert!((snapshot.secondary.unwrap().used_percent - 32.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn fractions_still_scale_together() {
+        let snapshot = snapshot_from_quota(
+            &serde_json::json!({"daily_percentage": 0.4, "weekly_percentage": 0.32}),
+            "org/demo",
+        );
+        assert!((snapshot.primary.used_percent - 40.0).abs() < 0.001);
+        assert!((snapshot.secondary.unwrap().used_percent - 32.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_used_limit_pair_is_not_repeated_as_a_weekly_window() {
+        // The pair describes the account overall. Reporting it as weekly too
+        // invented a second ceiling from the same number.
+        let snapshot = snapshot_from_quota(
+            &serde_json::json!({"used": 25.0, "limit": 100.0}),
+            "org/demo",
+        );
+        assert!((snapshot.primary.used_percent - 25.0).abs() < 0.001);
+        assert!(snapshot.secondary.is_none());
     }
 
     #[test]
