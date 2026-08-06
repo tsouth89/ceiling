@@ -1056,3 +1056,223 @@ fn codex_spark_usage_visibility_defaults_to_visible_and_roundtrips() {
 
     assert!(!loaded.codex_spark_usage_visible());
 }
+
+// ── Legacy flat-field migration (raw.rs) ─────────────────────────────
+//
+// `RawSettings` accepts the pre-`provider_configs` on-disk shape and folds it
+// into the unified map. A regression here silently discards a saved
+// configuration on upgrade, and the user finds out by opening the app to
+// defaults. The cases below cover the long-tail providers that had none.
+
+/// Every legacy flat `*_cookie_source` field lands on the right provider.
+#[test]
+fn legacy_cookie_sources_migrate_for_every_provider() {
+    let json = r#"{
+            "codex_cookie_source": "manual",
+            "claude_cookie_source": "chrome",
+            "cursor_cookie_source": "edge",
+            "opencode_cookie_source": "firefox",
+            "factory_cookie_source": "manual",
+            "alibaba_cookie_source": "chrome",
+            "kimi_cookie_source": "edge",
+            "minimax_cookie_source": "firefox",
+            "augment_cookie_source": "manual",
+            "amp_cookie_source": "chrome",
+            "ollama_cookie_source": "edge"
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Claude), "chrome");
+    assert_eq!(settings.cookie_source(ProviderId::Cursor), "edge");
+    assert_eq!(settings.cookie_source(ProviderId::OpenCode), "firefox");
+    assert_eq!(settings.cookie_source(ProviderId::Factory), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Alibaba), "chrome");
+    assert_eq!(settings.cookie_source(ProviderId::Kimi), "edge");
+    assert_eq!(settings.cookie_source(ProviderId::MiniMax), "firefox");
+    assert_eq!(settings.cookie_source(ProviderId::Augment), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Amp), "chrome");
+    assert_eq!(settings.cookie_source(ProviderId::Ollama), "edge");
+}
+
+/// Every legacy flat manual-cookie-header field lands on the right provider.
+/// Kimi is the odd one out: its legacy key is `kimi_manual_cookie_header`,
+/// not `kimi_cookie_header`.
+#[test]
+fn legacy_cookie_headers_migrate_for_every_provider() {
+    let json = r#"{
+            "alibaba_cookie_header": "ali=PLACEHOLDER",
+            "kimi_manual_cookie_header": "kimi=PLACEHOLDER",
+            "augment_cookie_header": "aug=PLACEHOLDER",
+            "amp_cookie_header": "amp=PLACEHOLDER",
+            "ollama_cookie_header": "olm=PLACEHOLDER",
+            "minimax_cookie_header": "mm=PLACEHOLDER"
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Alibaba),
+        "ali=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Kimi),
+        "kimi=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Augment),
+        "aug=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Amp),
+        "amp=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Ollama),
+        "olm=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::MiniMax),
+        "mm=PLACEHOLDER"
+    );
+}
+
+/// A file carrying BOTH shapes keeps the modern `provider_configs` value.
+/// The legacy field must not overwrite it, otherwise someone who reconfigured
+/// a provider in a newer build gets silently reverted to their old value.
+#[test]
+fn provider_configs_take_precedence_over_legacy_flat_fields() {
+    let json = r#"{
+            "codex_cookie_source": "manual",
+            "claude_usage_source": "auto",
+            "alibaba_api_region": "singapore",
+            "alibaba_cookie_header": "legacy=lost",
+            "opencode_workspace_id": "ws_legacy",
+            "minimax_api_token": "tok_legacy",
+            "jetbrains_ide_base_path": "C:/legacy",
+            "provider_configs": {
+                "codex": { "cookie_source": "chrome" },
+                "claude": { "usage_source": "web" },
+                "alibaba": { "api_region": "cn", "manual_cookie_header": "kept=1" },
+                "opencode": { "workspace_id": "ws_kept" },
+                "minimax": { "api_token": "tok_kept" },
+                "jetbrains": { "ide_base_path": "C:/kept" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "chrome");
+    assert_eq!(settings.usage_source(ProviderId::Claude), "web");
+    assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
+    assert_eq!(settings.manual_cookie_header(ProviderId::Alibaba), "kept=1");
+    assert_eq!(settings.workspace_id(ProviderId::OpenCode), "ws_kept");
+    assert_eq!(settings.api_token(ProviderId::MiniMax), "tok_kept");
+    assert_eq!(settings.ide_base_path(ProviderId::JetBrains), "C:/kept");
+}
+
+/// A legacy field still fills a provider entry that exists but left that
+/// particular slot empty. Precedence is per-field, not per-provider.
+#[test]
+fn legacy_fields_fill_gaps_in_an_existing_provider_entry() {
+    let json = r#"{
+            "alibaba_cookie_header": "legacy=used",
+            "provider_configs": {
+                "alibaba": { "api_region": "cn" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Alibaba),
+        "legacy=used",
+        "an untouched slot should still accept the legacy value"
+    );
+}
+
+/// Only `true` migrates for the two legacy bool flags. A stored `false` must
+/// not create an entry, so the per-provider default still applies.
+#[test]
+fn legacy_false_boolean_flags_do_not_override_defaults() {
+    let json = r#"{
+            "codex_historical_tracking": false,
+            "claude_avoid_keychain_prompts": false
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert!(!settings.historical_tracking(ProviderId::Codex));
+    assert!(!settings.avoid_keychain_prompts(ProviderId::Claude));
+}
+
+// ── Forward compatibility ────────────────────────────────────────────
+
+/// A config written by a NEWER build must still load on an older one.
+/// `RawSettings` does not set `deny_unknown_fields`; this pins that down so a
+/// future edit cannot quietly make downgrades fatal.
+#[test]
+fn unknown_fields_from_a_newer_build_are_ignored() {
+    let json = r#"{
+            "refresh_interval_secs": 900,
+            "a_field_from_the_future": {"nested": [1, 2, 3]},
+            "another_unknown": "ignore me",
+            "provider_configs": {
+                "codex": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    let settings: Settings =
+        serde_json::from_str(json).expect("unknown fields must not fail the load");
+
+    assert_eq!(settings.refresh_interval_secs, 900);
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "chrome");
+}
+
+/// An empty object is a valid config and yields defaults.
+#[test]
+fn an_empty_config_object_loads_as_defaults() {
+    let settings: Settings = serde_json::from_str("{}").unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(
+        settings.refresh_interval_secs,
+        defaults.refresh_interval_secs
+    );
+    assert_eq!(settings.enabled_providers, defaults.enabled_providers);
+    assert_eq!(settings.theme, defaults.theme);
+    assert_eq!(settings.float_bar_enabled, defaults.float_bar_enabled);
+    assert_eq!(
+        settings.taskbar_widget_enabled,
+        defaults.taskbar_widget_enabled
+    );
+}
+
+// ── Taskbar account map sanitization ─────────────────────────────────
+
+/// Provider keys are trimmed and lowercased, values are trimmed, and blank
+/// entries are dropped so "Auto" stays represented by a missing key.
+#[test]
+fn taskbar_account_map_is_sanitized_on_load() {
+    let json = r#"{
+            "taskbar_account_by_provider": {
+                "  CODEX  ": "  work-id  ",
+                "Claude": "personal",
+                "cursor": "   ",
+                "   ": "orphan-value"
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+    let map = &settings.taskbar_account_by_provider;
+
+    assert_eq!(map.get("codex").map(String::as_str), Some("work-id"));
+    assert_eq!(map.get("claude").map(String::as_str), Some("personal"));
+    assert!(
+        !map.contains_key("cursor"),
+        "a blank account must be dropped, not stored as empty"
+    );
+    assert_eq!(map.len(), 2, "blank provider keys must be dropped too");
+}
