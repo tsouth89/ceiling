@@ -75,7 +75,8 @@ The active desktop app lives in `apps/desktop-tauri`. Shared provider and usage 
 
 For the active implementation state and the next work items, see
 [docs/HANDOFF.md](docs/HANDOFF.md). For the tray and strip visual system, see
-[docs/CEILING_UI.md](docs/CEILING_UI.md). Maintainers should follow the
+[docs/CEILING_UI.md](docs/CEILING_UI.md). For the `codexbar` CLI, see
+[docs/CLI.md](docs/CLI.md). Maintainers should follow the
 [release checklist](docs/RELEASING.md) for public builds.
 
 ## Lineage, license, and credits
