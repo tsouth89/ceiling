@@ -41,7 +41,7 @@ export function PaceSection({ pace, t }: Props) {
   );
 }
 
-function formatEta(seconds: number): string {
+export function formatEta(seconds: number): string {
   const mins = Math.max(0, Math.round(seconds / 60));
   if (mins < 60) return `${mins}m`;
   const hrs = Math.round(mins / 60);
