@@ -622,4 +622,25 @@ mod tests {
         assert!(output.contains("Plan:    Gemini Code Assist in Google One AI Pro"));
         assert!(!output.contains("Google One Ai Pro"));
     }
+
+    #[test]
+    fn progress_bar_renders_exact_empty_half_and_full_bars() {
+        assert_eq!(render_progress_bar(0.0, 10, false), "[░░░░░░░░░░]");
+        assert_eq!(render_progress_bar(50.0, 10, false), "[█████░░░░░]");
+        assert_eq!(render_progress_bar(100.0, 10, false), "[██████████]");
+    }
+
+    #[test]
+    fn progress_bar_clamps_non_finite_and_out_of_range_input() {
+        assert_eq!(render_progress_bar(f64::NAN, 10, false), "[░░░░░░░░░░]");
+        assert_eq!(render_progress_bar(-10.0, 10, false), "[░░░░░░░░░░]");
+        assert_eq!(render_progress_bar(150.0, 10, false), "[██████████]");
+    }
+
+    #[test]
+    fn progress_bar_without_color_has_no_ansi_codes() {
+        let output = render_progress_bar(80.0, 10, false);
+        assert!(!output.contains('\u{1b}'));
+        assert_eq!(output, "[████████░░]");
+    }
 }
