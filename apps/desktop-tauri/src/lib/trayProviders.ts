@@ -51,7 +51,10 @@ export function orderedEnabledProviderSlots(
     if (seen.has(providerId)) continue;
     slots.push({
       id: providerId,
-      displayName: snapshotNames.get(providerId) ?? providerId,
+      displayName:
+        catalogById.get(providerId)?.displayName ??
+        snapshotNames.get(providerId) ??
+        providerId,
     });
   }
 
