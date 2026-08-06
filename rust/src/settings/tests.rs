@@ -1056,3 +1056,299 @@ fn codex_spark_usage_visibility_defaults_to_visible_and_roundtrips() {
 
     assert!(!loaded.codex_spark_usage_visible());
 }
+
+// ── Legacy flat-field migration (raw.rs) ─────────────────────────────
+//
+// `RawSettings` accepts the pre-`provider_configs` on-disk shape and folds it
+// into the unified map. A regression here silently discards a saved
+// configuration on upgrade, and the user finds out by opening the app to
+// defaults. The cases below cover the long-tail providers that had none.
+
+/// Every legacy flat `*_cookie_source` field lands on the right provider.
+#[test]
+fn legacy_cookie_sources_migrate_for_every_provider() {
+    let json = r#"{
+            "codex_cookie_source": "manual",
+            "claude_cookie_source": "chrome",
+            "cursor_cookie_source": "edge",
+            "opencode_cookie_source": "firefox",
+            "factory_cookie_source": "manual",
+            "alibaba_cookie_source": "chrome",
+            "kimi_cookie_source": "edge",
+            "minimax_cookie_source": "firefox",
+            "augment_cookie_source": "manual",
+            "amp_cookie_source": "chrome",
+            "ollama_cookie_source": "edge"
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Claude), "chrome");
+    assert_eq!(settings.cookie_source(ProviderId::Cursor), "edge");
+    assert_eq!(settings.cookie_source(ProviderId::OpenCode), "firefox");
+    assert_eq!(settings.cookie_source(ProviderId::Factory), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Alibaba), "chrome");
+    assert_eq!(settings.cookie_source(ProviderId::Kimi), "edge");
+    assert_eq!(settings.cookie_source(ProviderId::MiniMax), "firefox");
+    assert_eq!(settings.cookie_source(ProviderId::Augment), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Amp), "chrome");
+    assert_eq!(settings.cookie_source(ProviderId::Ollama), "edge");
+}
+
+/// Every legacy flat manual-cookie-header field lands on the right provider.
+/// Kimi is the odd one out: its legacy key is `kimi_manual_cookie_header`,
+/// not `kimi_cookie_header`.
+#[test]
+fn legacy_cookie_headers_migrate_for_every_provider() {
+    let json = r#"{
+            "alibaba_cookie_header": "ali=PLACEHOLDER",
+            "kimi_manual_cookie_header": "kimi=PLACEHOLDER",
+            "augment_cookie_header": "aug=PLACEHOLDER",
+            "amp_cookie_header": "amp=PLACEHOLDER",
+            "ollama_cookie_header": "olm=PLACEHOLDER",
+            "minimax_cookie_header": "mm=PLACEHOLDER"
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Alibaba),
+        "ali=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Kimi),
+        "kimi=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Augment),
+        "aug=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Amp),
+        "amp=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Ollama),
+        "olm=PLACEHOLDER"
+    );
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::MiniMax),
+        "mm=PLACEHOLDER"
+    );
+}
+
+/// A file carrying BOTH shapes keeps the modern `provider_configs` value.
+/// The legacy field must not overwrite it, otherwise someone who reconfigured
+/// a provider in a newer build gets silently reverted to their old value.
+#[test]
+fn provider_configs_take_precedence_over_legacy_flat_fields() {
+    let json = r#"{
+            "codex_cookie_source": "manual",
+            "claude_usage_source": "auto",
+            "alibaba_api_region": "singapore",
+            "alibaba_cookie_header": "legacy=lost",
+            "opencode_workspace_id": "ws_legacy",
+            "minimax_api_token": "tok_legacy",
+            "jetbrains_ide_base_path": "C:/legacy",
+            "provider_configs": {
+                "codex": { "cookie_source": "chrome" },
+                "claude": { "usage_source": "web" },
+                "alibaba": { "api_region": "cn", "manual_cookie_header": "kept=1" },
+                "opencode": { "workspace_id": "ws_kept" },
+                "minimax": { "api_token": "tok_kept" },
+                "jetbrains": { "ide_base_path": "C:/kept" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "chrome");
+    assert_eq!(settings.usage_source(ProviderId::Claude), "web");
+    assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
+    assert_eq!(settings.manual_cookie_header(ProviderId::Alibaba), "kept=1");
+    assert_eq!(settings.workspace_id(ProviderId::OpenCode), "ws_kept");
+    assert_eq!(settings.api_token(ProviderId::MiniMax), "tok_kept");
+    assert_eq!(settings.ide_base_path(ProviderId::JetBrains), "C:/kept");
+}
+
+/// A legacy field still fills a provider entry that exists but left that
+/// particular slot empty. Precedence is per-field, not per-provider.
+#[test]
+fn legacy_fields_fill_gaps_in_an_existing_provider_entry() {
+    // Covers several providers and several slot types. A per-provider (rather
+    // than per-field) implementation would drop the legacy value whenever the
+    // provider has any entry at all, and testing one provider would only catch
+    // that for the provider tested.
+    let json = r#"{
+            "alibaba_cookie_header": "legacy=used",
+            "opencode_workspace_id": "ws_legacy",
+            "minimax_api_token": "tok_legacy",
+            "codex_usage_source": "web",
+            "provider_configs": {
+                "alibaba": { "api_region": "cn" },
+                "opencode": { "cookie_source": "chrome" },
+                "minimax": { "api_region": "cn" },
+                "codex": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    // The modern values survive.
+    assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
+    assert_eq!(settings.cookie_source(ProviderId::OpenCode), "chrome");
+    assert_eq!(settings.api_region(ProviderId::MiniMax), "cn");
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "chrome");
+
+    // Every untouched slot still accepts its legacy value.
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Alibaba),
+        "legacy=used"
+    );
+    assert_eq!(settings.workspace_id(ProviderId::OpenCode), "ws_legacy");
+    assert_eq!(settings.api_token(ProviderId::MiniMax), "tok_legacy");
+    assert_eq!(settings.usage_source(ProviderId::Codex), "web");
+}
+
+/// Only `true` migrates for the two legacy bool flags. A stored `false` must
+/// not create an entry, so the per-provider default still applies.
+#[test]
+fn legacy_false_boolean_flags_do_not_override_defaults() {
+    let json = r#"{
+            "codex_historical_tracking": false,
+            "claude_avoid_keychain_prompts": false
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert!(!settings.provider_configs.contains_key(&ProviderId::Codex));
+    assert!(!settings.provider_configs.contains_key(&ProviderId::Claude));
+}
+
+// ── Forward compatibility ────────────────────────────────────────────
+
+/// A config written by a NEWER build must still load on an older one.
+///
+/// Neither `RawSettings` nor `ProviderConfig` sets `deny_unknown_fields`. Both
+/// levels are exercised: a top-level-only test would still pass if the inner
+/// `ProviderConfig` started rejecting unknown keys, and downgrades would break
+/// while this test stayed green.
+#[test]
+fn unknown_fields_from_a_newer_build_are_ignored() {
+    let json = r#"{
+            "refresh_interval_secs": 900,
+            "a_field_from_the_future": {"nested": [1, 2, 3]},
+            "another_unknown": "ignore me",
+            "provider_configs": {
+                "codex": {
+                    "cookie_source": "chrome",
+                    "a_per_provider_field_from_the_future": true,
+                    "another_nested_unknown": {"deep": [4, 5]}
+                }
+            }
+        }"#;
+
+    let settings: Settings =
+        serde_json::from_str(json).expect("unknown fields must not fail the load");
+
+    assert_eq!(settings.refresh_interval_secs, 900);
+    assert_eq!(
+        settings.cookie_source(ProviderId::Codex),
+        "chrome",
+        "a known sibling key must still load past an unknown per-provider field"
+    );
+}
+
+/// An empty object is a valid config and yields defaults.
+#[test]
+fn an_empty_config_object_loads_as_defaults() {
+    let settings: Settings = serde_json::from_str("{}").unwrap();
+    let defaults = Settings::default();
+
+    // Compare the whole serialized form rather than a hand-picked set of
+    // fields. `Settings` has no `PartialEq`, and spot-checking would let a
+    // diverging default for any unlisted field through, which is exactly the
+    // regression that makes a fresh install come up wrong.
+    let mut loaded = serde_json::to_value(&settings).unwrap();
+    let mut expected = serde_json::to_value(&defaults).unwrap();
+
+    // `enabled_providers` is a HashSet, so its serialized order is not stable.
+    for value in [&mut loaded, &mut expected] {
+        let list = value["enabled_providers"]
+            .as_array_mut()
+            .expect("enabled_providers serializes as an array");
+        list.sort_by_key(|entry| entry.as_str().unwrap_or_default().to_string());
+    }
+
+    // Two fields deliberately diverge, because a field-level `#[serde(default)]`
+    // in RawSettings uses the FIELD TYPE's default rather than the container's:
+    //
+    //  float_bar_contrast — absent means "fall back to the legacy dark_text
+    //    flag", so None is intended. See
+    //    legacy_dark_text_setting_is_preserved_when_contrast_is_absent.
+    //
+    //  float_bar_show_reset_inline — absent reads as false even though
+    //    Settings::default() is true, with no fallback logic. That looks
+    //    unintended, but this is a tests-only change, so the behavior is
+    //    recorded here rather than altered.
+    assert_eq!(loaded["float_bar_contrast"], serde_json::Value::Null);
+    assert_eq!(expected["float_bar_contrast"], serde_json::json!("auto"));
+    assert_eq!(
+        loaded["float_bar_show_reset_inline"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        expected["float_bar_show_reset_inline"],
+        serde_json::json!(true)
+    );
+    for key in ["float_bar_contrast", "float_bar_show_reset_inline"] {
+        loaded[key] = serde_json::Value::Null;
+        expected[key] = serde_json::Value::Null;
+    }
+
+    assert_eq!(
+        loaded, expected,
+        "apart from the two documented exceptions, an empty config must be \
+         indistinguishable from Settings::default()"
+    );
+}
+
+// ── Taskbar account map sanitization ─────────────────────────────────
+
+/// Provider keys are trimmed and lowercased, values are trimmed but NOT
+/// case-folded, and blank entries are dropped so "Auto" stays represented by a
+/// missing key.
+///
+/// The mixed-case account value is deliberate. Account ids are case-sensitive,
+/// so lowercasing a value would stop it matching and silently fall the provider
+/// back to Auto. An all-lowercase fixture could not detect that.
+#[test]
+fn taskbar_account_map_is_sanitized_on_load() {
+    let json = r#"{
+            "taskbar_account_by_provider": {
+                "  CODEX  ": "  Work-ID  ",
+                "Claude": "Personal.Account@Example.com",
+                "cursor": "   ",
+                "   ": "orphan-value"
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+    let map = &settings.taskbar_account_by_provider;
+
+    assert_eq!(
+        map.get("codex").map(String::as_str),
+        Some("Work-ID"),
+        "the key is lowercased but the account value must keep its case"
+    );
+    assert_eq!(
+        map.get("claude").map(String::as_str),
+        Some("Personal.Account@Example.com")
+    );
+    assert!(
+        !map.contains_key("cursor"),
+        "a blank account must be dropped, not stored as empty"
+    );
+    assert_eq!(map.len(), 2, "blank provider keys must be dropped too");
+}
