@@ -1281,37 +1281,60 @@ fn an_empty_config_object_loads_as_defaults() {
         list.sort_by_key(|entry| entry.as_str().unwrap_or_default().to_string());
     }
 
-    // Two fields deliberately diverge, because a field-level `#[serde(default)]`
-    // in RawSettings uses the FIELD TYPE's default rather than the container's:
-    //
-    //  float_bar_contrast — absent means "fall back to the legacy dark_text
-    //    flag", so None is intended. See
-    //    legacy_dark_text_setting_is_preserved_when_contrast_is_absent.
-    //
-    //  float_bar_show_reset_inline — absent reads as false even though
-    //    Settings::default() is true, with no fallback logic. That looks
-    //    unintended, but this is a tests-only change, so the behavior is
-    //    recorded here rather than altered.
+    // One field deliberately diverges. `float_bar_contrast` carries meaning in
+    // its absence: None means "fall back to the legacy dark_text flag", which
+    // `resolved_float_bar_contrast` implements. See
+    // legacy_dark_text_setting_is_preserved_when_contrast_is_absent.
     assert_eq!(loaded["float_bar_contrast"], serde_json::Value::Null);
     assert_eq!(expected["float_bar_contrast"], serde_json::json!("auto"));
-    assert_eq!(
-        loaded["float_bar_show_reset_inline"],
-        serde_json::json!(false)
-    );
-    assert_eq!(
-        expected["float_bar_show_reset_inline"],
-        serde_json::json!(true)
-    );
-    for key in ["float_bar_contrast", "float_bar_show_reset_inline"] {
-        loaded[key] = serde_json::Value::Null;
-        expected[key] = serde_json::Value::Null;
-    }
+    loaded["float_bar_contrast"] = serde_json::Value::Null;
+    expected["float_bar_contrast"] = serde_json::Value::Null;
 
     assert_eq!(
         loaded, expected,
-        "apart from the two documented exceptions, an empty config must be \
+        "apart from the one documented exception, an empty config must be \
          indistinguishable from Settings::default()"
     );
+}
+
+/// A config predating `float_bar_show_reset_inline` must adopt the default
+/// (`true`), not the bool type default (`false`).
+///
+/// A bare field-level `#[serde(default)]` shadows the container default, which
+/// is what previously split behavior: a fresh install showed the inline reset
+/// while every upgraded install hid it, on the same build.
+#[test]
+fn absent_show_reset_inline_adopts_the_default_rather_than_false() {
+    let legacy: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["claude", "codex"],
+            "refresh_interval_secs": 300
+        }"#,
+    )
+    .expect("parse a config written before the field existed");
+
+    assert!(
+        legacy.float_bar_show_reset_inline,
+        "an absent key must take Settings::default(), not bool::default()"
+    );
+    assert_eq!(
+        legacy.float_bar_show_reset_inline,
+        Settings::default().float_bar_show_reset_inline
+    );
+}
+
+/// An explicit opt-out still survives the load. The default only fills a
+/// genuinely absent key, so turning the setting off is not undone on restart.
+#[test]
+fn explicit_show_reset_inline_false_is_preserved() {
+    let opted_out: Settings = serde_json::from_str(r#"{"float_bar_show_reset_inline": false}"#)
+        .expect("parse an explicit opt-out");
+    assert!(!opted_out.float_bar_show_reset_inline);
+
+    // And it survives a save/load cycle rather than snapping back to true.
+    let json = serde_json::to_string(&opted_out).expect("serialize");
+    let back: Settings = serde_json::from_str(&json).expect("deserialize");
+    assert!(!back.float_bar_show_reset_inline);
 }
 
 // ── Taskbar account map sanitization ─────────────────────────────────
