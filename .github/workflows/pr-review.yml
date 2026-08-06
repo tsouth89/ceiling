@@ -49,4 +49,8 @@ jobs:
         uses: tsouth89/coderev@main
         with:
           api-key: ${{ secrets.REVIEW_API_KEY }}
+          # Dual-generator: inert until the REVIEW_FIND2_API_KEY secret exists.
+          find2-provider: meta
+          find2-model: muse-spark-1.2-contributor
+          find2-api-key: ${{ secrets.REVIEW_FIND2_API_KEY }}
           conventions: AGENTS.md
