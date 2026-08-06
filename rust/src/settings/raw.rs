@@ -163,11 +163,11 @@ pub(super) struct RawSettings {
     taskbar_account_by_provider: std::collections::HashMap<String, String>,
     #[serde(default)]
     float_bar_dark_text: bool,
-    // NO field-level `#[serde(default)]` here, deliberately. This field defaults
-    // to `true`, and a field-level attribute would use the FIELD TYPE's default
-    // (`false`) instead of the container's, which is seeded from
-    // `Settings::default()`. That is what previously made a fresh install show
-    // the inline reset while every upgraded install hid it.
+    // Must stay `default_true`, not a bare `#[serde(default)]`. A bare attribute
+    // uses the FIELD TYPE's default (`false`) rather than the container's, which
+    // is what previously made a fresh install show the inline reset while every
+    // upgraded install hid it.
+    #[serde(default = "default_true")]
     float_bar_show_reset_inline: bool,
     #[serde(default)]
     float_bar_show_cost: bool,
