@@ -367,15 +367,52 @@ jobs:
         env:
           PARTNER_CENTER_PRODUCT_ID: ${{ vars.PARTNER_CENTER_PRODUCT_ID }}
         run: |
+          # The Store allows one active submission per product, so a release
+          # tagged while the previous one is still certifying cannot submit. That
+          # is a queueing conflict, not a broken release: the binaries, the
+          # GitHub release, and the R2 upload are all already done and correct.
+          # Skip the Store step and report it instead of failing the whole run.
+          $blocked = 'One Active Submission In-Progress'
+
+          function Skip-StoreSubmission {
+            "### Microsoft Store submission skipped" |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "The Store already has an active submission, which allows only one at a time." |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "Everything else in this release succeeded. To submit once the active" |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "submission clears, run **Validate Microsoft Store submission** with" |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "``publish`` checked and version ``$env:RELEASE_VERSION``. To clear it now," |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "use *Cancel review* in Partner Center (see docs/RELEASING.md)." |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "Installer: $env:STORE_INSTALLER_URL" |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            Write-Host "::warning::Microsoft Store submission skipped - the product already has an active submission."
+          }
+
           $package = Get-Content -LiteralPath $env:STORE_PACKAGE_PATH -Raw
-          msstore submission update $env:PARTNER_CENTER_PRODUCT_ID $package
+          $updateOutput = msstore submission update $env:PARTNER_CENTER_PRODUCT_ID $package 2>&1 | Out-String
+          Write-Host $updateOutput
           if ($LASTEXITCODE -ne 0) {
+            if ($updateOutput -match $blocked) {
+              Skip-StoreSubmission
+              exit 0
+            }
             throw "Microsoft Store package update failed."
           }
-          msstore submission publish $env:PARTNER_CENTER_PRODUCT_ID
+
+          $publishOutput = msstore submission publish $env:PARTNER_CENTER_PRODUCT_ID 2>&1 | Out-String
+          Write-Host $publishOutput
           if ($LASTEXITCODE -ne 0) {
+            if ($publishOutput -match $blocked) {
+              Skip-StoreSubmission
+              exit 0
+            }
             throw "Microsoft Store submission failed."
           }
+
           "### Submitted Ceiling to Microsoft Store" |
             Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "Installer: $env:STORE_INSTALLER_URL" |

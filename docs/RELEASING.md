@@ -88,6 +88,52 @@ submit it for certification. Leave the enable variable `false` if Store
 submission should temporarily remain manual. Never reuse or overwrite a
 versioned R2 URL after Microsoft has certified it.
 
+### When a release collides with an in-flight submission
+
+The Store allows one active submission per product, so tagging a release while
+the previous one is still certifying cannot submit:
+
+```text
+error - Product already has One Active Submission In-Progress. SubmissionId: <id>
+```
+
+That is a queueing conflict, not a broken release. The release run treats it as
+one: the Store step reports the collision as a warning and skips, and the run
+still passes, because the binaries, the GitHub release, and the R2 upload have
+all already succeeded. Only the Store submission is deferred.
+
+To submit the deferred version once the active submission clears, run
+**Validate Microsoft Store submission** with `publish` checked and that version.
+
+To clear the active submission instead, cancel it in Partner Center:
+
+1. Apps and Games overview, then open the app.
+2. On the Application overview page, go to the **Update app** card (the **App
+   setup** card for a first submission).
+3. Click the three dots at the top right of that card and choose
+   **Cancel review**, then confirm. It returns to draft within about a minute.
+
+It is a menu on a card rather than an action in a submissions list, which is why
+it is easy to miss. Note that Ceiling is a flat MSI/EXE product: `msstore
+submission delete` is documented only for MSIX, and the MSI/EXE submission API
+has no delete or cancel operation at all, so Partner Center is the only way to
+retract a submission. Cancelling stays available through certification and is
+lost once publishing begins.
+
+Do **not** try to resume the blocked release with `gh run rerun --failed`. A
+rerun restarts the whole job rather than resuming at the failed step, so it
+rebuilds and re-signs. Signing embeds an RFC 3161 timestamp, so the new
+installer never matches the bytes already published for that version, and
+`publish-store-installer.ps1` refuses to overwrite an immutable release object.
+The rerun dies at the R2 step, long before reaching the Store.
+
+Submit the deferred version with the validation workflow instead, which reuses
+the installer already in R2 and rebuilds nothing:
+
+```powershell
+gh workflow run validate-store-submission.yml -f version=<version> -f publish=true
+```
+
 For a local unsigned packaging rehearsal, use the managed Windows checkout:
 
 ```powershell
