@@ -1222,8 +1222,8 @@ fn legacy_false_boolean_flags_do_not_override_defaults() {
 
     let settings: Settings = serde_json::from_str(json).unwrap();
 
-    assert!(!settings.historical_tracking(ProviderId::Codex));
-    assert!(!settings.avoid_keychain_prompts(ProviderId::Claude));
+    assert!(!settings.provider_configs.contains_key(&ProviderId::Codex));
+    assert!(!settings.provider_configs.contains_key(&ProviderId::Claude));
 }
 
 // ── Forward compatibility ────────────────────────────────────────────
