@@ -155,7 +155,9 @@ impl OpenCodeGoProvider {
         let primary = RateWindow::with_details(
             rolling,
             Some(300),
-            Some(now + chrono::Duration::seconds(raw_rolling.1)),
+            raw_rolling
+                .1
+                .map(|secs| now + chrono::Duration::seconds(secs)),
             None,
         );
         let mut snap = UsageSnapshot::new(primary).with_login_method("OpenCode Go");
@@ -164,7 +166,7 @@ impl OpenCodeGoProvider {
             snap = snap.with_secondary(RateWindow::with_details(
                 pct,
                 Some(10080),
-                Some(now + chrono::Duration::seconds(reset)),
+                reset.map(|secs| now + chrono::Duration::seconds(secs)),
                 None,
             ));
         }
@@ -174,7 +176,7 @@ impl OpenCodeGoProvider {
                 .with_tertiary(RateWindow::with_details(
                     pct,
                     Some(43200),
-                    Some(now + chrono::Duration::seconds(reset)),
+                    reset.map(|secs| now + chrono::Duration::seconds(secs)),
                     None,
                 ))
                 .with_tertiary_label("Monthly");
@@ -193,7 +195,11 @@ impl OpenCodeGoProvider {
 
     /// Extract raw `(usage, resetInSec)` for a usage block by name, before any
     /// percent-scale normalization.
-    fn extract_window(text: &str, names: &[&str]) -> Option<(f64, i64)> {
+    ///
+    /// Reset is `None` when the percent matched but no reset field did. Callers
+    /// must not invent a `resets_at` of "now" for that case — that is a claim
+    /// about schedule, not an unknown.
+    fn extract_window(text: &str, names: &[&str]) -> Option<(f64, Option<i64>)> {
         for name in names {
             let percent_pattern = format!(
                 r#"{}[^}}]*?(?:usagePercent|usedPercent|percentUsed|percent)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)"#,
@@ -206,10 +212,8 @@ impl OpenCodeGoProvider {
 
             let percent = Self::extract_number(&percent_pattern, text);
             if let Some(p) = percent {
-                let reset = Self::extract_number(&reset_pattern, text)
-                    .map(|n| n as i64)
-                    .unwrap_or(0);
-                return Some((p, reset.max(0)));
+                let reset = Self::extract_number(&reset_pattern, text).map(|n| (n as i64).max(0));
+                return Some((p, reset));
             }
         }
         None
@@ -542,5 +546,25 @@ mod tests {
             renewal.window.resets_at.unwrap().to_rfc3339(),
             "2026-06-01T12:00:00+00:00"
         );
+    }
+
+    #[test]
+    fn missing_reset_field_does_not_claim_resets_now() {
+        // Percent matched, reset key omitted → schedule is unknown. Substituting
+        // 0s would set resets_at to the fetch timestamp and poison pace/reset
+        // detection with a fake "resets this instant" claim.
+        let text = r#"
+            rollingUsage: { usagePercent: 42.5 }
+            weeklyUsage: { usagePercent: 13, resetInSec: 86400 }
+        "#;
+        let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
+        assert!(
+            snap.primary.resets_at.is_none(),
+            "unknown reset must stay None, got {:?}",
+            snap.primary.resets_at
+        );
+        let secondary = snap.secondary.expect("weekly still parses with reset");
+        assert!(secondary.resets_at.is_some());
+        assert!((snap.primary.used_percent - 42.5).abs() < 0.001);
     }
 }
