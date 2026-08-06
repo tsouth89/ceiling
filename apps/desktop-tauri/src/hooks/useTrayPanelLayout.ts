@@ -9,12 +9,15 @@ import {
   reanchorTrayPanel,
   revealTrayPanelWindow,
 } from "../lib/tauri";
-
-const TRAY_WIDTH = 328;
-const TRAY_MAX_MEASURE_HEIGHT = 920;
-const TRAY_OVERVIEW_MIN_HEIGHT = 200;
-const TRAY_DETAIL_MIN_HEIGHT = 420;
-const TRAY_DENSE_OVERVIEW_HEIGHT = 776;
+import {
+  clampTrayHeight,
+  isUserDragResize,
+  measureTrayContentHeight,
+  shouldApplyAutoFitSize,
+  trayMaxHeight,
+  trayMinHeight,
+  TRAY_WIDTH,
+} from "../lib/trayPanelLayout";
 
 export interface TrayPanelLayoutOptions {
   canMeasure: boolean;
@@ -105,15 +108,12 @@ export function useTrayPanelLayout({
     void (async () => {
       try {
         unlisten = await win.onResized(({ payload }) => {
-          if (programmaticInFlightRef.current > 0) return;
-          const last = lastSizeRef.current;
-          if (
-            last &&
-            Math.abs(payload.width - last.width) <= 3 &&
-            Math.abs(payload.height - last.height) <= 3
-          ) {
-            return;
-          }
+          const isDrag = isUserDragResize({
+            programmaticInFlight: programmaticInFlightRef.current,
+            lastApplied: lastSizeRef.current,
+            event: { width: payload.width, height: payload.height },
+          });
+          if (!isDrag) return;
           onUserResizeRef.current?.(payload.width, payload.height);
         });
       } catch {
@@ -182,11 +182,7 @@ export function useTrayPanelLayout({
   useEffect(() => {
     if (!autoFit || !canMeasure) return;
 
-    const minHeight = detailMode
-      ? TRAY_DETAIL_MIN_HEIGHT
-      : denseOverview
-        ? TRAY_DENSE_OVERVIEW_HEIGHT
-        : TRAY_OVERVIEW_MIN_HEIGHT;
+    const minHeight = trayMinHeight({ detailMode, denseOverview });
 
     const resize = async () => {
       const run = ++resizeRunRef.current;
@@ -195,13 +191,7 @@ export function useTrayPanelLayout({
       const html = document.documentElement;
       const pageBody = document.body;
       const workArea = await getWorkAreaRect().catch(() => null);
-      const maxHeight = Math.max(
-        minHeight,
-        Math.min(
-          TRAY_MAX_MEASURE_HEIGHT,
-          (workArea?.height ?? TRAY_MAX_MEASURE_HEIGHT) - 16,
-        ),
-      );
+      const maxHeight = trayMaxHeight(minHeight, workArea?.height ?? null);
 
       const body = surface.querySelector<HTMLElement>(".menu-surface__body");
       const stack = surface.querySelector<HTMLElement>(".menu-stack");
@@ -261,31 +251,25 @@ export function useTrayPanelLayout({
         if (run !== resizeRunRef.current) return;
 
         const surfaceRect = surface.getBoundingClientRect();
-        let contentHeight = Math.max(
-          surface.scrollHeight,
-          Math.ceil(surfaceRect.height),
-        );
-        let maxBottom = surfaceRect.top + contentHeight;
         const bodyRect = body?.getBoundingClientRect();
-        if (bodyRect && bodyRect.height > 0 && bodyRect.bottom > maxBottom) {
-          maxBottom = bodyRect.bottom;
-        }
         const footer = surface.querySelector<HTMLElement>(".menu-surface__footer");
         const footerRect = footer?.getBoundingClientRect();
-        if (footerRect && footerRect.height > 0 && footerRect.bottom > maxBottom) {
-          maxBottom = footerRect.bottom;
-        }
-        contentHeight = Math.ceil(maxBottom - surfaceRect.top) + 4;
+        const contentHeight = measureTrayContentHeight({
+          surfaceTop: surfaceRect.top,
+          surfaceHeight: surfaceRect.height,
+          surfaceScrollHeight: surface.scrollHeight,
+          body: bodyRect,
+          footer: footerRect,
+        });
 
-        const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
+        const height = clampTrayHeight(contentHeight, minHeight, maxHeight);
         surface.style.maxHeight = `${height}px`;
         committedHeight = true;
 
-        const previousSize = autoFitLogicalRef.current;
-        const shouldResize =
-          previousSize === null ||
-          previousSize.width !== TRAY_WIDTH ||
-          Math.abs(previousSize.height - height) > 2;
+        const shouldResize = shouldApplyAutoFitSize(autoFitLogicalRef.current, {
+          width: TRAY_WIDTH,
+          height,
+        });
         if (shouldResize) {
           autoFitLogicalRef.current = { width: TRAY_WIDTH, height };
           await applySize(new LogicalSize(TRAY_WIDTH, height));
