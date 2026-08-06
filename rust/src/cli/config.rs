@@ -386,3 +386,55 @@ async fn show_paths() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_provider_accepts_a_known_provider() {
+        assert_eq!(parse_provider("codex").unwrap(), ProviderId::Codex);
+    }
+
+    #[test]
+    fn parse_provider_rejects_an_unknown_provider() {
+        assert!(parse_provider("unknown").is_err());
+    }
+
+    #[test]
+    fn ensure_provider_accepts_api_key_for_key_providers() {
+        assert!(ensure_provider_accepts_api_key(ProviderId::Amp).is_ok());
+    }
+
+    #[test]
+    fn ensure_provider_rejects_providers_without_stored_keys() {
+        assert!(ensure_provider_accepts_api_key(ProviderId::Codex).is_err());
+    }
+
+    #[test]
+    fn resolve_api_key_input_uses_an_inline_key() {
+        assert_eq!(
+            resolve_api_key_input(Some("secret"), false).unwrap(),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_input_rejects_both_inline_and_stdin() {
+        assert!(resolve_api_key_input(Some("secret"), true).is_err());
+    }
+
+    #[test]
+    fn resolve_api_key_input_rejects_missing_input() {
+        assert!(resolve_api_key_input(None, false).is_err());
+        assert!(resolve_api_key_input(Some("   "), false).is_err());
+    }
+
+    #[test]
+    fn resolve_api_key_input_strips_surrounding_quotes() {
+        assert_eq!(
+            resolve_api_key_input(Some("\"secret\""), false).unwrap(),
+            "secret"
+        );
+    }
+}
