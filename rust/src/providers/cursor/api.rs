@@ -176,39 +176,41 @@ impl CursorApi {
                         inactives.push(InactiveRateWindow::new("cursor-api", "API", NOT_ENFORCED));
                     }
                 }
-
-                let on_demand = individual.on_demand.as_ref().or_else(|| {
-                    summary
-                        .team_usage
-                        .as_ref()
-                        .and_then(|t| t.on_demand.as_ref())
-                });
-
-                let (metered, notice) = on_demand_windows(on_demand, window_minutes, billing_end);
-                extras.extend(metered);
-                inactives.extend(notice);
-
-                // On-demand owns the cost slot: it is the only Cursor lane that
-                // bills real money. Plan usage is metered at internal rates and
-                // charged nothing, so it must never outrank actual spend here.
-                cost_snapshot = Self::on_demand_cost(on_demand, billing_end, ON_DEMAND_PERIOD)
-                    .or_else(|| plan_cost_snapshot(plan, billing_end));
             } else if let Some(overall) = &individual.overall {
                 // Overall is a single reported pool — keep it as monthly + cost only.
                 monthly_percent = Self::usage_percent(overall);
+                // Overall fills the cost slot as a monthly pool. On-demand still
+                // surfaces as its own meter below; it must not replace this total.
                 cost_snapshot = Self::on_demand_cost(Some(overall), billing_end, MONTHLY_PERIOD);
+            }
 
-                // `overall` does not replace on-demand: the overdraft meter is
-                // reported separately and would otherwise never be read here.
-                let on_demand = individual.on_demand.as_ref().or_else(|| {
-                    summary
-                        .team_usage
-                        .as_ref()
-                        .and_then(|t| t.on_demand.as_ref())
-                });
-                let (metered, notice) = on_demand_windows(on_demand, window_minutes, billing_end);
-                extras.extend(metered);
-                inactives.extend(notice);
+            // On-demand is a sibling of plan/overall on IndividualUsage. Read it
+            // once for every individual shape — including payloads that only
+            // carry onDemand and omit both plan and overall.
+            let on_demand = individual.on_demand.as_ref().or_else(|| {
+                summary
+                    .team_usage
+                    .as_ref()
+                    .and_then(|t| t.on_demand.as_ref())
+            });
+            let (metered, notice) = on_demand_windows(on_demand, window_minutes, billing_end);
+            extras.extend(metered);
+            inactives.extend(notice);
+
+            // Cost ownership by shape:
+            // - plan: on-demand (real money) outranks plan internal units
+            // - overall: already set above; leave the monthly pool cost alone
+            // - on-demand only: on-demand is the only billed signal
+            if individual.plan.is_some() {
+                cost_snapshot = Self::on_demand_cost(on_demand, billing_end, ON_DEMAND_PERIOD)
+                    .or_else(|| {
+                        individual
+                            .plan
+                            .as_ref()
+                            .and_then(|plan| plan_cost_snapshot(plan, billing_end))
+                    });
+            } else if individual.overall.is_none() {
+                cost_snapshot = Self::on_demand_cost(on_demand, billing_end, ON_DEMAND_PERIOD);
             }
         } else if let Some(team) = &summary.team_usage {
             if let Some(pooled) = &team.pooled {
@@ -712,6 +714,35 @@ mod tests {
         assert!(usage.extra_rate_windows.is_empty());
         assert!(usage.inactive_rate_windows.is_empty());
         assert!(cost.is_none());
+    }
+
+    #[test]
+    fn test_cursor_on_demand_only_individual_usage() {
+        // individualUsage may carry only onDemand (plan and overall both null).
+        // That shape used to fall through both arms and drop the overdraft lane.
+        let json = r#"{
+            "billingCycleEnd": "2026-04-01T00:00:00Z",
+            "membershipType": "pro",
+            "individualUsage": {
+                "onDemand": {
+                    "enabled": true,
+                    "used": 350,
+                    "limit": 1000
+                }
+            }
+        }"#;
+
+        let summary = parse_summary(json);
+        let (usage, cost) = api().build_result(summary, None).unwrap();
+
+        let on_demand = extra(&usage, "cursor-on-demand");
+        assert_eq!(on_demand.title, "On-demand");
+        assert!((on_demand.window.used_percent - 35.0).abs() < 0.01);
+
+        let cost = cost.expect("on-demand-only payload still reports spend");
+        assert!((cost.used - 3.5).abs() < 0.01);
+        assert_eq!(cost.limit, Some(10.0));
+        assert_eq!(cost.period, "On-demand");
     }
 
     #[test]
