@@ -79,6 +79,10 @@ For the active implementation state and the next work items, see
 [docs/CLI.md](docs/CLI.md). Maintainers should follow the
 [release checklist](docs/RELEASING.md) for public builds.
 
+## Contributing
+
+New here? Start with an issue tagged [`good first issue`](https://github.com/tsouth89/ceiling/labels/good%20first%20issue), then read [CONTRIBUTING.md](https://github.com/tsouth89/ceiling/blob/main/CONTRIBUTING.md) for the workflow.
+
 ## Lineage, license, and credits
 
 Ceiling is an independent Windows-focused fork of
