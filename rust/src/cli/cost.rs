@@ -296,3 +296,23 @@ fn is_terminal() -> bool {
     use std::io::IsTerminal;
     std::io::stdout().is_terminal()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_number_groups_by_thousands() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(7), "7");
+        assert_eq!(format_number(999), "999");
+        assert_eq!(format_number(1_000), "1,000");
+        assert_eq!(format_number(1_234), "1,234");
+        assert_eq!(format_number(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn format_number_handles_u64_max() {
+        assert_eq!(format_number(u64::MAX), "18,446,744,073,709,551,615");
+    }
+}
