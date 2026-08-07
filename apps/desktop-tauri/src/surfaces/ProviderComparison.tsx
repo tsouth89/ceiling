@@ -9,20 +9,20 @@ import type {
   ProviderUsageSnapshot,
 } from "../types/bridge";
 
-function formatTokens(value: number): string {
+export function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US", {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-function cacheShare(breakdown: LocalTokenBreakdown): number {
+export function cacheShare(breakdown: LocalTokenBreakdown): number {
   if (breakdown.processedTokens <= 0) return 0;
   return (((breakdown.cacheReadTokens + breakdown.cacheWriteTokens) /
     breakdown.processedTokens) * 100);
 }
 
-function periodChange(period: LocalUsageComparisonPeriod): string {
+export function periodChange(period: LocalUsageComparisonPeriod): string {
   if (period.previousTokens <= 0) {
     return period.currentTokens > 0 ? "New activity" : "No change";
   }
@@ -31,7 +31,7 @@ function periodChange(period: LocalUsageComparisonPeriod): string {
   return `${sign}${Math.round(change)}% vs prior`;
 }
 
-function comparisonSummary(leftName: string, leftTokens: number, rightName: string, rightTokens: number): string {
+export function comparisonSummary(leftName: string, leftTokens: number, rightName: string, rightTokens: number): string {
   if (leftTokens === rightTokens) return "Even activity across both providers";
   const [leaderName, leaderTokens, otherTokens] = leftTokens > rightTokens
     ? [leftName, leftTokens, rightTokens]
