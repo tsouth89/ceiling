@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../../i18n/LocaleProvider";
 import { buildBundle } from "../../../test/localeHarness";
@@ -78,7 +78,7 @@ describe("TokenAccountsPanel", () => {
       });
     });
 
-    expect(screen.getByText("ABCD-1234")).toBeInTheDocument();
+    expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
   });
 
   it("does not render a code when the phase carries none", async () => {
@@ -113,7 +113,7 @@ describe("TokenAccountsPanel", () => {
         code: "ABCD-1234",
       });
     });
-    expect(screen.getByText("ABCD-1234")).toBeInTheDocument();
+    expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
 
     // A phase change that (incorrectly) still carries the old code must not
     // keep it on screen — the render is gated on the phase, not just the code.
@@ -124,6 +124,8 @@ describe("TokenAccountsPanel", () => {
         code: "ABCD-1234",
       });
     });
-    expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument(),
+    );
   });
 });
