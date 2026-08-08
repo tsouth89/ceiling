@@ -12,6 +12,8 @@ export type ProviderLoginPhaseChangedPayload = {
   phase: ProviderLoginPhase;
   /** The device-flow user code to display, when the phase has one to show. */
   code?: string;
+  /** The verification URL `code` must be entered at, when there is one. */
+  url?: string;
 };
 
 export function providerLoginPhaseKey(

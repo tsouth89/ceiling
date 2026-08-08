@@ -5,12 +5,14 @@ import {
   type ProviderLoginPhase,
 } from "../../../../lib/providerLogin";
 import { CopyIconButton } from "../../../../components/MenuCard";
+import { openExternalUrl } from "../../../../lib/tauri";
 
 interface Props {
   provider: ProviderDetail;
   busy: boolean;
   loginPhase: ProviderLoginPhase | null;
   loginCode: string | null;
+  loginUrl: string | null;
   onRefresh: () => void;
   onSwitchAccount: () => void;
   onOpenDashboard: () => void;
@@ -31,6 +33,7 @@ export function QuickActionsSection({
   busy,
   loginPhase,
   loginCode,
+  loginUrl,
   onRefresh,
   onSwitchAccount,
   onOpenDashboard,
@@ -53,6 +56,18 @@ export function QuickActionsSection({
               {t("LoginPhaseEnterGithubCodePrefix")}{" "}
               <strong className="settings-status__code">{loginCode}</strong>{" "}
               <CopyIconButton text={loginCode} />
+              {loginUrl && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="provider-detail-datasource__link"
+                    onClick={() => void openExternalUrl(loginUrl)}
+                  >
+                    {t("LoginPhaseOpenVerificationLink")}
+                  </button>
+                </>
+              )}
             </>
           )}
         </p>

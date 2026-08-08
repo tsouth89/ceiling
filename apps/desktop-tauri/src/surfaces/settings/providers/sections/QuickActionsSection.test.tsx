@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../../../i18n/LocaleProvider";
 import { buildBundle } from "../../../../test/localeHarness";
@@ -8,6 +8,7 @@ import { QuickActionsSection } from "./QuickActionsSection";
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
+  openExternalUrl: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -54,10 +55,11 @@ describe("QuickActionsSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
+    tauriMocks.openExternalUrl.mockResolvedValue(undefined);
     eventMocks.listen.mockResolvedValue(() => {});
   });
 
-  it("shows the device-flow code alongside the login status", async () => {
+  it("shows the device-flow code and verification link alongside the login status", async () => {
     render(
       <LocaleProvider>
         <QuickActionsSection
@@ -65,6 +67,7 @@ describe("QuickActionsSection", () => {
           busy={false}
           loginPhase="waitingBrowser"
           loginCode="ABCD-1234"
+          loginUrl="https://github.com/login/device"
           onRefresh={noop}
           onSwitchAccount={noop}
           onOpenDashboard={noop}
@@ -77,11 +80,18 @@ describe("QuickActionsSection", () => {
     );
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "LoginPhaseWaitingBrowser LoginPhaseEnterGithubCodePrefix ABCD-1234",
+      "LoginPhaseWaitingBrowser LoginPhaseEnterGithubCodePrefix ABCD-1234 LoginPhaseOpenVerificationLink",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "LoginPhaseOpenVerificationLink" }),
+    );
+    expect(tauriMocks.openExternalUrl).toHaveBeenCalledWith(
+      "https://github.com/login/device",
     );
   });
 
-  it("does not render a code during waitingBrowser when none is carried yet", async () => {
+  it("does not render a code or link during waitingBrowser when none is carried yet", async () => {
     render(
       <LocaleProvider>
         <QuickActionsSection
@@ -89,6 +99,7 @@ describe("QuickActionsSection", () => {
           busy={false}
           loginPhase="waitingBrowser"
           loginCode={null}
+          loginUrl={null}
           onRefresh={noop}
           onSwitchAccount={noop}
           onOpenDashboard={noop}
@@ -105,7 +116,7 @@ describe("QuickActionsSection", () => {
     );
   });
 
-  it("does not render a stale code once the phase moves past waitingBrowser", async () => {
+  it("does not render a stale code or link once the phase moves past waitingBrowser", async () => {
     render(
       <LocaleProvider>
         <QuickActionsSection
@@ -113,6 +124,7 @@ describe("QuickActionsSection", () => {
           busy={false}
           loginPhase="complete"
           loginCode="ABCD-1234"
+          loginUrl="https://github.com/login/device"
           onRefresh={noop}
           onSwitchAccount={noop}
           onOpenDashboard={noop}
@@ -126,5 +138,8 @@ describe("QuickActionsSection", () => {
 
     await screen.findByRole("status");
     expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "LoginPhaseOpenVerificationLink" }),
+    ).not.toBeInTheDocument();
   });
 });

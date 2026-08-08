@@ -92,6 +92,7 @@ export function ProviderDetailPane({
   const [busy, setBusy] = useState(false);
   const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
   const [loginCode, setLoginCode] = useState<string | null>(null);
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [gatewayDraft, setGatewayDraft] = useState(wayfinderGatewayUrl);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
 
@@ -209,6 +210,7 @@ export function ProviderDetailPane({
   useEffect(() => {
     setLoginPhase(null);
     setLoginCode(null);
+    setLoginUrl(null);
     if (!providerId) return;
     const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
       "login-phase-changed",
@@ -216,6 +218,7 @@ export function ProviderDetailPane({
         if (payload.providerId === providerId) {
           setLoginPhase(payload.phase);
           setLoginCode(payload.code ?? null);
+          setLoginUrl(payload.url ?? null);
         }
       },
     );
@@ -273,6 +276,7 @@ export function ProviderDetailPane({
     setBusy(true);
     setLoginPhase(null);
     setLoginCode(null);
+    setLoginUrl(null);
     try {
       await triggerProviderLogin(detail.id);
       setCredentialRevision((value) => value + 1);
@@ -451,6 +455,7 @@ export function ProviderDetailPane({
         busy={busy}
         loginPhase={loginPhase}
         loginCode={loginCode}
+        loginUrl={loginUrl}
         onRefresh={handleRefresh}
         onSwitchAccount={handleSwitchAccount}
         onOpenDashboard={handleOpenDashboard}

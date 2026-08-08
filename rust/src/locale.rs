@@ -365,6 +365,7 @@ locale_keys! {
     LoginPhaseRequesting,
     LoginPhaseWaitingBrowser,
     LoginPhaseEnterGithubCodePrefix,
+    LoginPhaseOpenVerificationLink,
     LoginPhaseComplete,
     LoginPhaseFailed,
     ActionUsageDashboard,

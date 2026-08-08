@@ -4,6 +4,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import {
   addTokenAccount,
   getTokenAccounts,
+  openExternalUrl,
   removeTokenAccount,
   setActiveTokenAccount,
   triggerProviderLogin,
@@ -44,6 +45,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const [busy, setBusy] = useState(false);
   const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
   const [loginCode, setLoginCode] = useState<string | null>(null);
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addLabel, setAddLabel] = useState("");
   const [addToken, setAddToken] = useState("");
@@ -76,12 +78,14 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   useEffect(() => {
     setLoginPhase(null);
     setLoginCode(null);
+    setLoginUrl(null);
     const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
       "login-phase-changed",
       ({ payload }) => {
         if (payload.providerId === providerId) {
           setLoginPhase(payload.phase);
           setLoginCode(payload.code ?? null);
+          setLoginUrl(payload.url ?? null);
         }
       },
     );
@@ -143,6 +147,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setBusy(true);
     setLoginPhase(null);
     setLoginCode(null);
+    setLoginUrl(null);
     setError(null);
     try {
       await triggerProviderLogin(providerId);
@@ -178,6 +183,18 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
               {t("LoginPhaseEnterGithubCodePrefix")}{" "}
               <strong className="settings-status__code">{loginCode}</strong>{" "}
               <CopyIconButton text={loginCode} />
+              {loginUrl && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="provider-detail-datasource__link"
+                    onClick={() => void openExternalUrl(loginUrl)}
+                  >
+                    {t("LoginPhaseOpenVerificationLink")}
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>

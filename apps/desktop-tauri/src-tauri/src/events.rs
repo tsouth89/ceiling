@@ -55,6 +55,10 @@ pub struct LoginPhaseChangedPayload<'a> {
     /// authorization code), when the phase has one to show.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<&'a str>,
+    /// The verification URL the user must open to enter `code`, for when
+    /// the app could not open it in a browser automatically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<&'a str>,
 }
 
 // ── Emit helpers ─────────────────────────────────────────────────────
@@ -109,18 +113,22 @@ pub fn emit_login_phase_changed(app: &AppHandle, provider_id: &str, phase: &str)
             provider_id,
             phase,
             code: None,
+            url: None,
         },
     );
 }
 
 /// Same as [`emit_login_phase_changed`], but also carries a device-flow user
-/// code for the frontend to display (e.g. GitHub's device authorization
-/// code, which the user must type into the browser tab that was opened).
+/// code and the verification URL it must be entered at, for the frontend to
+/// display (e.g. GitHub's device authorization code and
+/// `https://github.com/login/device`) in case the browser did not open
+/// automatically.
 pub fn emit_login_phase_changed_with_code(
     app: &AppHandle,
     provider_id: &str,
     phase: &str,
     code: &str,
+    url: &str,
 ) {
     let _ = app.emit(
         LOGIN_PHASE_CHANGED,
@@ -128,6 +136,7 @@ pub fn emit_login_phase_changed_with_code(
             provider_id,
             phase,
             code: Some(code),
+            url: Some(url),
         },
     );
 }
@@ -156,24 +165,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn login_phase_payload_omits_code_when_absent() {
+    fn login_phase_payload_omits_code_and_url_when_absent() {
         let payload = LoginPhaseChangedPayload {
             provider_id: "copilot",
             phase: "requesting",
             code: None,
+            url: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert!(json.get("code").is_none());
+        assert!(json.get("url").is_none());
     }
 
     #[test]
-    fn login_phase_payload_includes_code_when_present() {
+    fn login_phase_payload_includes_code_and_url_when_present() {
         let payload = LoginPhaseChangedPayload {
             provider_id: "copilot",
             phase: "waitingBrowser",
             code: Some("ABCD-1234"),
+            url: Some("https://github.com/login/device"),
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["code"], "ABCD-1234");
+        assert_eq!(json["url"], "https://github.com/login/device");
     }
 }

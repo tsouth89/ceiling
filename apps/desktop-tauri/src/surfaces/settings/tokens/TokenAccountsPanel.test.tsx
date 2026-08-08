@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../../i18n/LocaleProvider";
 import { buildBundle } from "../../../test/localeHarness";
@@ -10,6 +10,7 @@ const tauriMocks = vi.hoisted(() => ({
   setUiLanguage: vi.fn(),
   getTokenAccounts: vi.fn(),
   triggerProviderLogin: vi.fn(),
+  openExternalUrl: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -51,6 +52,7 @@ describe("TokenAccountsPanel", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
     tauriMocks.getTokenAccounts.mockResolvedValue(emptyAccounts());
     tauriMocks.triggerProviderLogin.mockResolvedValue(undefined);
+    tauriMocks.openExternalUrl.mockResolvedValue(undefined);
     eventMocks.listen.mockImplementation(
       (event: string, handler: (event: { payload: unknown }) => void) => {
         const listeners = eventMocks.listeners.get(event) ?? [];
@@ -61,7 +63,7 @@ describe("TokenAccountsPanel", () => {
     );
   });
 
-  it("shows the device-flow code alongside the waiting-for-browser status", async () => {
+  it("shows the device-flow code and verification link alongside the waiting-for-browser status", async () => {
     render(
       <LocaleProvider>
         <TokenAccountsPanel providerId="copilot" />
@@ -75,10 +77,18 @@ describe("TokenAccountsPanel", () => {
         providerId: "copilot",
         phase: "waitingBrowser",
         code: "ABCD-1234",
+        url: "https://github.com/login/device",
       });
     });
 
     expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "LoginPhaseOpenVerificationLink" }),
+    );
+    expect(tauriMocks.openExternalUrl).toHaveBeenCalledWith(
+      "https://github.com/login/device",
+    );
   });
 
   it("does not render a code when the phase carries none", async () => {

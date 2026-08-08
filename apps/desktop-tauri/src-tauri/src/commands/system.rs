@@ -442,17 +442,20 @@ async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> 
         .await
         .map_err(|e| format!("GitHub device login failed: {e}"))?;
 
-    // Show the code first: the device flow is already valid and the user can
-    // navigate to github.com/login/device by hand, so a browser-open failure
-    // (no default browser, blocked by policy, ...) must not strand them with
-    // no code at all.
+    // Show the code and the URL to enter it at first: the device flow is
+    // already valid and the user can navigate there by hand, so a
+    // browser-open failure (no default browser, blocked by policy, ...) must
+    // not strand them with no code and no link at all.
     events::emit_login_phase_changed_with_code(
         app,
         ProviderId::Copilot.cli_name(),
         "waitingBrowser",
         &device.user_code,
+        device.verification_url_to_open(),
     );
-    let _ = open_url_in_browser(device.verification_url_to_open());
+    if let Err(error) = open_url_in_browser(device.verification_url_to_open()) {
+        tracing::warn!(%error, "failed to open the GitHub device-flow verification URL");
+    }
 
     let token = flow
         .wait_for_token(&device.device_code, device.interval, device.expires_in)

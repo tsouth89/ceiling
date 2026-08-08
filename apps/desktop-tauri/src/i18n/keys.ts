@@ -181,6 +181,7 @@ export const ALL_LOCALE_KEYS = [
   "LoginPhaseRequesting",
   "LoginPhaseWaitingBrowser",
   "LoginPhaseEnterGithubCodePrefix",
+  "LoginPhaseOpenVerificationLink",
   "LoginPhaseComplete",
   "LoginPhaseFailed",
   "ActionUsageDashboard",
