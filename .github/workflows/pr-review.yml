@@ -13,7 +13,10 @@ name: PR review
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # one-review-per-PR: synchronize removed 2026-08-08 — a review on
+    # every push had agents in an endless fix-review loop. Reviews now
+    # fire once when the PR opens and again if it is marked ready.
+    types: [opened, ready_for_review, labeled]
 
 # A second push reviews the new head, not race the old one.
 concurrency:
