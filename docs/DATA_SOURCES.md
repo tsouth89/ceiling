@@ -18,7 +18,7 @@ data" panel in a provider's Settings detail view.
 | API keys | `%APPDATA%\Ceiling` (ApiKeys store) | Windows DPAPI, user-only file ACL |
 | Manual cookies | `%APPDATA%\Ceiling` (ManualCookies store) | Windows DPAPI, user-only file ACL |
 | OAuth token accounts | `%APPDATA%\Ceiling` (token store) | Windows DPAPI, user-only file ACL |
-| Settings | `%APPDATA%\Ceiling\settings.json` | Local file |
+| Settings | `%APPDATA%\Ceiling\settings.json` - [schema](SETTINGS_JSON.md) | Local file |
 
 Ceiling also *reads* credentials that other tools already wrote (for example
 `~/.codex/auth.json`, the Cursor IDE session database, or your browser's cookie
