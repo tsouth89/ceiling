@@ -4,6 +4,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import {
   addTokenAccount,
   getTokenAccounts,
+  openExternalUrl,
   removeTokenAccount,
   setActiveTokenAccount,
   triggerProviderLogin,
@@ -14,6 +15,7 @@ import {
   type ProviderLoginPhase,
   type ProviderLoginPhaseChangedPayload,
 } from "../../../lib/providerLogin";
+import { CopyIconButton } from "../../../components/MenuCard";
 
 interface Props {
   providerId: string;
@@ -42,6 +44,9 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const [data, setData] = useState<ProviderTokenAccountsBridge | null>(null);
   const [busy, setBusy] = useState(false);
   const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
+  const [loginCode, setLoginCode] = useState<string | null>(null);
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addLabel, setAddLabel] = useState("");
   const [addToken, setAddToken] = useState("");
@@ -73,11 +78,16 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
 
   useEffect(() => {
     setLoginPhase(null);
+    setLoginCode(null);
+    setLoginUrl(null);
+    setLinkError(null);
     const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
       "login-phase-changed",
       ({ payload }) => {
         if (payload.providerId === providerId) {
           setLoginPhase(payload.phase);
+          setLoginCode(payload.code ?? null);
+          setLoginUrl(payload.url ?? null);
         }
       },
     );
@@ -85,6 +95,15 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       void unlistenPromise.then((fn) => fn());
     };
   }, [providerId]);
+
+  // A new login attempt (or a retry of the same one) gets a fresh code, so
+  // any error from opening a previous attempt's URL must not linger next to
+  // it. Keyed on the code rather than the URL: GitHub's plain
+  // verification_uri is a constant, so two different attempts could share
+  // the same URL even though the code (and thus the attempt) differs.
+  useEffect(() => {
+    setLinkError(null);
+  }, [loginCode]);
 
   const handleAdd = async () => {
     if (!providerId || !addLabel.trim() || !addToken.trim()) return;
@@ -138,6 +157,9 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     if (!providerId) return;
     setBusy(true);
     setLoginPhase(null);
+    setLoginCode(null);
+    setLoginUrl(null);
+    setLinkError(null);
     setError(null);
     try {
       await triggerProviderLogin(providerId);
@@ -167,6 +189,36 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       {loginStatusKey && (
         <div className="settings-status" role="status">
           {t(loginStatusKey)}
+          {loginPhase === "waitingBrowser" && loginCode && (
+            <>
+              {" "}
+              {t("LoginPhaseEnterGithubCodePrefix")}{" "}
+              <strong className="settings-status__code">{loginCode}</strong>{" "}
+              <CopyIconButton text={loginCode} />
+              {loginUrl && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="provider-detail-datasource__link"
+                    onClick={() => {
+                      setLinkError(null);
+                      void openExternalUrl(loginUrl).catch((err: unknown) =>
+                        setLinkError(
+                          err instanceof Error ? err.message : String(err),
+                        ),
+                      );
+                    }}
+                  >
+                    {t("LoginPhaseOpenVerificationLink")}
+                  </button>
+                  {linkError && (
+                    <span className="settings-status--error"> {linkError}</span>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 

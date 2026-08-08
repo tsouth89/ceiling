@@ -1,14 +1,19 @@
+import { useEffect, useState } from "react";
 import type { ProviderDetail } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import {
   providerLoginPhaseKey,
   type ProviderLoginPhase,
 } from "../../../../lib/providerLogin";
+import { CopyIconButton } from "../../../../components/MenuCard";
+import { openExternalUrl } from "../../../../lib/tauri";
 
 interface Props {
   provider: ProviderDetail;
   busy: boolean;
   loginPhase: ProviderLoginPhase | null;
+  loginCode: string | null;
+  loginUrl: string | null;
   onRefresh: () => void;
   onSwitchAccount: () => void;
   onOpenDashboard: () => void;
@@ -28,6 +33,8 @@ export function QuickActionsSection({
   provider,
   busy,
   loginPhase,
+  loginCode,
+  loginUrl,
   onRefresh,
   onSwitchAccount,
   onOpenDashboard,
@@ -37,6 +44,25 @@ export function QuickActionsSection({
   t,
 }: Props) {
   const loginStatusKey = providerLoginPhaseKey(loginPhase);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  // ProviderDetailPane doesn't remount this component between login
+  // attempts — it just pushes new props — so a stale error from a previous
+  // attempt must be cleared explicitly once a new one starts. Keyed on the
+  // code rather than the URL: GitHub's plain verification_uri is a
+  // constant, so two different attempts could share the same URL even
+  // though the code (and thus the attempt) differs.
+  useEffect(() => {
+    setLinkError(null);
+  }, [loginCode]);
+
+  const handleOpenLoginUrl = () => {
+    if (!loginUrl) return;
+    setLinkError(null);
+    void openExternalUrl(loginUrl).catch((err: unknown) =>
+      setLinkError(err instanceof Error ? err.message : String(err)),
+    );
+  };
 
   return (
     <section className="provider-detail-section">
@@ -44,6 +70,29 @@ export function QuickActionsSection({
       {loginStatusKey && (
         <p className="settings-status" role="status">
           {t(loginStatusKey)}
+          {loginPhase === "waitingBrowser" && loginCode && (
+            <>
+              {" "}
+              {t("LoginPhaseEnterGithubCodePrefix")}{" "}
+              <strong className="settings-status__code">{loginCode}</strong>{" "}
+              <CopyIconButton text={loginCode} />
+              {loginUrl && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="provider-detail-datasource__link"
+                    onClick={handleOpenLoginUrl}
+                  >
+                    {t("LoginPhaseOpenVerificationLink")}
+                  </button>
+                  {linkError && (
+                    <span className="settings-status--error"> {linkError}</span>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </p>
       )}
       <div className="provider-detail-actions">

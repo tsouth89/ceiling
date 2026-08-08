@@ -364,6 +364,8 @@ locale_keys! {
     ActionSwitchAccount,
     LoginPhaseRequesting,
     LoginPhaseWaitingBrowser,
+    LoginPhaseEnterGithubCodePrefix,
+    LoginPhaseOpenVerificationLink,
     LoginPhaseComplete,
     LoginPhaseFailed,
     ActionUsageDashboard,

@@ -515,6 +515,11 @@ html {
   background: rgba(255, 108, 108, 0.1);
 }
 
+.settings-status__code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.05em;
+}
+
 /* section grouping */
 .settings-section {
   display: flex;

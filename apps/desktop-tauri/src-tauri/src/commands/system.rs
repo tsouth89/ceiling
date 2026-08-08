@@ -434,6 +434,18 @@ fn require_successful_login(id: ProviderId, result: LoginResult) -> Result<(), S
     }
 }
 
+/// Attempts to open the verification URL and reports the outcome, but never
+/// fails the caller: by the time this runs, the code has already been
+/// emitted and is valid on its own, so a browser-open failure (no default
+/// browser, blocked by policy, ...) must not abort the login. `open` is
+/// injected so this decision is testable without launching a real browser.
+fn open_verification_url_best_effort(
+    url: &str,
+    open: impl FnOnce(&str) -> Result<(), String>,
+) -> Option<String> {
+    open(url).err()
+}
+
 async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> {
     events::emit_login_phase_changed(app, ProviderId::Copilot.cli_name(), "requesting");
     let flow = CopilotDeviceFlow::new();
@@ -442,8 +454,22 @@ async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> 
         .await
         .map_err(|e| format!("GitHub device login failed: {e}"))?;
 
-    open_url_in_browser(device.verification_url_to_open())?;
-    events::emit_login_phase_changed(app, ProviderId::Copilot.cli_name(), "waitingBrowser");
+    // Show the code and the URL to enter it at first: the device flow is
+    // already valid and the user can navigate there by hand, so a
+    // browser-open failure (no default browser, blocked by policy, ...) must
+    // not strand them with no code and no link at all. Resolve the URL once
+    // so the one shown/copied is guaranteed to be the one actually opened.
+    let verification_url = device.verification_url_to_open();
+    events::emit_login_phase_changed_with_code(
+        app,
+        ProviderId::Copilot.cli_name(),
+        "waitingBrowser",
+        &device.user_code,
+        verification_url,
+    );
+    if let Some(error) = open_verification_url_best_effort(verification_url, open_url_in_browser) {
+        tracing::warn!(%error, "failed to open the GitHub device-flow verification URL");
+    }
 
     let token = flow
         .wait_for_token(&device.device_code, device.interval, device.expires_in)
@@ -535,5 +561,22 @@ mod tests {
         assert!(error.contains("status 7"));
         assert!(!error.contains("secret-token-from-cli"));
         assert!(error.contains("manual credential options"));
+    }
+
+    #[test]
+    fn verification_url_open_failure_is_reported_not_fatal() {
+        let outcome = open_verification_url_best_effort("https://github.com/login/device", |_| {
+            Err("no default browser".to_string())
+        });
+
+        assert_eq!(outcome, Some("no default browser".to_string()));
+    }
+
+    #[test]
+    fn verification_url_open_success_reports_nothing() {
+        let outcome =
+            open_verification_url_best_effort("https://github.com/login/device", |_| Ok(()));
+
+        assert_eq!(outcome, None);
     }
 }

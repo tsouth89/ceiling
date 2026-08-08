@@ -180,6 +180,8 @@ export const ALL_LOCALE_KEYS = [
   "ActionSwitchAccount",
   "LoginPhaseRequesting",
   "LoginPhaseWaitingBrowser",
+  "LoginPhaseEnterGithubCodePrefix",
+  "LoginPhaseOpenVerificationLink",
   "LoginPhaseComplete",
   "LoginPhaseFailed",
   "ActionUsageDashboard",
