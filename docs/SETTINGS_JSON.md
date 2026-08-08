@@ -66,13 +66,13 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `taskbar_widget_open_on_hover` | boolean | `true` | Open the taskbar glance panel after pointer dwell. Safe to edit. |
 | `float_bar_density` | string | `"standard"` | `"compact"`, `"standard"`, or `"detailed"`. Safe to edit. |
 | `float_bar_information_mode` | string | `"exact"` | `"exact"` or `"calm"`. Safe to edit. |
-| `float_bar_contrast` | string | `"auto"` | `"auto"`, `"light-text"`, or `"dark-text"`. Safe to edit. |
+| `float_bar_contrast` | string or null | `"auto"` | `"auto"`, `"light-text"`, or `"dark-text"`; an invalid string normalizes to `"auto"`. `null` is accepted and deserializes to `None`, which resolves through the legacy `float_bar_dark_text` flag instead. Safe to edit. |
 | `float_bar_click_through` | boolean | `false` | Make the floating bar fully click-through. Safe to edit. |
 | `float_bar_provider_ids` | array of strings | `[]` | Empty means all enabled providers. Safe to edit. |
 | `taskbar_account_by_provider` | object | `{}` | Provider CLI name to directory-account UUID for compact taskbar/float-bar strips. Safe to edit. |
 | `float_bar_dark_text` | boolean | `false` | Dark-on-light palette for the floating bar. Safe to edit. |
 | `float_bar_show_reset_inline` | boolean | `true` | Show the next reset inline in each pill. Safe to edit. |
-| `float_bar_show_cost` | boolean | `false` | Legacy compatibility field; current UI no longer renders local cost pills. |
+| `float_bar_show_cost` | boolean | `false` | Legacy compatibility field; the current UI no longer renders local cost pills, so it has no visible effect. Leave it unchanged. |
 
 ## `provider_configs`
 
