@@ -96,11 +96,14 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     };
   }, [providerId]);
 
-  // A new login attempt (or a retry of the same one) gets a fresh url, so
-  // any error from opening a previous one must not linger next to it.
+  // A new login attempt (or a retry of the same one) gets a fresh code, so
+  // any error from opening a previous attempt's URL must not linger next to
+  // it. Keyed on the code rather than the URL: GitHub's plain
+  // verification_uri is a constant, so two different attempts could share
+  // the same URL even though the code (and thus the attempt) differs.
   useEffect(() => {
     setLinkError(null);
-  }, [loginUrl]);
+  }, [loginCode]);
 
   const handleAdd = async () => {
     if (!providerId || !addLabel.trim() || !addToken.trim()) return;

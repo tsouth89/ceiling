@@ -151,6 +151,8 @@ describe("QuickActionsSection", () => {
     );
     expect(await screen.findByText("no browser")).toBeInTheDocument();
 
+    // Same URL as before — GitHub's plain verification_uri is a constant,
+    // so the clear must be keyed on the code, not the URL, to catch this.
     rerender(
       <LocaleProvider>
         <QuickActionsSection
@@ -158,7 +160,7 @@ describe("QuickActionsSection", () => {
           busy={false}
           loginPhase="waitingBrowser"
           loginCode="WXYZ-5678"
-          loginUrl="https://github.com/login/device?code=2"
+          loginUrl="https://github.com/login/device"
           onRefresh={noop}
           onSwitchAccount={noop}
           onOpenDashboard={noop}

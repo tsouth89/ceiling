@@ -48,10 +48,13 @@ export function QuickActionsSection({
 
   // ProviderDetailPane doesn't remount this component between login
   // attempts — it just pushes new props — so a stale error from a previous
-  // attempt must be cleared explicitly once a new url arrives.
+  // attempt must be cleared explicitly once a new one starts. Keyed on the
+  // code rather than the URL: GitHub's plain verification_uri is a
+  // constant, so two different attempts could share the same URL even
+  // though the code (and thus the attempt) differs.
   useEffect(() => {
     setLinkError(null);
-  }, [loginUrl]);
+  }, [loginCode]);
 
   const handleOpenLoginUrl = () => {
     if (!loginUrl) return;

@@ -177,12 +177,14 @@ describe("TokenAccountsPanel", () => {
     );
     expect(await screen.findByText("no browser")).toBeInTheDocument();
 
+    // Same URL as before — GitHub's plain verification_uri is a constant,
+    // so the clear must be keyed on the code, not the URL, to catch this.
     act(() => {
       emitLoginPhaseChanged({
         providerId: "copilot",
         phase: "waitingBrowser",
         code: "WXYZ-5678",
-        url: "https://github.com/login/device?code=2",
+        url: "https://github.com/login/device",
       });
     });
     await waitFor(() =>
