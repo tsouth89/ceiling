@@ -46,6 +46,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
   const [loginCode, setLoginCode] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addLabel, setAddLabel] = useState("");
   const [addToken, setAddToken] = useState("");
@@ -79,6 +80,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setLoginPhase(null);
     setLoginCode(null);
     setLoginUrl(null);
+    setLinkError(null);
     const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
       "login-phase-changed",
       ({ payload }) => {
@@ -93,6 +95,12 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       void unlistenPromise.then((fn) => fn());
     };
   }, [providerId]);
+
+  // A new login attempt (or a retry of the same one) gets a fresh url, so
+  // any error from opening a previous one must not linger next to it.
+  useEffect(() => {
+    setLinkError(null);
+  }, [loginUrl]);
 
   const handleAdd = async () => {
     if (!providerId || !addLabel.trim() || !addToken.trim()) return;
@@ -148,6 +156,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setLoginPhase(null);
     setLoginCode(null);
     setLoginUrl(null);
+    setLinkError(null);
     setError(null);
     try {
       await triggerProviderLogin(providerId);
@@ -189,14 +198,20 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
                   <button
                     type="button"
                     className="provider-detail-datasource__link"
-                    onClick={() =>
+                    onClick={() => {
+                      setLinkError(null);
                       void openExternalUrl(loginUrl).catch((err: unknown) =>
-                        setError(err instanceof Error ? err.message : String(err)),
-                      )
-                    }
+                        setLinkError(
+                          err instanceof Error ? err.message : String(err),
+                        ),
+                      );
+                    }}
                   >
                     {t("LoginPhaseOpenVerificationLink")}
                   </button>
+                  {linkError && (
+                    <span className="settings-status--error"> {linkError}</span>
+                  )}
                 </>
               )}
             </>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ProviderDetail } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import {
@@ -45,6 +45,14 @@ export function QuickActionsSection({
 }: Props) {
   const loginStatusKey = providerLoginPhaseKey(loginPhase);
   const [linkError, setLinkError] = useState<string | null>(null);
+
+  // ProviderDetailPane doesn't remount this component between login
+  // attempts — it just pushes new props — so a stale error from a previous
+  // attempt must be cleared explicitly once a new url arrives.
+  useEffect(() => {
+    setLinkError(null);
+  }, [loginUrl]);
+
   const handleOpenLoginUrl = () => {
     if (!loginUrl) return;
     setLinkError(null);

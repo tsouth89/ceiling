@@ -120,6 +120,76 @@ describe("TokenAccountsPanel", () => {
     expect(await screen.findByText("no browser")).toBeInTheDocument();
   });
 
+  it("clears the link error once a retry succeeds", async () => {
+    tauriMocks.openExternalUrl.mockRejectedValueOnce(new Error("no browser"));
+    tauriMocks.openExternalUrl.mockResolvedValueOnce(undefined);
+
+    render(
+      <LocaleProvider>
+        <TokenAccountsPanel providerId="copilot" />
+      </LocaleProvider>,
+    );
+
+    await screen.findByText("TokenAccountGithubLoginButton");
+    act(() => {
+      emitLoginPhaseChanged({
+        providerId: "copilot",
+        phase: "waitingBrowser",
+        code: "ABCD-1234",
+        url: "https://github.com/login/device",
+      });
+    });
+
+    const link = await screen.findByRole("button", {
+      name: "LoginPhaseOpenVerificationLink",
+    });
+    fireEvent.click(link);
+    expect(await screen.findByText("no browser")).toBeInTheDocument();
+
+    fireEvent.click(link);
+    await waitFor(() =>
+      expect(screen.queryByText("no browser")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("clears a stale link error once a new login attempt starts", async () => {
+    tauriMocks.openExternalUrl.mockRejectedValue(new Error("no browser"));
+
+    render(
+      <LocaleProvider>
+        <TokenAccountsPanel providerId="copilot" />
+      </LocaleProvider>,
+    );
+
+    await screen.findByText("TokenAccountGithubLoginButton");
+    act(() => {
+      emitLoginPhaseChanged({
+        providerId: "copilot",
+        phase: "waitingBrowser",
+        code: "ABCD-1234",
+        url: "https://github.com/login/device",
+      });
+    });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "LoginPhaseOpenVerificationLink",
+      }),
+    );
+    expect(await screen.findByText("no browser")).toBeInTheDocument();
+
+    act(() => {
+      emitLoginPhaseChanged({
+        providerId: "copilot",
+        phase: "waitingBrowser",
+        code: "WXYZ-5678",
+        url: "https://github.com/login/device?code=2",
+      });
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("no browser")).not.toBeInTheDocument(),
+    );
+  });
+
   it("does not render a code when the phase carries none", async () => {
     render(
       <LocaleProvider>

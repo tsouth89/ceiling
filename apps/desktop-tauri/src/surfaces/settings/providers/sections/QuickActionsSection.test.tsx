@@ -122,6 +122,57 @@ describe("QuickActionsSection", () => {
     expect(await screen.findByText("no browser")).toBeInTheDocument();
   });
 
+  it("clears a stale link error once a new login attempt starts", async () => {
+    tauriMocks.openExternalUrl.mockRejectedValue(new Error("no browser"));
+
+    const { rerender } = render(
+      <LocaleProvider>
+        <QuickActionsSection
+          provider={provider()}
+          busy={false}
+          loginPhase="waitingBrowser"
+          loginCode="ABCD-1234"
+          loginUrl="https://github.com/login/device"
+          onRefresh={noop}
+          onSwitchAccount={noop}
+          onOpenDashboard={noop}
+          onOpenStatusPage={noop}
+          onCopyError={noop}
+          onBuyCredits={noop}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "LoginPhaseOpenVerificationLink",
+      }),
+    );
+    expect(await screen.findByText("no browser")).toBeInTheDocument();
+
+    rerender(
+      <LocaleProvider>
+        <QuickActionsSection
+          provider={provider()}
+          busy={false}
+          loginPhase="waitingBrowser"
+          loginCode="WXYZ-5678"
+          loginUrl="https://github.com/login/device?code=2"
+          onRefresh={noop}
+          onSwitchAccount={noop}
+          onOpenDashboard={noop}
+          onOpenStatusPage={noop}
+          onCopyError={noop}
+          onBuyCredits={noop}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
+    );
+
+    expect(screen.queryByText("no browser")).not.toBeInTheDocument();
+  });
+
   it("does not render a code or link during waitingBrowser when none is carried yet", async () => {
     render(
       <LocaleProvider>
