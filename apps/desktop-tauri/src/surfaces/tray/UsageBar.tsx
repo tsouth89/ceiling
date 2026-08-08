@@ -23,7 +23,18 @@ export default function UsageBar({ window: w, label, compact }: UsageBarProps) {
   return (
     <div className={`usage-bar ${compact ? "usage-bar--compact" : ""}`}>
       {label && <span className="usage-bar__label">{label}</span>}
-      <div className="usage-bar__track">
+      <div
+        className="usage-bar__track"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={
+          label
+            ? `${label} usage: ${rawPct.toFixed(0)}%`
+            : `Usage: ${rawPct.toFixed(0)}%`
+        }
+      >
         <div
           className="usage-bar__fill"
           data-level={level}
