@@ -91,6 +91,35 @@ describe("TokenAccountsPanel", () => {
     );
   });
 
+  it("shows an error when opening the verification link fails", async () => {
+    tauriMocks.openExternalUrl.mockRejectedValue(new Error("no browser"));
+
+    render(
+      <LocaleProvider>
+        <TokenAccountsPanel providerId="copilot" />
+      </LocaleProvider>,
+    );
+
+    await screen.findByText("TokenAccountGithubLoginButton");
+
+    act(() => {
+      emitLoginPhaseChanged({
+        providerId: "copilot",
+        phase: "waitingBrowser",
+        code: "ABCD-1234",
+        url: "https://github.com/login/device",
+      });
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "LoginPhaseOpenVerificationLink",
+      }),
+    );
+
+    expect(await screen.findByText("no browser")).toBeInTheDocument();
+  });
+
   it("does not render a code when the phase carries none", async () => {
     render(
       <LocaleProvider>

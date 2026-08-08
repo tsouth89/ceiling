@@ -91,6 +91,37 @@ describe("QuickActionsSection", () => {
     );
   });
 
+  it("shows an inline error when opening the verification link fails", async () => {
+    tauriMocks.openExternalUrl.mockRejectedValue(new Error("no browser"));
+
+    render(
+      <LocaleProvider>
+        <QuickActionsSection
+          provider={provider()}
+          busy={false}
+          loginPhase="waitingBrowser"
+          loginCode="ABCD-1234"
+          loginUrl="https://github.com/login/device"
+          onRefresh={noop}
+          onSwitchAccount={noop}
+          onOpenDashboard={noop}
+          onOpenStatusPage={noop}
+          onCopyError={noop}
+          onBuyCredits={noop}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "LoginPhaseOpenVerificationLink",
+      }),
+    );
+
+    expect(await screen.findByText("no browser")).toBeInTheDocument();
+  });
+
   it("does not render a code or link during waitingBrowser when none is carried yet", async () => {
     render(
       <LocaleProvider>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ProviderDetail } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import {
@@ -43,6 +44,14 @@ export function QuickActionsSection({
   t,
 }: Props) {
   const loginStatusKey = providerLoginPhaseKey(loginPhase);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const handleOpenLoginUrl = () => {
+    if (!loginUrl) return;
+    setLinkError(null);
+    void openExternalUrl(loginUrl).catch((err: unknown) =>
+      setLinkError(err instanceof Error ? err.message : String(err)),
+    );
+  };
 
   return (
     <section className="provider-detail-section">
@@ -62,10 +71,13 @@ export function QuickActionsSection({
                   <button
                     type="button"
                     className="provider-detail-datasource__link"
-                    onClick={() => void openExternalUrl(loginUrl)}
+                    onClick={handleOpenLoginUrl}
                   >
                     {t("LoginPhaseOpenVerificationLink")}
                   </button>
+                  {linkError && (
+                    <span className="settings-status--error"> {linkError}</span>
+                  )}
                 </>
               )}
             </>

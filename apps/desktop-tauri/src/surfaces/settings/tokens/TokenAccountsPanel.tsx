@@ -189,7 +189,11 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
                   <button
                     type="button"
                     className="provider-detail-datasource__link"
-                    onClick={() => void openExternalUrl(loginUrl)}
+                    onClick={() =>
+                      void openExternalUrl(loginUrl).catch((err: unknown) =>
+                        setError(err instanceof Error ? err.message : String(err)),
+                      )
+                    }
                   >
                     {t("LoginPhaseOpenVerificationLink")}
                   </button>
