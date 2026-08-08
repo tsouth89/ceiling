@@ -40,11 +40,14 @@ describe("UsageBar", () => {
     );
   });
 
-  it("clamps aria-valuenow to 100 when usage overshoots the window", () => {
+  it("clamps aria-valuenow to 100 but keeps the raw percentage in the label", () => {
     render(<UsageBar window={windowSnapshot({ usedPercent: 140 })} label="Session" />);
 
     const track = screen.getByRole("progressbar");
     expect(track).toHaveAttribute("aria-valuenow", "100");
-    expect(track).toHaveAttribute("aria-label", "Session usage: 100%");
+    // aria-valuenow must stay within aria-valuemax per the ARIA spec, but the
+    // label still reports the true 140% — a screen reader user must not be
+    // told they're at the limit when they're actually 40% over it.
+    expect(track).toHaveAttribute("aria-label", "Session usage: 140%");
   });
 });
