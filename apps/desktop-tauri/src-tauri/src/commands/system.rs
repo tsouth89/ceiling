@@ -443,7 +443,12 @@ async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> 
         .map_err(|e| format!("GitHub device login failed: {e}"))?;
 
     open_url_in_browser(device.verification_url_to_open())?;
-    events::emit_login_phase_changed(app, ProviderId::Copilot.cli_name(), "waitingBrowser");
+    events::emit_login_phase_changed_with_code(
+        app,
+        ProviderId::Copilot.cli_name(),
+        "waitingBrowser",
+        &device.user_code,
+    );
 
     let token = flow
         .wait_for_token(&device.device_code, device.interval, device.expires_in)

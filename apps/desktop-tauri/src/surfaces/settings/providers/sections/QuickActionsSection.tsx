@@ -9,6 +9,7 @@ interface Props {
   provider: ProviderDetail;
   busy: boolean;
   loginPhase: ProviderLoginPhase | null;
+  loginCode: string | null;
   onRefresh: () => void;
   onSwitchAccount: () => void;
   onOpenDashboard: () => void;
@@ -28,6 +29,7 @@ export function QuickActionsSection({
   provider,
   busy,
   loginPhase,
+  loginCode,
   onRefresh,
   onSwitchAccount,
   onOpenDashboard,
@@ -44,6 +46,13 @@ export function QuickActionsSection({
       {loginStatusKey && (
         <p className="settings-status" role="status">
           {t(loginStatusKey)}
+          {loginCode && (
+            <>
+              {" "}
+              {t("LoginPhaseEnterCodePrefix")}{" "}
+              <strong className="settings-status__code">{loginCode}</strong>
+            </>
+          )}
         </p>
       )}
       <div className="provider-detail-actions">

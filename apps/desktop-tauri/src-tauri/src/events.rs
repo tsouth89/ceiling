@@ -51,6 +51,10 @@ pub struct RefreshStartedPayload {
 pub struct LoginPhaseChangedPayload<'a> {
     pub provider_id: &'a str,
     pub phase: &'a str,
+    /// The device-flow user code to display (e.g. GitHub's device
+    /// authorization code), when the phase has one to show.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<&'a str>,
 }
 
 // ── Emit helpers ─────────────────────────────────────────────────────
@@ -101,7 +105,30 @@ pub fn emit_update_state_changed(app: &AppHandle, payload: &UpdateStatePayload) 
 pub fn emit_login_phase_changed(app: &AppHandle, provider_id: &str, phase: &str) {
     let _ = app.emit(
         LOGIN_PHASE_CHANGED,
-        LoginPhaseChangedPayload { provider_id, phase },
+        LoginPhaseChangedPayload {
+            provider_id,
+            phase,
+            code: None,
+        },
+    );
+}
+
+/// Same as [`emit_login_phase_changed`], but also carries a device-flow user
+/// code for the frontend to display (e.g. GitHub's device authorization
+/// code, which the user must type into the browser tab that was opened).
+pub fn emit_login_phase_changed_with_code(
+    app: &AppHandle,
+    provider_id: &str,
+    phase: &str,
+    code: &str,
+) {
+    let _ = app.emit(
+        LOGIN_PHASE_CHANGED,
+        LoginPhaseChangedPayload {
+            provider_id,
+            phase,
+            code: Some(code),
+        },
     );
 }
 
@@ -122,4 +149,31 @@ pub fn emit_capacity_event(
     payload: &crate::capacity_events::CapacityEventPayload,
 ) {
     let _ = app.emit(CAPACITY_EVENT, payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_phase_payload_omits_code_when_absent() {
+        let payload = LoginPhaseChangedPayload {
+            provider_id: "copilot",
+            phase: "requesting",
+            code: None,
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert!(json.get("code").is_none());
+    }
+
+    #[test]
+    fn login_phase_payload_includes_code_when_present() {
+        let payload = LoginPhaseChangedPayload {
+            provider_id: "copilot",
+            phase: "waitingBrowser",
+            code: Some("ABCD-1234"),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["code"], "ABCD-1234");
+    }
 }

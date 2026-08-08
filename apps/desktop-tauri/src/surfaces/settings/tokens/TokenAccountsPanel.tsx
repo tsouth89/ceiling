@@ -42,6 +42,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const [data, setData] = useState<ProviderTokenAccountsBridge | null>(null);
   const [busy, setBusy] = useState(false);
   const [loginPhase, setLoginPhase] = useState<ProviderLoginPhase | null>(null);
+  const [loginCode, setLoginCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addLabel, setAddLabel] = useState("");
   const [addToken, setAddToken] = useState("");
@@ -73,11 +74,13 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
 
   useEffect(() => {
     setLoginPhase(null);
+    setLoginCode(null);
     const unlistenPromise = listen<ProviderLoginPhaseChangedPayload>(
       "login-phase-changed",
       ({ payload }) => {
         if (payload.providerId === providerId) {
           setLoginPhase(payload.phase);
+          setLoginCode(payload.code ?? null);
         }
       },
     );
@@ -138,6 +141,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     if (!providerId) return;
     setBusy(true);
     setLoginPhase(null);
+    setLoginCode(null);
     setError(null);
     try {
       await triggerProviderLogin(providerId);
@@ -167,6 +171,13 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       {loginStatusKey && (
         <div className="settings-status" role="status">
           {t(loginStatusKey)}
+          {loginCode && (
+            <>
+              {" "}
+              {t("LoginPhaseEnterCodePrefix")}{" "}
+              <strong className="settings-status__code">{loginCode}</strong>
+            </>
+          )}
         </div>
       )}
 
