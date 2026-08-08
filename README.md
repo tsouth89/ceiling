@@ -81,7 +81,7 @@ For the active implementation state and the next work items, see
 
 ## Contributing
 
-New here? Start with an issue tagged [`good first issue`](https://github.com/tsouth89/ceiling/labels/good%20first%20issue), then read [CONTRIBUTING.md](https://github.com/tsouth89/ceiling/blob/main/CONTRIBUTING.md) for the workflow.
+New here? Start with an issue tagged [`good first issue`](https://github.com/tsouth89/ceiling/labels/good%20first%20issue), then read [CONTRIBUTING.md](https://github.com/tsouth89/ceiling/blob/main/CONTRIBUTING.md) for the workflow. See [docs/CLI.md](docs/CLI.md) for the `codexbar` CLI reference.
 
 ## Lineage, license, and credits
 
