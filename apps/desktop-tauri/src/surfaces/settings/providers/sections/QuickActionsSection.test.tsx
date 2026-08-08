@@ -1,7 +1,24 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "../../../../i18n/LocaleProvider";
+import { buildBundle } from "../../../../test/localeHarness";
 import type { ProviderDetail } from "../../../../types/bridge";
 import { QuickActionsSection } from "./QuickActionsSection";
+
+const tauriMocks = vi.hoisted(() => ({
+  getLocaleStrings: vi.fn(),
+  setUiLanguage: vi.fn(),
+}));
+
+const eventMocks = vi.hoisted(() => ({
+  listen: vi.fn(),
+}));
+
+vi.mock("../../../../lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../lib/tauri")>()),
+  ...tauriMocks,
+}));
+vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 function provider(): ProviderDetail {
   return {
@@ -34,65 +51,80 @@ function provider(): ProviderDetail {
 const noop = vi.fn();
 
 describe("QuickActionsSection", () => {
-  it("shows the device-flow code alongside the login status", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
+    eventMocks.listen.mockResolvedValue(() => {});
+  });
+
+  it("shows the device-flow code alongside the login status", async () => {
     render(
-      <QuickActionsSection
-        provider={provider()}
-        busy={false}
-        loginPhase="waitingBrowser"
-        loginCode="ABCD-1234"
-        onRefresh={noop}
-        onSwitchAccount={noop}
-        onOpenDashboard={noop}
-        onOpenStatusPage={noop}
-        onCopyError={noop}
-        onBuyCredits={noop}
-        t={(key) => key}
-      />,
+      <LocaleProvider>
+        <QuickActionsSection
+          provider={provider()}
+          busy={false}
+          loginPhase="waitingBrowser"
+          loginCode="ABCD-1234"
+          onRefresh={noop}
+          onSwitchAccount={noop}
+          onOpenDashboard={noop}
+          onOpenStatusPage={noop}
+          onCopyError={noop}
+          onBuyCredits={noop}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent(
+    expect(await screen.findByRole("status")).toHaveTextContent(
       "LoginPhaseWaitingBrowser LoginPhaseEnterGithubCodePrefix ABCD-1234",
     );
   });
 
-  it("does not render a code when the phase carries none", () => {
+  it("does not render a code during waitingBrowser when none is carried yet", async () => {
     render(
-      <QuickActionsSection
-        provider={provider()}
-        busy={false}
-        loginPhase="requesting"
-        loginCode={null}
-        onRefresh={noop}
-        onSwitchAccount={noop}
-        onOpenDashboard={noop}
-        onOpenStatusPage={noop}
-        onCopyError={noop}
-        onBuyCredits={noop}
-        t={(key) => key}
-      />,
+      <LocaleProvider>
+        <QuickActionsSection
+          provider={provider()}
+          busy={false}
+          loginPhase="waitingBrowser"
+          loginCode={null}
+          onRefresh={noop}
+          onSwitchAccount={noop}
+          onOpenDashboard={noop}
+          onOpenStatusPage={noop}
+          onCopyError={noop}
+          onBuyCredits={noop}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
     );
 
-    expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
+    expect(await screen.findByRole("status")).not.toHaveTextContent(
+      "LoginPhaseEnterGithubCodePrefix",
+    );
   });
 
-  it("does not render a stale code once the phase moves past waitingBrowser", () => {
+  it("does not render a stale code once the phase moves past waitingBrowser", async () => {
     render(
-      <QuickActionsSection
-        provider={provider()}
-        busy={false}
-        loginPhase="complete"
-        loginCode="ABCD-1234"
-        onRefresh={noop}
-        onSwitchAccount={noop}
-        onOpenDashboard={noop}
-        onOpenStatusPage={noop}
-        onCopyError={noop}
-        onBuyCredits={noop}
-        t={(key) => key}
-      />,
+      <LocaleProvider>
+        <QuickActionsSection
+          provider={provider()}
+          busy={false}
+          loginPhase="complete"
+          loginCode="ABCD-1234"
+          onRefresh={noop}
+          onSwitchAccount={noop}
+          onOpenDashboard={noop}
+          onOpenStatusPage={noop}
+          onCopyError={noop}
+          onBuyCredits={noop}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
     );
 
+    await screen.findByRole("status");
     expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
   });
 });

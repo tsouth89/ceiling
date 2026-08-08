@@ -28,7 +28,7 @@ import { accountIdentityLabel } from "../lib/providerRow";
 import { maskEmail } from "../lib/privacy";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
-function CopyIconButton({ text }: { text: string }) {
+export function CopyIconButton({ text }: { text: string }) {
   const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {

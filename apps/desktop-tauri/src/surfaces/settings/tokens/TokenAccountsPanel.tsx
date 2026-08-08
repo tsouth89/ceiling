@@ -14,6 +14,7 @@ import {
   type ProviderLoginPhase,
   type ProviderLoginPhaseChangedPayload,
 } from "../../../lib/providerLogin";
+import { CopyIconButton } from "../../../components/MenuCard";
 
 interface Props {
   providerId: string;
@@ -175,7 +176,8 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
             <>
               {" "}
               {t("LoginPhaseEnterGithubCodePrefix")}{" "}
-              <strong className="settings-status__code">{loginCode}</strong>
+              <strong className="settings-status__code">{loginCode}</strong>{" "}
+              <CopyIconButton text={loginCode} />
             </>
           )}
         </div>

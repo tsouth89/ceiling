@@ -4,6 +4,7 @@ import {
   providerLoginPhaseKey,
   type ProviderLoginPhase,
 } from "../../../../lib/providerLogin";
+import { CopyIconButton } from "../../../../components/MenuCard";
 
 interface Props {
   provider: ProviderDetail;
@@ -50,7 +51,8 @@ export function QuickActionsSection({
             <>
               {" "}
               {t("LoginPhaseEnterGithubCodePrefix")}{" "}
-              <strong className="settings-status__code">{loginCode}</strong>
+              <strong className="settings-status__code">{loginCode}</strong>{" "}
+              <CopyIconButton text={loginCode} />
             </>
           )}
         </p>
