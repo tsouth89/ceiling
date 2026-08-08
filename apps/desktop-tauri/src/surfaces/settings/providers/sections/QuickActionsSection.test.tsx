@@ -52,7 +52,7 @@ describe("QuickActionsSection", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "LoginPhaseWaitingBrowser LoginPhaseEnterCodePrefix ABCD-1234",
+      "LoginPhaseWaitingBrowser LoginPhaseEnterGithubCodePrefix ABCD-1234",
     );
   });
 
@@ -63,6 +63,26 @@ describe("QuickActionsSection", () => {
         busy={false}
         loginPhase="requesting"
         loginCode={null}
+        onRefresh={noop}
+        onSwitchAccount={noop}
+        onOpenDashboard={noop}
+        onOpenStatusPage={noop}
+        onCopyError={noop}
+        onBuyCredits={noop}
+        t={(key) => key}
+      />,
+    );
+
+    expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
+  });
+
+  it("does not render a stale code once the phase moves past waitingBrowser", () => {
+    render(
+      <QuickActionsSection
+        provider={provider()}
+        busy={false}
+        loginPhase="complete"
+        loginCode="ABCD-1234"
         onRefresh={noop}
         onSwitchAccount={noop}
         onOpenDashboard={noop}

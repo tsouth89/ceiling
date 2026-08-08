@@ -171,10 +171,10 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       {loginStatusKey && (
         <div className="settings-status" role="status">
           {t(loginStatusKey)}
-          {loginCode && (
+          {loginPhase === "waitingBrowser" && loginCode && (
             <>
               {" "}
-              {t("LoginPhaseEnterCodePrefix")}{" "}
+              {t("LoginPhaseEnterGithubCodePrefix")}{" "}
               <strong className="settings-status__code">{loginCode}</strong>
             </>
           )}

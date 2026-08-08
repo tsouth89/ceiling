@@ -96,4 +96,34 @@ describe("TokenAccountsPanel", () => {
 
     expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
   });
+
+  it("does not render a stale code once the phase moves past waitingBrowser", async () => {
+    render(
+      <LocaleProvider>
+        <TokenAccountsPanel providerId="copilot" />
+      </LocaleProvider>,
+    );
+
+    await screen.findByText("TokenAccountGithubLoginButton");
+
+    act(() => {
+      emitLoginPhaseChanged({
+        providerId: "copilot",
+        phase: "waitingBrowser",
+        code: "ABCD-1234",
+      });
+    });
+    expect(screen.getByText("ABCD-1234")).toBeInTheDocument();
+
+    // A phase change that (incorrectly) still carries the old code must not
+    // keep it on screen — the render is gated on the phase, not just the code.
+    act(() => {
+      emitLoginPhaseChanged({
+        providerId: "copilot",
+        phase: "complete",
+        code: "ABCD-1234",
+      });
+    });
+    expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument();
+  });
 });
