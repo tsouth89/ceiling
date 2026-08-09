@@ -1340,6 +1340,84 @@ fn a_parked_provider_config_is_reclaimed_once_the_id_is_known() {
     assert!(settings.unrecognized_provider_configs.is_empty());
 }
 
+/// The same SBS-625 failure reached through a different door: a closed enum
+/// whose stored value this build does not know. `#[serde(default)]` covers a
+/// MISSING field, not a present-but-unparseable one, so a newer build's
+/// `ui_language` used to fail the whole document and reset every preference.
+#[test]
+fn an_unknown_enum_value_does_not_reset_the_rest_of_settings() {
+    let json = r#"{
+            "refresh_interval_secs": 42,
+            "hide_personal_info": true,
+            "ui_language": "klingon",
+            "theme": "solarized",
+            "update_channel": "nightly"
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap_or_default();
+
+    assert_eq!(
+        settings.refresh_interval_secs, 42,
+        "an unreadable enum must degrade to its own default, not take its siblings"
+    );
+    assert!(settings.hide_personal_info);
+    // The unreadable fields fall back individually.
+    assert_eq!(settings.ui_language, Language::default());
+    assert_eq!(settings.theme, ThemePreference::default());
+    assert_eq!(settings.update_channel, UpdateChannel::default());
+}
+
+/// One unreadable metric preference must not reset every provider's choice.
+#[test]
+fn an_unknown_provider_metric_drops_only_that_entry() {
+    let json = r#"{
+            "refresh_interval_secs": 42,
+            "provider_metrics": {
+                "codex": "weekly",
+                "claude": "a_metric_from_the_future"
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap_or_default();
+
+    assert_eq!(settings.refresh_interval_secs, 42);
+    assert_eq!(
+        settings.provider_metrics.get("codex"),
+        Some(&MetricPreference::Weekly)
+    );
+    assert!(!settings.provider_metrics.contains_key("claude"));
+}
+
+/// A legacy inline credential under an id this build cannot resolve must still
+/// reach the secure store. `manual_cookie_header` / `api_token` are
+/// `skip_serializing`, so leaving it parked would drop it on the next save.
+#[test]
+fn a_legacy_credential_under_an_unknown_provider_id_is_still_migrated() {
+    let json = r#"{
+            "provider_configs": {
+                "brand_new_provider": {
+                    "cookie_source": "manual",
+                    "api_token": "future-token"
+                }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).expect("load");
+    let parked = settings
+        .unrecognized_provider_configs
+        .get("brand_new_provider")
+        .expect("unknown id is parked");
+    assert_eq!(
+        parked.api_token.as_deref(),
+        Some("future-token"),
+        "the inline credential must survive the load so migration can see it"
+    );
+    assert!(
+        carries_legacy_credentials(parked),
+        "migration must recognize a parked entry as carrying legacy credentials"
+    );
+}
+
 /// An empty object is a valid config and yields defaults.
 #[test]
 fn an_empty_config_object_loads_as_defaults() {

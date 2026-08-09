@@ -16,6 +16,17 @@ use crate::core::ProviderId;
 
 const NOTIFICATION_POLICY_VERSION: u8 = 1;
 
+fn carries_legacy_credentials(config: &ProviderConfig) -> bool {
+    config
+        .manual_cookie_header
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || config
+            .api_token
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn legacy_credential_to_migrate<'a>(
     legacy_value: Option<&'a str>,
     stored_value: Option<&str>,
@@ -149,9 +160,13 @@ pub struct Settings {
     pub provider_configs: HashMap<ProviderId, ProviderConfig>,
 
     /// Per-provider configs whose id this build does not resolve, carried
-    /// through untouched so saving never deletes a config we only failed to
-    /// recognize. A build that knows the id folds these back into
+    /// through so saving never deletes a config we only failed to recognize.
+    /// A build that knows the id folds these back into
     /// [`provider_configs`](Self::provider_configs) on load (SBS-625).
+    ///
+    /// Carried through as far as this build's [`ProviderConfig`] models: they
+    /// are re-serialized through that struct, so a per-provider *field* a newer
+    /// build added is still dropped. This preserves the entry, not every byte.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub unrecognized_provider_configs: HashMap<String, ProviderConfig>,
 
@@ -690,16 +705,16 @@ impl Settings {
     /// stores. Existing secure-store entries win so a stale settings file can
     /// never overwrite a newer credential.
     fn migrate_legacy_credentials(&self) -> Option<anyhow::Result<Self>> {
-        let has_legacy_credentials = self.provider_configs.values().any(|config| {
-            config
-                .manual_cookie_header
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-                || config
-                    .api_token
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-        });
+        // Unrecognized ids are included: `manual_cookie_header` and `api_token`
+        // are `skip_serializing`, so an inline credential under a provider this
+        // build cannot resolve would be read in, never migrated, and dropped by
+        // the next save — data loss inside the path that parks unknown ids to
+        // prevent exactly that.
+        let has_legacy_credentials = self
+            .provider_configs
+            .values()
+            .chain(self.unrecognized_provider_configs.values())
+            .any(carries_legacy_credentials);
         if !has_legacy_credentials {
             return None;
         }
@@ -714,8 +729,19 @@ impl Settings {
             let mut keys_changed = false;
             let mut sanitized = self.clone();
 
-            for (provider, config) in &self.provider_configs {
-                let provider_id = provider.cli_name();
+            // The secure stores are keyed by string, so an unresolvable id
+            // migrates the same way a known one does.
+            let legacy_entries = self
+                .provider_configs
+                .iter()
+                .map(|(provider, config)| (provider.cli_name(), config))
+                .chain(
+                    self.unrecognized_provider_configs
+                        .iter()
+                        .map(|(id, config)| (id.as_str(), config)),
+                );
+
+            for (provider_id, config) in legacy_entries {
                 if let Some(cookie_header) = legacy_credential_to_migrate(
                     config.manual_cookie_header.as_deref(),
                     manual_cookies.get(provider_id),
@@ -730,11 +756,15 @@ impl Settings {
                     api_keys.set(provider_id, api_token, Some("Migrated from settings"));
                     keys_changed = true;
                 }
+            }
 
-                if let Some(config) = sanitized.provider_configs.get_mut(provider) {
-                    config.manual_cookie_header = None;
-                    config.api_token = None;
-                }
+            for config in sanitized
+                .provider_configs
+                .values_mut()
+                .chain(sanitized.unrecognized_provider_configs.values_mut())
+            {
+                config.manual_cookie_header = None;
+                config.api_token = None;
             }
 
             // Do not sanitize settings.json until every changed secure store

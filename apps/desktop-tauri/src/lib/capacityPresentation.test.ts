@@ -165,6 +165,31 @@ describe("capacityPresentation", () => {
     });
     expect(constrainingWindow(fableHot).label).toBe("Session (5h)");
 
+    // Claude's seven-day Opus/Sonnet cap does not travel as a scoped extra —
+    // it lands in the generic `model` slot — and is the same category.
+    const opusMaxed = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(34),
+      primaryLabel: "Session (5h)",
+      secondary: window(12),
+      secondaryLabel: "Weekly",
+      modelSpecific: window(100),
+    });
+    expect(constrainingWindow(opusMaxed).label).toBe("Session (5h)");
+    expect(providerGlanceStatus(opusMaxed)).toBe("ok");
+
+    // Claude-only: other providers use `model` for real pools that must bind.
+    const codexModel = provider({
+      providerId: "codex",
+      displayName: "Codex",
+      primary: window(20),
+      primaryLabel: "Session",
+      modelSpecific: window(90),
+    });
+    expect(constrainingWindow(codexModel).id).toBe("model");
+    expect(constrainingWindow(codexModel).window.usedPercent).toBe(90);
+
     // Real pools still rank normally against each other.
     const weeklyHot = provider({
       providerId: "claude",

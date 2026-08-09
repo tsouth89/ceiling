@@ -160,15 +160,20 @@ function cursorStripWindow(
 }
 
 /**
- * Model-scoped sub-limits, e.g. Claude's `claude-weekly-scoped-fable`
- * ("Fable only"), reported alongside the Session and Weekly pools.
+ * Claude lanes that cap ONE model inside an allowance rather than the
+ * allowance itself. Maxing one doesn't stop you working, it means you use a
+ * different model — the same parallel-pool shape as Cursor's Auto/API.
  *
- * These cap ONE model inside an allowance, not the allowance itself: maxing
- * "Fable only" doesn't stop you working, it just means you use a different
- * model. Same shape as Cursor's parallel Auto/API pools.
+ * Claude reports these two different ways and both must be caught:
+ *  - the scoped extras, `claude-weekly-scoped-{model}` ("Fable only"), and
+ *  - the seven-day Opus/Sonnet cap, which lands in the generic `model` slot.
+ *
+ * Claude-only on purpose. Other providers put real pools in `model` — Codex's
+ * code review, Gemini's Pro quota — and those must keep competing.
  */
-function isModelScopedWindow(id: string): boolean {
-  return id.startsWith("extra-claude-weekly-scoped-");
+function isModelScopedLane(providerId: string, id: string): boolean {
+  if (providerId !== "claude") return false;
+  return id === "model" || id.startsWith("extra-claude-weekly-scoped-");
 }
 
 /**
@@ -195,7 +200,7 @@ export function constrainingWindow(
   };
 
   for (const candidate of nonPrimaryWindows(provider)) {
-    if (isModelScopedWindow(candidate.id)) continue;
+    if (isModelScopedLane(provider.providerId, candidate.id)) continue;
     if (outranks(candidate, best)) {
       best = candidate;
     }

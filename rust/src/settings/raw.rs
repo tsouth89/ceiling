@@ -59,7 +59,7 @@ pub(super) struct RawSettings {
     // single unknown key used to erase every unrelated preference (SBS-625).
     provider_configs: HashMap<String, ProviderConfig>,
     /// Provider ids a previous run could not resolve, parked here so a
-    /// downgrade hands them back untouched instead of deleting them.
+    /// downgrade hands the entry back instead of deleting it.
     #[serde(default)]
     unrecognized_provider_configs: HashMap<String, ProviderConfig>,
 
@@ -123,7 +123,9 @@ pub(super) struct RawSettings {
 
     disable_keychain_access: bool,
     hide_personal_info: bool,
+    #[serde(default, deserialize_with = "lenient")]
     update_channel: UpdateChannel,
+    #[serde(default, deserialize_with = "lenient_map")]
     provider_metrics: HashMap<String, MetricPreference>,
     provider_order: Vec<String>,
     #[serde(default = "default_global_shortcut")]
@@ -135,7 +137,9 @@ pub(super) struct RawSettings {
     agent_session_ssh_hosts: Vec<String>,
     auto_download_updates: bool,
     install_updates_on_quit: bool,
+    #[serde(default, deserialize_with = "lenient")]
     ui_language: Language,
+    #[serde(default, deserialize_with = "lenient")]
     theme: ThemePreference,
     #[serde(default = "default_window_scale_percent")]
     window_scale_percent: u16,
@@ -285,6 +289,38 @@ impl Default for RawSettings {
             float_bar_show_cost: s.float_bar_show_cost,
         }
     }
+}
+
+/// Deserialize a value, falling back to its default when the stored value is
+/// not one this build understands.
+///
+/// `#[serde(default)]` only covers a MISSING field. A field that is *present*
+/// with an unrecognized value — a closed enum variant added by a newer build —
+/// still fails the whole document, and `Settings::load` turns any parse
+/// failure into defaults that the next save writes over the user's real file.
+/// That is the SBS-625 data loss with a different trigger, so the closed enums
+/// degrade to their own default instead of taking every sibling with them.
+fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
+}
+
+/// Same contract per entry: one unreadable value drops that key, not the map.
+/// Dropping the whole map would silently reset every provider's metric choice.
+fn lenient_map<'de, D, V>(deserializer: D) -> Result<HashMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: serde::de::DeserializeOwned,
+{
+    let raw = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(key, value)| V::deserialize(value).ok().map(|value| (key, value)))
+        .collect())
 }
 
 /// Split the on-disk provider map into ids this build resolves and ids it does
