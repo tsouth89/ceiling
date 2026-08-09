@@ -148,6 +148,13 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub provider_configs: HashMap<ProviderId, ProviderConfig>,
 
+    /// Per-provider configs whose id this build does not resolve, carried
+    /// through untouched so saving never deletes a config we only failed to
+    /// recognize. A build that knows the id folds these back into
+    /// [`provider_configs`](Self::provider_configs) on load (SBS-625).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub unrecognized_provider_configs: HashMap<String, ProviderConfig>,
+
     /// Disable credential/keychain-style reads where supported
     #[serde(default)]
     pub disable_keychain_access: bool,
@@ -550,6 +557,7 @@ impl Default for Settings {
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             show_all_token_accounts_in_menu: false,
             provider_configs: HashMap::new(),
+            unrecognized_provider_configs: HashMap::new(),
             disable_keychain_access: false,
             hide_personal_info: false, // Show personal info by default
             update_channel: UpdateChannel::default(), // Stable by default
@@ -609,9 +617,26 @@ impl Settings {
         let mut settings = match Self::settings_path() {
             Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
                 Ok(content) => {
-                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
+                    match serde_json::from_str(content.trim_start_matches('\u{feff}')) {
+                        Ok(settings) => settings,
+                        Err(error) => {
+                            // Falling back to defaults means the next save
+                            // rewrites the user's file as defaults, so a parse
+                            // failure must at least be diagnosable rather than
+                            // silent. Unknown provider ids no longer land here
+                            // (see `RawSettings::provider_configs`).
+                            tracing::warn!(
+                                %error,
+                                "settings.json could not be parsed; falling back to defaults"
+                            );
+                            Self::default()
+                        }
+                    }
                 }
-                Err(_) => Self::default(),
+                Err(error) => {
+                    tracing::warn!(%error, "settings.json could not be read; using defaults");
+                    Self::default()
+                }
             },
             _ => Self::default(),
         };

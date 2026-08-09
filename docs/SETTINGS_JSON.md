@@ -39,6 +39,7 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `menu_bar_display_mode` | string | `"detailed"` | `"minimal"`, `"compact"`, or `"detailed"`. Safe to edit. |
 | `show_all_token_accounts_in_menu` | boolean | `false` | Show all token accounts instead of collapsing behind switchers. Safe to edit. |
 | `provider_configs` | object | `{}` | Per-provider configuration map. See below. Safe to edit. |
+| `unrecognized_provider_configs` | object | `{}` | Written by Ceiling, not by you. Holds `provider_configs` entries whose provider id this build does not recognize, so they survive until a build that knows them folds them back in. Leave it unchanged. |
 | `disable_keychain_access` | boolean | `false` | Disable keychain-style credential reads where supported. Safe to edit. |
 | `hide_personal_info` | boolean | `false` | Hide emails and account names for streaming/sharing. Safe to edit. |
 | `update_channel` | string | `"stable"` | `"stable"` or `"beta"`. Safe to edit. |
@@ -94,6 +95,10 @@ Each key is a provider CLI name. Values are objects with optional fields:
 Legacy flat fields such as `codex_cookie_source`, `claude_cookie_source`, and
 `alibaba_api_region` are accepted on load and migrated into `provider_configs`.
 New saves write only the unified map.
+
+A provider id this build does not recognize does not fail the load. It moves to
+`unrecognized_provider_configs` and is written back untouched, so downgrading
+past a provider does not delete its configuration.
 
 ## Secrets
 

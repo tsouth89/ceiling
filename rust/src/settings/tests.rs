@@ -1260,6 +1260,86 @@ fn unknown_fields_from_a_newer_build_are_ignored() {
     );
 }
 
+/// SBS-625: an unknown key in the `provider_configs` MAP is a different failure
+/// from an unknown FIELD. `HashMap<ProviderId, _>` made serde reject the entire
+/// document, `Settings::load` fell back to defaults, and the next save persisted
+/// them over the user's real file.
+#[test]
+fn an_unknown_provider_configs_key_does_not_reset_the_rest_of_settings() {
+    let json = r#"{
+            "refresh_interval_secs": 42,
+            "enabled_providers": ["claude"],
+            "hide_personal_info": true,
+            "provider_configs": {
+                "codex": { "cookie_source": "manual" },
+                "brand_new_provider": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    // Exactly what Settings::load does on a parse failure.
+    let settings: Settings = serde_json::from_str(json).unwrap_or_default();
+
+    assert_eq!(settings.refresh_interval_secs, 42);
+    assert!(settings.enabled_providers.contains("claude"));
+    assert_eq!(settings.enabled_providers.len(), 1);
+    assert!(settings.hide_personal_info);
+    assert_eq!(
+        settings.cookie_source(ProviderId::Codex),
+        "manual",
+        "known provider_configs entries must still load"
+    );
+}
+
+/// The unknown id itself is parked, not deleted, so a downgrade hands it back
+/// intact to the build that understands it.
+#[test]
+fn an_unknown_provider_configs_key_round_trips_through_a_save() {
+    let json = r#"{
+            "provider_configs": {
+                "codex": { "cookie_source": "manual" },
+                "brand_new_provider": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).expect("load");
+    assert_eq!(
+        settings
+            .unrecognized_provider_configs
+            .get("brand_new_provider")
+            .and_then(|config| config.cookie_source.as_deref()),
+        Some("chrome")
+    );
+
+    // Save (serialize) then load again, as a tray toggle or preference edit
+    // would, and the unknown provider must still be there.
+    let written = serde_json::to_string(&settings).expect("serialize");
+    let reloaded: Settings = serde_json::from_str(&written).expect("reload");
+    assert_eq!(
+        reloaded
+            .unrecognized_provider_configs
+            .get("brand_new_provider")
+            .and_then(|config| config.cookie_source.as_deref()),
+        Some("chrome"),
+        "saving must not drop a provider config we merely failed to recognize"
+    );
+    assert_eq!(reloaded.cookie_source(ProviderId::Codex), "manual");
+}
+
+/// A build that later learns the id folds it back into the real map rather than
+/// leaving it stranded in the parking field.
+#[test]
+fn a_parked_provider_config_is_reclaimed_once_the_id_is_known() {
+    let json = r#"{
+            "unrecognized_provider_configs": {
+                "codex": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).expect("load");
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "chrome");
+    assert!(settings.unrecognized_provider_configs.is_empty());
+}
+
 /// An empty object is a valid config and yields defaults.
 #[test]
 fn an_empty_config_object_loads_as_defaults() {
