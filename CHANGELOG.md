@@ -2,6 +2,13 @@
 
 ## [Ceiling] Unreleased
 
+## [Ceiling] 1.5.26 - 2026-08-09
+
+Patch release for correct identity and usage isolation across multiple configured Claude accounts.
+
+### Fixed
+- **Configured Claude accounts no longer collapse onto one globally active session.** When multiple accounts use separate `CLAUDE_CONFIG_DIR` directories, each card now fetches through OAuth credentials scoped to its own directory. Ceiling no longer tries the process-wide Claude Desktop, browser, ambient CLI, or API-token session first, which could make two distinct accounts show the same email and usage. Single-account automatic fallback behavior is unchanged.
+
 ## [Ceiling] 1.5.25 - 2026-08-09
 
 Patch release for credential and settings integrity, safer custom Codex endpoints, and a Claude taskbar tile that stays focused on usable account capacity.
