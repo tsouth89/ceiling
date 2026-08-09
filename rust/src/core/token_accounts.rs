@@ -511,17 +511,25 @@ impl TokenAccountStore {
             .join("token-accounts.json")
     }
 
-    /// Load all accounts from disk
-    pub fn load(&self) -> Result<HashMap<ProviderId, ProviderAccountData>, TokenAccountError> {
+    /// Read the file exactly as stored, including provider ids this build does
+    /// not resolve.
+    fn load_raw(&self) -> Result<HashMap<String, ProviderAccountData>, TokenAccountError> {
         if !self.file_path.exists() {
             return Ok(HashMap::new());
         }
 
         let data = crate::secure_file::read_string(&self.file_path)?;
         let file: TokenAccountsFile = serde_json::from_str(&data)?;
+        Ok(file.providers)
+    }
 
+    /// Load all accounts from disk, keyed by the providers this build knows.
+    ///
+    /// Ids that do not resolve are omitted here but are **not** forgotten —
+    /// [`save`](Self::save) reads them back off disk and preserves them.
+    pub fn load(&self) -> Result<HashMap<ProviderId, ProviderAccountData>, TokenAccountError> {
         let mut result = HashMap::new();
-        for (key, value) in file.providers {
+        for (key, value) in self.load_raw()? {
             if let Some(provider) = ProviderId::from_cli_name(&key) {
                 result.insert(provider, value);
             }
@@ -529,20 +537,36 @@ impl TokenAccountStore {
         Ok(result)
     }
 
-    /// Save all accounts to disk
+    /// Save all accounts to disk.
+    ///
+    /// `accounts` is authoritative for every provider this build resolves, so
+    /// omitting one deletes it. Credentials stored under an id this build does
+    /// **not** resolve are carried over from the existing file rather than
+    /// dropped: `save` replaces the whole document, so a downgrade (or a
+    /// renamed `cli_name`) would otherwise destroy another build's accounts on
+    /// the first unrelated add/remove/activate (SBS-628).
     pub fn save(
         &self,
         accounts: &HashMap<ProviderId, ProviderAccountData>,
     ) -> Result<(), TokenAccountError> {
+        // Read before create_dir_all/write so an undecodable existing file
+        // fails closed instead of being replaced by a partial one.
+        let mut providers: HashMap<String, ProviderAccountData> = self
+            .load_raw()?
+            .into_iter()
+            .filter(|(key, _)| ProviderId::from_cli_name(key).is_none())
+            .collect();
+
         // Ensure directory exists
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let providers: HashMap<String, ProviderAccountData> = accounts
-            .iter()
-            .map(|(k, v)| (k.cli_name().to_string(), v.clone()))
-            .collect();
+        providers.extend(
+            accounts
+                .iter()
+                .map(|(k, v)| (k.cli_name().to_string(), v.clone())),
+        );
 
         let file = TokenAccountsFile {
             version: 1,
@@ -631,6 +655,79 @@ pub const MAX_ACCOUNTS_PER_FETCH: usize = 6;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SBS-628: `load` filters the on-disk map through `from_cli_name`, and
+    /// `save`/`save_provider` rewrite the whole document from that filtered
+    /// map. Without carrying unresolvable ids across, any add/remove/activate
+    /// permanently erases credentials stored by a build that knows a provider
+    /// this one does not (downgrade, renamed `cli_name`, fork).
+    #[test]
+    fn save_provider_preserves_credentials_for_unrecognized_providers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-accounts.json");
+        let store = TokenAccountStore::with_path(path.clone());
+
+        // A file written by a build that knows `brand_new_provider`, alongside
+        // one this build does resolve.
+        let mut claude = ProviderAccountData::default();
+        claude.add_account(TokenAccount::new("personal", "sessionKey=known"));
+        store
+            .save_provider(ProviderId::Claude, &claude)
+            .expect("seed known provider");
+
+        let raw = crate::secure_file::read_string(&path).expect("read seeded file");
+        let mut file: serde_json::Value = serde_json::from_str(&raw).expect("parse seeded file");
+        let unknown = serde_json::json!({
+            "version": 1,
+            "accounts": [{
+                "id": Uuid::new_v4(),
+                "label": "future",
+                "token": "sessionKey=future-secret",
+                "added_at": 1_754_700_000_i64,
+            }],
+            "active_index": 0,
+        });
+        file["providers"]["brand_new_provider"] = unknown;
+        crate::secure_file::write_string(&path, &file.to_string()).expect("write mixed file");
+
+        // Ordinary user action on an unrelated, recognized provider.
+        let mut cursor = ProviderAccountData::default();
+        cursor.add_account(TokenAccount::new("work", "WorkosCursorSessionToken=abc"));
+        store
+            .save_provider(ProviderId::Cursor, &cursor)
+            .expect("save unrelated provider");
+
+        let after = crate::secure_file::read_string(&path).expect("read after save");
+        let after: serde_json::Value = serde_json::from_str(&after).expect("parse after save");
+        assert!(
+            after["providers"]["brand_new_provider"]["accounts"][0]["token"]
+                .as_str()
+                .is_some_and(|token| token.contains("future-secret")),
+            "credentials under an unrecognized provider id must survive an \
+             unrelated save; file was {after}"
+        );
+        // And the recognized providers are both intact.
+        let loaded = store.load().expect("load after save");
+        assert_eq!(loaded[&ProviderId::Claude].accounts.len(), 1);
+        assert_eq!(loaded[&ProviderId::Cursor].accounts.len(), 1);
+    }
+
+    /// Removing a known provider must still remove it — preservation applies
+    /// only to ids this build cannot resolve.
+    #[test]
+    fn save_still_deletes_recognized_providers_left_out_of_the_map() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = TokenAccountStore::with_path(dir.path().join("token-accounts.json"));
+
+        let mut claude = ProviderAccountData::default();
+        claude.add_account(TokenAccount::new("personal", "sessionKey=known"));
+        store
+            .save_provider(ProviderId::Claude, &claude)
+            .expect("seed");
+
+        store.save(&HashMap::new()).expect("save empty");
+        assert!(store.load().expect("load").is_empty());
+    }
 
     #[test]
     fn test_token_account_support() {
