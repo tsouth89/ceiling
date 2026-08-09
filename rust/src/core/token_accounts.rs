@@ -430,12 +430,24 @@ impl ProviderAccountData {
 
     /// Remove an account by ID
     pub fn remove_account(&mut self, id: Uuid) -> Option<TokenAccount> {
-        let pos = self.accounts.iter().position(|a| a.id == id)?;
-        let removed = self.accounts.remove(pos);
-        // Adjust active index if needed
-        if self.active_index >= self.accounts.len() && !self.accounts.is_empty() {
-            self.active_index = self.accounts.len() - 1;
-        }
+        let index = self.accounts.iter().position(|a| a.id == id)?;
+        // Track the seat by identity. `active_index` is positional, so only
+        // clamping it when it runs past the end silently promotes a different
+        // account whenever something before it is removed. Mirrors
+        // `DirectoryAccountData::remove_account`.
+        let active_id = self.active_account().map(|account| account.id);
+        let removed = self.accounts.remove(index);
+
+        self.active_index = match active_id {
+            Some(active_id) if active_id != removed.id => self
+                .accounts
+                .iter()
+                .position(|account| account.id == active_id)
+                .unwrap_or(0),
+            // The active account itself went away: fall back to its neighbor.
+            _ => index.min(self.accounts.len().saturating_sub(1)),
+        };
+
         Some(removed)
     }
 
@@ -655,6 +667,67 @@ pub const MAX_ACCOUNTS_PER_FETCH: usize = 6;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SBS-618/639: `active_index` is positional, so removing an account that
+    /// sits *before* the active one used to leave the index pointing at a
+    /// different account. Nothing errored — the user simply started fetching
+    /// with the wrong seat.
+    #[test]
+    fn removing_an_earlier_account_keeps_the_same_account_active() {
+        let mut data = ProviderAccountData::default();
+        data.add_account(TokenAccount::new("personal", "sessionKey=personal"));
+        data.add_account(TokenAccount::new("work", "sessionKey=work"));
+        data.add_account(TokenAccount::new("school", "sessionKey=school"));
+
+        let work = data.accounts[1].id;
+        data.set_active_by_id(work);
+
+        let personal = data.accounts[0].id;
+        data.remove_account(personal).expect("remove personal");
+
+        assert_eq!(
+            data.active_account().map(|account| account.id),
+            Some(work),
+            "the selected seat must survive removal of an earlier account"
+        );
+        assert_eq!(
+            data.active_account().map(|a| a.label.as_str()),
+            Some("work")
+        );
+    }
+
+    #[test]
+    fn removing_the_active_account_falls_back_to_its_neighbor() {
+        let mut data = ProviderAccountData::default();
+        data.add_account(TokenAccount::new("personal", "sessionKey=personal"));
+        data.add_account(TokenAccount::new("work", "sessionKey=work"));
+        data.add_account(TokenAccount::new("school", "sessionKey=school"));
+
+        let work = data.accounts[1].id;
+        data.set_active_by_id(work);
+        data.remove_account(work).expect("remove work");
+
+        // The account that shifted into the freed slot takes over.
+        assert_eq!(
+            data.active_account().map(|a| a.label.as_str()),
+            Some("school")
+        );
+
+        // Removing the last remaining active account clamps rather than
+        // pointing past the end.
+        let school = data.accounts[1].id;
+        data.set_active_by_id(school);
+        data.remove_account(school).expect("remove school");
+        assert_eq!(
+            data.active_account().map(|a| a.label.as_str()),
+            Some("personal")
+        );
+
+        let personal = data.accounts[0].id;
+        data.remove_account(personal).expect("remove personal");
+        assert!(data.accounts.is_empty());
+        assert!(data.active_account().is_none());
+    }
 
     /// SBS-628: `load` filters the on-disk map through `from_cli_name`, and
     /// `save`/`save_provider` rewrite the whole document from that filtered
