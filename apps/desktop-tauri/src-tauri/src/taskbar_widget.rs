@@ -214,12 +214,22 @@ fn constraining_readout(
         window: &snapshot.primary,
     };
 
+    // Claude's per-model weekly caps are parallel sub-pools, not blockers: at
+    // 100% you switch model rather than stop. The tile shows one lane, so
+    // letting them compete meant a maxed "Fable only" (or the seven-day Opus
+    // cap, which arrives in `model_specific`) took the whole Claude tile and
+    // hid a Session and Weekly that still had room. Claude-only — other
+    // providers put real pools in `model_specific`.
+    let is_claude = snapshot.provider_id == "claude";
+
     let candidates: Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> = {
         let mut out = Vec::new();
         if let Some(window) = snapshot.secondary.as_ref() {
             out.push((snapshot.secondary_label.as_deref(), window));
         }
-        if let Some(window) = snapshot.model_specific.as_ref() {
+        if let Some(window) = snapshot.model_specific.as_ref()
+            && !is_claude
+        {
             out.push((Some("Model"), window));
         }
         if let Some(window) = snapshot.tertiary.as_ref() {
@@ -227,6 +237,9 @@ fn constraining_readout(
         }
         for extra in &snapshot.extra_rate_windows {
             if extra.id == "reset-credits" {
+                continue;
+            }
+            if is_claude && extra.id.starts_with("claude-weekly-scoped-") {
                 continue;
             }
             out.push((Some(extra.title.as_str()), &extra.window));
@@ -2187,6 +2200,60 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("Session (5h)"));
         assert_eq!(readout.window.used_percent, 92.0);
+    }
+
+    /// The reported taskbar symptom: a maxed Claude per-model cap took the
+    /// whole tile and hid a Session and Weekly that still had capacity. This
+    /// mirrors `keeps a maxed model-scoped lane off the strip` in
+    /// `capacityPresentation.test.ts` — the two selectors must not drift.
+    #[test]
+    fn constraining_readout_keeps_claude_model_caps_off_the_tile() {
+        let mut snapshot = snap("claude", None, 34.0);
+        snapshot.primary_label = Some("Session (5h)".into());
+        snapshot.secondary = Some(rate_window(12.0, Some(10_080)));
+        snapshot.secondary_label = Some("Weekly".into());
+        // Both shapes Claude reports a per-model cap in.
+        snapshot.model_specific = Some(rate_window(100.0, Some(10_080)));
+        snapshot.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "claude-weekly-scoped-fable".into(),
+            title: "Fable only".into(),
+            window: rate_window(100.0, Some(10_080)),
+            amount: None,
+        }];
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Session (5h)"));
+        assert_eq!(readout.window.used_percent, 34.0);
+    }
+
+    /// Claude-only. Other providers put real pools in `model_specific` (Codex
+    /// code review, Gemini Pro quota) and those must still bind the tile.
+    #[test]
+    fn constraining_readout_still_ranks_model_windows_for_other_providers() {
+        let mut snapshot = snap("codex", None, 20.0);
+        snapshot.model_specific = Some(rate_window(90.0, Some(10_080)));
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("Model"));
+        assert_eq!(readout.window.used_percent, 90.0);
+    }
+
+    /// Account selection ranks by the same readout, so a maxed model cap must
+    /// not decide which Claude seat owns the single tile either.
+    #[test]
+    fn strip_snapshot_ignores_claude_model_caps_when_ranking_accounts() {
+        let mut quiet_but_fable_maxed = snap("claude", Some("personal"), 30.0);
+        quiet_but_fable_maxed.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "claude-weekly-scoped-fable".into(),
+            title: "Fable only".into(),
+            window: rate_window(100.0, Some(10_080)),
+            amount: None,
+        }];
+        let genuinely_hot = snap("claude", Some("work"), 80.0);
+
+        let cache = [quiet_but_fable_maxed, genuinely_hot];
+        let picked = select_strip_snapshot(cache.iter(), "claude", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("work"));
     }
 
     #[test]

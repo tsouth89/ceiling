@@ -50,7 +50,18 @@ pub(super) struct RawSettings {
     show_all_token_accounts_in_menu: bool,
 
     // ── New unified per-provider map ─────────────────────────────────
-    provider_configs: HashMap<ProviderId, ProviderConfig>,
+    //
+    // Keyed by raw string rather than `ProviderId`. A `HashMap<ProviderId, _>`
+    // makes serde reject the WHOLE document on meeting one provider id this
+    // build does not know — a file written by a newer build, a renamed
+    // `cli_name`, a hand-edited typo. `Settings::load` maps any parse failure
+    // to `Settings::default()` and the next save persists those defaults, so a
+    // single unknown key used to erase every unrelated preference (SBS-625).
+    provider_configs: HashMap<String, ProviderConfig>,
+    /// Provider ids a previous run could not resolve, parked here so a
+    /// downgrade hands the entry back instead of deleting it.
+    #[serde(default)]
+    unrecognized_provider_configs: HashMap<String, ProviderConfig>,
 
     // ── Legacy flat per-provider fields (migrated on load) ───────────
     #[serde(default)]
@@ -112,7 +123,9 @@ pub(super) struct RawSettings {
 
     disable_keychain_access: bool,
     hide_personal_info: bool,
+    #[serde(default, deserialize_with = "lenient")]
     update_channel: UpdateChannel,
+    #[serde(default, deserialize_with = "lenient_map")]
     provider_metrics: HashMap<String, MetricPreference>,
     provider_order: Vec<String>,
     #[serde(default = "default_global_shortcut")]
@@ -124,7 +137,9 @@ pub(super) struct RawSettings {
     agent_session_ssh_hosts: Vec<String>,
     auto_download_updates: bool,
     install_updates_on_quit: bool,
+    #[serde(default, deserialize_with = "lenient")]
     ui_language: Language,
+    #[serde(default, deserialize_with = "lenient")]
     theme: ThemePreference,
     #[serde(default = "default_window_scale_percent")]
     window_scale_percent: u16,
@@ -204,7 +219,12 @@ impl Default for RawSettings {
             predictive_pace_warning_enabled: s.predictive_pace_warning_enabled,
             menu_bar_display_mode: s.menu_bar_display_mode,
             show_all_token_accounts_in_menu: s.show_all_token_accounts_in_menu,
-            provider_configs: s.provider_configs,
+            provider_configs: s
+                .provider_configs
+                .into_iter()
+                .map(|(id, config)| (id.cli_name().to_string(), config))
+                .collect(),
+            unrecognized_provider_configs: s.unrecognized_provider_configs,
             claude_usage_source: None,
             codex_usage_source: None,
             codex_cookie_source: None,
@@ -271,9 +291,72 @@ impl Default for RawSettings {
     }
 }
 
+/// Deserialize a value, falling back to its default when the stored value is
+/// not one this build understands.
+///
+/// `#[serde(default)]` only covers a MISSING field. A field that is *present*
+/// with an unrecognized value — a closed enum variant added by a newer build —
+/// still fails the whole document, and `Settings::load` turns any parse
+/// failure into defaults that the next save writes over the user's real file.
+/// That is the SBS-625 data loss with a different trigger, so the closed enums
+/// degrade to their own default instead of taking every sibling with them.
+fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
+}
+
+/// Same contract per entry: one unreadable value drops that key, not the map.
+/// Dropping the whole map would silently reset every provider's metric choice.
+fn lenient_map<'de, D, V>(deserializer: D) -> Result<HashMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: serde::de::DeserializeOwned,
+{
+    let raw = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(key, value)| V::deserialize(value).ok().map(|value| (key, value)))
+        .collect())
+}
+
+/// Split the on-disk provider map into ids this build resolves and ids it does
+/// not.
+///
+/// Unknown ids are preserved verbatim rather than dropped: a build that
+/// predates a provider (or postdates a rename) would otherwise delete a config
+/// it merely failed to recognize the moment anything triggers a save.
+fn split_provider_configs(
+    stored: HashMap<String, ProviderConfig>,
+    stashed: HashMap<String, ProviderConfig>,
+) -> (
+    HashMap<ProviderId, ProviderConfig>,
+    HashMap<String, ProviderConfig>,
+) {
+    let mut known: HashMap<ProviderId, ProviderConfig> = HashMap::new();
+    let mut unknown: HashMap<String, ProviderConfig> = HashMap::new();
+    // `provider_configs` is canonical, so it is chained last and wins over a
+    // stale stash entry for the same id.
+    for (key, config) in stashed.into_iter().chain(stored) {
+        match ProviderId::from_cli_name(&key) {
+            Some(id) => {
+                known.insert(id, config);
+            }
+            None => {
+                unknown.insert(key, config);
+            }
+        }
+    }
+    (known, unknown)
+}
+
 impl From<RawSettings> for Settings {
     fn from(raw: RawSettings) -> Self {
-        let mut provider_configs = raw.provider_configs;
+        let (mut provider_configs, unrecognized_provider_configs) =
+            split_provider_configs(raw.provider_configs, raw.unrecognized_provider_configs);
         let legacy_float_bar_style = match raw.float_bar_style.as_deref() {
             Some("taskbar") => Some("taskbar"),
             Some("floating") => Some("floating"),
@@ -536,6 +619,7 @@ impl From<RawSettings> for Settings {
             menu_bar_display_mode: raw.menu_bar_display_mode,
             show_all_token_accounts_in_menu: raw.show_all_token_accounts_in_menu,
             provider_configs,
+            unrecognized_provider_configs,
             disable_keychain_access: raw.disable_keychain_access,
             hide_personal_info: raw.hide_personal_info,
             update_channel: raw.update_channel,

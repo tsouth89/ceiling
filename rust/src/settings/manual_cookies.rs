@@ -20,9 +20,31 @@ impl ManualCookies {
         dirs::config_dir().map(|p| p.join("Ceiling").join("manual_cookies.json"))
     }
 
-    /// Load manual cookies from disk
+    /// Load manual cookies from disk, treating an unreadable store as empty.
+    ///
+    /// Read-only callers only. Anything that mutates and then calls
+    /// [`save`](Self::save) must use [`load_for_update`](Self::load_for_update).
     pub fn load() -> Self {
         Self::try_load().unwrap_or_default()
+    }
+
+    /// Load manual cookies for a read-modify-write cycle, failing closed.
+    ///
+    /// See [`ApiKeys::load_for_update`] — `save` replaces the whole file, so a
+    /// store that silently decoded as empty would take every other provider's
+    /// cookie with it on the next write (SBS-623).
+    pub fn load_for_update() -> anyhow::Result<Self> {
+        Self::try_load().map_err(|error| {
+            // Generic for the same reason as `ApiKeys::load_for_update`: the
+            // decode error can quote decrypted cookie material and this string
+            // reaches the frontend.
+            tracing::warn!(%error, "Saved manual cookies could not be decoded");
+            anyhow::anyhow!(
+                "Saved manual cookies could not be read. Refusing to write, which \
+                 would replace the stored cookies with only this change. See the \
+                 log for details."
+            )
+        })
     }
 
     pub(super) fn try_load() -> anyhow::Result<Self> {

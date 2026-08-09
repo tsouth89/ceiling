@@ -1260,6 +1260,164 @@ fn unknown_fields_from_a_newer_build_are_ignored() {
     );
 }
 
+/// SBS-625: an unknown key in the `provider_configs` MAP is a different failure
+/// from an unknown FIELD. `HashMap<ProviderId, _>` made serde reject the entire
+/// document, `Settings::load` fell back to defaults, and the next save persisted
+/// them over the user's real file.
+#[test]
+fn an_unknown_provider_configs_key_does_not_reset_the_rest_of_settings() {
+    let json = r#"{
+            "refresh_interval_secs": 42,
+            "enabled_providers": ["claude"],
+            "hide_personal_info": true,
+            "provider_configs": {
+                "codex": { "cookie_source": "manual" },
+                "brand_new_provider": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    // Exactly what Settings::load does on a parse failure.
+    let settings: Settings = serde_json::from_str(json).unwrap_or_default();
+
+    assert_eq!(settings.refresh_interval_secs, 42);
+    assert!(settings.enabled_providers.contains("claude"));
+    assert_eq!(settings.enabled_providers.len(), 1);
+    assert!(settings.hide_personal_info);
+    assert_eq!(
+        settings.cookie_source(ProviderId::Codex),
+        "manual",
+        "known provider_configs entries must still load"
+    );
+}
+
+/// The unknown id itself is parked, not deleted, so a downgrade hands it back
+/// intact to the build that understands it.
+#[test]
+fn an_unknown_provider_configs_key_round_trips_through_a_save() {
+    let json = r#"{
+            "provider_configs": {
+                "codex": { "cookie_source": "manual" },
+                "brand_new_provider": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).expect("load");
+    assert_eq!(
+        settings
+            .unrecognized_provider_configs
+            .get("brand_new_provider")
+            .and_then(|config| config.cookie_source.as_deref()),
+        Some("chrome")
+    );
+
+    // Save (serialize) then load again, as a tray toggle or preference edit
+    // would, and the unknown provider must still be there.
+    let written = serde_json::to_string(&settings).expect("serialize");
+    let reloaded: Settings = serde_json::from_str(&written).expect("reload");
+    assert_eq!(
+        reloaded
+            .unrecognized_provider_configs
+            .get("brand_new_provider")
+            .and_then(|config| config.cookie_source.as_deref()),
+        Some("chrome"),
+        "saving must not drop a provider config we merely failed to recognize"
+    );
+    assert_eq!(reloaded.cookie_source(ProviderId::Codex), "manual");
+}
+
+/// A build that later learns the id folds it back into the real map rather than
+/// leaving it stranded in the parking field.
+#[test]
+fn a_parked_provider_config_is_reclaimed_once_the_id_is_known() {
+    let json = r#"{
+            "unrecognized_provider_configs": {
+                "codex": { "cookie_source": "chrome" }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).expect("load");
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "chrome");
+    assert!(settings.unrecognized_provider_configs.is_empty());
+}
+
+/// The same SBS-625 failure reached through a different door: a closed enum
+/// whose stored value this build does not know. `#[serde(default)]` covers a
+/// MISSING field, not a present-but-unparseable one, so a newer build's
+/// `ui_language` used to fail the whole document and reset every preference.
+#[test]
+fn an_unknown_enum_value_does_not_reset_the_rest_of_settings() {
+    let json = r#"{
+            "refresh_interval_secs": 42,
+            "hide_personal_info": true,
+            "ui_language": "klingon",
+            "theme": "solarized",
+            "update_channel": "nightly"
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap_or_default();
+
+    assert_eq!(
+        settings.refresh_interval_secs, 42,
+        "an unreadable enum must degrade to its own default, not take its siblings"
+    );
+    assert!(settings.hide_personal_info);
+    // The unreadable fields fall back individually.
+    assert_eq!(settings.ui_language, Language::default());
+    assert_eq!(settings.theme, ThemePreference::default());
+    assert_eq!(settings.update_channel, UpdateChannel::default());
+}
+
+/// One unreadable metric preference must not reset every provider's choice.
+#[test]
+fn an_unknown_provider_metric_drops_only_that_entry() {
+    let json = r#"{
+            "refresh_interval_secs": 42,
+            "provider_metrics": {
+                "codex": "weekly",
+                "claude": "a_metric_from_the_future"
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap_or_default();
+
+    assert_eq!(settings.refresh_interval_secs, 42);
+    assert_eq!(
+        settings.provider_metrics.get("codex"),
+        Some(&MetricPreference::Weekly)
+    );
+    assert!(!settings.provider_metrics.contains_key("claude"));
+}
+
+/// A legacy inline credential under an id this build cannot resolve must still
+/// reach the secure store. `manual_cookie_header` / `api_token` are
+/// `skip_serializing`, so leaving it parked would drop it on the next save.
+#[test]
+fn a_legacy_credential_under_an_unknown_provider_id_is_still_migrated() {
+    let json = r#"{
+            "provider_configs": {
+                "brand_new_provider": {
+                    "cookie_source": "manual",
+                    "api_token": "future-token"
+                }
+            }
+        }"#;
+
+    let settings: Settings = serde_json::from_str(json).expect("load");
+    let parked = settings
+        .unrecognized_provider_configs
+        .get("brand_new_provider")
+        .expect("unknown id is parked");
+    assert_eq!(
+        parked.api_token.as_deref(),
+        Some("future-token"),
+        "the inline credential must survive the load so migration can see it"
+    );
+    assert!(
+        carries_legacy_credentials(parked),
+        "migration must recognize a parked entry as carrying legacy credentials"
+    );
+}
+
 /// An empty object is a valid config and yields defaults.
 #[test]
 fn an_empty_config_object_loads_as_defaults() {

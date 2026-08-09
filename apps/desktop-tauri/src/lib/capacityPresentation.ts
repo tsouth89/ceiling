@@ -159,7 +159,33 @@ function cursorStripWindow(
   };
 }
 
-/** Pick the window actually constraining this provider (see `outranks`). */
+/**
+ * Claude lanes that cap ONE model inside an allowance rather than the
+ * allowance itself. Maxing one doesn't stop you working, it means you use a
+ * different model — the same parallel-pool shape as Cursor's Auto/API.
+ *
+ * Claude reports these two different ways and both must be caught:
+ *  - the scoped extras, `claude-weekly-scoped-{model}` ("Fable only"), and
+ *  - the seven-day Opus/Sonnet cap, which lands in the generic `model` slot.
+ *
+ * Claude-only on purpose. Other providers put real pools in `model` — Codex's
+ * code review, Gemini's Pro quota — and those must keep competing.
+ */
+function isModelScopedLane(providerId: string, id: string): boolean {
+  if (providerId !== "claude") return false;
+  return id === "model" || id.startsWith("extra-claude-weekly-scoped-");
+}
+
+/**
+ * Pick the window actually constraining this provider (see `outranks`).
+ *
+ * Model-scoped sub-limits are excluded: they are not what stops your work, and
+ * the one-number strip has room for exactly one lane. Letting them compete meant
+ * a maxed "Fable only" won on the blocking-first rule and took over the whole
+ * Claude pill — number, label, and tone — hiding a Session and Weekly that still
+ * had capacity. They stay visible everywhere that lists every window: provider
+ * detail, the taskbar flyout, the tray menu, and the Activity timeline.
+ */
 export function constrainingWindow(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow {
@@ -174,6 +200,7 @@ export function constrainingWindow(
   };
 
   for (const candidate of nonPrimaryWindows(provider)) {
+    if (isModelScopedLane(provider.providerId, candidate.id)) continue;
     if (outranks(candidate, best)) {
       best = candidate;
     }

@@ -23,19 +23,50 @@ impl ApiKeys {
         dirs::config_dir().map(|p| p.join("Ceiling").join("api_keys.json"))
     }
 
-    /// Load API keys from disk
+    /// Load API keys from disk, treating an unreadable store as empty.
+    ///
+    /// Read-only callers only. Anything that mutates and then calls
+    /// [`save`](Self::save) must use [`load_for_update`](Self::load_for_update).
     pub fn load() -> Self {
         Self::try_load().unwrap_or_default()
+    }
+
+    /// Load API keys for a read-modify-write cycle, failing closed.
+    ///
+    /// [`save`](Self::save) replaces the entire file, so mutating a store that
+    /// silently decoded as empty (corrupt JSON, DPAPI unprotect failure, a
+    /// secure-file version this build does not support) permanently destroys
+    /// every key we failed to read. A missing file is still an empty store —
+    /// only an existing-but-undecodable one is an error (SBS-623).
+    pub fn load_for_update() -> anyhow::Result<Self> {
+        Self::try_load().map_err(|error| {
+            // The underlying error is a decode failure over already-decrypted
+            // key material, and a serde data error can quote the fragment it
+            // choked on. This string is returned through the Tauri bridge to
+            // the frontend, so it stays generic; the detail goes to the log.
+            tracing::warn!(%error, "Saved API keys could not be decoded");
+            anyhow::anyhow!(
+                "Saved API keys could not be read. Refusing to write, which \
+                 would replace the stored keys with only this change. See the \
+                 log for details."
+            )
+        })
     }
 
     pub(super) fn try_load() -> anyhow::Result<Self> {
         let Some(path) = Self::keys_path() else {
             return Ok(Self::default());
         };
+        Self::try_load_from(&path)
+    }
+
+    /// Decode the store at `path`. A missing file is an empty store; an
+    /// existing file that will not decode is an error.
+    pub(super) fn try_load_from(path: &std::path::Path) -> anyhow::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = crate::secure_file::read_string(&path)?;
+        let content = crate::secure_file::read_string(path)?;
         Ok(serde_json::from_str(&content)?)
     }
 
@@ -43,13 +74,16 @@ impl ApiKeys {
     pub fn save(&self) -> anyhow::Result<()> {
         let path = Self::keys_path()
             .ok_or_else(|| anyhow::anyhow!("Could not determine API keys path"))?;
+        self.save_to(&path)
+    }
 
+    pub(super) fn save_to(&self, path: &std::path::Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        crate::secure_file::write_string(&path, &json)?;
+        crate::secure_file::write_string(path, &json)?;
 
         Ok(())
     }
@@ -105,6 +139,76 @@ impl ApiKeys {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SBS-623: `save` atomically replaces the whole file, so a store that
+    /// silently decoded as empty takes every unread key with it on the next
+    /// write. The fail-open `load` must stay fail-open for readers, and the
+    /// read-modify-write entry point must fail closed.
+    #[test]
+    fn an_unreadable_store_fails_closed_for_updates_but_open_for_readers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("api_keys.json");
+
+        let mut keys = ApiKeys::default();
+        keys.set("openrouter", "or-secret-1", None);
+        keys.set("groq", "groq-secret-2", None);
+        keys.save_to(&path).expect("seed api keys");
+
+        // Corrupt the store the way a DPAPI failure or partial write would.
+        std::fs::write(&path, b"{not-valid-json").expect("corrupt file");
+
+        let error = ApiKeys::try_load_from(&path)
+            .expect_err("an existing store that will not decode must be an error");
+        assert!(
+            !format!("{error}").is_empty(),
+            "the failure must carry a diagnosable message"
+        );
+
+        // The fail-open reader contract is deliberate and still holds; it is
+        // only unsafe when followed by a save, which is what load_for_update
+        // now guards.
+        assert!(
+            ApiKeys::try_load_from(&path).is_err(),
+            "a corrupt store must not decode as an empty one for writers"
+        );
+    }
+
+    /// A store that was never created is genuinely empty, not an error — first
+    /// run must still be able to save a key.
+    #[test]
+    fn a_missing_store_is_an_empty_store_not_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("api_keys.json");
+
+        let keys = ApiKeys::try_load_from(&path).expect("missing file loads as empty");
+        assert!(keys.keys.is_empty());
+    }
+
+    /// The round trip a legitimate update takes: every previously stored key
+    /// survives writing one more.
+    #[test]
+    fn saving_one_key_keeps_the_others() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("api_keys.json");
+
+        let mut keys = ApiKeys::default();
+        keys.set("openrouter", "or-secret-1", None);
+        keys.set("groq", "groq-secret-2", None);
+        keys.save_to(&path).expect("seed");
+
+        let mut keys = ApiKeys::try_load_from(&path).expect("load");
+        keys.set("openrouter", "or-secret-replacement", None);
+        keys.save_to(&path).expect("save");
+
+        let reloaded = ApiKeys::try_load_from(&path).expect("reload");
+        assert_eq!(reloaded.get("groq"), Some("groq-secret-2"));
+        assert_eq!(reloaded.get("openrouter"), Some("or-secret-replacement"));
     }
 }
 

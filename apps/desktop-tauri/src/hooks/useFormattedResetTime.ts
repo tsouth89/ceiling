@@ -41,7 +41,10 @@ export function useFormattedResetTime(
   if (relative) {
     const diffMs = target - now;
     if (diffMs <= 0) return t("TrayResetsDueNow");
-    const totalMinutes = Math.floor(diffMs / 60_000);
+    // Never floor to zero. Between 1ms and 59.999s the reset is imminent, not
+    // absent, and "Resets in 0m" reads as a stuck timer. Clamp to one minute
+    // rather than ceiling the whole range, so 61s still reads "1m".
+    const totalMinutes = Math.max(1, Math.floor(diffMs / 60_000));
     const days = Math.floor(totalMinutes / 1440);
     const hours = Math.floor((totalMinutes % 1440) / 60);
     const minutes = totalMinutes % 60;

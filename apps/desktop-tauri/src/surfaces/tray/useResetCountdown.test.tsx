@@ -51,6 +51,15 @@ describe("useResetCountdown", () => {
     vi.useRealTimers();
   });
 
+  // SBS-621: the tray countdown floored to whole minutes exactly like the
+  // strip did, so the last sub-minute rendered as "0m".
+  it("never counts down to zero minutes while time remains", async () => {
+    await mountWithLocale(
+      <Probe resetsAt="2024-06-01T00:00:45Z" fallback="later" />,
+    );
+    expect(screen.getByTestId("cd")).toHaveTextContent("1m");
+  });
+
   it("returns the fallback when `resetsAt` is null", async () => {
     await mountWithLocale(<Probe resetsAt={null} fallback="in 3h" />);
     expect(screen.getByTestId("cd")).toHaveTextContent("in 3h");

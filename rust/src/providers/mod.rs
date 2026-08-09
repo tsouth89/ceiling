@@ -174,6 +174,24 @@ pub(crate) fn resolve_api_key(
     )))
 }
 
+/// Whether a parsed URL points at the local machine.
+///
+/// Host-based, never prefix-based: `http://localhost@evil.example` and
+/// `http://127.0.0.1.evil.example` both *start with* a loopback literal while
+/// resolving somewhere else entirely.
+pub(crate) fn is_loopback_url(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_matches(['[', ']']);
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
 pub(crate) fn validated_https_url(
     raw: &str,
     label: &str,

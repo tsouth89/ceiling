@@ -93,7 +93,7 @@ pub fn import_browser_cookies(
     validate_single_line_secret(&cookie_header, "Cookie header", MAX_COOKIE_HEADER_LEN)?;
 
     // Persist as manual cookie.
-    let mut manual = ManualCookies::load();
+    let mut manual = ManualCookies::load_for_update().map_err(|e| e.to_string())?;
     manual.set(pid.cli_name(), &cookie_header);
     manual.save().map_err(|e| e.to_string())?;
 

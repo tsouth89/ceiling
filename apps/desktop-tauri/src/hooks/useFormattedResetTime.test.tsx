@@ -77,6 +77,25 @@ describe("useFormattedResetTime", () => {
     expect(screen.getByTestId("reset")).toHaveTextContent("Resets in 24d");
   });
 
+  // SBS-621: flooring to whole minutes turned the last sub-minute into
+  // "Resets in 0m", which reads as a broken timer rather than an imminent
+  // reset.
+  it("never counts down to zero minutes while time remains", async () => {
+    const target = new Date("2024-06-01T00:00:45Z").toISOString();
+    await mountWithLocale(
+      <Probe resetsAt={target} fallback="later" relative={true} />,
+    );
+    expect(screen.getByTestId("reset")).toHaveTextContent("Resets in 1m");
+  });
+
+  it("still reports a reset that has arrived as due now", async () => {
+    const target = new Date("2024-06-01T00:00:00Z").toISOString();
+    await mountWithLocale(
+      <Probe resetsAt={target} fallback="later" relative={true} />,
+    );
+    expect(screen.getByTestId("reset")).toHaveTextContent("Resetting");
+  });
+
   it("leaves fallback text unlabelled in relative mode", async () => {
     await mountWithLocale(
       <Probe resetsAt={null} fallback="3h" relative={true} />,

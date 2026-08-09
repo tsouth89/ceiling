@@ -9,7 +9,6 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -116,26 +115,13 @@ pub fn parse_gateway_url(raw: &str) -> Result<Url, ProviderError> {
         ));
     }
 
-    if !is_loopback_host(&url) {
+    if !super::is_loopback_url(&url) {
         return Err(ProviderError::Other(
             "Wayfinder gateway must use localhost or a loopback address".to_string(),
         ));
     }
 
     Ok(url)
-}
-
-fn is_loopback_host(url: &Url) -> bool {
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.trim_matches(['[', ']']);
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    host.parse::<IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
 }
 
 pub fn endpoint_url(base: &Url, path: &str) -> Result<Url, ProviderError> {
