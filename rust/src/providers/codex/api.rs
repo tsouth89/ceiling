@@ -278,17 +278,13 @@ impl CodexApi {
             && let Some(base_url) = parse_chatgpt_base_url(&content)
         {
             let normalized = normalize_base_url(&base_url);
-            // Only allow HTTPS URLs for custom base URLs to prevent token exfiltration
-            if normalized.starts_with("https://")
-                || normalized.starts_with("http://127.0.0.1")
-                || normalized.starts_with("http://localhost")
-            {
-                return normalized;
+            match accepted_custom_base_url(&normalized) {
+                Ok(()) => return normalized,
+                Err(reason) => tracing::warn!(
+                    "Ignoring custom chatgpt_base_url ({reason}): {}",
+                    normalized
+                ),
             }
-            tracing::warn!(
-                "Ignoring insecure custom chatgpt_base_url (must be HTTPS): {}",
-                normalized
-            );
         }
 
         DEFAULT_BASE_URL.to_string()
@@ -921,6 +917,37 @@ fn parse_chatgpt_base_url(config_content: &str) -> Option<String> {
     None
 }
 
+/// Whether a custom `chatgpt_base_url` may receive the Codex access token.
+///
+/// Every usage refresh sends `Authorization: Bearer {access_token}` to this
+/// URL, so the gate is exfiltration-critical and must be host-based. The
+/// previous prefix test (`starts_with("http://localhost")`) admitted
+/// `http://localhost@evil.example`, where `localhost` is userinfo and the real
+/// host is remote, and `http://localhost.evil.example`, where it is merely a
+/// label of a remote name. Both then received the token in cleartext.
+fn accepted_custom_base_url(raw: &str) -> Result<(), &'static str> {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return Err("not a valid URL");
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("URLs with user info are not accepted");
+    }
+    let Some(host) = url.host_str() else {
+        return Err("must include a host");
+    };
+    if host.contains('%') || host.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("host contains encoded or invalid characters");
+    }
+    match url.scheme() {
+        "https" => Ok(()),
+        // Plaintext is tolerated only for a proxy on this machine, where the
+        // token never leaves the host.
+        "http" if crate::providers::is_loopback_url(&url) => Ok(()),
+        "http" => Err("must be HTTPS unless the host is loopback"),
+        _ => Err("must use HTTP or HTTPS"),
+    }
+}
+
 fn normalize_base_url(url: &str) -> String {
     let mut trimmed = url.trim().to_string();
     if trimmed.is_empty() {
@@ -958,6 +985,80 @@ mod tests {
 
     const AUTH_JSON: &str =
         r#"{"tokens":{"access_token":"from-account-dir","account_id":"acct-scoped"}}"#;
+
+    /// SBS-632: the old gate was `starts_with`, so a remote host that merely
+    /// began with a loopback literal received the Bearer access token in
+    /// cleartext on every usage refresh.
+    #[test]
+    fn a_remote_host_wearing_a_loopback_prefix_is_rejected() {
+        for raw in [
+            // `localhost` / `127.0.0.1` as userinfo; the host is remote.
+            "http://localhost@evil.example",
+            "http://127.0.0.1@evil.example",
+            "http://localhost:pass@evil.example",
+            // Loopback literal as a label of a remote name.
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example",
+            // Plain remote cleartext, the case the gate always meant to catch.
+            "http://evil.example",
+            // Non-HTTP schemes must not slip through either.
+            "file:///etc/passwd",
+        ] {
+            assert!(
+                accepted_custom_base_url(raw).is_err(),
+                "{raw} must not be accepted as a custom base URL"
+            );
+        }
+    }
+
+    /// A local proxy is the reason plaintext is tolerated at all, so the
+    /// legitimate forms must keep working.
+    #[test]
+    fn loopback_and_https_bases_are_still_accepted() {
+        for raw in [
+            "http://127.0.0.1",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:8080/backend-api",
+            "http://localhost",
+            "http://localhost:1455/backend-api",
+            "http://[::1]:8080",
+            "https://chatgpt.com/backend-api",
+            "https://proxy.internal.example/backend-api",
+        ] {
+            assert!(
+                accepted_custom_base_url(raw).is_ok(),
+                "{raw} must remain a usable custom base URL"
+            );
+        }
+    }
+
+    /// The rejected URL must not reach the network: resolve_base_url falls back
+    /// to the default backend rather than returning the attacker's host.
+    #[test]
+    fn a_rejected_base_url_falls_back_to_the_default_backend() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("config.toml"),
+            "chatgpt_base_url = \"http://localhost@evil.example\"\n",
+        )
+        .expect("write config");
+
+        let api = CodexApi::new().scoped(home.path().to_path_buf());
+        assert_eq!(api.resolve_base_url(), DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn a_loopback_base_url_is_used_as_written() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("config.toml"),
+            "chatgpt_base_url = \"http://127.0.0.1:1455/backend-api\"\n",
+        )
+        .expect("write config");
+
+        let api = CodexApi::new().scoped(home.path().to_path_buf());
+        assert_eq!(api.resolve_base_url(), "http://127.0.0.1:1455/backend-api");
+    }
 
     #[test]
     fn a_scoped_client_reads_its_own_account_directory() {
