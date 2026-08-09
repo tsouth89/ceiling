@@ -65,8 +65,17 @@ impl RateWindow {
 
     /// Format the reset time as a countdown string
     pub fn format_countdown(&self) -> Option<String> {
+        self.format_countdown_at(Utc::now())
+    }
+
+    /// `format_countdown` against an explicit clock.
+    ///
+    /// Exists so the rounding can be asserted deterministically: reading
+    /// `Utc::now()` inside meant a test building `now + 42min` measured
+    /// marginally less than that by the time it was formatted, and flooring
+    /// turned those microseconds into a whole minute of difference.
+    pub(crate) fn format_countdown_at(&self, now: DateTime<Utc>) -> Option<String> {
         let resets_at = self.resets_at?;
-        let now = Utc::now();
 
         if resets_at <= now {
             return Some("now".to_string());
@@ -78,7 +87,13 @@ impl RateWindow {
         // the two disagree across an hour boundary: at 1h59m30s the total
         // rounded up into the next hour, so minutes read 0 while hours stayed
         // 1 and the countdown claimed "1h 0m" — nearly an hour short.
-        let total_minutes = ((duration.num_seconds() + 59) / 60).max(1);
+        //
+        // Floor-and-clamp, matching `useFormattedResetTime` / `useResetCountdown`
+        // exactly. The same `resets_at` must not read "2h 0m" on the taskbar
+        // tile and "1h 59m" in the tray flyout, and flooring never overstates
+        // what is left. The clamp keeps a sub-minute reset at "1m" rather than
+        // "0m", the same as those hooks.
+        let total_minutes = (duration.num_seconds() / 60).max(1);
         let hours = total_minutes / 60;
         let minutes = total_minutes % 60;
 
@@ -149,22 +164,48 @@ mod tests {
     /// advanced — reporting nearly an hour less time than remained.
     #[test]
     fn countdown_does_not_lose_an_hour_at_a_boundary() {
+        let now = "2026-04-02T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let countdown = |seconds: i64| {
             RateWindow::with_details(
                 10.0,
                 None,
-                Some(Utc::now() + chrono::Duration::seconds(seconds)),
+                Some(now + chrono::Duration::seconds(seconds)),
                 None,
             )
-            .format_countdown()
+            .format_countdown_at(now)
         };
 
-        // 1h59m30s rounds to 120 minutes: two hours, not "1h 0m".
-        assert_eq!(countdown(2 * 3600 - 30).as_deref(), Some("2h 0m"));
-        // A minute earlier is still inside the first hour.
-        assert_eq!(countdown(2 * 3600 - 90).as_deref(), Some("1h 59m"));
+        // 1h59m30s floors to 119 minutes. Never "1h 0m".
+        assert_eq!(countdown(2 * 3600 - 30).as_deref(), Some("1h 59m"));
+        assert_eq!(countdown(2 * 3600 - 90).as_deref(), Some("1h 58m"));
         // Ordinary readings are unchanged.
         assert_eq!(countdown(3600 + 20 * 60).as_deref(), Some("1h 20m"));
         assert_eq!(countdown(42 * 60).as_deref(), Some("42m"));
+    }
+
+    /// The taskbar tile (Rust) and the tray flyout (TypeScript) render the same
+    /// `resets_at`, so they must round identically. Mirrors the hooks'
+    /// `Math.max(1, Math.floor(diffMs / 60_000))`.
+    #[test]
+    fn countdown_rounds_the_same_way_the_typescript_hooks_do() {
+        let now = "2026-04-02T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+
+        for (seconds, expected) in [
+            (45_i64, "1m"),
+            (61, "1m"),
+            (119, "1m"),
+            (42 * 60, "42m"),
+            (2 * 3600 - 30, "1h 59m"),
+            (3600 + 20 * 60, "1h 20m"),
+        ] {
+            let actual = RateWindow::with_details(
+                10.0,
+                None,
+                Some(now + chrono::Duration::seconds(seconds)),
+                None,
+            )
+            .format_countdown_at(now);
+            assert_eq!(actual.as_deref(), Some(expected), "at {seconds}s");
+        }
     }
 }

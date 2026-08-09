@@ -210,16 +210,22 @@ pub fn revoke_provider_credentials(provider_id: String) -> Result<(), String> {
     let id = parse_provider_arg(&provider_id)?;
     let provider_id = id.cli_name();
 
+    // Read every store before writing any of them. Each load can now fail
+    // closed on an undecodable file, and revoke touches three stores, so
+    // interleaving reads and writes would let the first write land and a later
+    // read abort — leaving the provider revoked in one store and live in the
+    // others, with an error returned either way.
     let mut keys = ApiKeys::load_for_update().map_err(|e| e.to_string())?;
+    let mut cookies = ManualCookies::load_for_update().map_err(|e| e.to_string())?;
+    let token_store = TokenAccountStore::new();
+    let mut token_accounts = token_store.load().map_err(|e| e.to_string())?;
+
     keys.remove(provider_id);
     keys.save().map_err(|e| e.to_string())?;
 
-    let mut cookies = ManualCookies::load_for_update().map_err(|e| e.to_string())?;
     cookies.remove(provider_id);
     cookies.save().map_err(|e| e.to_string())?;
 
-    let token_store = TokenAccountStore::new();
-    let mut token_accounts = token_store.load().map_err(|e| e.to_string())?;
     if token_accounts.remove(&id).is_some() {
         token_store
             .save(&token_accounts)

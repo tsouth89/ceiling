@@ -40,9 +40,15 @@ impl ApiKeys {
     /// only an existing-but-undecodable one is an error (SBS-623).
     pub fn load_for_update() -> anyhow::Result<Self> {
         Self::try_load().map_err(|error| {
+            // The underlying error is a decode failure over already-decrypted
+            // key material, and a serde data error can quote the fragment it
+            // choked on. This string is returned through the Tauri bridge to
+            // the frontend, so it stays generic; the detail goes to the log.
+            tracing::warn!(%error, "Saved API keys could not be decoded");
             anyhow::anyhow!(
-                "Saved API keys could not be read ({error}). Refusing to write, \
-                 which would replace the stored keys with only this change."
+                "Saved API keys could not be read. Refusing to write, which \
+                 would replace the stored keys with only this change. See the \
+                 log for details."
             )
         })
     }

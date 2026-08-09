@@ -35,9 +35,14 @@ impl ManualCookies {
     /// cookie with it on the next write (SBS-623).
     pub fn load_for_update() -> anyhow::Result<Self> {
         Self::try_load().map_err(|error| {
+            // Generic for the same reason as `ApiKeys::load_for_update`: the
+            // decode error can quote decrypted cookie material and this string
+            // reaches the frontend.
+            tracing::warn!(%error, "Saved manual cookies could not be decoded");
             anyhow::anyhow!(
-                "Saved manual cookies could not be read ({error}). Refusing to write, \
-                 which would replace the stored cookies with only this change."
+                "Saved manual cookies could not be read. Refusing to write, which \
+                 would replace the stored cookies with only this change. See the \
+                 log for details."
             )
         })
     }
