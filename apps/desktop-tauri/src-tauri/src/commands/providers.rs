@@ -431,9 +431,6 @@ async fn refresh_provider(
         (snapshot, Vec::new(), false)
     };
     crate::usage_history::record_snapshot(&snapshot);
-    // Track open quota runs every sample so a confirmed reset can close a run
-    // with peak used % and observation span (SOU-298).
-    crate::quota_run_history::record_snapshot(&snapshot);
     events::emit_provider_updated(&app, &snapshot);
     let notification_settings = Settings::load();
 
@@ -462,6 +459,10 @@ async fn refresh_provider(
     if !capacity_events.is_empty() {
         crate::quota_run_history::record_capacity_events(&capacity_events, &snapshot);
     }
+    // Apply classified resets before the snapshot-driven fallback. Otherwise
+    // the observed drop opens a new run that the classified event immediately
+    // closes again as a zero-duration duplicate.
+    crate::quota_run_history::record_snapshot(&snapshot);
     if capacity_events.is_empty() {
         return;
     }
