@@ -51,6 +51,42 @@ use raw::RawSettings;
 pub use status::*;
 pub use types::*;
 
+/// Remove every app-managed credential for a provider under one shared lock.
+///
+/// Filesystems do not provide an atomic transaction across these three files.
+/// We therefore read and validate all stores before the first write, exclude
+/// every competing writer until the last write, and make the operation
+/// idempotent. An I/O failure between atomic file replacements can leave a
+/// partial revocation, but retrying safely completes it; it can never restore
+/// a credential or lose another provider's concurrent update.
+pub fn revoke_managed_credentials(provider: ProviderId) -> anyhow::Result<()> {
+    crate::secure_file::with_state_write_lock(|| {
+        let keys_path = ApiKeys::keys_path()
+            .ok_or_else(|| std::io::Error::other("Could not determine API keys path"))?;
+        let cookies_path = ManualCookies::cookies_path()
+            .ok_or_else(|| std::io::Error::other("Could not determine cookies path"))?;
+        let token_store = crate::core::TokenAccountStore::new();
+
+        let mut keys = ApiKeys::try_load_from(&keys_path).map_err(std::io::Error::other)?;
+        let mut cookies =
+            ManualCookies::try_load_from(&cookies_path).map_err(std::io::Error::other)?;
+        let mut token_accounts = token_store.load().map_err(std::io::Error::other)?;
+
+        keys.remove(provider.cli_name());
+        cookies.remove(provider.cli_name());
+        token_accounts.remove(&provider);
+
+        keys.save_to(&keys_path).map_err(std::io::Error::other)?;
+        cookies
+            .save_to(&cookies_path)
+            .map_err(std::io::Error::other)?;
+        token_store
+            .save_unlocked(&token_accounts)
+            .map_err(std::io::Error::other)
+    })
+    .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -612,6 +648,28 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Apply a mutation to the latest settings while holding the shared
+    /// cross-process lock for the complete read-modify-write cycle.
+    pub fn update(operation: impl FnOnce(&mut Self)) -> anyhow::Result<Self> {
+        Self::try_update(|settings| {
+            operation(settings);
+            Ok(())
+        })
+        .map(|(settings, ())| settings)
+    }
+
+    pub fn try_update<T>(
+        operation: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> anyhow::Result<(Self, T)> {
+        crate::secure_file::with_state_write_lock(|| {
+            let mut settings = Self::load_unlocked();
+            let result = operation(&mut settings).map_err(std::io::Error::other)?;
+            settings.save_unlocked().map_err(std::io::Error::other)?;
+            Ok((settings, result))
+        })
+        .map_err(Into::into)
+    }
+
     /// Preferred strip account for `provider_id`, if the user pinned one.
     pub fn taskbar_account_for(&self, provider_id: &str) -> Option<&str> {
         self.taskbar_account_by_provider
@@ -628,6 +686,43 @@ impl Settings {
 
     /// Load settings from disk
     pub fn load() -> Self {
+        let settings = Self::load_from_disk();
+        if !settings.has_legacy_credentials() {
+            return settings;
+        }
+
+        // Loading can become a write when an older settings file still embeds
+        // credentials. Re-read after taking the lock so two processes cannot
+        // migrate stale snapshots over newer secure-store contents.
+        match crate::secure_file::with_state_write_lock(|| Ok(Self::load_unlocked())) {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(%error, "Failed to lock legacy settings credential migration");
+                settings
+            }
+        }
+    }
+
+    /// Load and migrate settings while the caller holds the state write lock.
+    fn load_unlocked() -> Self {
+        let mut settings = Self::load_from_disk();
+
+        if let Some(sanitized) = settings.migrate_legacy_credentials() {
+            match sanitized.and_then(|sanitized| {
+                Self::write_to_disk(&sanitized)?;
+                Ok(sanitized)
+            }) {
+                Ok(sanitized) => settings = sanitized,
+                Err(error) => {
+                    tracing::warn!(%error, "Failed to migrate legacy settings credentials");
+                }
+            }
+        }
+
+        settings
+    }
+
+    fn load_from_disk() -> Self {
         #[allow(unused_mut)]
         let mut settings = match Self::settings_path() {
             Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
@@ -662,23 +757,18 @@ impl Settings {
             settings.start_at_login = Self::sync_start_at_login_registry();
         }
 
-        if let Some(sanitized) = settings.migrate_legacy_credentials() {
-            match sanitized.and_then(|sanitized| {
-                Self::write_to_disk(&sanitized)?;
-                Ok(sanitized)
-            }) {
-                Ok(sanitized) => settings = sanitized,
-                Err(error) => {
-                    tracing::warn!(%error, "Failed to migrate legacy settings credentials");
-                }
-            }
-        }
-
         settings
     }
 
     /// Save settings to disk
     pub fn save(&self) -> anyhow::Result<()> {
+        crate::secure_file::with_state_write_lock(|| {
+            self.save_unlocked().map_err(std::io::Error::other)
+        })
+        .map_err(Into::into)
+    }
+
+    fn save_unlocked(&self) -> anyhow::Result<()> {
         let sanitized = match self.migrate_legacy_credentials() {
             Some(result) => result?,
             None => self.clone(),
@@ -710,12 +800,7 @@ impl Settings {
         // build cannot resolve would be read in, never migrated, and dropped by
         // the next save — data loss inside the path that parks unknown ids to
         // prevent exactly that.
-        let has_legacy_credentials = self
-            .provider_configs
-            .values()
-            .chain(self.unrecognized_provider_configs.values())
-            .any(carries_legacy_credentials);
-        if !has_legacy_credentials {
+        if !self.has_legacy_credentials() {
             return None;
         }
 
@@ -771,13 +856,24 @@ impl Settings {
             // has been written successfully. A partial failure is safe to
             // retry because existing secure-store values remain authoritative.
             if cookies_changed {
-                manual_cookies.save()?;
+                let path = ManualCookies::cookies_path()
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine cookies path"))?;
+                manual_cookies.save_to(&path)?;
             }
             if keys_changed {
-                api_keys.save()?;
+                let path = ApiKeys::keys_path()
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine API keys path"))?;
+                api_keys.save_to(&path)?;
             }
             Ok(sanitized)
         })())
+    }
+
+    fn has_legacy_credentials(&self) -> bool {
+        self.provider_configs
+            .values()
+            .chain(self.unrecognized_provider_configs.values())
+            .any(carries_legacy_credentials)
     }
 
     fn start_at_login_exe_path(current_exe: &std::path::Path) -> std::path::PathBuf {

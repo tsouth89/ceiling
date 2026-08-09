@@ -40,9 +40,10 @@ pub fn reorder_providers(
     app: tauri::AppHandle,
     ids: Vec<String>,
 ) -> Result<Vec<ProviderSummary>, String> {
-    let mut settings = Settings::load();
-    settings.provider_order = codexbar::settings::normalize_provider_order(&ids);
-    settings.save().map_err(|e| e.to_string())?;
+    let settings = Settings::update(|settings| {
+        settings.provider_order = codexbar::settings::normalize_provider_order(&ids)
+    })
+    .map_err(|e| e.to_string())?;
     crate::tray_bridge::refresh_tray_presentation(&app);
     // Notify open surfaces (tray flyout, pop-out window) so their provider grid
     // and cards re-render in the new order immediately after a drag-reorder.
@@ -105,9 +106,11 @@ pub fn set_provider_cookie_source(provider_id: String, source: String) -> Result
             "Invalid cookie source '{source}' for provider '{provider_id}'"
         ));
     }
-    let mut settings = Settings::load();
-    provider_cookie_source_set(&mut settings, &provider_id, source.to_string())?;
-    settings.save().map_err(|e| e.to_string())
+    Settings::try_update(|settings| {
+        provider_cookie_source_set(settings, &provider_id, source.to_string())
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -165,9 +168,9 @@ pub fn set_provider_region(provider_id: String, region: String) -> Result<(), St
             "Invalid region '{region}' for provider '{provider_id}'"
         ));
     }
-    let mut settings = Settings::load();
-    provider_region_set(&mut settings, &provider_id, region.to_string())?;
-    settings.save().map_err(|e| e.to_string())
+    Settings::try_update(|settings| provider_region_set(settings, &provider_id, region.to_string()))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -193,10 +196,13 @@ pub fn set_provider_workspace_id(provider_id: String, workspace_id: String) -> R
         format!("Provider '{provider_id}' does not expose a workspace/project id")
     })?;
     let workspace_id = codexbar::settings::validate_provider_workspace_value(id, &workspace_id)?;
-    let mut settings = Settings::load();
-    prevent_litellm_key_retargeting(id, settings.workspace_id(id), &workspace_id)?;
-    settings.set_workspace_id(id, workspace_id);
-    settings.save().map_err(|e| e.to_string())
+    Settings::try_update(|settings| {
+        prevent_litellm_key_retargeting(id, settings.workspace_id(id), &workspace_id)?;
+        settings.set_workspace_id(id, workspace_id);
+        Ok(())
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 fn prevent_litellm_key_retargeting(
@@ -318,9 +324,9 @@ pub fn set_provider_gateway_url(provider_id: String, gateway_url: String) -> Res
     codexbar::providers::wayfinder::parse_gateway_url(gateway_url)
         .map_err(|error| error.to_string())?;
 
-    let mut settings = Settings::load();
-    settings.set_gateway_url(id, gateway_url.to_string());
-    settings.save().map_err(|error| error.to_string())
+    Settings::update(|settings| settings.set_gateway_url(id, gateway_url.to_string()))
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 // ── Phase 6c — cookie source & region option catalogs ────────────────

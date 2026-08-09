@@ -15,6 +15,20 @@ pub struct ManualCookieEntry {
 }
 
 impl ManualCookies {
+    /// Apply a mutation while holding the shared state lock across load and
+    /// save, so another process cannot overwrite this update with stale data.
+    pub fn update(operation: impl FnOnce(&mut Self)) -> anyhow::Result<Self> {
+        let path = Self::cookies_path()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine cookies path"))?;
+        crate::secure_file::with_state_write_lock(|| {
+            let mut cookies = Self::load_update_from(&path)?;
+            operation(&mut cookies);
+            cookies.save_to(&path).map_err(std::io::Error::other)?;
+            Ok(cookies)
+        })
+        .map_err(Into::into)
+    }
+
     /// Get the cookies file path
     pub fn cookies_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("Ceiling").join("manual_cookies.json"))
@@ -51,10 +65,14 @@ impl ManualCookies {
         let Some(path) = Self::cookies_path() else {
             return Ok(Self::default());
         };
+        Self::try_load_from(&path)
+    }
+
+    pub(super) fn try_load_from(path: &std::path::Path) -> anyhow::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = crate::secure_file::read_string(&path)?;
+        let content = crate::secure_file::read_string(path)?;
         Ok(serde_json::from_str(&content)?)
     }
 
@@ -63,12 +81,26 @@ impl ManualCookies {
         let path = Self::cookies_path()
             .ok_or_else(|| anyhow::anyhow!("Could not determine cookies path"))?;
 
+        self.save_to(&path)
+    }
+
+    fn load_update_from(path: &std::path::Path) -> std::io::Result<Self> {
+        Self::try_load_from(path).map_err(|error| {
+            tracing::warn!(%error, "Saved manual cookies could not be decoded");
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Saved manual cookies could not be read; refusing to replace them",
+            )
+        })
+    }
+
+    pub(super) fn save_to(&self, path: &std::path::Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        crate::secure_file::write_string(&path, &json)?;
+        crate::secure_file::write_string(path, &json)?;
 
         Ok(())
     }

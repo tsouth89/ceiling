@@ -329,13 +329,13 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             });
         }
         Some(MenuAction::ToggleProvider(provider_id)) => {
-            let mut settings = Settings::load();
-            if settings.enabled_providers.contains(&provider_id) {
-                settings.enabled_providers.remove(&provider_id);
-            } else {
-                settings.enabled_providers.insert(provider_id);
-            }
-            let _ = settings.save();
+            let _ = Settings::update(|settings| {
+                if settings.enabled_providers.contains(&provider_id) {
+                    settings.enabled_providers.remove(&provider_id);
+                } else {
+                    settings.enabled_providers.insert(provider_id);
+                }
+            });
             crate::floatbar::notify_settings_changed(app);
             rebuild_tray_menu(app);
         }

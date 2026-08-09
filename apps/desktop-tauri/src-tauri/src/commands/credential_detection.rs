@@ -289,9 +289,11 @@ pub fn set_jetbrains_ide_path(path: String) -> Result<(), String> {
     if !pb.is_dir() {
         return Err(format!("JetBrains IDE path is not a directory: {trimmed}"));
     }
-    let mut settings = Settings::load();
-    settings.set_jetbrains_ide_base_path(pb.to_string_lossy().into_owned());
-    settings.save().map_err(|e| e.to_string())
+    Settings::update(|settings| {
+        settings.set_jetbrains_ide_base_path(pb.to_string_lossy().into_owned())
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

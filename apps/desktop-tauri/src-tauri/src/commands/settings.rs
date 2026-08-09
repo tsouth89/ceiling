@@ -385,26 +385,26 @@ pub async fn update_settings(
     app: tauri::AppHandle,
     patch: SettingsUpdate,
 ) -> Result<SettingsSnapshot, String> {
-    let mut settings = Settings::load();
     let notify_float_bar = patch.notifies_float_bar();
     let refresh_provider_data = patch.refreshes_provider_data();
     let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
-    let previous_language = settings.ui_language;
+    let (settings, (float_bar_patch, language_changed)) = Settings::try_update(|settings| {
+        let previous_language = settings.ui_language;
+        patch.validate_shortcut_changes(
+            &app,
+            &settings.global_shortcut,
+            &settings.taskbar_toggle_shortcut,
+        )?;
+        let float_bar_patch = patch.apply_to(settings)?;
+        Ok((float_bar_patch, settings.ui_language != previous_language))
+    })
+    .map_err(|e| e.to_string())?;
 
-    patch.validate_shortcut_changes(
-        &app,
-        &settings.global_shortcut,
-        &settings.taskbar_toggle_shortcut,
-    )?;
-    let float_bar_patch = patch.apply_to(&mut settings)?;
-
-    if settings.ui_language != previous_language {
+    if language_changed {
         let _ = app.emit(events::LOCALE_CHANGED, language_label(settings.ui_language));
     }
-
-    settings.save().map_err(|e| e.to_string())?;
     if clear_local_usage_cache {
         crate::commands::clear_provider_local_usage_cache();
     }
