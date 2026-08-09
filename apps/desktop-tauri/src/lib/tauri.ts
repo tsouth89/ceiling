@@ -29,7 +29,6 @@ import type {
   SurfaceTargetForMode,
   VisibleSurfaceMode,
   UpdateStatePayload,
-  CookieSourceOption,
   RegionOption,
   SafeDiagnostics,
   CredentialStorageStatus,
@@ -445,22 +444,10 @@ export function revokeProviderCredentials(providerId: string): Promise<void> {
   return invoke<void>("revoke_provider_credentials", { providerId });
 }
 
-// ── Phase 6c — cookie source & region pickers ────────────────────────
-
-export function getProviderCookieSourceOptions(
-  providerId: string,
-): Promise<CookieSourceOption[]> {
-  return invoke<CookieSourceOption[]>("get_provider_cookie_source_options", {
-    providerId,
-  });
-}
+// ── Region picker ────────────────────────────────────────────────────
 
 export function getProviderRegionOptions(providerId: string): Promise<RegionOption[]> {
   return invoke<RegionOption[]>("get_provider_region_options", { providerId });
-}
-
-export function setProviderCookieSource(providerId: string, source: string): Promise<void> {
-  return invoke<void>("set_provider_cookie_source", { providerId, source });
 }
 
 export function setProviderRegion(providerId: string, region: string): Promise<void> {

@@ -1034,13 +1034,7 @@ export interface ProviderDetail {
   region: string | null;
 }
 
-// ── Phase 6c — cookie-source & region pickers ────────────────────────
-
-export interface CookieSourceOption {
-  value: string;
-  label: string;
-  description?: string;
-}
+// ── Region picker ────────────────────────────────────────────────────
 
 export interface RegionOption {
   value: string;

@@ -5,12 +5,14 @@ import {
   setManualCookie,
 } from "../../../lib/tauri";
 import { Select } from "../../../components/FormControls";
+import { useLocale } from "../../../hooks/useLocale";
 import type {
   CookieInfoBridge,
   ProviderCatalogEntry,
 } from "../../../types/bridge";
 
 export default function CookiesTab({ providers }: { providers: ProviderCatalogEntry[] }) {
+  const { t } = useLocale();
   const [cookies, setCookies] = useState<CookieInfoBridge[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +72,9 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
         Saved cookie headers for browser-authenticated providers. Ceiling does
         not scan browser databases; you stay in control of exactly what is saved.
       </p>
+      <div className="settings-status">
+        {t("BrowserCookieMigrationNotice")}
+      </div>
 
       {error && (
         <div className="settings-status settings-status--error">{error}</div>
@@ -108,13 +113,14 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
         <p className="credential-empty">No manual cookies saved.</p>
       )}
 
-      <h3 className="settings-section__title">Copy a cookie header</h3>
+      <h3 className="settings-section__title">{t("BrowserCookiePasteGuideTitle")}</h3>
       <ol className="settings-section__hint">
-        <li>Sign in to the provider in your normal browser.</li>
-        <li>Press F12, open Network, then refresh the provider page.</li>
-        <li>Select an authenticated request and copy the Cookie request-header value.</li>
-        <li>Paste the value below and save it. Never share it—it grants account access.</li>
+        <li>{t("BrowserCookiePasteGuideSignIn")}</li>
+        <li>{t("BrowserCookiePasteGuideDevTools")}</li>
+        <li>{t("BrowserCookiePasteGuideCopy")}</li>
+        <li>{t("BrowserCookiePasteGuideSave")}</li>
       </ol>
+      <p className="settings-section__hint">{t("BrowserCookiePasteGuidePrivacy")}</p>
       <div className="credential-add-form">
         <Select
           value={addProviderId}

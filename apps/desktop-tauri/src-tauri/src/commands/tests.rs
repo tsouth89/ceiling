@@ -11,7 +11,7 @@ use codexbar::core::{
     SourceMode, TokenAccount, instantiate_provider,
 };
 use codexbar::host::session::launch_block_reason;
-use codexbar::settings::{ApiKeys, Language, ManualCookies, Settings};
+use codexbar::settings::{ApiKeys, ManualCookies, Settings};
 
 #[test]
 fn validate_surface_target_accepts_matching_target() {
@@ -114,8 +114,7 @@ fn command_inputs_reject_multiline_secrets() {
 }
 
 #[test]
-fn command_inputs_reject_unknown_cookie_source_and_region_values() {
-    assert!(super::set_provider_cookie_source("codex".into(), "browser".into()).is_err());
+fn command_inputs_reject_unknown_region_values() {
     assert!(super::set_provider_region("zai".into(), "moon".into()).is_err());
 }
 
@@ -228,7 +227,7 @@ fn settings_snapshot_preserves_partial_config_order_for_enabled_providers() {
 #[test]
 fn provider_cookie_source_lookup_roundtrips_known_providers() {
     let mut s = Settings::default();
-    super::provider_cookie_source_set(&mut s, "codex", "cli-config".to_string()).unwrap();
+    s.set_cookie_source(ProviderId::Codex, "cli-config");
     assert_eq!(
         provider_cookie_source_lookup(&s, "codex").as_deref(),
         Some("cli-config")
@@ -253,13 +252,6 @@ fn minimax_region_lookup_normalizes_legacy_china_value() {
     let mut s = Settings::default();
     super::provider_region_set(&mut s, "minimax", "china".to_string()).unwrap();
     assert_eq!(provider_region_lookup(&s, "minimax").as_deref(), Some("cn"));
-}
-
-#[test]
-fn provider_cookie_source_set_rejects_unknown_provider() {
-    let mut s = Settings::default();
-    let err = super::provider_cookie_source_set(&mut s, "nope", "x".into()).unwrap_err();
-    assert!(err.contains("nope"));
 }
 
 #[test]
@@ -1349,22 +1341,6 @@ fn chart_data_requires_account_email_for_codex() {
 }
 
 #[test]
-fn cookie_options_for_cookie_supporting_provider() {
-    let opts = super::cookie_source_options_for("codex", Language::English);
-    let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
-    assert_eq!(values, vec!["auto", "manual", "off"]);
-    assert!(opts.iter().any(|o| o.label == "Automatic"));
-    assert!(opts.iter().any(|o| o.label == "Manual"));
-    assert!(opts.iter().any(|o| o.label == "Disabled"));
-}
-
-#[test]
-fn cookie_options_empty_for_providers_without_picker() {
-    assert!(super::cookie_source_options_for("anthropic", Language::English).is_empty());
-    assert!(super::cookie_source_options_for("unknown", Language::English).is_empty());
-}
-
-#[test]
 fn region_options_for_regional_provider() {
     let opts = super::region_options_for("alibaba");
     let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
@@ -1390,18 +1366,6 @@ fn minimax_region_options_match_upstream_hosts() {
 fn region_options_empty_for_non_regional_provider() {
     assert!(super::region_options_for("claude").is_empty());
     assert!(super::region_options_for("codex").is_empty());
-}
-
-#[test]
-fn cookie_source_option_roundtrips_serde() {
-    let opt = super::CookieSourceOption {
-        value: "auto".to_string(),
-        label: "Automatic".to_string(),
-        description: Some("Imports browser cookies.".to_string()),
-    };
-    let json = serde_json::to_string(&opt).unwrap();
-    let back: super::CookieSourceOption = serde_json::from_str(&json).unwrap();
-    assert_eq!(opt, back);
 }
 
 #[test]

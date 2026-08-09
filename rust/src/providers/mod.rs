@@ -217,3 +217,16 @@ pub(crate) fn validated_https_url(
     }
     Ok(url)
 }
+
+#[cfg(test)]
+mod browser_cookie_policy_tests {
+    use super::*;
+
+    #[test]
+    fn provider_browser_cookie_fallback_is_disabled() {
+        assert!(matches!(
+            browser_cookie_header(&["example.com"]),
+            Err(crate::core::ProviderError::NoCookies)
+        ));
+    }
+}
