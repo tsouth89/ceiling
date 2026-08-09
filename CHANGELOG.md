@@ -2,6 +2,10 @@
 
 ## [Ceiling] Unreleased
 
+## [Ceiling] 1.5.25 - 2026-08-09
+
+Patch release for credential and settings integrity, safer custom Codex endpoints, and a Claude taskbar tile that stays focused on usable account capacity.
+
 ### Security
 - **A custom Codex `chatgpt_base_url` can no longer be pointed at a remote host over plaintext.** Every usage refresh sends the Codex access token to that URL, and the check that was meant to confine plaintext to a local proxy compared string prefixes. `http://localhost@attacker.example` passed it — `localhost` is userinfo there, and the real host is remote — as did `http://localhost.attacker.example`, where the loopback literal is just a label of someone else's domain. Either one received the token in the clear on every refresh. The value is now parsed as a URL and judged on its actual host, with user info rejected outright. Legitimate local proxies on `127.0.0.1`, `localhost`, or `[::1]` still work, and a rejected value falls back to the default backend instead of being used.
 
