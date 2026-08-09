@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { RateWindowSnapshot } from "../../types/bridge";
-import UsageBar from "./UsageBar";
+import UsageBar, { usageLevel } from "./UsageBar";
 
 function windowSnapshot(
   overrides: Partial<RateWindowSnapshot> = {},
@@ -49,5 +49,27 @@ describe("UsageBar", () => {
     // label still reports the true 140% — a screen reader user must not be
     // told they're at the limit when they're actually 40% over it.
     expect(track).toHaveAttribute("aria-label", "Session usage: 140%");
+  });
+});
+
+describe("usageLevel", () => {
+  it("returns normal below the high threshold", () => {
+    expect(usageLevel(0, false)).toBe("normal");
+    expect(usageLevel(69, false)).toBe("normal");
+  });
+
+  it("returns high at and above 70, below the critical threshold", () => {
+    expect(usageLevel(70, false)).toBe("high");
+    expect(usageLevel(89, false)).toBe("high");
+  });
+
+  it("returns critical at and above 90", () => {
+    expect(usageLevel(90, false)).toBe("critical");
+    expect(usageLevel(100, false)).toBe("critical");
+  });
+
+  it("returns exhausted when exhausted is true, regardless of a low percentage", () => {
+    expect(usageLevel(0, true)).toBe("exhausted");
+    expect(usageLevel(40, true)).toBe("exhausted");
   });
 });

@@ -8,7 +8,7 @@ interface UsageBarProps {
 
 type UsageLevel = "normal" | "high" | "critical" | "exhausted";
 
-function usageLevel(pct: number, exhausted: boolean): UsageLevel {
+export function usageLevel(pct: number, exhausted: boolean): UsageLevel {
   if (exhausted) return "exhausted";
   if (pct >= 90) return "critical";
   if (pct >= 70) return "high";
