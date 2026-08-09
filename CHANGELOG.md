@@ -1,5 +1,13 @@
 # Changelog
 
+## [Ceiling] Unreleased
+
+### Fixed
+- **A maxed model sub-limit no longer takes over the Claude bar.** Claude reports per-model weekly caps ("Fable only", "Opus only", "Sonnet only") alongside the real Session and Weekly pools. The taskbar strip shows one lane per provider and picked whichever was closest to its ceiling, ranking already-blocked lanes first — so a Fable cap at 100% claimed the whole Claude pill and hid a session and a week that still had capacity. Hitting one model's cap does not stop work, it means you use another model, so these lanes no longer compete for the strip. They still appear in provider detail, the taskbar flyout, the tray menu, and the Activity timeline, which list every window. This also stops Claude being reported as exhausted on the strength of a model sub-limit alone.
+- **An unreadable credential store is no longer overwritten with a partial one.** Saving an API key, saving a manual cookie, or revoking one provider read the store first, and a store that could not be decoded — corrupt JSON, a DPAPI unprotect failure, a secure-file version this build does not understand — was read as empty. The following save replaces the whole file, so one provider's change destroyed every other stored secret. Those operations now fail with a diagnosable error and leave the file untouched. A store that was never created is still simply empty, so first-run setup is unaffected.
+- **One unknown provider id no longer resets every preference.** `provider_configs` was keyed strictly, so a single provider id this build does not recognize — a file written by a newer build, a renamed provider, a hand-edited typo — failed the entire settings parse. Settings then loaded as defaults, and the next tray toggle or preference edit persisted those defaults over the real file. Unknown ids are now parsed past and parked, so they survive a downgrade intact and are folded back in by a build that knows them.
+- **Token accounts stored under an unrecognized provider id survive an unrelated save.** The store dropped ids it could not resolve on load and then rewrote the whole file from what was left, so adding, removing, or switching an account for any known provider permanently erased credentials belonging to another build. They are now carried across writes. Removing a provider this build does recognize still removes it.
+
 ## [Ceiling] 1.5.24 - 2026-08-05
 
 Answers "am I going to run out before this resets?" on the usage bars themselves, and makes Cursor's on-demand spend visible in dollars. Both came from user feature requests (#190, #191).

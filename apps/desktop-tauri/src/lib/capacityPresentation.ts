@@ -159,7 +159,28 @@ function cursorStripWindow(
   };
 }
 
-/** Pick the window actually constraining this provider (see `outranks`). */
+/**
+ * Model-scoped sub-limits, e.g. Claude's `claude-weekly-scoped-fable`
+ * ("Fable only"), reported alongside the Session and Weekly pools.
+ *
+ * These cap ONE model inside an allowance, not the allowance itself: maxing
+ * "Fable only" doesn't stop you working, it just means you use a different
+ * model. Same shape as Cursor's parallel Auto/API pools.
+ */
+function isModelScopedWindow(id: string): boolean {
+  return id.startsWith("extra-claude-weekly-scoped-");
+}
+
+/**
+ * Pick the window actually constraining this provider (see `outranks`).
+ *
+ * Model-scoped sub-limits are excluded: they are not what stops your work, and
+ * the one-number strip has room for exactly one lane. Letting them compete meant
+ * a maxed "Fable only" won on the blocking-first rule and took over the whole
+ * Claude pill — number, label, and tone — hiding a Session and Weekly that still
+ * had capacity. They stay visible everywhere that lists every window: provider
+ * detail, the taskbar flyout, the tray menu, and the Activity timeline.
+ */
 export function constrainingWindow(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow {
@@ -174,6 +195,7 @@ export function constrainingWindow(
   };
 
   for (const candidate of nonPrimaryWindows(provider)) {
+    if (isModelScopedWindow(candidate.id)) continue;
     if (outranks(candidate, best)) {
       best = candidate;
     }

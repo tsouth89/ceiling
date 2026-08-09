@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  allMeasuredWindows,
   capacityFreshness,
   constrainingWindow,
   glanceMeters,
@@ -115,13 +116,109 @@ describe("capacityPresentation", () => {
       primaryLabel: "Session",
       extraRateWindows: [
         {
-          id: "scoped",
-          title: "Fable only",
+          id: "claude-design",
+          title: "Design",
           window: { ...window(40), isExhausted: true },
         },
       ],
     });
-    expect(constrainingWindow(blockedExtra).id).toBe("extra-scoped");
+    expect(constrainingWindow(blockedExtra).id).toBe("extra-claude-design");
+  });
+
+  it("keeps a maxed model-scoped lane off the strip while a pool has room", () => {
+    // Reporter case: Claude's weekly Fable sub-limit hits 100% and the strip
+    // pill shows "Fable only 100%", hiding a Session and Weekly with capacity.
+    // Maxing one model does not stop work — you use another model.
+    const fableMaxed = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(34),
+      primaryLabel: "Session (5h)",
+      secondary: window(12),
+      secondaryLabel: "Weekly",
+      extraRateWindows: [
+        {
+          id: "claude-weekly-scoped-fable",
+          title: "Fable only",
+          window: window(100),
+        },
+      ],
+    });
+    expect(constrainingWindow(fableMaxed).label).toBe("Session (5h)");
+    expect(constrainingWindow(fableMaxed).window.usedPercent).toBe(34);
+
+    // Not just the blocking case: a merely hot scoped lane must not win either.
+    const fableHot = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(34),
+      primaryLabel: "Session (5h)",
+      secondary: window(12),
+      secondaryLabel: "Weekly",
+      extraRateWindows: [
+        {
+          id: "claude-weekly-scoped-opus",
+          title: "Opus only",
+          window: window(99),
+        },
+      ],
+    });
+    expect(constrainingWindow(fableHot).label).toBe("Session (5h)");
+
+    // Real pools still rank normally against each other.
+    const weeklyHot = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(34),
+      primaryLabel: "Session (5h)",
+      secondary: window(91),
+      secondaryLabel: "Weekly",
+      extraRateWindows: [
+        {
+          id: "claude-weekly-scoped-sonnet",
+          title: "Sonnet only",
+          window: window(100),
+        },
+      ],
+    });
+    expect(constrainingWindow(weeklyHot).label).toBe("Weekly");
+    expect(constrainingWindow(weeklyHot).window.usedPercent).toBe(91);
+  });
+
+  it("does not report Claude as exhausted for a maxed model-scoped lane", () => {
+    const snap = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(34),
+      primaryLabel: "Session (5h)",
+      extraRateWindows: [
+        {
+          id: "claude-weekly-scoped-fable",
+          title: "Fable only",
+          window: window(100),
+        },
+      ],
+    });
+    expect(providerGlanceStatus(snap)).toBe("ok");
+  });
+
+  it("still lists model-scoped lanes among all measured windows", () => {
+    const snap = provider({
+      providerId: "claude",
+      displayName: "Claude",
+      primary: window(34),
+      primaryLabel: "Session (5h)",
+      extraRateWindows: [
+        {
+          id: "claude-weekly-scoped-fable",
+          title: "Fable only",
+          window: window(100),
+        },
+      ],
+    });
+    expect(
+      allMeasuredWindows(snap).map((measured) => measured.label),
+    ).toContain("Fable only");
   });
 
   it("breaks an exact tie toward the window that resets first", () => {
