@@ -234,7 +234,7 @@ impl OllamaProvider {
         }
     }
 
-    /// Resolve cookies from manual cookies, browser import, or context.
+    /// Resolve an explicitly saved cookie from the fetch context.
     fn resolve_cookie_source(
         &self,
         ctx: &FetchContext,
@@ -248,22 +248,7 @@ impl OllamaProvider {
                 .ok_or(ProviderError::NoCookies);
         }
 
-        // Try browser cookie extraction
-        match crate::providers::browser_cookies_for_domain(OLLAMA_COOKIE_DOMAIN) {
-            Ok(cookies) => {
-                let source = OllamaCookieSource::Browser(cookies);
-                source
-                    .header_for_url(
-                        &Url::parse(OLLAMA_SETTINGS_URL)
-                            .map_err(|e| ProviderError::Other(e.to_string()))?,
-                    )
-                    .is_some()
-                    .then_some(source)
-                    .ok_or(ProviderError::NoCookies)
-            }
-            Err(ProviderError::NoCookies) => Err(ProviderError::NoCookies),
-            Err(err) => Err(err),
-        }
+        Err(ProviderError::NoCookies)
     }
 
     /// Parse usage data from the Ollama settings HTML page

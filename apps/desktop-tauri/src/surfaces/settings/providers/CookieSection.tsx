@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getManualCookies,
-  importBrowserCookies,
-  listDetectedBrowsers,
   removeManualCookie,
   setManualCookie,
 } from "../../../lib/tauri";
-import { Select } from "../../../components/FormControls";
 import { useLocale } from "../../../hooks/useLocale";
-import type {
-  CookieInfoBridge,
-  DetectedBrowserBridge,
-} from "../../../types/bridge";
+import type { CookieInfoBridge } from "../../../types/bridge";
 
 interface Props {
   providerId: string;
@@ -42,12 +36,6 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [browsers, setBrowsers] = useState<DetectedBrowserBridge[]>([]);
-  const [browsersLoaded, setBrowsersLoaded] = useState(false);
-  const [browserType, setBrowserType] = useState("");
-  const [importStatus, setImportStatus] = useState<string | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-
   const [pasteValue, setPasteValue] = useState("");
 
   const reload = useCallback(async (signal: { stale: boolean }) => {
@@ -68,26 +56,11 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     const signal = { stale: false };
     setLoaded(false);
     setError(null);
-    setImportError(null);
-    setImportStatus(null);
     setPasteValue("");
     setSaved(null);
     void reload(signal);
     return () => { signal.stale = true; };
   }, [reload, cookieDomain]);
-
-  useEffect(() => {
-    if (cookieDomain === null) return;
-    listDetectedBrowsers()
-      .then((list) => {
-        setBrowsers(list);
-        setBrowsersLoaded(true);
-        if (list.length > 0) setBrowserType(list[0].browserType);
-      })
-      .catch(() => {
-        setBrowsersLoaded(true);
-      });
-  }, [cookieDomain]);
 
   if (cookieDomain === null) return null;
   if (!loaded) return null;
@@ -100,22 +73,6 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleImport = async () => {
-    if (!browserType) return;
-    setBusy(true);
-    setImportError(null);
-    setImportStatus(null);
-    try {
-      const next = await importBrowserCookies(providerId, browserType);
-      setSaved(next.find((c) => c.providerId === providerId) ?? null);
-      setImportStatus(t("BrowserCookieImportSuccess"));
-    } catch (err: unknown) {
-      setImportError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -172,42 +129,16 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
         <p className="credential-empty">{t("BrowserCookieNoneSaved")}</p>
       )}
 
-      {browsersLoaded && browsers.length > 0 && (
-        <>
-          {importError && (
-            <div className="settings-status settings-status--error">
-              {importError}
-            </div>
-          )}
-          {importStatus && (
-            <div className="settings-status settings-status--ok">
-              {importStatus}
-            </div>
-          )}
-          <div className="credential-add-form">
-            <Select
-              value={browserType}
-              options={browsers.map((b) => ({
-                value: b.browserType,
-                label: `${b.displayName} (${b.profileCount} ${
-                  b.profileCount === 1
-                    ? t("BrowserCookieProfileSingular")
-                    : t("BrowserCookieProfilePlural")
-                })`,
-              }))}
-              onChange={setBrowserType}
-              disabled={busy}
-            />
-            <button
-              className="credential-btn credential-btn--primary"
-              disabled={busy || !browserType}
-              onClick={() => void handleImport()}
-            >
-              {t("BrowserCookieImportFromBrowser")}
-            </button>
-          </div>
-        </>
-      )}
+      <div className="provider-detail-helper">
+        <strong>{t("BrowserCookiePasteGuideTitle")}</strong>
+        <ol>
+          <li>{t("BrowserCookiePasteGuideSignIn")}</li>
+          <li>{t("BrowserCookiePasteGuideDevTools")}</li>
+          <li>{t("BrowserCookiePasteGuideCopy")}</li>
+          <li>{t("BrowserCookiePasteGuideSave")}</li>
+        </ol>
+        <p>{t("BrowserCookiePasteGuidePrivacy")}</p>
+      </div>
 
       <div className="credential-add-form">
         <textarea

@@ -76,15 +76,10 @@ pub(crate) fn build_fetch_context(
             }
             // `browser` is accepted as a legacy alias from older settings.
             "auto" | "browser" | "web" => {
-                // Try browser cookie extraction as fallback when no manual cookie is set.
-                // On non-Windows this is a harmless no-op that returns an error.
-                let cookie_header = active_token_cookie.or(stored_cookie).or_else(|| {
-                    provider_cookie_domain(id, settings).and_then(|domain| {
-                        codexbar::browser::cookies::get_cookie_header(domain)
-                            .ok()
-                            .filter(|h| !h.is_empty())
-                    })
-                });
+                // Modern browsers deliberately prevent reliable database
+                // extraction. Automatic sources may still use CLI/IDE auth,
+                // but website cookies must be supplied explicitly.
+                let cookie_header = active_token_cookie.or(stored_cookie);
                 (usage_source, cookie_header)
             }
             _ => (usage_source, stored_cookie),
@@ -105,24 +100,6 @@ pub(crate) fn build_fetch_context(
         gateway_url,
         ..FetchContext::default()
     }
-}
-
-pub(crate) fn provider_cookie_domain(id: ProviderId, settings: &Settings) -> Option<&'static str> {
-    if id == ProviderId::MiniMax {
-        return Some(
-            codexbar::providers::MiniMaxProvider::cookie_domain_for_region(Some(
-                settings.api_region(id),
-            )),
-        );
-    }
-    if id == ProviderId::Alibaba {
-        return Some(
-            codexbar::providers::AlibabaProvider::cookie_domain_for_region(Some(
-                settings.api_region(id),
-            )),
-        );
-    }
-    id.cookie_domain()
 }
 
 const DEFAULT_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);

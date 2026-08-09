@@ -623,12 +623,6 @@ export interface CookieInfoBridge {
   savedAt: string;
 }
 
-export interface DetectedBrowserBridge {
-  browserType: string;
-  displayName: string;
-  profileCount: number;
-}
-
 export interface AppInfoBridge {
   name: string;
   version: string;
@@ -1040,13 +1034,7 @@ export interface ProviderDetail {
   region: string | null;
 }
 
-// ── Phase 6c — cookie-source & region pickers ────────────────────────
-
-export interface CookieSourceOption {
-  value: string;
-  label: string;
-  description?: string;
-}
+// ── Region picker ────────────────────────────────────────────────────
 
 export interface RegionOption {
   value: string;

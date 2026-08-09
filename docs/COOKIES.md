@@ -1,24 +1,15 @@
-# Browser Cookie Extraction
+# Manual Cookie Setup
 
-Some providers authenticate through their website (Claude, Cursor, Kimi, and similar). Ceiling can read those cookies from your browser, but modern Windows locks most Chromium cookies behind App-Bound Encryption, so **manual cookies are the default and most reliable path** for those providers.
+Some providers authenticate through their website (Claude, Cursor, Kimi, and similar). Modern browsers protect those sessions with mechanisms such as Chromium App-Bound Encryption, so Ceiling does not scan browser cookie databases. You explicitly copy and save only the cookie header you want Ceiling to use.
 
 ## Cookie source defaults
 
-- **Cursor** defaults to **Automatic** — Ceiling reads the signed-in Cursor IDE session, so a cookie import is usually unnecessary.
+- **Cursor** defaults to **Automatic** — Ceiling reads the signed-in Cursor IDE session, so a cookie is usually unnecessary.
 - **Every other cookie-based provider** defaults to **Manual**. You paste the cookie header once and Ceiling stores it encrypted.
 
 Change a provider's source in **Settings → Providers → provider detail → Browser Cookies**.
 
-## Automatic import and App-Bound Encryption
-
-| Browser | Reality on current Windows |
-|---------|----------------------------|
-| Chrome / Edge / Brave | App-Bound Encryption (Chrome/Edge 127+, `v20` cookies) blocks automatic import for most profiles. When it does, Ceiling reports "App-Bound Encryption is blocking automatic browser import" and you should switch that provider to manual cookies. |
-| Firefox | Cookies are stored unencrypted, so automatic import works. |
-
-When automatic import does succeed, Ceiling reads the browser's cookie database, decrypts Chromium cookies with the current user's Windows DPAPI key, and extracts only the cookies for enabled providers (e.g. `claude.ai`, `cursor.com`).
-
-## Manual cookies (recommended for Chromium providers)
+## Copy a cookie header
 
 1. Open the provider's website in your browser (e.g. `claude.ai`) and make sure you are logged in.
 2. Open DevTools (F12) → **Network** tab, refresh the page, and click any request to the provider.
@@ -29,6 +20,6 @@ Manual cookies are saved to the `ManualCookies` store and reused across restarts
 
 ## Troubleshooting
 
-- **"App-Bound Encryption is blocking automatic browser import"**: expected on current Chrome/Edge/Brave. Switch that provider to manual cookies.
-- **"Cookie decryption failed" or empty cookies**: close the browser (it can lock the cookie database while running) and confirm you are logged into the provider's website in that browser.
-- **WSL**: Chromium DPAPI cookies cannot be decrypted from WSL. Use manual cookies or CLI-based provider auth instead.
+- If the provider reports that authentication is required, repeat the steps above and copy the complete `Cookie` request-header value from a successful authenticated request.
+- Browser sessions expire. If usage stops refreshing later, replace the saved value with a fresh cookie header.
+- Never send a cookie header to support, paste it into an issue, or include it in diagnostics.

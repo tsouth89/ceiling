@@ -9,7 +9,6 @@ use chrono::{DateTime, Utc};
 use reqwest::{Client, Url};
 use serde::Deserialize;
 
-use crate::browser::cookies::get_cookie_header;
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
     RateWindow, SourceMode, UsageSnapshot,
@@ -19,7 +18,6 @@ const KIMI_WEB_USAGE_URL: &str =
     "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages";
 const KIMI_SUBSCRIPTION_STATS_URL: &str =
     "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats";
-const KIMI_COOKIE_DOMAINS: [&str; 2] = ["www.kimi.com", "kimi.moonshot.cn"];
 const KIMI_CODE_API_BASE: &str = "https://api.kimi.com";
 const KIMI_CODE_API_KEY_ENV: &str = "KIMI_CODE_API_KEY";
 const KIMI_CODE_BASE_URL_ENV: &str = "KIMI_CODE_BASE_URL";
@@ -120,33 +118,6 @@ impl KimiProvider {
         }
     }
 
-    /// Extract JWT token from kimi-auth cookie
-    fn get_auth_token(&self) -> Result<String, ProviderError> {
-        let mut saw_cookie_header = false;
-        let mut last_error = None;
-        for domain in KIMI_COOKIE_DOMAINS {
-            match get_cookie_header(domain) {
-                Ok(header) if !header.is_empty() => {
-                    saw_cookie_header = true;
-                    if let Ok(token) = Self::auth_token_from_cookie_header(&header) {
-                        return Ok(token);
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => last_error = Some(e),
-            }
-        }
-
-        if !saw_cookie_header && let Some(e) = last_error {
-            return Err(ProviderError::Other(format!(
-                "Failed to get cookies: {}",
-                e
-            )));
-        }
-
-        Err(ProviderError::AuthRequired)
-    }
-
     fn auth_token_from_cookie_headers(
         headers: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<String, ProviderError> {
@@ -183,7 +154,7 @@ impl KimiProvider {
             Some(header) if !header.trim().is_empty() => {
                 Self::auth_token_from_cookie_header(header)
             }
-            _ => self.get_auth_token(),
+            _ => Err(ProviderError::AuthRequired),
         }?;
 
         let client = crate::core::credentialed_http_client_builder()

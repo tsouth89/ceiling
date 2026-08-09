@@ -207,8 +207,8 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
           KEYCHAIN ACCESS
         </h3>
         <p className="settings-section__caption">
-          Disable all Keychain reads and writes. Browser cookie import is
-          unavailable; paste Cookie headers manually in Providers.
+          Disable all Keychain reads and writes. Manually saved Cookie headers
+          remain available in Providers.
         </p>
         <div className="settings-section__group">
           <Field

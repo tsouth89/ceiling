@@ -121,28 +121,12 @@ pub use zai::ZaiProvider;
 pub use zed::ZedProvider;
 
 pub(crate) fn browser_cookie_header(
-    domains: &[&str],
+    _domains: &[&str],
 ) -> Result<String, crate::core::ProviderError> {
-    crate::browser::cookies::get_cookie_header_for_domains(domains)
-        .map_err(map_browser_cookie_error)
-}
-
-pub(crate) fn browser_cookies_for_domain(
-    domain: &str,
-) -> Result<Vec<crate::browser::cookies::Cookie>, crate::core::ProviderError> {
-    crate::browser::cookies::get_cookies_for_domain(domain).map_err(map_browser_cookie_error)
-}
-
-fn map_browser_cookie_error(
-    error: crate::browser::cookies::CookieError,
-) -> crate::core::ProviderError {
-    match error {
-        crate::browser::cookies::CookieError::BrowserNotInstalled
-        | crate::browser::cookies::CookieError::NotFound(_) => {
-            crate::core::ProviderError::NoCookies
-        }
-        _ => crate::core::ProviderError::Other(format!("Failed to read browser cookies: {error}")),
-    }
+    // Browser database extraction is intentionally disabled. Chromium's
+    // App-Bound Encryption makes it unreliable, and silently probing browser
+    // profiles conflicts with the explicit manual-cookie UX.
+    Err(crate::core::ProviderError::NoCookies)
 }
 
 pub(crate) fn resolve_api_key(
@@ -232,4 +216,17 @@ pub(crate) fn validated_https_url(
         )));
     }
     Ok(url)
+}
+
+#[cfg(test)]
+mod browser_cookie_policy_tests {
+    use super::*;
+
+    #[test]
+    fn provider_browser_cookie_fallback_is_disabled() {
+        assert!(matches!(
+            browser_cookie_header(&["example.com"]),
+            Err(crate::core::ProviderError::NoCookies)
+        ));
+    }
 }

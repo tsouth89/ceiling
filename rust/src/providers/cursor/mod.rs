@@ -117,19 +117,7 @@ impl CursorProvider {
             }
         }
 
-        match self.api.get_cookie_header() {
-            Ok(header) => {
-                if let Some(normalized) = normalize_cookie_header(&header) {
-                    Ok(normalized)
-                } else {
-                    Ok(header)
-                }
-            }
-            Err(err) => {
-                tracing::debug!("Cursor browser cookie lookup failed: {err}");
-                Err(ProviderError::AuthRequired)
-            }
-        }
+        Err(ProviderError::AuthRequired)
     }
 }
 
@@ -164,7 +152,7 @@ impl Provider for CursorProvider {
                 tracing::warn!("Cursor API fetch failed: {}", e);
                 Err(match e {
                     ProviderError::AuthRequired => ProviderError::Other(
-                        "Cursor auth failed. Automatic uses your signed-in Cursor IDE session when available. Otherwise paste WorkosCursorSessionToken from cursor.com (Application → Cookies), or import via Firefox if Chrome/Edge blocks cookie access.".to_string(),
+                        "Cursor auth failed. Sign in to the Cursor IDE, or paste WorkosCursorSessionToken from cursor.com (Application → Cookies) in Settings.".to_string(),
                     ),
                     other => other,
                 })

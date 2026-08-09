@@ -257,16 +257,7 @@ impl ClaudeWebApiFetcher {
             return Ok(result);
         }
 
-        // Try multiple domains - Claude uses different domains for different services
-        let domains = [
-            "claude.ai",
-            "claude.com",
-            "console.anthropic.com",
-            "anthropic.com",
-        ];
-
-        let cookie_header = crate::providers::browser_cookie_header(&domains)?;
-        self.fetch_with_cookie_header(&cookie_header).await
+        Err(ProviderError::NoCookies)
     }
 
     /// Fetch usage with a provided cookie header
