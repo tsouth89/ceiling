@@ -91,7 +91,7 @@ pub fn set_api_key(
     validate_single_line_secret(&api_key, "API key", MAX_API_KEY_LEN)?;
     let label = sanitize_optional_label(label)?;
 
-    let mut keys = ApiKeys::load();
+    let mut keys = ApiKeys::load_for_update().map_err(|e| e.to_string())?;
     keys.set(&canonical_provider, api_key.trim(), label.as_deref());
     keys.save().map_err(|e| e.to_string())?;
     Ok(get_api_keys())
@@ -100,7 +100,7 @@ pub fn set_api_key(
 #[tauri::command]
 pub fn remove_api_key(provider_id: String) -> Result<Vec<ApiKeyInfoBridge>, String> {
     let canonical_provider = canonical_provider_arg(&provider_id)?;
-    let mut keys = ApiKeys::load();
+    let mut keys = ApiKeys::load_for_update().map_err(|e| e.to_string())?;
     keys.remove(&canonical_provider);
     keys.save().map_err(|e| e.to_string())?;
     Ok(get_api_keys())
@@ -142,7 +142,7 @@ pub fn set_manual_cookie(
         codexbar::core::TokenAccountSupport::normalized_cookie_header(id, &cookie_header)
     };
 
-    let mut cookies = ManualCookies::load();
+    let mut cookies = ManualCookies::load_for_update().map_err(|e| e.to_string())?;
     cookies.set(id.cli_name(), normalized.trim());
     cookies.save().map_err(|e| e.to_string())?;
     Ok(get_manual_cookies())
@@ -151,7 +151,7 @@ pub fn set_manual_cookie(
 #[tauri::command]
 pub fn remove_manual_cookie(provider_id: String) -> Result<Vec<CookieInfoBridge>, String> {
     let canonical_provider = canonical_provider_arg(&provider_id)?;
-    let mut cookies = ManualCookies::load();
+    let mut cookies = ManualCookies::load_for_update().map_err(|e| e.to_string())?;
     cookies.remove(&canonical_provider);
     cookies.save().map_err(|e| e.to_string())?;
     Ok(get_manual_cookies())

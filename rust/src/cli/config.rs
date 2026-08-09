@@ -284,7 +284,7 @@ async fn set_api_key(
     ensure_provider_accepts_api_key(id)?;
     let api_key = resolve_api_key_input(api_key, read_from_stdin)?;
 
-    let mut keys = ApiKeys::load();
+    let mut keys = ApiKeys::load_for_update()?;
     keys.set(id.cli_name(), &api_key, None);
     keys.save()?;
 

@@ -210,11 +210,11 @@ pub fn revoke_provider_credentials(provider_id: String) -> Result<(), String> {
     let id = parse_provider_arg(&provider_id)?;
     let provider_id = id.cli_name();
 
-    let mut keys = ApiKeys::load();
+    let mut keys = ApiKeys::load_for_update().map_err(|e| e.to_string())?;
     keys.remove(provider_id);
     keys.save().map_err(|e| e.to_string())?;
 
-    let mut cookies = ManualCookies::load();
+    let mut cookies = ManualCookies::load_for_update().map_err(|e| e.to_string())?;
     cookies.remove(provider_id);
     cookies.save().map_err(|e| e.to_string())?;
 
