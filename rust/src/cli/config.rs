@@ -261,13 +261,13 @@ async fn list_providers() -> anyhow::Result<()> {
 /// Enable or disable a provider by CLI name.
 async fn set_provider_enabled(provider: &str, enabled: bool) -> anyhow::Result<()> {
     let id = parse_provider(provider)?;
-    let mut settings = Settings::load();
-    if enabled {
-        settings.enable_provider(id);
-    } else {
-        settings.disable_provider(id);
-    }
-    settings.save()?;
+    Settings::update(|settings| {
+        if enabled {
+            settings.enable_provider(id);
+        } else {
+            settings.disable_provider(id);
+        }
+    })?;
     let state = if enabled { "enabled" } else { "disabled" };
     println!("Config: {state} {}", id.display_name());
     Ok(())
@@ -284,14 +284,10 @@ async fn set_api_key(
     ensure_provider_accepts_api_key(id)?;
     let api_key = resolve_api_key_input(api_key, read_from_stdin)?;
 
-    let mut keys = ApiKeys::load_for_update()?;
-    keys.set(id.cli_name(), &api_key, None);
-    keys.save()?;
+    ApiKeys::update(|keys| keys.set(id.cli_name(), &api_key, None))?;
 
     if enable_provider {
-        let mut settings = Settings::load();
-        settings.enable_provider(id);
-        settings.save()?;
+        Settings::update(|settings| settings.enable_provider(id))?;
     }
 
     let suffix = if enable_provider { " and enabled" } else { "" };

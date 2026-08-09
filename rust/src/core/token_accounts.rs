@@ -561,6 +561,16 @@ impl TokenAccountStore {
         &self,
         accounts: &HashMap<ProviderId, ProviderAccountData>,
     ) -> Result<(), TokenAccountError> {
+        crate::secure_file::with_state_write_lock(|| {
+            self.save_unlocked(accounts).map_err(std::io::Error::other)
+        })
+        .map_err(TokenAccountError::Io)
+    }
+
+    pub(crate) fn save_unlocked(
+        &self,
+        accounts: &HashMap<ProviderId, ProviderAccountData>,
+    ) -> Result<(), TokenAccountError> {
         // Read before create_dir_all/write so an undecodable existing file
         // fails closed instead of being replaced by a partial one.
         let mut providers: HashMap<String, ProviderAccountData> = self
@@ -614,9 +624,12 @@ impl TokenAccountStore {
         provider: ProviderId,
         data: &ProviderAccountData,
     ) -> Result<(), TokenAccountError> {
-        let mut all = self.load()?;
-        all.insert(provider, data.clone());
-        self.save(&all)
+        crate::secure_file::with_state_write_lock(|| {
+            let mut all = self.load().map_err(std::io::Error::other)?;
+            all.insert(provider, data.clone());
+            self.save_unlocked(&all).map_err(std::io::Error::other)
+        })
+        .map_err(TokenAccountError::Io)
     }
 }
 
@@ -783,6 +796,40 @@ mod tests {
         let loaded = store.load().expect("load after save");
         assert_eq!(loaded[&ProviderId::Claude].accounts.len(), 1);
         assert_eq!(loaded[&ProviderId::Cursor].accounts.len(), 1);
+    }
+
+    #[test]
+    fn concurrent_provider_saves_both_survive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-accounts.json");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+        let writers: Vec<_> = [ProviderId::Claude, ProviderId::Cursor]
+            .into_iter()
+            .map(|provider| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut data = ProviderAccountData::default();
+                    data.add_account(TokenAccount::new(
+                        format!("{provider:?}"),
+                        format!("secret-{provider:?}"),
+                    ));
+                    barrier.wait();
+                    TokenAccountStore::with_path(path)
+                        .save_provider(provider, &data)
+                        .expect("concurrent provider save");
+                })
+            })
+            .collect();
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored = TokenAccountStore::with_path(path).load().expect("reload");
+        assert!(stored.contains_key(&ProviderId::Claude));
+        assert!(stored.contains_key(&ProviderId::Cursor));
     }
 
     /// Removing a known provider must still remove it — preservation applies

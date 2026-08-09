@@ -74,12 +74,17 @@ fn parse_locale_language(raw: &str) -> Option<Language> {
 pub fn set_ui_language(app: tauri::AppHandle, language: String) -> Result<(), String> {
     let lang =
         parse_locale_language(&language).ok_or_else(|| format!("unknown language: {language}"))?;
-    let mut settings = Settings::load();
-    if settings.ui_language == lang {
+    let (_, changed) = Settings::try_update(|settings| {
+        if settings.ui_language == lang {
+            return Ok(false);
+        }
+        settings.ui_language = lang;
+        Ok(true)
+    })
+    .map_err(|e| e.to_string())?;
+    if !changed {
         return Ok(());
     }
-    settings.ui_language = lang;
-    settings.save().map_err(|e| e.to_string())?;
     let _ = app.emit(events::LOCALE_CHANGED, language_label(lang));
     crate::tray_bridge::refresh_tray_presentation(&app);
     Ok(())

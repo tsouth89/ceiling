@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine;
@@ -13,6 +13,116 @@ const VERSION: u32 = 1;
 const WINDOWS_DPAPI_USER: &str = "windows-dpapi-user";
 const WINDOWS_DPAPI_MACHINE: &str = "windows-dpapi-machine";
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+const STATE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const STATE_LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Serialize read-modify-write transactions across Ceiling processes.
+///
+/// Every settings and credential store shares one lock so operations spanning
+/// multiple files cannot interleave with a writer for any one of those files.
+pub fn with_state_write_lock<T>(operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let lock_path = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Ceiling")
+        .join("state-write.lock");
+    with_state_write_lock_at(&lock_path, operation)
+}
+
+pub(crate) fn with_state_write_lock_at<T>(
+    lock_path: &Path,
+    operation: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = StateWriteLock::acquire(lock_path)?;
+    operation()
+}
+
+struct StateWriteLock {
+    #[cfg(windows)]
+    handle: windows::Win32::Foundation::HANDLE,
+    #[cfg(not(windows))]
+    path: PathBuf,
+}
+
+impl StateWriteLock {
+    fn acquire(path: &Path) -> io::Result<Self> {
+        let deadline = std::time::Instant::now() + STATE_LOCK_TIMEOUT;
+        loop {
+            match Self::try_acquire(path) {
+                Ok(lock) => return Ok(lock),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied
+                    ) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(STATE_LOCK_RETRY);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn try_acquire(path: &Path) -> io::Result<Self> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_MODE, OPEN_ALWAYS,
+        };
+        use windows::core::PCWSTR;
+
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                GENERIC_READ.0 | GENERIC_WRITE.0,
+                FILE_SHARE_MODE(0),
+                None,
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+        }
+        .map_err(|error| {
+            let code = error.code().0 as u32;
+            let win32_code = code & 0xffff;
+            if win32_code == 32 || win32_code == 33 {
+                io::Error::new(io::ErrorKind::WouldBlock, "state store is locked")
+            } else {
+                io::Error::other(format!("could not acquire state lock: {error}"))
+            }
+        })?;
+        Ok(Self { handle })
+    }
+
+    #[cfg(not(windows))]
+    fn try_acquire(path: &Path) -> io::Result<Self> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(|_| Self {
+                path: path.to_path_buf(),
+            })
+    }
+}
+
+impl Drop for StateWriteLock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.handle);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProtectedFile {

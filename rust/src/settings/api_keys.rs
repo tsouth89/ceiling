@@ -18,6 +18,33 @@ pub struct ApiKeyEntry {
 }
 
 impl ApiKeys {
+    /// Apply one mutation against the latest on-disk store while holding the
+    /// process-wide state lock for the complete read-modify-write cycle.
+    pub fn update(operation: impl FnOnce(&mut Self)) -> anyhow::Result<Self> {
+        let path = Self::keys_path()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine API keys path"))?;
+        crate::secure_file::with_state_write_lock(|| {
+            let mut keys = Self::load_update_from(&path)?;
+            operation(&mut keys);
+            keys.save_to(&path).map_err(std::io::Error::other)?;
+            Ok(keys)
+        })
+        .map_err(Into::into)
+    }
+
+    fn update_at(
+        path: &std::path::Path,
+        operation: impl FnOnce(&mut Self),
+    ) -> anyhow::Result<Self> {
+        let lock_path = path.with_extension("state-write.lock");
+        crate::secure_file::with_state_write_lock_at(&lock_path, || {
+            let mut keys = Self::load_update_from(path)?;
+            operation(&mut keys);
+            keys.save_to(path).map_err(std::io::Error::other)?;
+            Ok(keys)
+        })
+        .map_err(Into::into)
+    }
     /// Get the API keys file path
     pub fn keys_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("Ceiling").join("api_keys.json"))
@@ -68,6 +95,16 @@ impl ApiKeys {
         }
         let content = crate::secure_file::read_string(path)?;
         Ok(serde_json::from_str(&content)?)
+    }
+
+    fn load_update_from(path: &std::path::Path) -> std::io::Result<Self> {
+        Self::try_load_from(path).map_err(|error| {
+            tracing::warn!(%error, "Saved API keys could not be decoded");
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Saved API keys could not be read; refusing to replace them",
+            )
+        })
     }
 
     /// Save API keys to disk
@@ -209,6 +246,34 @@ mod tests {
         let reloaded = ApiKeys::try_load_from(&path).expect("reload");
         assert_eq!(reloaded.get("groq"), Some("groq-secret-2"));
         assert_eq!(reloaded.get("openrouter"), Some("or-secret-replacement"));
+    }
+
+    #[test]
+    fn concurrent_provider_updates_both_survive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = std::sync::Arc::new(dir.path().join("api_keys.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+        let writers: Vec<_> = [("openrouter", "or-secret"), ("groq", "groq-secret")]
+            .into_iter()
+            .map(|(provider, secret)| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    ApiKeys::update_at(&path, |keys| keys.set(provider, secret, None))
+                        .expect("concurrent update");
+                })
+            })
+            .collect();
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let keys = ApiKeys::try_load_from(&path).expect("reload");
+        assert_eq!(keys.get("openrouter"), Some("or-secret"));
+        assert_eq!(keys.get("groq"), Some("groq-secret"));
     }
 }
 

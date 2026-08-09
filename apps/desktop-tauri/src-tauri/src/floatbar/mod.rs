@@ -55,12 +55,15 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
 /// Toggle the floating bar from the tray menu. Persists the new state
 /// and shows or hides the window accordingly.
 pub fn toggle(app: &tauri::AppHandle) {
-    let mut settings = Settings::load();
-    settings.taskbar_widget_enabled = !settings.taskbar_widget_enabled;
-    if let Err(error) = settings.save() {
-        tracing::warn!(%error, "Could not persist taskbar widget visibility");
-        return;
-    }
+    let settings = match Settings::update(|settings| {
+        settings.taskbar_widget_enabled = !settings.taskbar_widget_enabled;
+    }) {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::warn!(%error, "Could not persist taskbar widget visibility");
+            return;
+        }
+    };
     crate::taskbar_widget::apply_state(app, &settings);
 }
 
