@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  CookieSourceOption,
   CredentialStorageStatus,
   ProviderDetail,
   RegionOption,
@@ -10,7 +9,6 @@ import type {
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getCredentialStorageStatus,
-  getProviderCookieSourceOptions,
   getProviderDetail,
   getProviderRegionOptions,
   getTokenAccountProviders,
@@ -34,7 +32,6 @@ import { PaceSection } from "./sections/PaceSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { ChartsSection } from "./sections/charts/ChartsSection";
-import { CookieSourceSection } from "./sections/CookieSourceSection";
 import { RegionSection } from "./sections/RegionSection";
 import { GeminiCliCreds } from "./sections/credentials/GeminiCliCreds";
 import { VertexAiCreds } from "./sections/credentials/VertexAiCreds";
@@ -79,7 +76,6 @@ export function ProviderDetailPane({
 }: Props) {
   const { t } = useLocale();
   const [detail, setDetail] = useState<ProviderDetail | null>(null);
-  const [cookieOptions, setCookieOptions] = useState<CookieSourceOption[]>([]);
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
   const [credentialStatus, setCredentialStatus] =
     useState<CredentialStorageStatus | null>(null);
@@ -144,22 +140,19 @@ export function ProviderDetailPane({
     setLoading(true);
     setError(null);
     try {
-      const [next, cookieOpts, regionOpts, storageStatus] = await Promise.all([
+      const [next, regionOpts, storageStatus] = await Promise.all([
         getProviderDetail(id, accountId),
-        getProviderCookieSourceOptions(id),
         getProviderRegionOptions(id),
         getCredentialStorageStatus(),
       ]);
       if (signal?.stale) return;
       setDetail(next);
-      setCookieOptions(cookieOpts);
       setRegionOptions(regionOpts);
       setCredentialStatus(storageStatus);
     } catch (e) {
       if (signal?.stale) return;
       setError(String(e));
       setDetail(null);
-      setCookieOptions([]);
       setRegionOptions([]);
       setCredentialStatus(null);
     // A selection belongs to one provider; carrying it across panes would
@@ -174,13 +167,11 @@ export function ProviderDetailPane({
   useEffect(() => {
     if (!providerId) {
       setDetail(null);
-      setCookieOptions([]);
       setRegionOptions([]);
       return;
     }
     // Clear stale detail immediately so we don't render the old provider
     setDetail(null);
-    setCookieOptions([]);
     setRegionOptions([]);
     setCredentialStatus(null);
     const signal = { stale: false };
@@ -405,13 +396,6 @@ export function ProviderDetailPane({
       <CostSection cost={detail.cost} t={t} />
 
       {/* Per-provider sub-sections ported in Phases 6c–6f. */}
-      <CookieSourceSection
-        providerId={detail.id}
-        currentValue={detail.cookieSource}
-        options={cookieOptions}
-        t={t}
-        onChanged={() => void load(detail.id)}
-      />
       <RegionSection
         providerId={detail.id}
         currentValue={detail.region}

@@ -21,10 +21,9 @@ data" panel in a provider's Settings detail view.
 | Settings | `%APPDATA%\Ceiling\settings.json` - [schema](SETTINGS_JSON.md) | Local file |
 
 Ceiling also *reads* credentials that other tools already wrote (for example
-`~/.codex/auth.json`, the Cursor IDE session database, or your browser's cookie
-database). It does not copy those into its own storage unless you explicitly
-import them. See [COOKIES.md](COOKIES.md) for browser cookie extraction and
-App-Bound Encryption details.
+`~/.codex/auth.json` or the Cursor IDE session database). It does not scan
+browser cookie databases; website cookies must be copied explicitly. See
+[COOKIES.md](COOKIES.md) for the manual setup and storage details.
 
 ## Per-provider sources
 

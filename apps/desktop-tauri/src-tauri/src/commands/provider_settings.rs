@@ -444,7 +444,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(
                 lang,
                 "auto",
-                "Automatic imports browser cookies from opencode.ai.",
+                "Automatic uses supported CLI credentials. Website cookies must be pasted manually.",
                 "",
                 None,
             ),
@@ -460,7 +460,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(
                 lang,
                 "auto",
-                "Automatic imports browser cookies and WorkOS sessions.",
+                "Automatic uses supported local sessions. Website cookies must be pasted manually.",
                 "",
                 None,
             ),
@@ -476,7 +476,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(
                 lang,
                 "auto",
-                "Automatic imports browser cookies from Model Studio / Bailian.",
+                "Automatic uses supported local credentials. Website cookies must be pasted manually.",
                 "",
                 None,
             ),
@@ -489,7 +489,13 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             ),
         ],
         "kimi" | "kimik2" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
+            cookie_option(
+                lang,
+                "auto",
+                "Automatic uses supported local credentials. Website cookies must be pasted manually.",
+                "",
+                None,
+            ),
             cookie_option(
                 lang,
                 "manual",
@@ -503,7 +509,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(
                 lang,
                 "auto",
-                "Automatic imports browser cookies and Coding Plan tokens.",
+                "Automatic uses supported Coding Plan tokens. Website cookies must be pasted manually.",
                 "",
                 None,
             ),
@@ -516,7 +522,13 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             ),
         ],
         "augment" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
+            cookie_option(
+                lang,
+                "auto",
+                "Automatic uses supported local credentials. Website cookies must be pasted manually.",
+                "",
+                None,
+            ),
             cookie_option(
                 lang,
                 "manual",
@@ -526,7 +538,13 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             ),
         ],
         "amp" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
+            cookie_option(
+                lang,
+                "auto",
+                "Automatic uses supported local credentials. Website cookies must be pasted manually.",
+                "",
+                None,
+            ),
             cookie_option(
                 lang,
                 "manual",
@@ -536,7 +554,13 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             ),
         ],
         "ollama" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
+            cookie_option(
+                lang,
+                "auto",
+                "Automatic uses supported local credentials. Website cookies must be pasted manually.",
+                "",
+                None,
+            ),
             cookie_option(
                 lang,
                 "manual",
@@ -549,7 +573,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(
                 lang,
                 "auto",
-                "Automatic imports browser cookies from Mistral Admin.",
+                "Automatic uses supported local credentials. Website cookies must be pasted manually.",
                 "",
                 None,
             ),

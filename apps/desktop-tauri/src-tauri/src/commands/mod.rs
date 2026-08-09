@@ -30,7 +30,6 @@ mod updater;
 
 mod agent_sessions;
 mod bridge;
-mod browser_import;
 mod credential_detection;
 mod credentials;
 mod locale_cmd;
@@ -44,7 +43,6 @@ mod system;
 
 pub use agent_sessions::*;
 pub(crate) use bridge::*;
-pub use browser_import::*;
 pub use credential_detection::*;
 pub use credentials::*;
 pub use locale_cmd::*;

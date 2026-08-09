@@ -8,7 +8,6 @@ import type {
   ProofCommand,
   ProofStatePayload,
   CookieInfoBridge,
-  DetectedBrowserBridge,
   DetectedProviderAccount,
   Language,
   LocaleStrings,
@@ -230,20 +229,6 @@ export function removeManualCookie(
   providerId: string,
 ): Promise<CookieInfoBridge[]> {
   return invoke<CookieInfoBridge[]>("remove_manual_cookie", { providerId });
-}
-
-export function listDetectedBrowsers(): Promise<DetectedBrowserBridge[]> {
-  return invoke<DetectedBrowserBridge[]>("list_detected_browsers");
-}
-
-export function importBrowserCookies(
-  providerId: string,
-  browserType: string,
-): Promise<CookieInfoBridge[]> {
-  return invoke<CookieInfoBridge[]>("import_browser_cookies", {
-    providerId,
-    browserType,
-  });
 }
 
 export function getAppInfo(): Promise<AppInfoBridge> {

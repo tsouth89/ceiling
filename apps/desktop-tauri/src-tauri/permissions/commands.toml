@@ -42,8 +42,6 @@ commands.allow = [
   "get_manual_cookies",
   "set_manual_cookie",
   "remove_manual_cookie",
-  "list_detected_browsers",
-  "import_browser_cookies",
   "get_token_account_providers",
   "get_token_accounts",
   "add_token_account",

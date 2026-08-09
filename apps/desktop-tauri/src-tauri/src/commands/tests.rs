@@ -256,21 +256,6 @@ fn minimax_region_lookup_normalizes_legacy_china_value() {
 }
 
 #[test]
-fn minimax_cookie_domain_follows_selected_region() {
-    let mut s = Settings::default();
-    assert_eq!(
-        super::provider_cookie_domain(ProviderId::MiniMax, &s),
-        Some("platform.minimax.io")
-    );
-
-    s.set_api_region(ProviderId::MiniMax, "cn");
-    assert_eq!(
-        super::provider_cookie_domain(ProviderId::MiniMax, &s),
-        Some("platform.minimaxi.com")
-    );
-}
-
-#[test]
 fn provider_cookie_source_set_rejects_unknown_provider() {
     let mut s = Settings::default();
     let err = super::provider_cookie_source_set(&mut s, "nope", "x".into()).unwrap_err();
@@ -292,7 +277,7 @@ fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
         &token_accounts,
     );
 
-    // Cursor defaults to Automatic and resolves IDE disk / browser cookies in-provider.
+    // Cursor defaults to Automatic and resolves the signed-in IDE session in-provider.
     assert_eq!(ctx.source_mode, SourceMode::Auto);
     assert!(ctx.manual_cookie_header.is_none());
 }
@@ -1514,7 +1499,6 @@ fn auxiliary_window_permissions_exclude_sensitive_commands() {
     for command in [
         "set_api_key",
         "set_manual_cookie",
-        "import_browser_cookies",
         "add_token_account",
         "open_path",
         "quit_app",

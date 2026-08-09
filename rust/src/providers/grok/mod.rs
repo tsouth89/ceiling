@@ -314,7 +314,7 @@ impl GrokProvider {
         self.fetch_with_auth(&credentials, "cli").await
     }
 
-    /// Prefer `grok login` credentials (Claude/Codex-style), then cookies.
+    /// Prefer a manually supplied cookie, then `grok login` credentials.
     async fn fetch_auto(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         if let Some(ref cookie_header) = ctx.manual_cookie_header {
             match self.fetch_with_cookie(cookie_header).await {
@@ -328,11 +328,7 @@ impl GrokProvider {
             Err(ProviderError::AuthRequired) | Err(ProviderError::NotInstalled(_)) => {}
             Err(e) => return Err(e),
         }
-        match crate::providers::browser_cookie_header(&["grok.com"]) {
-            Ok(cookie_header) => self.fetch_with_cookie(&cookie_header).await,
-            Err(ProviderError::NoCookies) => Err(ProviderError::AuthRequired),
-            Err(e) => Err(e),
-        }
+        Err(ProviderError::AuthRequired)
     }
 
     fn detect_cli_version() -> Option<String> {
