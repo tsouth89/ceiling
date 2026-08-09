@@ -45,6 +45,20 @@ pub struct ClaudeProvider {
     admin_fetcher: ClaudeAdminApiFetcher,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaudeAutoPolicy {
+    FallbackChain,
+    ScopedOAuthOnly,
+}
+
+fn claude_auto_policy(ctx: &FetchContext) -> ClaudeAutoPolicy {
+    if ctx.account_config_dir.is_some() {
+        ClaudeAutoPolicy::ScopedOAuthOnly
+    } else {
+        ClaudeAutoPolicy::FallbackChain
+    }
+}
+
 impl ClaudeProvider {
     pub fn new() -> Self {
         Self {
@@ -444,6 +458,19 @@ impl ClaudeProvider {
         &self,
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
+        // A configured account is a promise that this reading belongs to one
+        // specific CLAUDE_CONFIG_DIR. Global sources such as Claude Desktop,
+        // browser cookies, environment tokens, and an ambient CLI session have
+        // no account identity attached, so consulting them here can render the
+        // same seat under every configured account card.
+        if claude_auto_policy(ctx) == ClaudeAutoPolicy::ScopedOAuthOnly {
+            tracing::debug!(
+                config_dir = ?ctx.account_config_dir,
+                "using only directory-scoped OAuth for configured Claude account"
+            );
+            return self.fetch_via_oauth(ctx).await;
+        }
+
         let mut failures = Vec::new();
 
         if let Some(result) = self.try_auto_admin_api(ctx, &mut failures).await {
@@ -1038,6 +1065,24 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
+
+    #[test]
+    fn configured_account_auto_mode_is_scoped_oauth_only() {
+        let configured = FetchContext {
+            account_config_dir: Some(std::path::PathBuf::from(r"C:\Users\person\.claude-work")),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            claude_auto_policy(&configured),
+            ClaudeAutoPolicy::ScopedOAuthOnly
+        );
+
+        let ambient = FetchContext::default();
+        assert_eq!(
+            claude_auto_policy(&ambient),
+            ClaudeAutoPolicy::FallbackChain
+        );
+    }
 
     #[test]
     fn names_a_pro_seat_from_its_subscription_type() {
