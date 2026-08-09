@@ -73,8 +73,13 @@ impl RateWindow {
         }
 
         let duration = resets_at - now;
-        let hours = duration.num_hours();
+        // Derive hours and minutes from ONE rounded total. Taking hours from
+        // `num_hours()` (floor) while taking minutes from a ceiled total let
+        // the two disagree across an hour boundary: at 1h59m30s the total
+        // rounded up into the next hour, so minutes read 0 while hours stayed
+        // 1 and the countdown claimed "1h 0m" — nearly an hour short.
         let total_minutes = ((duration.num_seconds() + 59) / 60).max(1);
+        let hours = total_minutes / 60;
         let minutes = total_minutes % 60;
 
         if hours > 24 {
@@ -137,5 +142,29 @@ mod tests {
         );
 
         assert_eq!(window.format_countdown().as_deref(), Some("1m"));
+    }
+
+    /// SBS-619: hours came from a floor and minutes from a ceil, so just under
+    /// an hour boundary the minutes wrapped to 0 while the hours had not yet
+    /// advanced — reporting nearly an hour less time than remained.
+    #[test]
+    fn countdown_does_not_lose_an_hour_at_a_boundary() {
+        let countdown = |seconds: i64| {
+            RateWindow::with_details(
+                10.0,
+                None,
+                Some(Utc::now() + chrono::Duration::seconds(seconds)),
+                None,
+            )
+            .format_countdown()
+        };
+
+        // 1h59m30s rounds to 120 minutes: two hours, not "1h 0m".
+        assert_eq!(countdown(2 * 3600 - 30).as_deref(), Some("2h 0m"));
+        // A minute earlier is still inside the first hour.
+        assert_eq!(countdown(2 * 3600 - 90).as_deref(), Some("1h 59m"));
+        // Ordinary readings are unchanged.
+        assert_eq!(countdown(3600 + 20 * 60).as_deref(), Some("1h 20m"));
+        assert_eq!(countdown(42 * 60).as_deref(), Some("42m"));
     }
 }
