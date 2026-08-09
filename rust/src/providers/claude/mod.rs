@@ -59,6 +59,28 @@ fn claude_auto_policy(ctx: &FetchContext) -> ClaudeAutoPolicy {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ClaudeOAuthSource<'a> {
+    Scoped(&'a std::path::Path),
+    AccessToken(&'a str),
+    Ambient,
+}
+
+fn claude_oauth_source(ctx: &FetchContext) -> ClaudeOAuthSource<'_> {
+    if let Some(dir) = ctx.account_config_dir.as_deref() {
+        return ClaudeOAuthSource::Scoped(dir);
+    }
+
+    match ctx
+        .api_key
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        Some(token) => ClaudeOAuthSource::AccessToken(token),
+        None => ClaudeOAuthSource::Ambient,
+    }
+}
+
 impl ClaudeProvider {
     pub fn new() -> Self {
         Self {
@@ -516,19 +538,17 @@ impl ClaudeProvider {
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Attempting OAuth fetch for Claude");
-        if let Some(token) = ctx
-            .api_key
-            .as_deref()
-            .filter(|token| !token.trim().is_empty())
-        {
-            return self.oauth_fetcher.fetch_with_access_token(token).await;
-        }
-
-        // A configured account pins the credential to its own CLAUDE_CONFIG_DIR;
-        // otherwise follow whichever account the CLI is signed in as.
-        match &ctx.account_config_dir {
-            Some(dir) => self.oauth_fetcher.scoped(dir.clone()).fetch().await,
-            None => self.oauth_fetcher.fetch().await,
+        // A configured account always pins the credential to its own
+        // CLAUDE_CONFIG_DIR. Ambient overrides must not leak one account's
+        // identity or usage into another configured account card.
+        match claude_oauth_source(ctx) {
+            ClaudeOAuthSource::Scoped(dir) => {
+                self.oauth_fetcher.scoped(dir.to_path_buf()).fetch().await
+            }
+            ClaudeOAuthSource::AccessToken(token) => {
+                self.oauth_fetcher.fetch_with_access_token(token).await
+            }
+            ClaudeOAuthSource::Ambient => self.oauth_fetcher.fetch().await,
         }
     }
 
@@ -1081,6 +1101,29 @@ mod tests {
         assert_eq!(
             claude_auto_policy(&ambient),
             ClaudeAutoPolicy::FallbackChain
+        );
+    }
+
+    #[test]
+    fn configured_account_oauth_ignores_ambient_access_token() {
+        let configured = FetchContext {
+            account_config_dir: Some(std::path::PathBuf::from(r"C:\Users\person\.claude-work")),
+            api_key: Some("ambient-token".to_string()),
+            ..FetchContext::default()
+        };
+
+        assert_eq!(
+            claude_oauth_source(&configured),
+            ClaudeOAuthSource::Scoped(std::path::Path::new(r"C:\Users\person\.claude-work"))
+        );
+
+        let ambient = FetchContext {
+            api_key: Some("ambient-token".to_string()),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            claude_oauth_source(&ambient),
+            ClaudeOAuthSource::AccessToken("ambient-token")
         );
     }
 
