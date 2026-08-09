@@ -244,6 +244,8 @@ mod tests {
 
         assert_eq!(pace.stage, PaceStage::OnTrack);
         assert!(pace.delta_percent.abs() < 2.0);
+        assert!(pace.will_last_to_reset);
+        assert!(pace.eta_seconds.is_none());
     }
 
     #[test]
@@ -258,6 +260,36 @@ mod tests {
 
         assert!(pace.stage.is_ahead());
         assert!(pace.delta_percent > 0.0);
+        assert!(!pace.will_last_to_reset);
+        let eta = pace.eta_seconds.expect("exhaustion ETA");
+        assert!(eta > 0.0);
+        assert!(eta < (resets_at - now).num_seconds() as f64);
+    }
+
+    #[test]
+    fn zero_usage_after_elapsed_time_will_last_to_reset() {
+        let now = Utc::now();
+        let resets_at = now + Duration::days(3) + Duration::hours(12);
+        let window = RateWindow::with_details(0.0, Some(10080), Some(resets_at), None);
+
+        let pace = UsagePace::weekly(&window, Some(now), 10080).unwrap();
+        assert!(pace.will_last_to_reset);
+        assert!(pace.eta_seconds.is_none());
+    }
+
+    #[test]
+    fn invalid_weekly_window_boundaries_return_none() {
+        let now = Utc::now();
+        let valid_reset = now + Duration::hours(1);
+        let zero_minutes = RateWindow::with_details(0.0, Some(0), Some(valid_reset), None);
+        assert!(UsagePace::weekly(&zero_minutes, Some(now), 10080).is_none());
+
+        let past = RateWindow::with_details(0.0, Some(60), Some(now), None);
+        assert!(UsagePace::weekly(&past, Some(now), 10080).is_none());
+
+        let beyond =
+            RateWindow::with_details(0.0, Some(60), Some(now + Duration::minutes(61)), None);
+        assert!(UsagePace::weekly(&beyond, Some(now), 10080).is_none());
     }
 
     #[test]

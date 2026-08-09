@@ -205,13 +205,14 @@ pub fn record_snapshot(snapshot: &ProviderUsageSnapshot) {
             if drop >= USED_DROP_CLOSE {
                 // Capacity events should finalize with a classified kind. If we
                 // only see a drop here, still close so runs are not lost.
+                let end_used_percent = open.last_used_percent;
                 let finished = finalize_open(
                     open.clone(),
                     observed_at,
-                    window.used_percent,
+                    end_used_percent,
                     QuotaRunResetKind::ObservedDrop,
                     false,
-                    None,
+                    Some(window.used_percent),
                 );
                 push_run(&mut guard, &scope, finished);
                 guard.open.remove(&open_key);
@@ -967,6 +968,69 @@ mod tests {
         assert_eq!(run.after_reset_used_percent, Some(8.0));
         assert_eq!(run.window_minutes, Some(300));
         assert!(run.observed_duration_seconds >= 4 * 3600 - 5);
+    }
+
+    #[test]
+    fn observed_drop_closes_the_run_and_starts_the_next_cycle() {
+        let _guard = test_lock();
+        clear_for_test();
+        let provider = "codex-observed-drop";
+        let email = "drop@job.test";
+        let start = Utc::now() - Duration::hours(4);
+        let reset = start + Duration::hours(5);
+
+        record_snapshot(&snapshot(provider, email, start, 5.0, reset));
+        record_snapshot(&snapshot(
+            provider,
+            email,
+            start + Duration::hours(2),
+            90.0,
+            reset,
+        ));
+        let after = start + Duration::hours(4);
+        record_snapshot(&snapshot(
+            provider,
+            email,
+            after,
+            70.0,
+            after + Duration::hours(5),
+        ));
+
+        let runs = list_runs(provider, Some(email), Some("acct-work"));
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].reset_kind, QuotaRunResetKind::ObservedDrop);
+        assert!((runs[0].peak_used_percent - 90.0).abs() < 0.01);
+        assert!((runs[0].end_used_percent - 90.0).abs() < 0.01);
+        assert_eq!(runs[0].after_reset_used_percent, Some(70.0));
+
+        let guard = store().lock().unwrap();
+        let next = guard.open.values().next().expect("new open run");
+        assert_eq!(next.started_at, after);
+        assert!((next.last_used_percent - 70.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn drop_just_below_threshold_does_not_close_the_run() {
+        let _guard = test_lock();
+        clear_for_test();
+        let provider = "codex-small-drop";
+        let email = "small-drop@job.test";
+        let start = Utc::now() - Duration::hours(1);
+        let reset = start + Duration::hours(5);
+
+        record_snapshot(&snapshot(provider, email, start, 50.0, reset));
+        record_snapshot(&snapshot(
+            provider,
+            email,
+            start + Duration::minutes(30),
+            30.01,
+            reset,
+        ));
+
+        assert!(list_runs(provider, Some(email), Some("acct-work")).is_empty());
+        let guard = store().lock().unwrap();
+        let open = guard.open.values().next().expect("open run remains");
+        assert!((open.last_used_percent - 30.01).abs() < 0.001);
     }
 
     #[test]

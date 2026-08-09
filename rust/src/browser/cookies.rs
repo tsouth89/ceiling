@@ -714,11 +714,18 @@ pub fn get_cookie_header(domain: &str) -> Result<String, CookieError> {
 
 /// Get a cookie header string from the first domain that has readable cookies.
 pub fn get_cookie_header_for_domains(domains: &[&str]) -> Result<String, CookieError> {
+    select_cookie_header_for_domains(domains, get_cookie_header)
+}
+
+fn select_cookie_header_for_domains(
+    domains: &[&str],
+    mut lookup: impl FnMut(&str) -> Result<String, CookieError>,
+) -> Result<String, CookieError> {
     let mut app_bound_encryption_seen = false;
     let mut last_error = None;
 
     for domain in domains {
-        match get_cookie_header(domain) {
+        match lookup(domain) {
             Ok(header) if !header.trim().is_empty() => return Ok(header),
             Ok(_) => {}
             Err(CookieError::AppBoundEncryption) => app_bound_encryption_seen = true,
@@ -748,6 +755,47 @@ pub fn get_cookie_header_from_browser(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multi_domain_lookup_prefers_a_later_readable_cookie_over_abe() {
+        let mut calls = 0;
+        let result = select_cookie_header_for_domains(&["first.test", "second.test"], |_| {
+            calls += 1;
+            if calls == 1 {
+                Err(CookieError::AppBoundEncryption)
+            } else {
+                Ok("session=readable".to_string())
+            }
+        });
+
+        assert_eq!(result.unwrap(), "session=readable");
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn multi_domain_lookup_keeps_abe_actionable_when_nothing_succeeds() {
+        let error = select_cookie_header_for_domains(&["first.test", "second.test"], |_| {
+            Err(CookieError::AppBoundEncryption)
+        })
+        .unwrap_err();
+        assert!(matches!(error, CookieError::AppBoundEncryption));
+    }
+
+    #[test]
+    fn multi_domain_lookup_preserves_not_found_without_abe() {
+        let mut calls = 0;
+        let error = select_cookie_header_for_domains(&["first.test", "second.test"], |_| {
+            calls += 1;
+            if calls == 1 {
+                Ok("  ".to_string())
+            } else {
+                Err(CookieError::NotFound("second.test".to_string()))
+            }
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, CookieError::NotFound(domain) if domain == "second.test"));
+    }
 
     #[test]
     fn temporary_cookie_database_is_removed_on_drop() {

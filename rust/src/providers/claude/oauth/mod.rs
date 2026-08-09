@@ -38,9 +38,13 @@ pub struct ClaudeOAuthCredentials {
 impl ClaudeOAuthCredentials {
     /// Check if the token is expired
     pub fn is_expired(&self) -> bool {
+        self.is_expired_at(Utc::now())
+    }
+
+    fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         if let Some(expires_at) = self.expires_at {
             // Consider expired if within 5 minutes of expiry
-            expires_at <= Utc::now() + chrono::Duration::minutes(5)
+            expires_at <= now + chrono::Duration::minutes(5)
         } else {
             // No expiry info = don't assume expired, try it
             false
@@ -435,6 +439,7 @@ mod tests {
         ClaudeOAuthCredentials, ClaudeOAuthFetcher, OAuthUsageResponse, UsageWindow,
         UtilizationScale,
     };
+    use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use reqwest::header::HeaderValue;
     use std::time::Duration;
 
@@ -447,6 +452,24 @@ mod tests {
             rate_limit_tier: Some("default_claude_ai".to_string()),
             subscription_type: None,
         }
+    }
+
+    #[test]
+    fn token_expiry_honors_the_five_minute_refresh_skew() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 9, 12, 0, 0).unwrap();
+        let mut credentials = test_credentials();
+
+        credentials.expires_at = Some(now + ChronoDuration::minutes(6));
+        assert!(!credentials.is_expired_at(now));
+
+        credentials.expires_at = Some(now + ChronoDuration::minutes(1));
+        assert!(credentials.is_expired_at(now));
+
+        credentials.expires_at = Some(now - ChronoDuration::seconds(1));
+        assert!(credentials.is_expired_at(now));
+
+        credentials.expires_at = None;
+        assert!(!credentials.is_expired_at(now));
     }
 
     #[test]
