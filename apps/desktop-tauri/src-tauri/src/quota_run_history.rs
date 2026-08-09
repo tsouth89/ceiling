@@ -1010,6 +1010,52 @@ mod tests {
     }
 
     #[test]
+    fn classified_reset_before_snapshot_does_not_create_a_duplicate_run() {
+        let _guard = test_lock();
+        clear_for_test();
+        let provider = "codex-classified-order";
+        let email = "classified@job.test";
+        let start = Utc::now() - Duration::hours(4);
+        let reset = start + Duration::hours(5);
+
+        record_snapshot(&snapshot(provider, email, start, 5.0, reset));
+        record_snapshot(&snapshot(
+            provider,
+            email,
+            start + Duration::hours(2),
+            90.0,
+            reset,
+        ));
+
+        let after = start + Duration::hours(4);
+        let post_reset = snapshot(provider, email, after, 8.0, after + Duration::hours(5));
+        let event = reset_event(
+            provider,
+            CapacityEventKind::ScheduledReset,
+            90.0,
+            8.0,
+            after,
+            false,
+        );
+
+        // This is the production order in commands/providers.rs.
+        record_capacity_events(&[event], &post_reset);
+        record_snapshot(&post_reset);
+
+        let runs = list_runs(provider, Some(email), Some("acct-work"));
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].reset_kind, QuotaRunResetKind::Scheduled);
+        assert!((runs[0].end_used_percent - 90.0).abs() < 0.01);
+        assert_eq!(runs[0].after_reset_used_percent, Some(8.0));
+
+        let guard = store().lock().unwrap();
+        assert_eq!(guard.open.len(), 1);
+        let next = guard.open.values().next().expect("new open run");
+        assert_eq!(next.started_at, after);
+        assert!((next.last_used_percent - 8.0).abs() < 0.01);
+    }
+
+    #[test]
     fn drop_just_below_threshold_does_not_close_the_run() {
         let _guard = test_lock();
         clear_for_test();

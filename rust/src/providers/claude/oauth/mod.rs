@@ -462,6 +462,9 @@ mod tests {
         credentials.expires_at = Some(now + ChronoDuration::minutes(6));
         assert!(!credentials.is_expired_at(now));
 
+        credentials.expires_at = Some(now + ChronoDuration::minutes(5));
+        assert!(credentials.is_expired_at(now));
+
         credentials.expires_at = Some(now + ChronoDuration::minutes(1));
         assert!(credentials.is_expired_at(now));
 

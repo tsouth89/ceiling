@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::UtilizationScale;
 use super::usage_api::{ClaudeExtraUsage, ClaudeUsageResponse, ClaudeUsageWindow};
-use crate::browser::cookies::{get_cookie_header, get_cookie_header_from_browser};
+use crate::browser::cookies::get_cookie_header_from_browser;
 use crate::browser::detection::{BrowserProfile, BrowserType, DetectedBrowser};
 use crate::core::{PromoSignal, ProviderError, ProviderFetchResult, RateWindow};
 
@@ -265,22 +265,8 @@ impl ClaudeWebApiFetcher {
             "anthropic.com",
         ];
 
-        for domain in domains {
-            match get_cookie_header(domain) {
-                Ok(cookie_header) if !cookie_header.is_empty() => {
-                    tracing::debug!("Found cookies for {}", domain);
-                    return self.fetch_with_cookie_header(&cookie_header).await;
-                }
-                Ok(_) => {
-                    tracing::debug!("No cookies found for {}", domain);
-                }
-                Err(e) => {
-                    tracing::debug!("Failed to get cookies for {}: {}", domain, e);
-                }
-            }
-        }
-
-        Err(ProviderError::NoCookies)
+        let cookie_header = crate::providers::browser_cookie_header(&domains)?;
+        self.fetch_with_cookie_header(&cookie_header).await
     }
 
     /// Fetch usage with a provided cookie header
