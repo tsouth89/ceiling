@@ -331,6 +331,13 @@ fn codex_variant_pricing_entries_are_not_collapsed_to_the_base_model() {
 }
 
 #[test]
+fn unknown_dated_codex_models_keep_their_full_name() {
+    for model in ["gpt-5.7-2026-01-01", "gpt-5.7-codex-2026-01-01"] {
+        assert_eq!(CostUsagePricing::normalize_codex_model(model), model);
+    }
+}
+
+#[test]
 fn test_normalize_claude_model() {
     assert_eq!(
         CostUsagePricing::normalize_claude_model("claude-sonnet-4-5"),

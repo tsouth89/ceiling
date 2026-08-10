@@ -652,13 +652,9 @@ impl CostUsagePricing {
         let date_pattern = regex_lite::Regex::new(r"-\d{4}-\d{2}-\d{2}$").unwrap();
         if let Some(mat) = date_pattern.find(&trimmed) {
             let base = &trimmed[..mat.start()];
-            if base.contains("-codex-") && CODEX_PRICING.contains_key(base) {
-                return base.to_string();
+            if CODEX_PRICING.contains_key(base) || base == "gpt-5.6" {
+                return Self::normalize_codex_model(base);
             }
-            if base == "gpt-5.6" {
-                return "gpt-5.6-sol".to_string();
-            }
-            trimmed = base.to_string();
         }
 
         // Check if base model (without -codex suffix) exists in pricing
