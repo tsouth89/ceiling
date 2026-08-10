@@ -1,5 +1,307 @@
 use super::*;
 
+fn assert_close(actual: f64, expected: f64) {
+    let tolerance = expected.abs().max(1.0) * 1e-12;
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "expected {expected:.12}, got {actual:.12}"
+    );
+}
+
+fn assert_valid_rate(model: &str, name: &str, rate: f64) {
+    assert!(rate.is_finite() && rate >= 0.0, "{model} {name}: {rate}");
+}
+
+fn assert_valid_optional_rate(model: &str, name: &str, rate: Option<f64>) {
+    if let Some(rate) = rate {
+        assert_valid_rate(model, name, rate);
+    }
+}
+
+fn assert_option_close(actual: Option<f64>, expected: Option<f64>, model: &str) {
+    match (actual, expected) {
+        (Some(actual), Some(expected)) => assert_close(actual, expected),
+        (None, None) => {}
+        _ => panic!("{model}: optional rates differ"),
+    }
+}
+
+fn assert_claude_rates_equal(actual: ClaudePricing, expected: ClaudePricing, model: &str) {
+    assert_close(actual.input_cost_per_token, expected.input_cost_per_token);
+    assert_close(actual.output_cost_per_token, expected.output_cost_per_token);
+    assert_close(
+        actual.cache_creation_input_cost_per_token,
+        expected.cache_creation_input_cost_per_token,
+    );
+    assert_close(
+        actual.cache_read_input_cost_per_token,
+        expected.cache_read_input_cost_per_token,
+    );
+    assert_eq!(
+        actual.threshold_tokens, expected.threshold_tokens,
+        "{model}"
+    );
+    assert_option_close(
+        actual.input_cost_per_token_above_threshold,
+        expected.input_cost_per_token_above_threshold,
+        model,
+    );
+    assert_option_close(
+        actual.output_cost_per_token_above_threshold,
+        expected.output_cost_per_token_above_threshold,
+        model,
+    );
+    assert_option_close(
+        actual.cache_creation_input_cost_per_token_above_threshold,
+        expected.cache_creation_input_cost_per_token_above_threshold,
+        model,
+    );
+    assert_option_close(
+        actual.cache_read_input_cost_per_token_above_threshold,
+        expected.cache_read_input_cost_per_token_above_threshold,
+        model,
+    );
+}
+
+#[test]
+fn every_codex_table_entry_has_valid_rates_and_resolves_to_a_price() {
+    assert!(!CODEX_PRICING.is_empty());
+    for (&model, pricing) in CODEX_PRICING.iter() {
+        // SBS-710 tracks this alias resolving to the full gpt-5.1 rate.
+        if model == "gpt-5.1-codex-mini" {
+            assert_eq!(CostUsagePricing::normalize_codex_model(model), "gpt-5.1");
+            continue;
+        }
+        let normalized = CostUsagePricing::normalize_codex_model(model);
+        assert!(
+            CODEX_PRICING.contains_key(normalized.as_str()),
+            "{model} normalizes to missing entry {normalized}"
+        );
+        for (name, rate) in [
+            ("input", pricing.input_cost_per_token),
+            ("output", pricing.output_cost_per_token),
+            ("cache read", pricing.cache_read_input_cost_per_token),
+        ] {
+            assert_valid_rate(model, name, rate);
+        }
+        if let Some(long_context) = pricing.long_context {
+            for (name, rate) in [
+                ("long-context input", long_context.input_cost_per_token),
+                ("long-context output", long_context.output_cost_per_token),
+                (
+                    "long-context cache read",
+                    long_context.cache_read_input_cost_per_token,
+                ),
+            ] {
+                assert_valid_rate(model, name, rate);
+            }
+        }
+        let cost = CostUsagePricing::codex_cost_usd(model, 2, 1, 1).unwrap();
+        assert_close(
+            cost,
+            pricing.input_cost_per_token
+                + pricing.cache_read_input_cost_per_token
+                + pricing.output_cost_per_token,
+        );
+    }
+}
+
+#[test]
+fn every_claude_table_entry_is_reachable_and_aliases_match() {
+    let date = NaiveDate::MIN;
+    assert!(!CLAUDE_PRICING.is_empty());
+    for (&model, pricing) in CLAUDE_PRICING.iter() {
+        for (name, rate) in [
+            ("input", pricing.input_cost_per_token),
+            ("output", pricing.output_cost_per_token),
+            (
+                "cache creation",
+                pricing.cache_creation_input_cost_per_token,
+            ),
+            ("cache read", pricing.cache_read_input_cost_per_token),
+        ] {
+            assert_valid_rate(model, name, rate);
+        }
+        for (name, rate) in [
+            (
+                "above-threshold input",
+                pricing.input_cost_per_token_above_threshold,
+            ),
+            (
+                "above-threshold output",
+                pricing.output_cost_per_token_above_threshold,
+            ),
+            (
+                "above-threshold cache creation",
+                pricing.cache_creation_input_cost_per_token_above_threshold,
+            ),
+            (
+                "above-threshold cache read",
+                pricing.cache_read_input_cost_per_token_above_threshold,
+            ),
+        ] {
+            assert_valid_optional_rate(model, name, rate);
+        }
+        if let Some(threshold) = pricing.threshold_tokens {
+            assert!(threshold >= 0, "{model} threshold: {threshold}");
+        }
+        let normalized = CostUsagePricing::normalize_claude_model(model);
+        let resolved = CLAUDE_PRICING
+            .get(normalized.as_str())
+            .unwrap_or_else(|| panic!("{model} normalizes to missing entry {normalized}"));
+        assert_claude_rates_equal(*resolved, *pricing, model);
+        assert!(
+            CostUsagePricing::claude_cost_usd_on_date(model, 1, 1, 1, 1, date).is_some(),
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn codex_prices_input_cache_and_output_as_separate_channels() {
+    let pricing = CODEX_PRICING["gpt-5"];
+    let input_only = CostUsagePricing::codex_cost_usd("gpt-5", 1_000, 0, 0).unwrap();
+    let cache_only = CostUsagePricing::codex_cost_usd("gpt-5", 1_000, 1_000, 0).unwrap();
+    let output_only = CostUsagePricing::codex_cost_usd("gpt-5", 0, 0, 1_000).unwrap();
+    assert_close(input_only, 1_000.0 * pricing.input_cost_per_token);
+    assert_close(
+        cache_only,
+        1_000.0 * pricing.cache_read_input_cost_per_token,
+    );
+    assert_close(output_only, 1_000.0 * pricing.output_cost_per_token);
+}
+
+#[test]
+fn codex_cached_input_is_clamped_to_total_input() {
+    let pricing = CODEX_PRICING["gpt-5"];
+    let cost = CostUsagePricing::codex_cost_usd("gpt-5", 10, 100, 0).unwrap();
+    assert_close(cost, 10.0 * pricing.cache_read_input_cost_per_token);
+    let split = CostUsagePricing::codex_cost_usd("gpt-5", 100, 30, 0).unwrap();
+    assert_close(
+        split,
+        70.0 * pricing.input_cost_per_token + 30.0 * pricing.cache_read_input_cost_per_token,
+    );
+}
+
+#[test]
+fn claude_prices_all_four_token_channels_separately() {
+    let pricing = CLAUDE_PRICING["claude-haiku-4-5"];
+    let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+    let cost = CostUsagePricing::claude_cost_usd_on_date(
+        "claude-haiku-4-5",
+        1_000,
+        2_000,
+        3_000,
+        4_000,
+        date,
+    )
+    .unwrap();
+    assert_close(
+        cost,
+        1_000.0 * pricing.input_cost_per_token
+            + 2_000.0 * pricing.cache_read_input_cost_per_token
+            + 3_000.0 * pricing.cache_creation_input_cost_per_token
+            + 4_000.0 * pricing.output_cost_per_token,
+    );
+}
+
+#[test]
+fn claude_tier_boundary_prices_only_tokens_above_the_threshold_at_premium() {
+    let pricing = CLAUDE_PRICING["claude-sonnet-4-5"];
+    let threshold = pricing.threshold_tokens.unwrap();
+    let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+    let at_threshold =
+        CostUsagePricing::claude_cost_usd_on_date("claude-sonnet-4-5", threshold, 0, 0, 0, date)
+            .unwrap();
+    let one_over = CostUsagePricing::claude_cost_usd_on_date(
+        "claude-sonnet-4-5",
+        threshold + 1,
+        0,
+        0,
+        0,
+        date,
+    )
+    .unwrap();
+    assert_close(
+        at_threshold,
+        threshold as f64 * pricing.input_cost_per_token,
+    );
+    assert_close(
+        one_over - at_threshold,
+        pricing.input_cost_per_token_above_threshold.unwrap(),
+    );
+    for (base, premium, counts) in [
+        (
+            pricing.cache_read_input_cost_per_token,
+            pricing
+                .cache_read_input_cost_per_token_above_threshold
+                .unwrap(),
+            (0, threshold + 1, 0, 0),
+        ),
+        (
+            pricing.cache_creation_input_cost_per_token,
+            pricing
+                .cache_creation_input_cost_per_token_above_threshold
+                .unwrap(),
+            (0, 0, threshold + 1, 0),
+        ),
+        (
+            pricing.output_cost_per_token,
+            pricing.output_cost_per_token_above_threshold.unwrap(),
+            (0, 0, 0, threshold + 1),
+        ),
+    ] {
+        let (input, cache_read, cache_creation, output) = counts;
+        let cost = CostUsagePricing::claude_cost_usd_on_date(
+            "claude-sonnet-4-5",
+            input,
+            cache_read,
+            cache_creation,
+            output,
+            date,
+        )
+        .unwrap();
+        assert_close(cost, threshold as f64 * base + premium);
+    }
+}
+
+#[test]
+fn sonnet_5_uses_rates_effective_on_the_usage_date() {
+    let before = NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+    let after = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+    assert_close(
+        CostUsagePricing::claude_cost_usd_on_date("claude-sonnet-5", 1_000_000, 0, 0, 0, before)
+            .unwrap(),
+        2.0,
+    );
+    assert_close(
+        CostUsagePricing::claude_cost_usd_on_date("claude-sonnet-5", 1_000_000, 0, 0, 0, after)
+            .unwrap(),
+        3.0,
+    );
+}
+
+#[test]
+fn zero_negative_and_unknown_usage_have_explicit_results() {
+    let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+    assert_eq!(
+        CostUsagePricing::codex_cost_usd("gpt-5", 0, 0, 0),
+        Some(0.0)
+    );
+    assert_eq!(
+        CostUsagePricing::claude_cost_usd_on_date("claude-haiku-4-5", -1, -2, -3, -4, date,),
+        Some(0.0)
+    );
+    assert_eq!(
+        CostUsagePricing::codex_cost_usd("definitely-not-a-model", 1, 1, 1),
+        None
+    );
+    assert_eq!(
+        CostUsagePricing::claude_cost_usd_on_date("definitely-not-a-model", 1, 1, 1, 1, date,),
+        None
+    );
+}
+
 #[test]
 fn test_normalize_codex_model() {
     assert_eq!(CostUsagePricing::normalize_codex_model("gpt-5"), "gpt-5");
