@@ -140,10 +140,36 @@ fn cursor_actionable_windows(
     out
 }
 
+fn cursor_on_demand_readout(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> Option<ConstrainingReadout<'_>> {
+    snapshot
+        .extra_rate_windows
+        .iter()
+        .find(|extra| extra.id == "cursor-on-demand")
+        .map(|extra| ConstrainingReadout {
+            label: Some(match extra.title.trim() {
+                "" => "On-demand",
+                label => label,
+            }),
+            window: &extra.window,
+        })
+}
+
 fn cursor_strip_readout(
     snapshot: &crate::commands::ProviderUsageSnapshot,
 ) -> ConstrainingReadout<'_> {
     let actionable = cursor_actionable_windows(snapshot);
+    let on_demand = cursor_on_demand_readout(snapshot);
+    let has_on_demand_spend = snapshot
+        .extra_rate_windows
+        .iter()
+        .find(|extra| extra.id == "cursor-on-demand")
+        .and_then(|extra| extra.amount.as_ref())
+        .is_some_and(|amount| amount.used > 0.0);
+    if has_on_demand_spend && let Some(readout) = on_demand {
+        return readout;
+    }
     if !actionable.is_empty() {
         // Hottest non-exhausted Auto/API lane.
         let mut with_room: Option<ConstrainingReadout<'_>> = None;
@@ -170,6 +196,11 @@ fn cursor_strip_readout(
         if let Some(best) = with_room {
             return best;
         }
+        if is_blocking_window(&snapshot.primary)
+            && let Some(readout) = on_demand
+        {
+            return readout;
+        }
         // All actionable lanes exhausted: soonest reset.
         let mut exhausted: Option<ConstrainingReadout<'_>> = None;
         for (label, window) in &actionable {
@@ -195,6 +226,11 @@ fn cursor_strip_readout(
         if let Some(best) = exhausted {
             return best;
         }
+    }
+    if is_blocking_window(&snapshot.primary)
+        && let Some(readout) = on_demand
+    {
+        return readout;
     }
     ConstrainingReadout {
         label: snapshot.primary_label.as_deref(),
@@ -2392,6 +2428,40 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("API"));
         assert_eq!(readout.window.used_percent, 100.0);
+    }
+
+    #[test]
+    fn cursor_strip_surfaces_on_demand_after_included_usage_is_exhausted() {
+        let mut snapshot = snap("cursor", None, 100.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.secondary = Some(rate_window(100.0, Some(43_200)));
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: rate_window(100.0, Some(43_200)),
+                amount: None,
+            });
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-on-demand".into(),
+                title: "On-demand".into(),
+                window: rate_window(56.0, Some(43_200)),
+                amount: Some(crate::commands::WindowAmountBridge {
+                    used: 1002.16,
+                    limit: Some(1800.0),
+                    currency_code: "USD".into(),
+                    formatted_used: "$1,002.16".into(),
+                    formatted_limit: Some("$1,800.00".into()),
+                }),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("On-demand"));
+        assert_eq!(readout.window.used_percent, 56.0);
     }
 
     #[test]

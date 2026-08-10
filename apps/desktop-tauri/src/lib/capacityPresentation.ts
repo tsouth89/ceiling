@@ -96,6 +96,28 @@ function cursorActionableWindows(
   return out;
 }
 
+function cursorOnDemandWindow(
+  provider: ProviderUsageSnapshot,
+): ConstrainingWindow | null {
+  const extra = (provider.extraRateWindows ?? []).find(
+    (candidate) => candidate.id === "cursor-on-demand",
+  );
+  if (!extra) return null;
+  return {
+    id: `extra-${extra.id}`,
+    label: extra.title?.trim() || "On-demand",
+    window: extra.window,
+    amount: extra.amount,
+  };
+}
+
+function cursorOnDemandIsActive(
+  provider: ProviderUsageSnapshot,
+  onDemand: ConstrainingWindow,
+): boolean {
+  return (onDemand.amount?.used ?? 0) > 0 || isBlocking(provider.primary);
+}
+
 /** Hottest non-exhausted window, then soonest reset on a used-% tie. */
 function hottestWithRoom(
   windows: ConstrainingWindow[],
@@ -146,12 +168,20 @@ function cursorStripWindow(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow {
   const actionable = cursorActionableWindows(provider);
+  const onDemand = cursorOnDemandWindow(provider);
+  // Once real-money billing starts it is the most important glance signal,
+  // even if Cursor's included-pool counters have not advanced in lockstep.
+  if (onDemand && (onDemand.amount?.used ?? 0) > 0) return onDemand;
   if (actionable.length > 0) {
     const withRoom = hottestWithRoom(actionable);
     if (withRoom) return withRoom;
+    // Included Auto/API capacity is gone. Show the lane Cursor will bill next,
+    // including the useful $0-at-the-boundary state.
+    if (onDemand && isBlocking(provider.primary)) return onDemand;
     const exhausted = soonestExhausted(actionable);
     if (exhausted) return exhausted;
   }
+  if (onDemand && cursorOnDemandIsActive(provider, onDemand)) return onDemand;
   return {
     id: "primary",
     label: provider.primaryLabel?.trim() || "Plan",
@@ -239,13 +269,20 @@ export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
   const candidates = nonPrimaryWindows(provider);
   const pinned = PINNED_COMPANION_IDS[provider.providerId];
   if (pinned) {
+    const companions = pinned
+      .map((id) => candidates.find((candidate) => candidate.id === id))
+      .filter((candidate): candidate is ConstrainingWindow => Boolean(candidate));
+    if (provider.providerId === "cursor") {
+      const onDemand = candidates.find(
+        (candidate) => candidate.id === "extra-cursor-on-demand",
+      );
+      if (onDemand && cursorOnDemandIsActive(provider, onDemand)) {
+        companions.push(onDemand);
+      }
+    }
     return {
       primary,
-      companions: pinned
-        .map((id) => candidates.find((candidate) => candidate.id === id))
-        .filter((candidate): candidate is ConstrainingWindow =>
-          Boolean(candidate),
-        ),
+      companions,
     };
   }
 

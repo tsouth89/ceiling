@@ -151,9 +151,12 @@ fn visible_history(provider_id: &str, points: &[UsageHistoryPoint]) -> Vec<Usage
     let mut points = points.to_vec();
     if provider_id.eq_ignore_ascii_case("cursor") {
         for point in &mut points {
-            point.windows.retain(|window| {
-                !matches!(window.id.as_str(), "promotional" | "on-demand" | "ondemand")
-            });
+            // Promotional was an inferred meter and remains hidden. On-demand
+            // is a real capped lane, so keep its percentage in the reset
+            // schedule; money is shown on the live overview/detail surfaces.
+            point
+                .windows
+                .retain(|window| window.id.as_str() != "promotional");
         }
     }
     points
@@ -192,9 +195,7 @@ fn snapshot_windows(snapshot: &ProviderUsageSnapshot) -> Vec<UsageHistoryWindow>
         push_window(&mut windows, &extra.id, Some(&extra.title), &extra.window);
     }
     if snapshot.provider_id.eq_ignore_ascii_case("cursor") {
-        windows.retain(|window| {
-            !matches!(window.id.as_str(), "promotional" | "on-demand" | "ondemand")
-        });
+        windows.retain(|window| window.id.as_str() != "promotional");
     }
     windows
 }
@@ -602,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_history_hides_promotional_and_on_demand_pools() {
+    fn cursor_history_hides_promotional_but_keeps_real_on_demand_usage() {
         let points = vec![UsageHistoryPoint {
             recorded_at: "2026-07-14T10:00:00Z".into(),
             windows: vec![
@@ -617,16 +618,18 @@ mod tests {
                     used_percent: 0.0,
                 },
                 UsageHistoryWindow {
-                    id: "on-demand".into(),
+                    id: "cursor-on-demand".into(),
                     label: "On-demand".into(),
-                    used_percent: 0.0,
+                    used_percent: 56.0,
                 },
             ],
         }];
 
         let visible = visible_history("cursor", &points);
 
-        assert_eq!(visible[0].windows.len(), 1);
+        assert_eq!(visible[0].windows.len(), 2);
         assert_eq!(visible[0].windows[0].id, "plan");
+        assert_eq!(visible[0].windows[1].id, "cursor-on-demand");
+        assert_eq!(visible[0].windows[1].used_percent, 56.0);
     }
 }
