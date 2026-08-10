@@ -67,11 +67,6 @@ fn assert_claude_rates_equal(actual: ClaudePricing, expected: ClaudePricing, mod
 fn every_codex_table_entry_has_valid_rates_and_resolves_to_a_price() {
     assert!(!CODEX_PRICING.is_empty());
     for (&model, pricing) in CODEX_PRICING.iter() {
-        // SBS-710 tracks this alias resolving to the full gpt-5.1 rate.
-        if model == "gpt-5.1-codex-mini" {
-            assert_eq!(CostUsagePricing::normalize_codex_model(model), "gpt-5.1");
-            continue;
-        }
         let normalized = CostUsagePricing::normalize_codex_model(model);
         assert!(
             CODEX_PRICING.contains_key(normalized.as_str()),
@@ -313,6 +308,26 @@ fn test_normalize_codex_model() {
         CostUsagePricing::normalize_codex_model("gpt-5-codex"),
         "gpt-5"
     );
+}
+
+#[test]
+fn codex_variant_pricing_entries_are_not_collapsed_to_the_base_model() {
+    for model in ["gpt-5.1-codex-max", "gpt-5.1-codex-mini"] {
+        assert_eq!(CostUsagePricing::normalize_codex_model(model), model);
+        assert_eq!(
+            CostUsagePricing::normalize_codex_model(&format!("openai/{model}-2026-01-01")),
+            model
+        );
+    }
+    assert_eq!(
+        CostUsagePricing::normalize_codex_model("gpt-5.1-codex"),
+        "gpt-5.1"
+    );
+
+    let mini = CostUsagePricing::codex_cost_usd("gpt-5.1-codex-mini", 1_000_000, 0, 0);
+    let base = CostUsagePricing::codex_cost_usd("gpt-5.1", 1_000_000, 0, 0);
+    assert_eq!(mini, Some(0.25));
+    assert_eq!(base, Some(1.25));
 }
 
 #[test]

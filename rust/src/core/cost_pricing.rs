@@ -643,17 +643,27 @@ impl CostUsagePricing {
             trimmed = rest.to_string();
         }
 
-        // Check if base model (without -codex suffix) exists in pricing
-        if let Some(idx) = trimmed.find("-codex") {
-            let base = &trimmed[..idx];
-            if CODEX_PRICING.contains_key(base) || base == "gpt-5.6" {
-                trimmed = base.to_string();
-            }
+        // Preserve canonical table entries before considering generic aliases.
+        // Some families have distinct `-codex-*` rates (for example mini).
+        if trimmed.contains("-codex-") && CODEX_PRICING.contains_key(trimmed.as_str()) {
+            return trimmed;
         }
 
         let date_pattern = regex_lite::Regex::new(r"-\d{4}-\d{2}-\d{2}$").unwrap();
         if let Some(mat) = date_pattern.find(&trimmed) {
             let base = &trimmed[..mat.start()];
+            if base.contains("-codex-") && CODEX_PRICING.contains_key(base) {
+                return base.to_string();
+            }
+            if base == "gpt-5.6" {
+                return "gpt-5.6-sol".to_string();
+            }
+            trimmed = base.to_string();
+        }
+
+        // Check if base model (without -codex suffix) exists in pricing
+        if let Some(idx) = trimmed.find("-codex") {
+            let base = &trimmed[..idx];
             if CODEX_PRICING.contains_key(base) || base == "gpt-5.6" {
                 trimmed = base.to_string();
             }
