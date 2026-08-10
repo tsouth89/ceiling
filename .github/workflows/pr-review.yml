@@ -37,8 +37,8 @@ jobs:
     # and runs the BASE repo's workflow; the checkout below pins the PR head
     # and CodeRev treats its contents only as review evidence.
     if: >-
-      github.event.pull_request.user.login == 'tsouth89' &&
-      github.actor == 'tsouth89' &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.actor == github.repository_owner &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
@@ -58,8 +58,8 @@ jobs:
         with:
           provider: exec
           model: grok-subscription
-          # Uses CodeRev's trusted action-owned wrapper, not PR-controlled code.
-          exec-command: grok
+          # Absolute path prevents the PR checkout from shadowing the CLI.
+          exec-command: 'C:\Users\tsout\.grok\bin\grok.exe'
           # Muse keeps the measured two-model recall diversity.
           find2-provider: meta
           find2-model: muse-spark-1.2-contributor
