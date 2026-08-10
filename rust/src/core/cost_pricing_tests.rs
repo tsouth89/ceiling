@@ -8,6 +8,16 @@ fn assert_close(actual: f64, expected: f64) {
     );
 }
 
+fn assert_valid_rate(model: &str, name: &str, rate: f64) {
+    assert!(rate.is_finite() && rate >= 0.0, "{model} {name}: {rate}");
+}
+
+fn assert_valid_optional_rate(model: &str, name: &str, rate: Option<f64>) {
+    if let Some(rate) = rate {
+        assert_valid_rate(model, name, rate);
+    }
+}
+
 fn assert_claude_rates_equal(actual: ClaudePricing, expected: ClaudePricing, model: &str) {
     assert_close(actual.input_cost_per_token, expected.input_cost_per_token);
     assert_close(actual.output_cost_per_token, expected.output_cost_per_token);
@@ -58,7 +68,19 @@ fn every_codex_table_entry_has_valid_rates_and_resolves_to_a_price() {
             ("output", pricing.output_cost_per_token),
             ("cache read", pricing.cache_read_input_cost_per_token),
         ] {
-            assert!(rate.is_finite() && rate >= 0.0, "{model} {name}: {rate}");
+            assert_valid_rate(model, name, rate);
+        }
+        if let Some(long_context) = pricing.long_context {
+            for (name, rate) in [
+                ("long-context input", long_context.input_cost_per_token),
+                ("long-context output", long_context.output_cost_per_token),
+                (
+                    "long-context cache read",
+                    long_context.cache_read_input_cost_per_token,
+                ),
+            ] {
+                assert_valid_rate(model, name, rate);
+            }
         }
         // SBS-710 tracks the known gpt-5.1-codex-mini normalization bug.
         // Keep its behavior fix separate from this tests-only PR.
@@ -74,6 +96,40 @@ fn every_claude_table_entry_is_reachable_and_aliases_match() {
     let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
     assert!(!CLAUDE_PRICING.is_empty());
     for (&model, pricing) in CLAUDE_PRICING.iter() {
+        for (name, rate) in [
+            ("input", pricing.input_cost_per_token),
+            ("output", pricing.output_cost_per_token),
+            (
+                "cache creation",
+                pricing.cache_creation_input_cost_per_token,
+            ),
+            ("cache read", pricing.cache_read_input_cost_per_token),
+        ] {
+            assert_valid_rate(model, name, rate);
+        }
+        for (name, rate) in [
+            (
+                "above-threshold input",
+                pricing.input_cost_per_token_above_threshold,
+            ),
+            (
+                "above-threshold output",
+                pricing.output_cost_per_token_above_threshold,
+            ),
+            (
+                "above-threshold cache creation",
+                pricing.cache_creation_input_cost_per_token_above_threshold,
+            ),
+            (
+                "above-threshold cache read",
+                pricing.cache_read_input_cost_per_token_above_threshold,
+            ),
+        ] {
+            assert_valid_optional_rate(model, name, rate);
+        }
+        if let Some(threshold) = pricing.threshold_tokens {
+            assert!(threshold >= 0, "{model} threshold: {threshold}");
+        }
         let normalized = CostUsagePricing::normalize_claude_model(model);
         let resolved = CLAUDE_PRICING
             .get(normalized.as_str())
