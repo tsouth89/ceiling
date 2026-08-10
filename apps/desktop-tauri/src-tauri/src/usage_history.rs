@@ -366,19 +366,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_named_tertiary_window_charts_under_its_own_name() {
-        // OpenCode Go's third window is Monthly, not Cursor's API.
-        let mut snapshot = ProviderUsageSnapshot {
-            provider_id: "opencodego".into(),
-            display_name: "OpenCode Go".into(),
-            primary: window_snapshot(34.0),
-            primary_label: Some("Rolling (5h)".into()),
-            secondary: Some(window_snapshot(32.0)),
-            secondary_label: Some("Weekly".into()),
+    fn provider_snapshot(provider_id: &str, display_name: &str) -> ProviderUsageSnapshot {
+        ProviderUsageSnapshot {
+            provider_id: provider_id.into(),
+            display_name: display_name.into(),
+            primary: window_snapshot(0.0),
+            primary_label: Some("Plan".into()),
+            secondary: None,
+            secondary_label: None,
             model_specific: None,
-            tertiary: Some(window_snapshot(57.0)),
-            tertiary_label: Some("Monthly".into()),
+            tertiary: None,
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             inactive_rate_windows: Vec::new(),
             promo_signals: Vec::new(),
@@ -397,7 +395,19 @@ mod tests {
             account_tint: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
-        };
+        }
+    }
+
+    #[test]
+    fn a_named_tertiary_window_charts_under_its_own_name() {
+        // OpenCode Go's third window is Monthly, not Cursor's API.
+        let mut snapshot = provider_snapshot("opencodego", "OpenCode Go");
+        snapshot.primary = window_snapshot(34.0);
+        snapshot.primary_label = Some("Rolling (5h)".into());
+        snapshot.secondary = Some(window_snapshot(32.0));
+        snapshot.secondary_label = Some("Weekly".into());
+        snapshot.tertiary = Some(window_snapshot(57.0));
+        snapshot.tertiary_label = Some("Monthly".into());
 
         let windows = snapshot_windows(&snapshot);
         let named: Vec<_> = windows
@@ -618,7 +628,7 @@ mod tests {
                     used_percent: 0.0,
                 },
                 UsageHistoryWindow {
-                    id: "cursor-on-demand".into(),
+                    id: "on-demand".into(),
                     label: "On-demand".into(),
                     used_percent: 56.0,
                 },
@@ -629,7 +639,35 @@ mod tests {
 
         assert_eq!(visible[0].windows.len(), 2);
         assert_eq!(visible[0].windows[0].id, "plan");
-        assert_eq!(visible[0].windows[1].id, "cursor-on-demand");
+        assert_eq!(visible[0].windows[1].id, "on-demand");
         assert_eq!(visible[0].windows[1].used_percent, 56.0);
+    }
+
+    #[test]
+    fn cursor_snapshot_records_the_production_on_demand_series() {
+        let mut snapshot = provider_snapshot("cursor", "Cursor");
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-on-demand".into(),
+                title: "On-demand".into(),
+                window: window_snapshot(56.0),
+                amount: None,
+            });
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-promotional".into(),
+                title: "Promotional".into(),
+                window: window_snapshot(0.0),
+                amount: None,
+            });
+
+        let windows = snapshot_windows(&snapshot);
+
+        assert!(windows.iter().any(|window| {
+            window.id == "on-demand" && window.label == "On-demand" && window.used_percent == 56.0
+        }));
+        assert!(!windows.iter().any(|window| window.id == "promotional"));
     }
 }

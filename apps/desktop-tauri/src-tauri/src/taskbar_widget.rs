@@ -196,9 +196,7 @@ fn cursor_strip_readout(
         if let Some(best) = with_room {
             return best;
         }
-        if is_blocking_window(&snapshot.primary)
-            && let Some(readout) = on_demand
-        {
+        if let Some(readout) = on_demand {
             return readout;
         }
         // All actionable lanes exhausted: soonest reset.
@@ -2462,6 +2460,40 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("On-demand"));
         assert_eq!(readout.window.used_percent, 56.0);
+    }
+
+    #[test]
+    fn cursor_strip_surfaces_zero_spend_when_actionable_lanes_are_exhausted() {
+        let mut snapshot = snap("cursor", None, 50.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.secondary = Some(rate_window(100.0, Some(43_200)));
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: rate_window(100.0, Some(43_200)),
+                amount: None,
+            });
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-on-demand".into(),
+                title: "On-demand".into(),
+                window: rate_window(0.0, Some(43_200)),
+                amount: Some(crate::commands::WindowAmountBridge {
+                    used: 0.0,
+                    limit: Some(1800.0),
+                    currency_code: "USD".into(),
+                    formatted_used: "$0.00".into(),
+                    formatted_limit: Some("$1,800.00".into()),
+                }),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.label, Some("On-demand"));
+        assert_eq!(readout.window.used_percent, 0.0);
     }
 
     #[test]

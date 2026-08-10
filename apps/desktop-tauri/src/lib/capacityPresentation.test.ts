@@ -434,6 +434,67 @@ describe("capacityPresentation", () => {
     expect(constrainingWindow(snap).label).toBe("Auto");
   });
 
+  it("keeps unused Cursor on-demand hidden while Auto still has room", () => {
+    const snap = provider({
+      primary: window(100),
+      primaryLabel: "Plan",
+      secondary: window(20),
+      secondaryLabel: "Auto",
+      extraRateWindows: [
+        { id: "cursor-api", title: "API", window: window(100) },
+        {
+          id: "cursor-on-demand",
+          title: "On-demand",
+          window: window(0),
+          amount: {
+            used: 0,
+            limit: 1800,
+            currencyCode: "USD",
+            formattedUsed: "$0.00",
+            formattedLimit: "$1,800.00",
+          },
+        },
+      ],
+    });
+
+    expect(glanceMeters(snap).companions.map((meter) => meter.label)).toEqual([
+      "Auto",
+      "API",
+    ]);
+    expect(constrainingWindow(snap).label).toBe("Auto");
+  });
+
+  it("shows the zero-spend boundary when every Cursor lane is exhausted", () => {
+    const snap = provider({
+      primary: window(50),
+      primaryLabel: "Plan",
+      secondary: window(100),
+      secondaryLabel: "Auto",
+      extraRateWindows: [
+        { id: "cursor-api", title: "API", window: window(100) },
+        {
+          id: "cursor-on-demand",
+          title: "On-demand",
+          window: window(0),
+          amount: {
+            used: 0,
+            limit: 1800,
+            currencyCode: "USD",
+            formattedUsed: "$0.00",
+            formattedLimit: "$1,800.00",
+          },
+        },
+      ],
+    });
+
+    expect(constrainingWindow(snap).label).toBe("On-demand");
+    expect(glanceMeters(snap).companions.map((meter) => meter.label)).toEqual([
+      "Auto",
+      "API",
+      "On-demand",
+    ]);
+  });
+
   it("keeps Claude weekly visible even when it is quieter than the session", () => {
     const meters = glanceMeters(
       provider({

@@ -115,7 +115,11 @@ function cursorOnDemandIsActive(
   provider: ProviderUsageSnapshot,
   onDemand: ConstrainingWindow,
 ): boolean {
-  return (onDemand.amount?.used ?? 0) > 0 || isBlocking(provider.primary);
+  if ((onDemand.amount?.used ?? 0) > 0) return true;
+  const actionable = cursorActionableWindows(provider);
+  return actionable.length > 0
+    ? hottestWithRoom(actionable) === null
+    : isBlocking(provider.primary);
 }
 
 /** Hottest non-exhausted window, then soonest reset on a used-% tie. */
@@ -177,7 +181,7 @@ function cursorStripWindow(
     if (withRoom) return withRoom;
     // Included Auto/API capacity is gone. Show the lane Cursor will bill next,
     // including the useful $0-at-the-boundary state.
-    if (onDemand && isBlocking(provider.primary)) return onDemand;
+    if (onDemand) return onDemand;
     const exhausted = soonestExhausted(actionable);
     if (exhausted) return exhausted;
   }
