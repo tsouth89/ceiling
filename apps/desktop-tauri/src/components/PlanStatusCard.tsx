@@ -143,6 +143,13 @@ function MeterRow({
           </>
         )}
       </div>
+      {meter.amount && (
+        <div className="plan-status-card__meter-amount">
+          {meter.amount.formattedLimit
+            ? `${meter.amount.formattedUsed} ${t("PanelAmountOf")} ${meter.amount.formattedLimit}`
+            : meter.amount.formattedUsed}
+        </div>
+      )}
       <div
         className="pace-overlay"
         aria-hidden

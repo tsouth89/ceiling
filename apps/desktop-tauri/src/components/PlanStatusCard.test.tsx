@@ -8,6 +8,7 @@ vi.mock("../hooks/useLocale", () => ({
     t: (key: string) => {
       if (key === "PanelLeftSuffix") return "left";
       if (key === "PanelUsedSuffix") return "used";
+      if (key === "PanelAmountOf") return "of";
       return key;
     },
   }),
@@ -168,6 +169,38 @@ describe("PlanStatusCard", () => {
     expect(screen.getByText("Auto")).toBeTruthy();
     expect(screen.getByText("API")).toBeTruthy();
     expect(screen.getByText(/8% used/)).toBeTruthy();
+  });
+
+  it("shows Cursor on-demand dollars once included usage is exhausted", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          primary: window(100),
+          secondary: window(100),
+          extraRateWindows: [
+            { id: "cursor-api", title: "API", window: window(100) },
+            {
+              id: "cursor-on-demand",
+              title: "On-demand",
+              window: window(56),
+              amount: {
+                used: 1002.16,
+                limit: 1800,
+                currencyCode: "USD",
+                formattedUsed: "$1,002.16",
+                formattedLimit: "$1,800.00",
+              },
+            },
+          ],
+        })}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("On-demand")).toBeInTheDocument();
+    expect(screen.getByText("56% used")).toBeInTheDocument();
+    expect(screen.getByText("$1,002.16 of $1,800.00")).toBeInTheDocument();
   });
 
   it("still shows reset timing when the session is exhausted", () => {
