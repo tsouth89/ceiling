@@ -951,23 +951,37 @@ fn predictive_pace_candidates<'a>(
     u32,
 )> {
     use codexbar::notifications::PredictiveWarningWindow as W;
-    [
+    let mut candidates: Vec<(W, &'a RateWindowSnapshot, u32)> = Vec::with_capacity(3);
+    for (fallback_window, window, default_window_minutes) in [
         (W::Session, Some(primary), 300u32),
         (W::Weekly, secondary, 10_080u32),
         (W::Monthly, tertiary, 43_200u32),
-    ]
-    .into_iter()
-    .filter_map(|(fallback_window, window, default_window_minutes)| {
-        let window = window?;
+    ] {
+        let Some(window) = window else {
+            continue;
+        };
         // Name the window by its real cadence; fall back to the slot's meaning
         // only when the provider does not state a duration.
         let named = window
             .window_minutes
             .map(predictive_window_for)
             .unwrap_or(fallback_window);
-        Some((named, window, default_window_minutes))
-    })
-    .collect()
+
+        // Notification state is keyed by cadence, so two provider slots with
+        // the same cadence must produce one observation. Keep the more-used
+        // window to avoid a cooler duplicate suppressing or clearing its alert.
+        if let Some(index) = candidates
+            .iter()
+            .position(|(existing, ..)| *existing == named)
+        {
+            if window.used_percent > candidates[index].1.used_percent {
+                candidates[index] = (named, window, default_window_minutes);
+            }
+        } else {
+            candidates.push((named, window, default_window_minutes));
+        }
+    }
+    candidates
 }
 
 fn notify_predictive_pace(
@@ -1193,6 +1207,29 @@ mod predictive_warning_tests {
 
         assert_eq!(candidates[0].0, W::Monthly);
         assert_eq!(candidates[1].0, W::Weekly, "no duration falls back to slot");
+    }
+
+    #[test]
+    fn predictive_pace_dedupes_slots_that_share_a_cadence() {
+        use codexbar::notifications::PredictiveWarningWindow as W;
+        let session = rw(Some(300), 10.0);
+        let weekly = rw(Some(10_080), 40.0);
+        let hotter_weekly = rw(Some(10_080), 80.0);
+
+        let candidates = predictive_pace_candidates(&session, Some(&weekly), Some(&hotter_weekly));
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[1].0, W::Weekly);
+        assert_eq!(candidates[1].1.used_percent, 80.0);
+
+        let monthly = rw(Some(43_200), 40.0);
+        let hotter_monthly = rw(Some(43_200), 80.0);
+        let candidates =
+            predictive_pace_candidates(&session, Some(&monthly), Some(&hotter_monthly));
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[1].0, W::Monthly);
+        assert_eq!(candidates[1].1.used_percent, 80.0);
     }
 
     #[test]
