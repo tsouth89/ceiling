@@ -234,6 +234,7 @@ export function ProviderDetailPane({
     selectedId: detail?.accountId ?? null,
     onSelect: selectAccount,
     activation: "manual",
+    isTabDisabled: () => loading,
   });
 
   if (!providerId) {

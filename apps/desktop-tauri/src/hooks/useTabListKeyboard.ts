@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 
 /**
  * Whether arrowing to a tab also selects it.
@@ -38,18 +38,36 @@ export function useTabListKeyboard<Id extends string>({
   selectedId,
   onSelect,
   activation = "automatic",
+  isTabDisabled,
 }: {
   tabIds: readonly Id[];
   selectedId: Id | null | undefined;
   onSelect: (id: Id) => void;
   activation?: TabListActivation;
+  /** Mirrors whatever the caller passes to each tab's `disabled` prop. */
+  isTabDisabled?: (id: Id) => boolean;
 }) {
   const baseId = useId();
+  const [focusedId, setFocusedId] = useState<Id | null>(null);
 
-  // With nothing selected the first tab holds the strip's Tab stop, so the
-  // strip stays reachable instead of dropping out of the tab order entirely.
   const selectedIndex = selectedId == null ? -1 : tabIds.indexOf(selectedId);
-  const tabStopIndex = selectedIndex >= 0 ? selectedIndex : 0;
+  const usable = (index: number) =>
+    index >= 0 && index < tabIds.length && !isTabDisabled?.(tabIds[index]);
+
+  // The Tab stop follows focus while the user is moving through the strip —
+  // that is what roving tabindex means, and under manual activation the focused
+  // tab is not the selected one. It falls back to the selection, then to the
+  // first usable tab: a disabled tab cannot take focus, so parking the stop on
+  // one would drop the whole strip out of the tab order.
+  const focusedIndex = focusedId == null ? -1 : tabIds.indexOf(focusedId);
+  const tabStopIndex = usable(focusedIndex)
+    ? focusedIndex
+    : usable(selectedIndex)
+      ? selectedIndex
+      : Math.max(
+          tabIds.findIndex((_, index) => usable(index)),
+          0,
+        );
 
   const tabDomId = (index: number) => `${baseId}-tab-${index}`;
   const panelDomId = (index: number) => `${baseId}-panel-${index}`;
@@ -85,12 +103,16 @@ export function useTabListKeyboard<Id extends string>({
     }
 
     event.preventDefault();
+    // Home on the first tab, End on the last: focus is already there, and
+    // re-selecting would re-run the caller's handler for no movement. Settings
+    // sends an IPC surface-mode message from its handler.
+    if (next === from) return;
+
     const target = tabs[next];
+    const id = target.dataset.tabId as Id | undefined;
+    if (id !== undefined) setFocusedId(id);
     target.focus();
-    if (activation === "automatic") {
-      const id = target.dataset.tabId;
-      if (id !== undefined) onSelect(id as Id);
-    }
+    if (activation === "automatic" && id !== undefined) onSelect(id);
   };
 
   return {
@@ -106,6 +128,9 @@ export function useTabListKeyboard<Id extends string>({
         "aria-selected": selected,
         "aria-controls": selected ? panelDomId(index) : undefined,
         tabIndex: index === tabStopIndex ? 0 : -1,
+        // Clicking a tab focuses it too, so the stop tracks however focus got
+        // there rather than only the arrow keys.
+        onFocus: () => setFocusedId(id),
       };
     },
 

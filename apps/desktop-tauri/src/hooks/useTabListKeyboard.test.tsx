@@ -27,6 +27,7 @@ function Harness({
       onSelect?.(id);
     },
     activation,
+    isTabDisabled: (id) => disabled.includes(id),
   });
 
   return (
@@ -137,6 +138,34 @@ describe("useTabListKeyboard", () => {
     // The tabs are real buttons, so Enter commits through the click handler.
     fireEvent.click(tab("beta"));
     expect(onSelect).toHaveBeenCalledWith("beta");
+  });
+
+  it("moves the tab stop to the focused tab, not the selected one", () => {
+    // Under manual activation the two differ. If the stop stayed on the
+    // selection, the strip would offer a second stop and Tab-back would land
+    // somewhere the user did not leave.
+    render(<Harness activation="manual" />);
+    fireEvent.keyDown(tab("alpha"), { key: "ArrowRight" });
+    expect(tab("beta").tabIndex).toBe(0);
+    expect(tab("alpha").tabIndex).toBe(-1);
+    expect(tab("alpha").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("does not re-select when the key cannot move anywhere", () => {
+    // Settings sends an IPC surface-mode message from its select handler, so a
+    // no-op Home is not free.
+    const onSelect = vi.fn();
+    render(<Harness onSelect={onSelect} />);
+    fireEvent.keyDown(tab("alpha"), { key: "Home" });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tab stop off a disabled selected tab", () => {
+    // A disabled button cannot take focus, so leaving the stop there would drop
+    // the whole strip out of the tab order.
+    render(<Harness initial="alpha" disabled={["alpha"]} />);
+    expect(tab("alpha").tabIndex).toBe(-1);
+    expect(tab("beta").tabIndex).toBe(0);
   });
 
   it("pairs the selected tab with its panel and leaves the others unpaired", () => {
