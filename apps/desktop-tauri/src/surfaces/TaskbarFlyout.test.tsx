@@ -263,6 +263,67 @@ describe("TaskbarFlyout", () => {
     expect(screen.queryByText("Promotional")).not.toBeInTheDocument();
   });
 
+  it("keeps the On-demand lane and its spend when every Cursor allowance is depleted", async () => {
+    // SBS-191: the reporter's exact state — Plan/Auto/API all at 100%, real
+    // money accruing on-demand. The flyout used to drop the row by name, so the
+    // one lane still costing anything was the only one you could not see.
+    const cursor = provider("cursor", "Cursor", 100, 22 * 24 * 60, "Plan");
+    cursor.primary.isExhausted = true;
+    cursor.secondary = {
+      ...cursor.primary,
+      usedPercent: 100,
+      remainingPercent: 0,
+      isExhausted: true,
+    };
+    cursor.secondaryLabel = "Auto";
+    cursor.extraRateWindows = [
+      {
+        id: "cursor-api",
+        title: "API",
+        window: {
+          ...cursor.primary,
+          usedPercent: 100,
+          remainingPercent: 0,
+          isExhausted: true,
+        },
+      },
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: { ...cursor.primary, usedPercent: 62, remainingPercent: 38, isExhausted: false },
+        amount: {
+          used: 1112.92,
+          limit: 1800,
+          currencyCode: "USD",
+          formattedUsed: "$1112.92",
+          formattedLimit: "$1800.00",
+        },
+      },
+    ];
+    providerState.providers = [cursor];
+    const cursorState = {
+      ...state,
+      providers: [{ id: "cursor", displayName: "Cursor" }],
+      settings: {
+        ...state.settings,
+        enabledProviders: ["cursor"],
+        providerOrder: ["cursor"],
+      },
+    } as BootstrapState;
+
+    render(<TaskbarFlyout state={cursorState} />);
+
+    expect(screen.getByText("On-demand")).toBeInTheDocument();
+    expect(screen.getByText("$1112.92 of $1800.00")).toBeInTheDocument();
+    expect(
+      screen.getByRole("progressbar", {
+        name: "Cursor On-demand 62% — $1112.92 of $1800.00",
+      }),
+    ).toBeInTheDocument();
+    // All four lanes fit, so nothing is silently truncated.
+    expect(screen.queryByText(/more limits in Ceiling/)).not.toBeInTheDocument();
+  });
+
   it("opens the full dashboard and dismisses the glance flyout", async () => {
     render(<TaskbarFlyout state={state} />);
     fireEvent.click(screen.getByRole("button", { name: "Open Ceiling" }));

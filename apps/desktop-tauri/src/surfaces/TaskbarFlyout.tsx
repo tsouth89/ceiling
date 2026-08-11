@@ -56,7 +56,7 @@ function earliestReset(providers: ProviderUsageSnapshot[], now: number): string 
   let earliestTime = Number.POSITIVE_INFINITY;
   for (const provider of providers) {
     if (provider.error) continue;
-    const windows = allMeasuredWindows(provider).filter(isUtilityWindow);
+    const windows = allMeasuredWindows(provider).filter(isResetClockWindow);
     for (const { window } of windows) {
       const candidate = window?.resetsAt;
       if (!candidate) continue;
@@ -70,25 +70,43 @@ function earliestReset(providers: ProviderUsageSnapshot[], now: number): string 
   return earliest;
 }
 
-function isUtilityWindow(window: ConstrainingWindow): boolean {
+/** Promotional grants are giveaways, not limits — they never earn a row. */
+function isMeteredWindow(window: ConstrainingWindow): boolean {
+  return !`${window.id} ${window.label}`.toLowerCase().includes("promotional");
+}
+
+/**
+ * Windows that answer "when does capacity come back".
+ *
+ * A spend lane bills rather than blocks, so it stays out of the header clock —
+ * but it is still a real row. Folding both questions into one predicate is what
+ * erased On-demand from the flyout entirely (SBS-191).
+ */
+function isResetClockWindow(window: ConstrainingWindow): boolean {
   const identity = `${window.id} ${window.label}`.toLowerCase();
-  return ![
-    "promotional",
-    "on-demand",
-    "on demand",
-    "ondemand",
-  ].some((noise) => identity.includes(noise));
+  return (
+    isMeteredWindow(window) &&
+    !["on-demand", "on demand", "ondemand"].some((lane) =>
+      identity.includes(lane),
+    )
+  );
 }
 
 function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
-  const windows = allMeasuredWindows(provider).filter(isUtilityWindow);
+  const windows = allMeasuredWindows(provider).filter(isMeteredWindow);
   if (provider.providerId !== "cursor") {
     return windows.slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
   }
 
-  // Cursor's three durable allowances are the useful comparison. Keep API in
-  // the first three even if the provider inserts another auxiliary pool.
-  const preferredIds = ["primary", "secondary", "extra-cursor-api"];
+  // Cursor's three durable allowances plus the lane that actually charges you.
+  // On-demand is pinned rather than left to fill a leftover slot: when the
+  // other three are depleted it is the only row that still means anything.
+  const preferredIds = [
+    "primary",
+    "secondary",
+    "extra-cursor-api",
+    "extra-cursor-on-demand",
+  ];
   const preferred = preferredIds
     .map((id) => windows.find((window) => window.id === id))
     .filter((window): window is ConstrainingWindow => Boolean(window));
@@ -142,7 +160,7 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
   const resetCredits = codexResetCredits(provider);
   const hiddenWindowCount = Math.max(
     0,
-    allMeasuredWindows(provider).filter(isUtilityWindow).length - windows.length,
+    allMeasuredWindows(provider).filter(isMeteredWindow).length - windows.length,
   );
   return (
     <div
@@ -172,10 +190,17 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
           </div>
         )}
         <div className="taskbar-flyout__meters">
-          {windows.map(({ id, label, window }) => {
+          {windows.map(({ id, label, window, amount }) => {
             const percent = valueFor(window, showAsUsed);
             const reset = compactDuration(window.resetsAt, window.resetDescription, now);
             const level = meterLevel(window);
+            // A lane billed in currency reads as money first; the percentage is
+            // only the shape of the bar beneath it.
+            const spend = amount
+              ? amount.formattedLimit
+                ? `${amount.formattedUsed} of ${amount.formattedLimit}`
+                : amount.formattedUsed
+              : null;
             return (
               <div className="taskbar-flyout__meter" key={id} data-level={level}>
                 <div className="taskbar-flyout__meter-meta">
@@ -183,11 +208,18 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
                   <span className="taskbar-flyout__meter-value" data-level={level}>{percent}%</span>
                   <span className="taskbar-flyout__reset">{reset}</span>
                 </div>
+                {spend && (
+                  <div className="taskbar-flyout__meter-amount">{spend}</div>
+                )}
                 <div
                   className="taskbar-flyout__track"
                   data-level={level}
                   role="progressbar"
-                  aria-label={`${provider.displayName} ${label} ${percent}%`}
+                  aria-label={
+                    spend
+                      ? `${provider.displayName} ${label} ${percent}% — ${spend}`
+                      : `${provider.displayName} ${label} ${percent}%`
+                  }
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={percent}

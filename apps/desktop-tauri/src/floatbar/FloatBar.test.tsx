@@ -375,6 +375,48 @@ describe("FloatBar", () => {
     });
   });
 
+  it("headlines on-demand spend in dollars once every allowance is depleted", async () => {
+    // SBS-191: the free-floating bar had the same defect as the native tile —
+    // it picked the on-demand lane correctly, then rendered "62%".
+    const live = snapshot("cursor", "Cursor", 100);
+    live.updatedAt = new Date().toISOString();
+    live.primaryLabel = "Plan";
+    live.secondary = rateWindow(100);
+    live.secondaryLabel = "Auto";
+    live.extraRateWindows = [
+      { id: "cursor-api", title: "API", window: rateWindow(100) },
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: rateWindow(62),
+        amount: {
+          used: 1112.92,
+          limit: 1800,
+          currencyCode: "USD",
+          formattedUsed: "$1112.92",
+          formattedLimit: "$1800.00",
+        },
+      },
+    ];
+    tauriMocks.getCachedProviders.mockResolvedValue([live]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ showAsUsed: true, enabledProviders: ["cursor"] }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ showAsUsed: true, enabledProviders: ["cursor"] }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__window")?.textContent).toBe(
+        "On-demand",
+      );
+      expect(container.querySelector(".floatbar__pct")?.textContent).toBe(
+        "$1112.92",
+      );
+    });
+  });
+
   it("animates only the provider named by a confirmed capacity event", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 30),

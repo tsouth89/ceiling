@@ -243,6 +243,36 @@ export function constrainingWindow(
   return best;
 }
 
+/** Mirrors `format_currency` in `rust/src/core/usage_snapshot.rs`. */
+function formatAmount(value: number, currencyCode: string): string {
+  const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
+  switch (currencyCode.toUpperCase()) {
+    case "USD":
+      return `$${safe.toFixed(2)}`;
+    case "EUR":
+      return `€${safe.toFixed(2)}`;
+    case "GBP":
+      return `£${safe.toFixed(2)}`;
+    default:
+      return `${safe.toFixed(2)} ${currencyCode}`;
+  }
+}
+
+/**
+ * Headline for a currency-billed lane on a one-number strip.
+ *
+ * Mirrors `strip_amount_label` in `taskbar_widget.rs` so the native taskbar tile
+ * and the floating bar read the same. Uncapped spend has no headroom figure, so
+ * "show remaining" falls back to spend-to-date rather than going blank (SBS-191).
+ */
+export function stripAmountLabel(
+  amount: WindowAmountBridge,
+  showAsUsed: boolean,
+): string {
+  if (showAsUsed || amount.limit == null) return amount.formattedUsed;
+  return formatAmount(amount.limit - amount.used, amount.currencyCode);
+}
+
 /**
  * Lanes that define a plan alongside its hero, listed in display order and
  * shown on overview however quiet they are:

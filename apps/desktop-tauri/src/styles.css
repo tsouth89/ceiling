@@ -1480,6 +1480,20 @@ body:has(.taskbar-flyout-frame) #root {
   line-height: 13px;
 }
 
+/* Spend on a currency-billed lane. Sits between the meta row and the bar so the
+   money is adjacent to the fraction it explains. */
+.taskbar-flyout__meter-amount {
+  margin-bottom: 3px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .taskbar-flyout__track {
   flex: 1 1 auto;
   height: 4px;

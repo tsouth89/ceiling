@@ -1,5 +1,9 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
+import type {
+  ProviderUsageSnapshot,
+  RateWindowSnapshot,
+  WindowAmountBridge,
+} from "../types/bridge";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { allMeasuredWindows } from "../lib/capacityPresentation";
 import {
@@ -22,8 +26,23 @@ type TimelineEntry = {
   accountName: string | null;
   label: string;
   window: RateWindowSnapshot;
+  /** Money behind this lane, when the provider bills it in currency. */
+  amount: WindowAmountBridge | null;
   resetMs: number | null;
 };
+
+/**
+ * Spend on a currency-billed lane, for the row's headline.
+ *
+ * A percentage alone is the wrong answer here: "56% used" against a spend cap
+ * is the shape of the bar, not the bill (SBS-191).
+ */
+function spendLabel(entry: TimelineEntry): string | null {
+  if (!entry.amount) return null;
+  return entry.amount.formattedLimit
+    ? `${entry.amount.formattedUsed} of ${entry.amount.formattedLimit}`
+    : entry.amount.formattedUsed;
+}
 
 type Bucket = {
   id: string;
@@ -98,6 +117,7 @@ function collectEntries(
           : null,
         label: measured.label,
         window: measured.window,
+        amount: measured.amount ?? null,
         resetMs: Number.isNaN(parsed) ? null : parsed,
       });
     }
@@ -170,6 +190,7 @@ function UsageBar({ window }: { window: RateWindowSnapshot }) {
 
 function FeaturedReset({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) {
   const usedPct = Math.max(0, Math.min(100, entry.window.usedPercent));
+  const spend = spendLabel(entry);
   const duration = shortDuration((entry.resetMs as number) - nowMs);
   return (
     <section className="activity-next" data-activity-entry={entry.key}>
@@ -192,7 +213,9 @@ function FeaturedReset({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }
       <div className="activity-next__glance">
         <strong>{duration}</strong>
         <span>{localResetLabel(entry.resetMs as number, nowMs)}</span>
-        <span className="activity-next__pct">{Math.round(usedPct)}% used</span>
+        <span className="activity-next__pct">
+          {spend ?? `${Math.round(usedPct)}% used`}
+        </span>
       </div>
       <UsageBar window={entry.window} />
     </section>
@@ -201,6 +224,7 @@ function FeaturedReset({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }
 
 function TimelineRow({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) {
   const usedPct = Math.max(0, Math.min(100, entry.window.usedPercent));
+  const spend = spendLabel(entry);
   const when =
     entry.resetMs === null ? "—" : shortDuration(entry.resetMs - nowMs);
 
@@ -222,7 +246,9 @@ function TimelineRow({ entry, nowMs }: { entry: TimelineEntry; nowMs: number }) 
             )}
           </span>
           <span className="activity-row__label">{entry.label}</span>
-          <span className="activity-row__pct">{Math.round(usedPct)}% used</span>
+          <span className="activity-row__pct">
+            {spend ?? `${Math.round(usedPct)}% used`}
+          </span>
         </div>
         <UsageBar window={entry.window} />
       </div>
