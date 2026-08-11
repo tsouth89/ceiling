@@ -31,6 +31,11 @@ enum PlacementOutcome {
 struct ProviderReadout {
     provider_id: String,
     percent: Option<u8>,
+    /// Set when the constraining lane is billed in currency. Takes the tile's
+    /// headline slot ahead of `percent` — see [`strip_amount_label`].
+    amount_label: Option<String>,
+    /// Cents-free fallback for tiles too narrow for `amount_label`.
+    amount_label_compact: Option<String>,
     window_label: String,
     reset: Option<String>,
 }
@@ -81,6 +86,58 @@ fn native_mode_has_configured_provider(settings: &codexbar::settings::Settings) 
 struct ConstrainingReadout<'a> {
     label: Option<&'a str>,
     window: &'a crate::commands::RateWindowSnapshot,
+    /// Money behind this lane, when the provider bills it in currency. A
+    /// percentage is the wrong readout for a spend lane: "62%" of an $1800 cap
+    /// does not tell you that you owe $1112.92 (SBS-191).
+    amount: Option<&'a crate::commands::WindowAmountBridge>,
+}
+
+impl<'a> ConstrainingReadout<'a> {
+    fn new(label: Option<&'a str>, window: &'a crate::commands::RateWindowSnapshot) -> Self {
+        Self {
+            label,
+            window,
+            amount: None,
+        }
+    }
+}
+
+/// Tile text for a currency-billed lane.
+///
+/// Uncapped spend has no remaining figure to show, so "show remaining" falls
+/// back to spend-to-date — the only honest number when there is no denominator.
+fn strip_amount_label(
+    amount: &crate::commands::WindowAmountBridge,
+    show_as_used: bool,
+) -> Option<String> {
+    let Some(limit) = amount.limit.filter(|_| !show_as_used) else {
+        return Some(amount.formatted_used.clone());
+    };
+    let remaining = (limit - amount.used).max(0.0);
+    Some(codexbar::core::WindowAmount::new(remaining, amount.currency_code.clone()).format_used())
+}
+
+/// Whole-dollar spelling of [`strip_amount_label`], for tiles too narrow for cents.
+///
+/// A provider gets 72-104px on the strip and the paint does not clip, so an
+/// overlong label runs into the neighbouring tile rather than being cut off.
+/// "$1112.92" needs roughly 68px against a 51px budget on a crowded taskbar;
+/// "$1113" fits, and the exact figure is a hover away in the flyout.
+fn compact_amount_label(
+    amount: &crate::commands::WindowAmountBridge,
+    show_as_used: bool,
+) -> Option<String> {
+    let value = match amount.limit.filter(|_| !show_as_used) {
+        Some(limit) => (limit - amount.used).max(0.0),
+        None => amount.used,
+    };
+    let rounded = value.round();
+    Some(match amount.currency_code.to_uppercase().as_str() {
+        "USD" => format!("${rounded:.0}"),
+        "EUR" => format!("€{rounded:.0}"),
+        "GBP" => format!("£{rounded:.0}"),
+        code => format!("{rounded:.0} {code}"),
+    })
 }
 
 fn is_blocking_window(window: &crate::commands::RateWindowSnapshot) -> bool {
@@ -116,7 +173,7 @@ fn outranks_window(
 /// Cursor Auto + API only (not Plan/Monthly blend).
 fn cursor_actionable_windows(
     snapshot: &crate::commands::ProviderUsageSnapshot,
-) -> Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> {
+) -> Vec<ConstrainingReadout<'_>> {
     let mut out = Vec::new();
     if let Some(window) = snapshot.secondary.as_ref() {
         let label = snapshot
@@ -125,7 +182,7 @@ fn cursor_actionable_windows(
             .map(str::trim)
             .filter(|label| !label.is_empty())
             .unwrap_or("Auto");
-        out.push((Some(label), window));
+        out.push(ConstrainingReadout::new(Some(label), window));
     }
     for extra in &snapshot.extra_rate_windows {
         if extra.id != "cursor-api" {
@@ -135,7 +192,11 @@ fn cursor_actionable_windows(
             "" => "API",
             label => label,
         };
-        out.push((Some(label), &extra.window));
+        out.push(ConstrainingReadout {
+            label: Some(label),
+            window: &extra.window,
+            amount: extra.amount.as_ref(),
+        });
     }
     out
 }
@@ -153,6 +214,7 @@ fn cursor_on_demand_readout(
                 label => label,
             }),
             window: &extra.window,
+            amount: extra.amount.as_ref(),
         })
 }
 
@@ -173,14 +235,11 @@ fn cursor_strip_readout(
     if !actionable.is_empty() {
         // Hottest non-exhausted Auto/API lane.
         let mut with_room: Option<ConstrainingReadout<'_>> = None;
-        for (label, window) in &actionable {
-            if is_blocking_window(window) {
+        for candidate in &actionable {
+            if is_blocking_window(candidate.window) {
                 continue;
             }
-            let candidate = ConstrainingReadout {
-                label: *label,
-                window,
-            };
+            let candidate = *candidate;
             let replace = match with_room {
                 None => true,
                 Some(best) => {
@@ -201,14 +260,11 @@ fn cursor_strip_readout(
         }
         // All actionable lanes exhausted: soonest reset.
         let mut exhausted: Option<ConstrainingReadout<'_>> = None;
-        for (label, window) in &actionable {
-            if !is_blocking_window(window) {
+        for candidate in &actionable {
+            if !is_blocking_window(candidate.window) {
                 continue;
             }
-            let candidate = ConstrainingReadout {
-                label: *label,
-                window,
-            };
+            let candidate = *candidate;
             let replace = match exhausted {
                 None => true,
                 Some(best) => {
@@ -230,10 +286,7 @@ fn cursor_strip_readout(
     {
         return readout;
     }
-    ConstrainingReadout {
-        label: snapshot.primary_label.as_deref(),
-        window: &snapshot.primary,
-    }
+    ConstrainingReadout::new(snapshot.primary_label.as_deref(), &snapshot.primary)
 }
 
 fn constraining_readout(
@@ -243,10 +296,7 @@ fn constraining_readout(
         return cursor_strip_readout(snapshot);
     }
 
-    let mut best = ConstrainingReadout {
-        label: snapshot.primary_label.as_deref(),
-        window: &snapshot.primary,
-    };
+    let mut best = ConstrainingReadout::new(snapshot.primary_label.as_deref(), &snapshot.primary);
 
     // Claude's per-model weekly caps are parallel sub-pools, not blockers: at
     // 100% you switch model rather than stop. The tile shows one lane, so
@@ -256,18 +306,24 @@ fn constraining_readout(
     // providers put real pools in `model_specific`.
     let is_claude = snapshot.provider_id == "claude";
 
-    let candidates: Vec<(Option<&str>, &crate::commands::RateWindowSnapshot)> = {
+    let candidates: Vec<ConstrainingReadout<'_>> = {
         let mut out = Vec::new();
         if let Some(window) = snapshot.secondary.as_ref() {
-            out.push((snapshot.secondary_label.as_deref(), window));
+            out.push(ConstrainingReadout::new(
+                snapshot.secondary_label.as_deref(),
+                window,
+            ));
         }
         if let Some(window) = snapshot.model_specific.as_ref()
             && !is_claude
         {
-            out.push((Some("Model"), window));
+            out.push(ConstrainingReadout::new(Some("Model"), window));
         }
         if let Some(window) = snapshot.tertiary.as_ref() {
-            out.push((snapshot.tertiary_label.as_deref().or(Some("Extra")), window));
+            out.push(ConstrainingReadout::new(
+                snapshot.tertiary_label.as_deref().or(Some("Extra")),
+                window,
+            ));
         }
         for extra in &snapshot.extra_rate_windows {
             if extra.id == "reset-credits" {
@@ -276,14 +332,18 @@ fn constraining_readout(
             if is_claude && extra.id.starts_with("claude-weekly-scoped-") {
                 continue;
             }
-            out.push((Some(extra.title.as_str()), &extra.window));
+            out.push(ConstrainingReadout {
+                label: Some(extra.title.as_str()),
+                window: &extra.window,
+                amount: extra.amount.as_ref(),
+            });
         }
         out
     };
 
-    for (label, window) in candidates {
-        if outranks_window(window, best.window) {
-            best = ConstrainingReadout { label, window };
+    for candidate in candidates {
+        if outranks_window(candidate.window, best.window) {
+            best = candidate;
         }
     }
 
@@ -828,9 +888,17 @@ mod windows_host {
                     };
                     value.clamp(0.0, 100.0).round() as u8
                 });
+                // A spend lane's headline is the money, not the fraction.
+                let spend = constraining.and_then(|readout| readout.amount);
+                let amount_label =
+                    spend.and_then(|amount| strip_amount_label(amount, settings.show_as_used));
+                let amount_label_compact =
+                    spend.and_then(|amount| compact_amount_label(amount, settings.show_as_used));
                 ProviderReadout {
                     provider_id,
                     percent,
+                    amount_label,
+                    amount_label_compact,
                     // Window label only (Weekly / 5h). Account identity lives in
                     // the flyout (On strip + account line); long tags collide
                     // with the next tile on the compact strip.
@@ -1290,14 +1358,43 @@ mod windows_host {
         for (index, provider) in model.providers.iter().enumerate() {
             let item_left = i32::try_from(index).unwrap_or(0) * item_width;
             let color = provider_color(&provider.provider_id);
-            let label = provider
-                .percent
-                .map(|percent| format!("{percent}%"))
-                .unwrap_or_else(|| "—".to_string());
-            let label = wide_without_nul(&label);
-            let label_width = unsafe { text_width(hdc, &label) };
             const ICON_WIDTH: i32 = 16;
             const ICON_TEXT_GAP: i32 = 5;
+            // Widest spelling that stays inside this tile. The strip paints
+            // without clipping and `centered_content_x` pins overlong content to
+            // the cell's left edge, so an unchecked "$1112.92" on a crowded
+            // taskbar would run across the divider into the next provider.
+            let percent_label = provider.percent.map(|percent| format!("{percent}%"));
+            let budget = item_width
+                .saturating_sub(ICON_WIDTH)
+                .saturating_sub(ICON_TEXT_GAP);
+            let mut best: Option<(Vec<u16>, i32)> = None;
+            for candidate in [
+                provider.amount_label.as_deref(),
+                provider.amount_label_compact.as_deref(),
+                percent_label.as_deref(),
+                Some("—"),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let wide = wide_without_nul(candidate);
+                let width = unsafe { text_width(hdc, &wide) };
+                let fits = width <= budget;
+                // Take the first that fits; failing that, keep the narrowest so
+                // a tile too small for any spelling overruns as little as possible.
+                let better = match &best {
+                    None => true,
+                    Some((_, best_width)) => *best_width > budget && width < *best_width,
+                };
+                if better {
+                    best = Some((wide, width));
+                }
+                if fits {
+                    break;
+                }
+            }
+            let (label, label_width) = best.expect("the em dash always yields a candidate");
             let primary_width = ICON_WIDTH
                 .saturating_add(ICON_TEXT_GAP)
                 .saturating_add(label_width);
@@ -2494,6 +2591,109 @@ mod tests {
         let readout = constraining_readout(&snapshot);
         assert_eq!(readout.label, Some("On-demand"));
         assert_eq!(readout.window.used_percent, 0.0);
+    }
+
+    /// SBS-191: picking the on-demand lane was never the hard part — carrying
+    /// its money to the tile was. The readout dropped `amount` on the floor, so
+    /// the strip could only ever render "62%".
+    #[test]
+    fn cursor_strip_readout_carries_on_demand_money() {
+        let mut snapshot = snap("cursor", None, 100.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.secondary = Some(rate_window(100.0, Some(43_200)));
+        snapshot.secondary_label = Some("Auto".into());
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-api".into(),
+                title: "API".into(),
+                window: rate_window(100.0, Some(43_200)),
+                amount: None,
+            });
+        snapshot
+            .extra_rate_windows
+            .push(crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-on-demand".into(),
+                title: "On-demand".into(),
+                window: rate_window(62.0, Some(43_200)),
+                amount: Some(crate::commands::WindowAmountBridge {
+                    used: 1112.92,
+                    limit: Some(1800.0),
+                    currency_code: "USD".into(),
+                    formatted_used: "$1112.92".into(),
+                    formatted_limit: Some("$1800.00".into()),
+                }),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        let amount = readout.amount.expect("on-demand money reaches the tile");
+        assert_eq!(
+            strip_amount_label(amount, true).as_deref(),
+            Some("$1112.92")
+        );
+        // "Show remaining" on a capped spend lane is headroom, not spend.
+        assert_eq!(
+            strip_amount_label(amount, false).as_deref(),
+            Some("$687.08")
+        );
+    }
+
+    #[test]
+    fn uncapped_spend_reports_spend_even_in_remaining_mode() {
+        // No denominator means no headroom figure exists. Falling back to
+        // spend-to-date beats blanking the tile for exactly the people running
+        // on-demand without a cap.
+        let uncapped = crate::commands::WindowAmountBridge {
+            used: 42.5,
+            limit: None,
+            currency_code: "USD".into(),
+            formatted_used: "$42.50".into(),
+            formatted_limit: None,
+        };
+        assert_eq!(
+            strip_amount_label(&uncapped, false).as_deref(),
+            Some("$42.50")
+        );
+    }
+
+    #[test]
+    fn compact_spend_drops_cents_for_narrow_tiles() {
+        let capped = crate::commands::WindowAmountBridge {
+            used: 1112.92,
+            limit: Some(1800.0),
+            currency_code: "USD".into(),
+            formatted_used: "$1112.92".into(),
+            formatted_limit: Some("$1800.00".into()),
+        };
+        // Three characters narrower than "$1112.92", which is the difference
+        // between fitting a 72px tile and crossing into the next provider.
+        assert_eq!(
+            compact_amount_label(&capped, true).as_deref(),
+            Some("$1113")
+        );
+        assert_eq!(
+            compact_amount_label(&capped, false).as_deref(),
+            Some("$687")
+        );
+
+        let uncapped = crate::commands::WindowAmountBridge {
+            used: 42.5,
+            limit: None,
+            currency_code: "EUR".into(),
+            formatted_used: "€42.50".into(),
+            formatted_limit: None,
+        };
+        assert_eq!(
+            compact_amount_label(&uncapped, false).as_deref(),
+            Some("€43")
+        );
+    }
+
+    #[test]
+    fn percentage_lanes_leave_the_tile_on_percent() {
+        let snapshot = snap("claude", None, 41.0);
+        let readout = constraining_readout(&snapshot);
+        assert!(readout.amount.is_none());
     }
 
     #[test]
