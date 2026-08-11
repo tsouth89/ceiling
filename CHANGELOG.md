@@ -2,6 +2,10 @@
 
 ## [Ceiling] Unreleased
 
+## [Ceiling] 1.5.28 - 2026-08-11
+
+Finishes what 1.5.27 started: Cursor's on-demand spend now reads as money on every surface that shows it, not only the Overview card.
+
 ### Fixed
 - **Cursor's on-demand spend reads as money on the taskbar, not just on the Overview.** 1.5.27 taught the Overview card to show dollars, but the surfaces you actually glance at were left behind. The taskbar tile picked the on-demand lane correctly and then drew "62%" — the fraction of a spend cap, which says nothing about the $1,112.92 behind it, and which inverts to a cheerful "38%" if you display remaining rather than used. The flyout was worse: it discarded any lane whose name contained "on-demand" before building its rows, so the tile named a lane that the panel beneath it refused to show, and because the same filter ran before the "+N more limits" count, nothing hinted that a row had been dropped. The free-floating bar carried the identical percentage-only defect. Activity had the same habit from the other direction: it listed the On-demand row faithfully and then headlined it "56% used", describing the shape of the bar instead of the bill. A lane billed in currency now leads with the amount on every surface that shows it — taskbar tile, hover flyout, floating bar, and the Activity schedule — the flyout lists On-demand with its spend beside the bar and reserves it a slot so a depleted plan cannot crowd it out, and on-demand running uncapped reports spend-to-date rather than going blank for want of a denominator. Reported in #191.
 
