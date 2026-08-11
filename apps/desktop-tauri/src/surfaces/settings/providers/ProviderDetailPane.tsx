@@ -7,6 +7,7 @@ import type {
   SettingsUpdate,
 } from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
+import { useTabListKeyboard } from "../../../hooks/useTabListKeyboard";
 import {
   getCredentialStorageStatus,
   getProviderDetail,
@@ -218,6 +219,23 @@ export function ProviderDetailPane({
     };
   }, [providerId]);
 
+  const selectAccount = useCallback(
+    (accountId: string) => {
+      setSelectedAccountId(accountId);
+      if (providerId) void load(providerId, undefined, accountId);
+    },
+    [load, providerId],
+  );
+
+  // Manual activation: choosing an account refetches that account from the
+  // provider, so arrowing across the strip must not fire a request per tab.
+  const { tabListProps, getTabProps, getPanelProps } = useTabListKeyboard({
+    tabIds: (detail?.accounts ?? []).map((account) => account.accountId),
+    selectedId: detail?.accountId ?? null,
+    onSelect: selectAccount,
+    activation: "manual",
+  });
+
   if (!providerId) {
     return (
       <div className="provider-detail">
@@ -314,20 +332,22 @@ export function ProviderDetailPane({
     }
   };
 
+  // Only rendered with something to choose between. One account means this pane
+  // already describes it, and a selector would be noise. The body is only a
+  // tabpanel when the strip that labels it exists.
+  const hasAccountTabs = (detail.accounts?.length ?? 0) > 1;
+
   return (
     <div className="provider-detail">
-      {/* Only rendered with something to choose between. One account means this
-          pane already describes it, and a selector would be noise. */}
-      {(detail.accounts?.length ?? 0) > 1 && (
-        <div className="provider-detail__accounts" role="tablist">
+      {hasAccountTabs && (
+        <div className="provider-detail__accounts" aria-label={t("SectionAccounts")} {...tabListProps}>
           {detail.accounts?.map((account) => {
             const selected = account.accountId === detail.accountId;
             return (
               <button
                 key={account.accountId}
                 type="button"
-                role="tab"
-                aria-selected={selected}
+                {...getTabProps(account.accountId)}
                 className={`provider-detail__account${selected ? " provider-detail__account--selected" : ""}`}
                 style={
                   account.tint && selected
@@ -335,10 +355,7 @@ export function ProviderDetailPane({
                     : undefined
                 }
                 disabled={loading}
-                onClick={() => {
-                  setSelectedAccountId(account.accountId);
-                  void load(detail.id, undefined, account.accountId);
-                }}
+                onClick={() => selectAccount(account.accountId)}
               >
                 {account.label}
               </button>
@@ -347,107 +364,112 @@ export function ProviderDetailPane({
         </div>
       )}
 
-      <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+      <div
+        {...(hasAccountTabs ? getPanelProps() : {})}
+        className="provider-detail__body"
+      >
+        <IdentitySection provider={detail} subtitle={subtitle} t={t} />
 
-      <DataSourceSection provider={detail} t={t} />
+        <DataSourceSection provider={detail} t={t} />
 
-      {detail.lastError && (
-        <ProviderIssueNotice
-          detail={detail}
-          message={detail.lastError}
-          onCopy={handleCopyError}
+        {detail.lastError && (
+          <ProviderIssueNotice
+            detail={detail}
+            message={detail.lastError}
+            onCopy={handleCopyError}
+            t={t}
+          />
+        )}
+
+        <UsageSection
+          provider={detail}
+          resetTimeRelative={resetTimeRelative}
           t={t}
         />
-      )}
-
-      <UsageSection
-        provider={detail}
-        resetTimeRelative={resetTimeRelative}
-        t={t}
-      />
-      {detail.id === "wayfinder" && (
-        <section className="provider-detail__section">
-          <h3>{t("WayfinderGatewayTitle")}</h3>
-          <label>
-            <span>{t("WayfinderGatewayLabel")}</span>
-            <input
-              type="url"
-              value={gatewayDraft}
-              disabled={settingsDisabled || busy}
-              onChange={(event) => setGatewayDraft(event.target.value)}
-              aria-describedby="wayfinder-gateway-help"
-            />
-          </label>
-          <p id="wayfinder-gateway-help">{t("WayfinderGatewayHelp")}</p>
-          {gatewayError && <p role="alert">{gatewayError}</p>}
-          <button type="button" disabled={settingsDisabled || busy} onClick={() => void saveGateway()}>
-            {t("Save")}
-          </button>
-        </section>
-      )}
-      <MenuBarMetricSection
-        provider={detail}
-        providerMetrics={providerMetrics}
-        disabled={settingsDisabled}
-        t={t}
-        onChange={onSettingsChange}
-      />
-      <PaceSection pace={detail.pace} t={t} />
-      <CostSection cost={detail.cost} t={t} />
-
-      {/* Per-provider sub-sections ported in Phases 6c–6f. */}
-      <RegionSection
-        providerId={detail.id}
-        currentValue={detail.region}
-        options={regionOptions}
-        t={t}
-        onChanged={() => void load(detail.id)}
-      />
-      <CredentialsDispatcher providerId={detail.id} t={t} />
-      {detail.id === "codex" && <CodexUsageOptions t={t} />}
-      <CredentialStorageSection
-        status={credentialStatus}
-        busy={busy}
-        onRevoke={handleRevokeCredentials}
-        t={t}
-      />
-      {tokenProviderIds.has(detail.id) && (
-        <TokenAccountsPanel
-          key={`token-${detail.id}-${credentialRevision}`}
-          providerId={detail.id}
-          compact
+        {detail.id === "wayfinder" && (
+          <section className="provider-detail__section">
+            <h3>{t("WayfinderGatewayTitle")}</h3>
+            <label>
+              <span>{t("WayfinderGatewayLabel")}</span>
+              <input
+                type="url"
+                value={gatewayDraft}
+                disabled={settingsDisabled || busy}
+                onChange={(event) => setGatewayDraft(event.target.value)}
+                aria-describedby="wayfinder-gateway-help"
+              />
+            </label>
+            <p id="wayfinder-gateway-help">{t("WayfinderGatewayHelp")}</p>
+            {gatewayError && <p role="alert">{gatewayError}</p>}
+            <button type="button" disabled={settingsDisabled || busy} onClick={() => void saveGateway()}>
+              {t("Save")}
+            </button>
+          </section>
+        )}
+        <MenuBarMetricSection
+          provider={detail}
+          providerMetrics={providerMetrics}
+          disabled={settingsDisabled}
+          t={t}
+          onChange={onSettingsChange}
         />
-      )}
-      <ApiKeySection
-        key={`api-${detail.id}-${credentialRevision}`}
-        providerId={detail.id}
-      />
-      <CookieSection
-        key={`cookie-${detail.id}-${credentialRevision}`}
-        providerId={detail.id}
-        cookieDomain={cookieDomain}
-      />
-      <ChartsSection
-        providerId={detail.id}
-        accountEmail={detail.email}
-        accountId={detail.accountId}
-        t={t}
-      />
+        <PaceSection pace={detail.pace} t={t} />
+        <CostSection cost={detail.cost} t={t} />
 
-      <QuickActionsSection
-        provider={detail}
-        busy={busy}
-        loginPhase={loginPhase}
-        loginCode={loginCode}
-        loginUrl={loginUrl}
-        onRefresh={handleRefresh}
-        onSwitchAccount={handleSwitchAccount}
-        onOpenDashboard={handleOpenDashboard}
-        onOpenStatusPage={handleOpenStatusPage}
-        onCopyError={handleCopyError}
-        onBuyCredits={handleBuyCredits}
-        t={t}
-      />
+        {/* Per-provider sub-sections ported in Phases 6c–6f. */}
+        <RegionSection
+          providerId={detail.id}
+          currentValue={detail.region}
+          options={regionOptions}
+          t={t}
+          onChanged={() => void load(detail.id)}
+        />
+        <CredentialsDispatcher providerId={detail.id} t={t} />
+        {detail.id === "codex" && <CodexUsageOptions t={t} />}
+        <CredentialStorageSection
+          status={credentialStatus}
+          busy={busy}
+          onRevoke={handleRevokeCredentials}
+          t={t}
+        />
+        {tokenProviderIds.has(detail.id) && (
+          <TokenAccountsPanel
+            key={`token-${detail.id}-${credentialRevision}`}
+            providerId={detail.id}
+            compact
+          />
+        )}
+        <ApiKeySection
+          key={`api-${detail.id}-${credentialRevision}`}
+          providerId={detail.id}
+        />
+        <CookieSection
+          key={`cookie-${detail.id}-${credentialRevision}`}
+          providerId={detail.id}
+          cookieDomain={cookieDomain}
+        />
+        <ChartsSection
+          providerId={detail.id}
+          accountEmail={detail.email}
+          accountId={detail.accountId}
+          t={t}
+        />
+
+        <QuickActionsSection
+          provider={detail}
+          busy={busy}
+          loginPhase={loginPhase}
+          loginCode={loginCode}
+          loginUrl={loginUrl}
+          onRefresh={handleRefresh}
+          onSwitchAccount={handleSwitchAccount}
+          onOpenDashboard={handleOpenDashboard}
+          onOpenStatusPage={handleOpenStatusPage}
+          onCopyError={handleCopyError}
+          onBuyCredits={handleBuyCredits}
+          t={t}
+        />
+      </div>
     </div>
   );
 }

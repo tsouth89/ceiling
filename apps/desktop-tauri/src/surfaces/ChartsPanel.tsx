@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { useLocale } from "../hooks/useLocale";
+import { useTabListKeyboard } from "../hooks/useTabListKeyboard";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
@@ -73,6 +74,31 @@ export default function ChartsPanel({
     );
   }, [supported, comparisonProviders]);
 
+  const tabIds = useMemo(
+    () => [
+      ...(comparisonProviders ? [COMPARE_ID] : []),
+      ...supported.map((p) => p.providerId),
+    ],
+    [comparisonProviders, supported],
+  );
+
+  const comparing = selectedId === COMPARE_ID && comparisonProviders !== null;
+  // The selection settles in an effect, so until it does the strip reports what
+  // the body actually renders: the first supported provider.
+  const activeTabId = comparing
+    ? COMPARE_ID
+    : (tabIds.includes(selectedId ?? "") ? selectedId : supported[0]?.providerId) ?? null;
+
+  // Manual activation: picking a provider remounts ChartsSection, which loads
+  // that provider's history. Arrowing across the strip should not fire a load
+  // per tab it passes over.
+  const { tabListProps, getTabProps, getPanelProps } = useTabListKeyboard({
+    tabIds,
+    selectedId: activeTabId,
+    onSelect: setSelectedId,
+    activation: "manual",
+  });
+
   if (supported.length === 0) {
     // The API-value card loads its own local totals, so keep it visible even
     // when no provider reports chart-series data (or a snapshot errored).
@@ -88,21 +114,19 @@ export default function ChartsPanel({
     );
   }
 
-  const comparing = selectedId === COMPARE_ID && comparisonProviders !== null;
   const selected =
     supported.find((p) => p.providerId === selectedId) ?? supported[0];
-  const tabCount = supported.length + (comparisonProviders ? 1 : 0);
+  const tabCount = tabIds.length;
 
   return (
     <div className="charts-panel">
       <TotalApiValueCard />
       {tabCount > 1 && (
-        <div className="charts-provider-tabs" role="tablist" aria-label="Provider">
+        <div className="charts-provider-tabs" {...tabListProps} aria-label="Provider">
           {comparisonProviders && (
             <button
               type="button"
-              role="tab"
-              aria-selected={comparing}
+              {...getTabProps(COMPARE_ID)}
               className="charts-provider-tab charts-provider-tab--compare"
               data-active={comparing ? "true" : "false"}
               onClick={() => setSelectedId(COMPARE_ID)}
@@ -112,13 +136,12 @@ export default function ChartsPanel({
             </button>
           )}
           {supported.map((p) => {
-            const isActive = !comparing && p.providerId === selected.providerId;
+            const isActive = p.providerId === activeTabId;
             return (
               <button
                 key={p.providerId}
                 type="button"
-                role="tab"
-                aria-selected={isActive}
+                {...getTabProps(p.providerId)}
                 className="charts-provider-tab"
                 data-active={isActive ? "true" : "false"}
                 onClick={() => setSelectedId(p.providerId)}
@@ -135,24 +158,29 @@ export default function ChartsPanel({
           })}
         </div>
       )}
-      {comparing ? (
-        <>
-          <p className="charts-compare-note">
-            Compares all Codex usage against all Claude usage on this machine,
-            across every account.
-          </p>
-          <ProviderComparison providers={[comparisonProviders[0], comparisonProviders[1]]} />
-        </>
-      ) : (
-        <ChartsSection
-          key={chartSectionKey(selected)}
-          providerId={selected.providerId}
-          accountEmail={selected.accountEmail}
-          accountId={selected.accountId}
-          providerSnapshot={selected}
-          t={t}
-        />
-      )}
+      <div
+        {...(tabCount > 1 ? getPanelProps() : {})}
+        className="charts-panel__body"
+      >
+        {comparing ? (
+          <>
+            <p className="charts-compare-note">
+              Compares all Codex usage against all Claude usage on this machine,
+              across every account.
+            </p>
+            <ProviderComparison providers={[comparisonProviders[0], comparisonProviders[1]]} />
+          </>
+        ) : (
+          <ChartsSection
+            key={chartSectionKey(selected)}
+            providerId={selected.providerId}
+            accountEmail={selected.accountEmail}
+            accountId={selected.accountId}
+            providerSnapshot={selected}
+            t={t}
+          />
+        )}
+      </div>
     </div>
   );
 }
