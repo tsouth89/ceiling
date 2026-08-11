@@ -2,12 +2,28 @@
 
 ## [Ceiling] Unreleased
 
-## [Ceiling] 1.5.26 - 2026-08-09
+## [Ceiling] 1.5.27 - 2026-08-11
 
-Patch release for correct identity and usage isolation across multiple configured Claude accounts.
+Makes Cursor's on-demand spend readable at a glance, corrects two numbers Ceiling was reporting wrong, and replaces browser cookie import with a manual setup you can see.
+
+Supersedes 1.5.26, which was built but never published; everything from it is included here.
+
+### Changed
+- **Browser cookie import is gone, replaced by a manual copy-and-paste setup.** Ceiling could read cookies out of the browser's own database to authenticate a provider, and provider fallbacks could reach for that database without being asked. Handing an app your browser's cookie store is a large amount of trust for a usage meter, and it happened where you could not watch it. Providers that need a cookie now ask for one, with a guide for copying it out of the browser's developer tools, and the value goes to the same secure store as every other credential. **If a provider was authenticated by browser import, it will ask you to set it up again.** Everything else is untouched: CLI credentials, IDE credentials, OAuth sign-in, and Claude Desktop sessions are all still detected automatically, and providers on those paths need no attention.
+
+### Added
+- **Tab strips can be driven from the keyboard.** Settings, the Charts provider selector, the account switcher, and the chart-type tabs all announced themselves as tab strips to assistive technology while ignoring arrow keys entirely, and each one spent a Tab stop per tab. Left and Right move between tabs, Home and End jump to the ends, focus wraps, and a strip is now a single Tab stop. Each panel names the tab that opened it, and panels are focusable, so tabbing out of a strip lands in the content it just opened and a scrolling panel can be scrolled from the keyboard.
 
 ### Fixed
+- **Cursor's on-demand usage is readable without opening a provider.** On-demand is the only Cursor lane that bills real money, and once the included plan is at 100% it is the only number that matters. It now shows its percentage and its dollars together on the Overview card — "56%" beside "$1,002.16 of $1,800.00" — and takes the taskbar strip's slot once spending starts or the included allowance is exhausted. An unused `$0` on-demand lane stays out of the way on a healthy card. Reported in #191.
+- **Codex no longer overcharges `gpt-5.1-codex-mini`.** Pricing lookup collapsed `*-codex` model names onto their base model, which is right for the plain aliases but folded the distinct `mini` and `max` variants into `gpt-5.1`. Mini input was billed at the `gpt-5.1` rate of $1.25 per million tokens instead of its own $0.25, so every cost total containing mini usage read high. Dated and `openai/`-prefixed spellings of those variants now resolve to the same correct entry.
+- **The pace verdict describes the window that is actually running hot.** Pace was chosen by cadence — the weekly window, always — so a provider reporting both a weekly and a monthly quota could show a reassuring verdict about the window nobody was spending. An OpenCode Go account read "Weekly pace · Far below budget · -15.0%" directly beneath a monthly bar whose own marker showed it fifteen points over. Monthly quotas were doubly unreachable: pace looked only at the primary and secondary slots, and monthly quotas are reported in a third slot, and the cadence test would have rejected anything longer than fourteen days anyway. Every window a provider reports is now a candidate, and the one running hottest against its own clock is the one you are told about. The twelve-hour floor stays, so a five-hour session still gets no verdict rather than a meaningless one.
+- **Concurrent writes can no longer lose stored settings or credentials.** Settings, API keys, manual cookies, and token accounts were each read, changed, and written back without a lock, so two writers overlapping — the desktop app and the CLI, or two changes landing together — could drop whichever change was read first. All four now serialize through one cross-process lock, and revoking a provider's credentials happens inside a single validated critical section rather than as several separate writes.
 - **Configured Claude accounts no longer collapse onto one globally active session.** When multiple accounts use separate `CLAUDE_CONFIG_DIR` directories, each card now fetches through OAuth credentials scoped to its own directory. Ceiling no longer tries the process-wide Claude Desktop, browser, ambient CLI, or API-token session first, which could make two distinct accounts show the same email and usage. Single-account automatic fallback behavior is unchanged.
+
+### Internal
+- Cost pricing tables and cost math have regression coverage for the first time, including the mini-rate case above, along with new tests for the usage-level threshold classifier and the critical usage boundary.
+- Owner pull requests are reviewed by a pinned Grok action.
 
 ## [Ceiling] 1.5.25 - 2026-08-09
 
