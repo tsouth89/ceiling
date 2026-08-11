@@ -734,6 +734,14 @@ html {
   outline-offset: 1px;
 }
 
+/* Tab panels are focusable so a keyboard user can scroll them and so Tab out of
+   a tab strip lands on the content it selected (#219). Inset so the ring stays
+   inside a panel that is itself a scroll container. */
+[role="tabpanel"]:focus-visible {
+  outline: 2px solid var(--accent, #0a84ff);
+  outline-offset: -2px;
+}
+
 .toggle:disabled,
 .provider-detail-toggle input[type="checkbox"]:disabled,
 .providers-sidebar__checkbox:disabled {
@@ -7711,6 +7719,15 @@ body:has(.dashboard-shell) #root {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+/* The tabpanel wrapper carries the strip's ARIA pairing (#219). It repeats the
+   column layout so its children keep the spacing they had as direct children
+   of .charts-panel. */
+.charts-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
 }
 /* Provider selector: pill chips across the providers that report history. */
 .charts-provider-tabs {

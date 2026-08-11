@@ -118,6 +118,46 @@ describe("ChartsPanel", () => {
     expect(getByTestId("charts-section").textContent).toBe("claude");
   });
 
+  it("is one tab stop and arrows across the strip without loading each provider", () => {
+    const { getByRole, getByTestId } = render(
+      <ChartsPanel
+        providers={[
+          provider({ providerId: "codex", displayName: "Codex" }),
+          provider({ providerId: "claude", displayName: "Claude" }),
+        ]}
+      />,
+    );
+    const compare = getByRole("tab", { name: /Compare/ });
+    const claude = getByRole("tab", { name: /Claude/ });
+    expect(compare.tabIndex).toBe(0);
+    expect(claude.tabIndex).toBe(-1);
+
+    // Manual activation: arrowing past Codex must not mount its charts.
+    fireEvent.keyDown(compare, { key: "End" });
+    expect(claude).toBe(document.activeElement);
+    expect(getByTestId("provider-comparison")).toBeTruthy();
+
+    fireEvent.click(claude);
+    expect(getByTestId("charts-section").textContent).toBe("claude");
+    expect(claude.tabIndex).toBe(0);
+    expect(compare.tabIndex).toBe(-1);
+  });
+
+  it("names the charts body as the panel of the selected provider tab", () => {
+    const { getByRole } = render(
+      <ChartsPanel
+        providers={[
+          provider({ providerId: "codex", displayName: "Codex" }),
+          provider({ providerId: "claude", displayName: "Claude" }),
+        ]}
+      />,
+    );
+    const panel = getByRole("tabpanel");
+    const compare = getByRole("tab", { name: /Compare/ });
+    expect(compare.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.getAttribute("aria-labelledby")).toBe(compare.id);
+  });
+
   it("collapses a provider's accounts into a single tab, since local logs are machine-wide", () => {
     // Local activity is scanned from logs that carry no account identity, so
     // two Codex accounts must not present as two tabs of separable data.

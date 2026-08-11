@@ -9,6 +9,7 @@ import type {
 import { useSettings } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
+import { useTabListKeyboard } from "../hooks/useTabListKeyboard";
 import type { LocaleKey } from "../i18n/keys";
 import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
 import GeneralTab from "./settings/tabs/GeneralTab";
@@ -116,6 +117,8 @@ export const TAB_META: { id: SettingsTab; labelKey: LocaleKey }[] = [
   { id: "about", labelKey: "TabAbout" },
 ];
 
+const TAB_IDS: SettingsTab[] = TAB_META.map((t) => t.id);
+
 function isSettingsTab(value: string): value is SettingsTab {
   return TAB_META.some((t) => t.id === value);
 }
@@ -202,6 +205,12 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     }
   }, []);
 
+  const { tabListProps, getTabProps, getPanelProps } = useTabListKeyboard({
+    tabIds: TAB_IDS,
+    selectedId: activeTab,
+    onSelect: handleTabClick,
+  });
+
   return (
     <div
       className={`settings${activeTab === "providers" ? " settings--providers-active" : ""}`}
@@ -237,12 +246,11 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
       </div>
 
       {/* tab bar */}
-      <nav className="settings-tabs" role="tablist">
+      <nav className="settings-tabs" {...tabListProps}>
         {TAB_META.map((tab) => (
           <button
             key={tab.id}
-            role="tab"
-            aria-selected={activeTab === tab.id}
+            {...getTabProps(tab.id)}
             className={`settings-tab ${activeTab === tab.id ? "settings-tab--active" : ""}`}
             onClick={() => handleTabClick(tab.id)}
           >
@@ -262,7 +270,10 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
       )}
 
       {/* tab panels */}
-      <div className={`settings-body${activeTab === "providers" ? " settings-body--providers" : ""}`}>
+      <div
+        {...getPanelProps()}
+        className={`settings-body${activeTab === "providers" ? " settings-body--providers" : ""}`}
+      >
         {activeTab === "general" && (
           <GeneralTab mode="general" settings={settings} set={set} saving={saving} />
         )}

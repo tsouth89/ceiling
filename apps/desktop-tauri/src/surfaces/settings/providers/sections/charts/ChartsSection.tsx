@@ -24,6 +24,7 @@ import type {
   SettingsSnapshot,
 } from "../../../../../types/bridge";
 import type { useLocale } from "../../../../../hooks/useLocale";
+import { useTabListKeyboard } from "../../../../../hooks/useTabListKeyboard";
 import { CreditsHistoryChart } from "./CreditsHistoryChart";
 import { UsageBreakdownChart } from "./UsageBreakdownChart";
 import { QuotaHistoryChart } from "./QuotaHistoryChart";
@@ -681,6 +682,23 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
   const cursorRows = isCursor ? cursorActivity ?? [] : [];
   const hasCursorActivity = cursorRows.length > 0;
 
+  // Derived above the empty and loading states below because the tab-strip hook
+  // has to run on every render.
+  const available: TabKey[] = [];
+  if ((data?.quotaHistory.length ?? 0) > 0) available.push("limits");
+  if ((data?.creditsHistory.length ?? 0) > 0) available.push("credits");
+  if ((data?.usageBreakdown.length ?? 0) > 0) available.push("usage");
+  const current: TabKey | null =
+    active && available.includes(active) ? active : available[0] ?? null;
+
+  // Automatic activation: the series are already loaded, so switching tabs only
+  // swaps which chart is drawn.
+  const { tabListProps, getTabProps, getPanelProps } = useTabListKeyboard({
+    tabIds: available,
+    selectedId: current,
+    onSelect: setActive,
+  });
+
   if (loading) {
     return (
       <section className="provider-detail-section provider-detail-charts provider-detail-charts--loading">
@@ -711,12 +729,9 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
     );
   }
 
-  const hasCredits = data.creditsHistory.length > 0;
-  const hasUsage = data.usageBreakdown.length > 0;
-  const hasLimits = data.quotaHistory.length > 0;
   const hasLocalSummary = data.localUsage !== null;
 
-  if (!hasCredits && !hasUsage && !hasLimits && !hasLocalSummary && !hasCursorActivity
+  if (available.length === 0 && !hasLocalSummary && !hasCursorActivity
     && !resetBoundaryUnavailable) {
     return (
       <section className="provider-detail-section provider-detail-charts charts-data-empty">
@@ -726,12 +741,6 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
     );
   }
 
-  const available: TabKey[] = [];
-  if (hasLimits) available.push("limits");
-  if (hasCredits) available.push("credits");
-  if (hasUsage) available.push("usage");
-
-  const current: TabKey | null = active && available.includes(active) ? active : available[0] ?? null;
   const emptyMsg = t("DetailChartEmpty");
 
   const tabLabel = (k: TabKey): string => {
@@ -858,13 +867,12 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
         </div>
       )}
       {available.length > 1 && (
-        <div className="provider-detail-charts__tabs" role="tablist">
+        <div className="provider-detail-charts__tabs" {...tabListProps}>
           {available.map((k) => (
             <button
               key={k}
               type="button"
-              role="tab"
-              aria-selected={k === current}
+              {...getTabProps(k)}
               className="provider-detail-charts__tab"
               data-active={k === current ? "true" : "false"}
               onClick={() => setActive(k)}
@@ -874,7 +882,10 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
           ))}
         </div>
       )}
-      {current && <div className="provider-detail-charts__body" role="tabpanel">
+      {current && <div
+        className="provider-detail-charts__body"
+        {...(available.length > 1 ? getPanelProps() : {})}
+      >
         {current === "limits" && (
           <QuotaHistoryChart
             data={data.quotaHistory}
