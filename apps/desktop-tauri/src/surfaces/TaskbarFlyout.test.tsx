@@ -324,6 +324,57 @@ describe("TaskbarFlyout", () => {
     expect(screen.queryByText(/more limits in Ceiling/)).not.toBeInTheDocument();
   });
 
+  it("states spend of limit under Show-as-remaining, like the Overview does", () => {
+    // Rows with space print both numbers, so the used/remaining toggle has
+    // nothing left to reveal and moves only the percentage — the same split
+    // PlanStatusCard uses. Only the one-number strips (taskbar tile, floating
+    // bar) pick one figure and follow the setting.
+    const cursor = provider("cursor", "Cursor", 100, 22 * 24 * 60, "Plan");
+    cursor.primary.isExhausted = true;
+    cursor.extraRateWindows = [
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: {
+          ...cursor.primary,
+          usedPercent: 62,
+          remainingPercent: 38,
+          isExhausted: false,
+        },
+        amount: {
+          used: 1112.92,
+          limit: 1800,
+          currencyCode: "USD",
+          formattedUsed: "$1112.92",
+          formattedLimit: "$1800.00",
+        },
+      },
+    ];
+    providerState.providers = [cursor];
+
+    render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "cursor", displayName: "Cursor" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["cursor"],
+              providerOrder: ["cursor"],
+              showAsUsed: false,
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    // The percentage flips to remaining...
+    expect(screen.getByText("38%")).toBeInTheDocument();
+    // ...while the money keeps stating both figures.
+    expect(screen.getByText("$1112.92 of $1800.00")).toBeInTheDocument();
+  });
+
   it("opens the full dashboard and dismisses the glance flyout", async () => {
     render(<TaskbarFlyout state={state} />);
     fireEvent.click(screen.getByRole("button", { name: "Open Ceiling" }));

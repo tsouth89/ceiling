@@ -196,6 +196,14 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
             const level = meterLevel(window);
             // A lane billed in currency reads as money first; the percentage is
             // only the shape of the bar beneath it.
+            //
+            // Deliberately not switched by `showAsUsed`. A row with space
+            // states both numbers, so remaining is already on screen and the
+            // toggle has nothing to reveal; only the one-number strips (the
+            // taskbar tile and the floating bar) have to choose, and they
+            // follow the setting. This matches `PlanStatusCard`, where the
+            // percentage flips and the amount does not — making the flyout obey
+            // the toggle would put it out of step with the Overview it summarizes.
             const spend = amount
               ? amount.formattedLimit
                 ? `${amount.formattedUsed} of ${amount.formattedLimit}`

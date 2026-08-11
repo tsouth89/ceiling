@@ -36,6 +36,10 @@ type TimelineEntry = {
  *
  * A percentage alone is the wrong answer here: "56% used" against a spend cap
  * is the shape of the bar, not the bill (SBS-191).
+ *
+ * Always spend-of-limit, matching `PlanStatusCard` and the flyout: a row with
+ * room states both numbers, so there is nothing for a used/remaining toggle to
+ * reveal. Only the one-number strips choose between them.
  */
 function spendLabel(entry: TimelineEntry): string | null {
   if (!entry.amount) return null;
