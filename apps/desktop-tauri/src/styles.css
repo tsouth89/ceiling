@@ -7679,6 +7679,9 @@ body:has(.dashboard-shell) #root {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
+  /* "$1112.92 of $1800.00" is far longer than "56% used" and must stay on one
+     line; the window label beside it is the flexible half. */
+  white-space: nowrap;
 }
 .activity-row__bar {
   margin-top: 7px;

@@ -34,6 +34,8 @@ struct ProviderReadout {
     /// Set when the constraining lane is billed in currency. Takes the tile's
     /// headline slot ahead of `percent` — see [`strip_amount_label`].
     amount_label: Option<String>,
+    /// Cents-free fallback for tiles too narrow for `amount_label`.
+    amount_label_compact: Option<String>,
     window_label: String,
     reset: Option<String>,
 }
@@ -113,6 +115,29 @@ fn strip_amount_label(
     };
     let remaining = (limit - amount.used).max(0.0);
     Some(codexbar::core::WindowAmount::new(remaining, amount.currency_code.clone()).format_used())
+}
+
+/// Whole-dollar spelling of [`strip_amount_label`], for tiles too narrow for cents.
+///
+/// A provider gets 72-104px on the strip and the paint does not clip, so an
+/// overlong label runs into the neighbouring tile rather than being cut off.
+/// "$1112.92" needs roughly 68px against a 51px budget on a crowded taskbar;
+/// "$1113" fits, and the exact figure is a hover away in the flyout.
+fn compact_amount_label(
+    amount: &crate::commands::WindowAmountBridge,
+    show_as_used: bool,
+) -> Option<String> {
+    let value = match amount.limit.filter(|_| !show_as_used) {
+        Some(limit) => (limit - amount.used).max(0.0),
+        None => amount.used,
+    };
+    let rounded = value.round();
+    Some(match amount.currency_code.to_uppercase().as_str() {
+        "USD" => format!("${rounded:.0}"),
+        "EUR" => format!("€{rounded:.0}"),
+        "GBP" => format!("£{rounded:.0}"),
+        code => format!("{rounded:.0} {code}"),
+    })
 }
 
 fn is_blocking_window(window: &crate::commands::RateWindowSnapshot) -> bool {
@@ -864,15 +889,16 @@ mod windows_host {
                     value.clamp(0.0, 100.0).round() as u8
                 });
                 // A spend lane's headline is the money, not the fraction.
-                let amount_label = constraining.and_then(|readout| {
-                    readout
-                        .amount
-                        .and_then(|amount| strip_amount_label(amount, settings.show_as_used))
-                });
+                let spend = constraining.and_then(|readout| readout.amount);
+                let amount_label =
+                    spend.and_then(|amount| strip_amount_label(amount, settings.show_as_used));
+                let amount_label_compact =
+                    spend.and_then(|amount| compact_amount_label(amount, settings.show_as_used));
                 ProviderReadout {
                     provider_id,
                     percent,
                     amount_label,
+                    amount_label_compact,
                     // Window label only (Weekly / 5h). Account identity lives in
                     // the flyout (On strip + account line); long tags collide
                     // with the next tile on the compact strip.
@@ -1332,15 +1358,43 @@ mod windows_host {
         for (index, provider) in model.providers.iter().enumerate() {
             let item_left = i32::try_from(index).unwrap_or(0) * item_width;
             let color = provider_color(&provider.provider_id);
-            let label = provider
-                .amount_label
-                .clone()
-                .or_else(|| provider.percent.map(|percent| format!("{percent}%")))
-                .unwrap_or_else(|| "—".to_string());
-            let label = wide_without_nul(&label);
-            let label_width = unsafe { text_width(hdc, &label) };
             const ICON_WIDTH: i32 = 16;
             const ICON_TEXT_GAP: i32 = 5;
+            // Widest spelling that stays inside this tile. The strip paints
+            // without clipping and `centered_content_x` pins overlong content to
+            // the cell's left edge, so an unchecked "$1112.92" on a crowded
+            // taskbar would run across the divider into the next provider.
+            let percent_label = provider.percent.map(|percent| format!("{percent}%"));
+            let budget = item_width
+                .saturating_sub(ICON_WIDTH)
+                .saturating_sub(ICON_TEXT_GAP);
+            let mut best: Option<(Vec<u16>, i32)> = None;
+            for candidate in [
+                provider.amount_label.as_deref(),
+                provider.amount_label_compact.as_deref(),
+                percent_label.as_deref(),
+                Some("—"),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let wide = wide_without_nul(candidate);
+                let width = unsafe { text_width(hdc, &wide) };
+                let fits = width <= budget;
+                // Take the first that fits; failing that, keep the narrowest so
+                // a tile too small for any spelling overruns as little as possible.
+                let better = match &best {
+                    None => true,
+                    Some((_, best_width)) => *best_width > budget && width < *best_width,
+                };
+                if better {
+                    best = Some((wide, width));
+                }
+                if fits {
+                    break;
+                }
+            }
+            let (label, label_width) = best.expect("the em dash always yields a candidate");
             let primary_width = ICON_WIDTH
                 .saturating_add(ICON_TEXT_GAP)
                 .saturating_add(label_width);
@@ -2599,6 +2653,39 @@ mod tests {
         assert_eq!(
             strip_amount_label(&uncapped, false).as_deref(),
             Some("$42.50")
+        );
+    }
+
+    #[test]
+    fn compact_spend_drops_cents_for_narrow_tiles() {
+        let capped = crate::commands::WindowAmountBridge {
+            used: 1112.92,
+            limit: Some(1800.0),
+            currency_code: "USD".into(),
+            formatted_used: "$1112.92".into(),
+            formatted_limit: Some("$1800.00".into()),
+        };
+        // Three characters narrower than "$1112.92", which is the difference
+        // between fitting a 72px tile and crossing into the next provider.
+        assert_eq!(
+            compact_amount_label(&capped, true).as_deref(),
+            Some("$1113")
+        );
+        assert_eq!(
+            compact_amount_label(&capped, false).as_deref(),
+            Some("$687")
+        );
+
+        let uncapped = crate::commands::WindowAmountBridge {
+            used: 42.5,
+            limit: None,
+            currency_code: "EUR".into(),
+            formatted_used: "€42.50".into(),
+            formatted_limit: None,
+        };
+        assert_eq!(
+            compact_amount_label(&uncapped, false).as_deref(),
+            Some("€43")
         );
     }
 
