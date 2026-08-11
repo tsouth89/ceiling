@@ -215,12 +215,25 @@ fn primary_window_label<'a>(
 
 /// A window is worth pacing when it is long enough to be spent evenly.
 ///
-/// The same twelve-hour floor the expected-usage markers use: a five-hour
+/// The same twelve-hour floor the expected-usage markers use — `expectedPace.ts`
+/// skips `minutes < 12 * 60`, so exactly twelve hours is paced. A five-hour
 /// session is spent in bursts, so a verdict about it would sweep across the bar
 /// and mean nothing. There is deliberately no ceiling — a monthly quota is the
 /// most pace-worthy window a provider reports, not an outlier to exclude.
 fn is_paceable_cadence(window: &RateWindow) -> bool {
-    matches!(window.window_minutes, Some(minutes) if minutes > 720)
+    matches!(window.window_minutes, Some(minutes) if minutes >= 720)
+}
+
+/// Name a provider-supplied window the way the bars do.
+///
+/// `capacityPresentation` falls back to "Extra" for a window the provider did
+/// not name, so a verdict sitting beside that bar must not invent a different
+/// name for it.
+fn pace_label(label: Option<&str>) -> &str {
+    match label.map(str::trim) {
+        Some(text) if !text.is_empty() => text,
+        _ => "Extra",
+    }
 }
 
 /// Pick the window whose pace verdict the user most needs to see.
@@ -231,15 +244,22 @@ fn is_paceable_cadence(window: &RateWindow) -> bool {
 /// fifteen points over — and monthly windows were unreachable anyway, since they
 /// live in the tertiary slot and the old cadence test capped at fourteen days.
 ///
+/// Every candidate is measured against one `observed_at`, so the comparison
+/// cannot turn on the clock advancing between two of them.
+///
 /// Returns the label of the chosen window alongside its pace.
 fn preferred_pace<'a>(
     candidates: impl IntoIterator<Item = (&'a str, &'a RateWindow)>,
+    observed_at: chrono::DateTime<chrono::Utc>,
 ) -> Option<(String, codexbar::core::UsagePace)> {
     candidates
         .into_iter()
         .filter(|(_, window)| is_paceable_cadence(window))
         .filter_map(|(label, window)| {
-            codexbar::core::UsagePace::weekly(window, None, 10080)
+            // 10080 is only the fallback for a window that states no duration:
+            // `UsagePace` reads `window.window_minutes` whenever it is set, so a
+            // monthly window is measured against its own month.
+            codexbar::core::UsagePace::weekly(window, Some(observed_at), 10080)
                 .map(|pace| (label.to_string(), pace))
         })
         // `reduce` with a strict comparison, not `max_by`, which returns the
@@ -270,7 +290,7 @@ impl ProviderUsageSnapshot {
 
         // Every long window the provider reports is a candidate, in the order
         // the UI lists them so an exact tie keeps the more prominent one.
-        let tertiary_label = usage.tertiary_label.as_deref().unwrap_or("Monthly");
+        let tertiary_label = pace_label(usage.tertiary_label.as_deref());
         let pace_candidates = std::iter::once((primary_label.as_str(), &usage.primary))
             .chain(
                 usage
@@ -288,18 +308,19 @@ impl ProviderUsageSnapshot {
                 usage
                     .extra_rate_windows
                     .iter()
-                    .map(|extra| (extra.title.as_str(), &extra.window)),
+                    .map(|extra| (pace_label(Some(extra.title.as_str())), &extra.window)),
             );
 
-        let pace = preferred_pace(pace_candidates).map(|(label, p)| PaceSnapshot {
-            window_label: label,
-            stage: pace_stage_str(p.stage),
-            delta_percent: p.delta_percent,
-            will_last_to_reset: p.will_last_to_reset,
-            eta_seconds: p.eta_seconds,
-            expected_used_percent: p.expected_used_percent,
-            actual_used_percent: p.actual_used_percent,
-        });
+        let pace =
+            preferred_pace(pace_candidates, chrono::Utc::now()).map(|(label, p)| PaceSnapshot {
+                window_label: label,
+                stage: pace_stage_str(p.stage),
+                delta_percent: p.delta_percent,
+                will_last_to_reset: p.will_last_to_reset,
+                eta_seconds: p.eta_seconds,
+                expected_used_percent: p.expected_used_percent,
+                actual_used_percent: p.actual_used_percent,
+            });
 
         // Compute pace for secondary window (weekly) to derive reserve info
         let secondary_pace = usage
@@ -901,11 +922,16 @@ mod tests {
         assert_eq!(primary_window_label("Session", "Weekly", None), "Session");
     }
 
-    /// Build a window that is `elapsed_fraction` of the way through its period.
-    fn window_at(used_percent: f64, window_minutes: u32, elapsed_fraction: f64) -> RateWindow {
+    /// Build a window that is `elapsed_fraction` of the way through its period,
+    /// measured from one shared instant so two candidates can tie exactly.
+    fn window_at(
+        now: chrono::DateTime<chrono::Utc>,
+        used_percent: f64,
+        window_minutes: u32,
+        elapsed_fraction: f64,
+    ) -> RateWindow {
         let remaining_minutes = f64::from(window_minutes) * (1.0 - elapsed_fraction);
-        let resets_at =
-            chrono::Utc::now() + chrono::Duration::seconds((remaining_minutes * 60.0) as i64);
+        let resets_at = now + chrono::Duration::seconds((remaining_minutes * 60.0) as i64);
         RateWindow::with_details(used_percent, Some(window_minutes), Some(resets_at), None)
     }
 
@@ -916,18 +942,24 @@ mod tests {
     /// fourteen days.
     #[test]
     fn pace_reports_the_window_running_hottest() {
-        let session = window_at(0.0, 300, 0.5);
-        let weekly = window_at(0.0, 10_080, 0.15);
-        let monthly = window_at(61.0, 43_200, 0.46);
+        let now = chrono::Utc::now();
+        let session = window_at(now, 0.0, 300, 0.5);
+        let weekly = window_at(now, 0.0, 10_080, 0.15);
+        let monthly = window_at(now, 61.0, 43_200, 0.46);
 
-        let (label, pace) = preferred_pace([
-            ("Rolling (5h)", &session),
-            ("Weekly", &weekly),
-            ("Monthly", &monthly),
-        ])
+        let (label, pace) = preferred_pace(
+            [
+                ("Rolling (5h)", &session),
+                ("Weekly", &weekly),
+                ("Monthly", &monthly),
+            ],
+            now,
+        )
         .expect("a long window should pace");
 
         assert_eq!(label, "Monthly");
+        // Measured against its own thirty days, not the 10080-minute fallback,
+        // which would have read this as far *under* budget.
         assert!(
             pace.delta_percent > 10.0,
             "delta was {}",
@@ -937,9 +969,10 @@ mod tests {
 
     #[test]
     fn pace_still_reads_a_weekly_window_promoted_to_primary() {
-        let weekly = window_at(51.0, 10_080, 0.30);
+        let now = chrono::Utc::now();
+        let weekly = window_at(now, 51.0, 10_080, 0.30);
 
-        let (label, pace) = preferred_pace([("Weekly", &weekly)]).expect("weekly should pace");
+        let (label, pace) = preferred_pace([("Weekly", &weekly)], now).expect("weekly should pace");
 
         assert_eq!(label, "Weekly");
         assert_eq!(pace.actual_used_percent, 51.0);
@@ -949,22 +982,43 @@ mod tests {
     /// rather than a misleading one — the same floor the bar markers use.
     #[test]
     fn pace_skips_windows_too_short_to_spend_evenly() {
-        let session = window_at(90.0, 300, 0.2);
+        let now = chrono::Utc::now();
+        let session = window_at(now, 90.0, 300, 0.2);
 
-        assert!(preferred_pace([("Rolling (5h)", &session)]).is_none());
+        assert!(preferred_pace([("Rolling (5h)", &session)], now).is_none());
+    }
+
+    /// `expectedPace.ts` draws a marker on a window of exactly twelve hours, so
+    /// the verdict beside it must not go silent there.
+    #[test]
+    fn pace_includes_a_window_of_exactly_twelve_hours() {
+        let now = chrono::Utc::now();
+        let half_day = window_at(now, 80.0, 720, 0.25);
+
+        assert!(preferred_pace([("Half-day", &half_day)], now).is_some());
     }
 
     /// An exact tie keeps the window the UI lists first, so the verdict does
     /// not hop between equally-hot windows between refreshes.
     #[test]
     fn pace_breaks_an_exact_tie_toward_the_first_window() {
-        let weekly = window_at(40.0, 10_080, 0.20);
-        let monthly = window_at(40.0, 10_080, 0.20);
+        let now = chrono::Utc::now();
+        let weekly = window_at(now, 40.0, 10_080, 0.20);
+        let monthly = window_at(now, 40.0, 10_080, 0.20);
 
         let (label, _) =
-            preferred_pace([("Weekly", &weekly), ("Monthly", &monthly)]).expect("should pace");
+            preferred_pace([("Weekly", &weekly), ("Monthly", &monthly)], now).expect("should pace");
 
         assert_eq!(label, "Weekly");
+    }
+
+    /// The bars call an unnamed window "Extra"; the verdict beside them must
+    /// not invent a name, and must never render blank.
+    #[test]
+    fn pace_names_an_unnamed_window_the_way_the_bars_do() {
+        assert_eq!(pace_label(None), "Extra");
+        assert_eq!(pace_label(Some("   ")), "Extra");
+        assert_eq!(pace_label(Some("Monthly")), "Monthly");
     }
 
     fn snapshot_window_with(
