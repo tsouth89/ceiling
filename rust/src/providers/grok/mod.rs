@@ -825,22 +825,38 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
 
 /// Count still-valid banked resets from `GetRemainingResets`.
 ///
-/// A successful empty response is a known zero. Tokens missing an id or whose
-/// `validity_end` is in the past are ignored, matching grok.com's own filter.
-/// A grpc-web trailer with a non-zero status is an RPC failure, not a zero.
+/// A known zero is an empty grpc-web data frame (optionally with grpc-status 0).
+/// Tokens missing an id or whose `validity_end` is in the past are ignored,
+/// matching grok.com's own filter. Trailer errors, unframed bodies, truncated
+/// proto, and messages with no `tokens` field stay unknown rather than 0.
 fn parse_remaining_resets(data: &[u8]) -> Result<u32, ProviderError> {
-    validate_grpc_trailers(data)?;
+    let body = grpc_web_split(data)?;
+    validate_grpc_status_trailers(&body.trailers)?;
+    if body.frames.is_empty() {
+        return Err(ProviderError::Parse(
+            "Grok remaining resets returned no payload".to_string(),
+        ));
+    }
     let now = Utc::now();
     let mut count = 0u32;
-    for frame in grpc_web_data_frames(data) {
-        count = count.saturating_add(count_reset_tokens(&frame, now));
+    for frame in &body.frames {
+        if frame.is_empty() {
+            continue;
+        }
+        let (n, saw_tokens) = count_reset_tokens(frame, now)?;
+        if !saw_tokens {
+            return Err(ProviderError::Parse(
+                "Grok remaining resets payload had no reset tokens".to_string(),
+            ));
+        }
+        count = count.saturating_add(n);
     }
     Ok(count)
 }
 
-fn validate_grpc_trailers(data: &[u8]) -> Result<(), ProviderError> {
-    for trailer in grpc_web_trailer_frames(data) {
-        if let Some(status) = grpc_status_from_trailer_block(&trailer)
+fn validate_grpc_status_trailers(trailers: &[Vec<u8>]) -> Result<(), ProviderError> {
+    for trailer in trailers {
+        if let Some(status) = grpc_status_from_trailer_block(trailer)
             && status != 0
         {
             if status == 16 {
@@ -868,23 +884,24 @@ fn grpc_status_from_trailer_block(block: &[u8]) -> Option<u16> {
     None
 }
 
-fn count_reset_tokens(data: &[u8], now: DateTime<Utc>) -> u32 {
+fn count_reset_tokens(data: &[u8], now: DateTime<Utc>) -> Result<(u32, bool), ProviderError> {
     let mut count = 0u32;
-    for field in proto_fields(data) {
-        if field.number == RESET_TOKEN_FIELD
-            && field.wire == 2
-            && reset_token_is_available(field.bytes, now)
-        {
-            count = count.saturating_add(1);
+    let mut saw_tokens = false;
+    for field in proto_fields(data)? {
+        if field.number == RESET_TOKEN_FIELD && field.wire == 2 {
+            saw_tokens = true;
+            if reset_token_is_available(field.bytes, now)? {
+                count = count.saturating_add(1);
+            }
         }
     }
-    count
+    Ok((count, saw_tokens))
 }
 
-fn reset_token_is_available(data: &[u8], now: DateTime<Utc>) -> bool {
+fn reset_token_is_available(data: &[u8], now: DateTime<Utc>) -> Result<bool, ProviderError> {
     let mut token_id = None;
     let mut validity_end = None;
-    for field in proto_fields(data) {
+    for field in proto_fields(data)? {
         match (field.number, field.wire) {
             (RESET_TOKEN_ID_FIELD, 2) => {
                 token_id = std::str::from_utf8(field.bytes)
@@ -894,21 +911,21 @@ fn reset_token_is_available(data: &[u8], now: DateTime<Utc>) -> bool {
                     .map(ToOwned::to_owned);
             }
             (RESET_TOKEN_END_FIELD, 2) => {
-                validity_end = proto_timestamp(field.bytes);
+                validity_end = proto_timestamp(field.bytes)?;
             }
             _ => {}
         }
     }
-    token_id.is_some() && validity_end.is_some_and(|end| end > now)
+    Ok(token_id.is_some() && validity_end.is_some_and(|end| end > now))
 }
 
-fn proto_timestamp(data: &[u8]) -> Option<DateTime<Utc>> {
-    for field in proto_fields(data) {
+fn proto_timestamp(data: &[u8]) -> Result<Option<DateTime<Utc>>, ProviderError> {
+    for field in proto_fields(data)? {
         if field.number == 1 && field.wire == 0 {
-            return Utc.timestamp_opt(field.varint as i64, 0).single();
+            return Ok(Utc.timestamp_opt(field.varint as i64, 0).single());
         }
     }
-    None
+    Ok(None)
 }
 
 struct ProtoField<'a> {
@@ -918,12 +935,12 @@ struct ProtoField<'a> {
     bytes: &'a [u8],
 }
 
-fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
+fn proto_fields(data: &[u8]) -> Result<Vec<ProtoField<'_>>, ProviderError> {
     let mut fields = Vec::new();
     let mut i = 0;
     while i < data.len() {
         let Some((key, next)) = read_varint(data, i) else {
-            break;
+            return Err(resets_parse_error());
         };
         i = next;
         let number = key >> 3;
@@ -931,7 +948,7 @@ fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
         match wire {
             0 => {
                 let Some((value, next)) = read_varint(data, i) else {
-                    break;
+                    return Err(resets_parse_error());
                 };
                 i = next;
                 fields.push(ProtoField {
@@ -944,7 +961,7 @@ fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
             1 => {
                 let end = i.saturating_add(8);
                 if end > data.len() {
-                    break;
+                    return Err(resets_parse_error());
                 }
                 fields.push(ProtoField {
                     number,
@@ -956,12 +973,12 @@ fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
             }
             2 => {
                 let Some((len, next)) = read_varint(data, i) else {
-                    break;
+                    return Err(resets_parse_error());
                 };
                 i = next;
                 let end = i.saturating_add(len as usize);
                 if end > data.len() {
-                    break;
+                    return Err(resets_parse_error());
                 }
                 fields.push(ProtoField {
                     number,
@@ -974,7 +991,7 @@ fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
             5 => {
                 let end = i.saturating_add(4);
                 if end > data.len() {
-                    break;
+                    return Err(resets_parse_error());
                 }
                 fields.push(ProtoField {
                     number,
@@ -984,21 +1001,17 @@ fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
                 });
                 i = end;
             }
-            _ => break,
+            _ => return Err(resets_parse_error()),
         }
     }
-    fields
+    Ok(fields)
+}
+
+fn resets_parse_error() -> ProviderError {
+    ProviderError::Parse("Grok remaining resets payload is malformed".to_string())
 }
 
 fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
-    grpc_web_frames(data, false)
-}
-
-fn grpc_web_trailer_frames(data: &[u8]) -> Vec<Vec<u8>> {
-    grpc_web_frames(data, true)
-}
-
-fn grpc_web_frames(data: &[u8], trailers: bool) -> Vec<Vec<u8>> {
     let mut frames = Vec::new();
     let mut index = 0;
     while index + 5 <= data.len() {
@@ -1012,12 +1025,49 @@ fn grpc_web_frames(data: &[u8], trailers: bool) -> Vec<Vec<u8>> {
         if end > data.len() {
             break;
         }
-        if (flags & 0x80 != 0) == trailers {
+        if flags & 0x80 == 0 {
             frames.push(data[start..end].to_vec());
         }
         index = end;
     }
     frames
+}
+
+struct GrpcWebBody {
+    frames: Vec<Vec<u8>>,
+    trailers: Vec<Vec<u8>>,
+}
+
+fn grpc_web_split(data: &[u8]) -> Result<GrpcWebBody, ProviderError> {
+    let mut frames = Vec::new();
+    let mut trailers = Vec::new();
+    let mut index = 0;
+    while index + 5 <= data.len() {
+        let flags = data[index];
+        let len = ((data[index + 1] as usize) << 24)
+            | ((data[index + 2] as usize) << 16)
+            | ((data[index + 3] as usize) << 8)
+            | (data[index + 4] as usize);
+        let start = index + 5;
+        let end = start.saturating_add(len);
+        if end > data.len() {
+            return Err(ProviderError::Parse(
+                "Grok remaining resets frame is truncated".to_string(),
+            ));
+        }
+        if flags & 0x80 != 0 {
+            trailers.push(data[start..end].to_vec());
+        } else {
+            frames.push(data[start..end].to_vec());
+        }
+        index = end;
+    }
+    if index != data.len() {
+        return Err(ProviderError::Parse(
+            "Grok remaining resets frame is truncated".to_string(),
+        ));
+    }
+    Ok(GrpcWebBody { frames, trailers })
 }
 
 #[derive(Default)]
@@ -1296,7 +1346,6 @@ mod tests {
 
     #[test]
     fn remaining_resets_empty_payload_is_a_known_zero() {
-        assert_eq!(parse_remaining_resets(&[]).unwrap(), 0);
         assert_eq!(parse_remaining_resets(&grpc_frame(&[])).unwrap(), 0);
         let ok_empty = [grpc_frame(&[]), grpc_trailer(0)].concat();
         assert_eq!(parse_remaining_resets(&ok_empty).unwrap(), 0);
@@ -1306,11 +1355,32 @@ mod tests {
     fn remaining_resets_rpc_error_trailer_is_not_a_known_zero() {
         // grpc-web errors are HTTP 200 plus a trailer status. Empty data
         // frames would look like a successful zero if the trailer is ignored.
+        assert!(parse_remaining_resets(&grpc_trailer(12)).is_err());
         assert!(parse_remaining_resets(&grpc_trailer(13)).is_err());
         assert!(matches!(
             parse_remaining_resets(&grpc_trailer(16)),
             Err(ProviderError::AuthRequired)
         ));
+    }
+
+    #[test]
+    fn remaining_resets_unframed_or_unmatched_bodies_are_not_zero() {
+        assert!(parse_remaining_resets(&[]).is_err());
+        assert!(parse_remaining_resets(b"<html>not grpc</html>").is_err());
+        let mut unmatched = Vec::new();
+        write_key(&mut unmatched, 1, 0);
+        write_varint(&mut unmatched, 5);
+        assert!(parse_remaining_resets(&grpc_frame(&unmatched)).is_err());
+    }
+
+    #[test]
+    fn remaining_resets_truncated_varint_is_not_zero() {
+        let mut truncated = Vec::new();
+        write_key(&mut truncated, RESET_TOKEN_FIELD, 2);
+        write_varint(&mut truncated, 20);
+        truncated.extend_from_slice(&[1, 2, 3]);
+        assert!(parse_remaining_resets(&grpc_frame(&truncated)).is_err());
+        assert!(parse_remaining_resets(&grpc_frame(&[0x80])).is_err());
     }
 
     #[test]
@@ -1329,10 +1399,7 @@ mod tests {
     #[test]
     fn remaining_resets_decodes_live_shaped_token() {
         // Field numbers 10/20/30 match consumer_ui.proto as shipped by grok.com.
-        let end = Utc
-            .timestamp_opt(1_789_238_940, 0)
-            .single()
-            .expect("sep 12 2026");
+        let end = Utc::now() + chrono::Duration::days(30);
         let payload = encode_remaining_resets(&[("restok_example", end)]);
         assert_eq!(parse_remaining_resets(&payload).unwrap(), 1);
     }
