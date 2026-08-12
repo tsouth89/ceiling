@@ -100,7 +100,7 @@ fn credential_status_labels_do_not_include_error_details() {
 }
 
 #[test]
-fn credential_status_is_scoped_to_the_selected_provider() {
+fn credential_status_is_scoped_to_the_provider() {
     let mut api_keys = ApiKeys::default();
     api_keys.set("claude", "sk-claude", None);
     let mut manual_cookies = ManualCookies::default();
@@ -108,15 +108,19 @@ fn credential_status_is_scoped_to_the_selected_provider() {
     let mut account_data = ProviderAccountData::new();
     let token_account = TokenAccount::new("Claude", "token-secret");
     let token_account_id = token_account.id.to_string();
+    let detail_account_id = "00000000-0000-0000-0000-000000000000";
+    assert_ne!(token_account_id, detail_account_id);
     account_data.add_account(token_account);
     let mut token_accounts = HashMap::new();
     token_accounts.insert(ProviderId::Claude, account_data);
 
     let protected =
         || codexbar::secure_file::SecureFileStatus::Protected("windows-dpapi-user".to_string());
+    // Detail-pane account tabs use a separate UUID namespace from token
+    // accounts. The detail account ID is intentionally not an input here:
+    // credential presence is provider-level.
     let claude = super::build_credential_storage_status(
         ProviderId::Claude,
-        Some(&token_account_id),
         super::CredentialStorageSources {
             manual_cookie_file_status: Some(protected()),
             manual_cookies: Some(&manual_cookies),
@@ -134,7 +138,6 @@ fn credential_status_is_scoped_to_the_selected_provider() {
     // in any of them and must not inherit Claude's status in its detail pane.
     let codex = super::build_credential_storage_status(
         ProviderId::Codex,
-        None,
         super::CredentialStorageSources {
             manual_cookie_file_status: Some(protected()),
             manual_cookies: Some(&manual_cookies),
@@ -149,31 +152,11 @@ fn credential_status_is_scoped_to_the_selected_provider() {
     assert_eq!(codex.manual_cookies.has_provider_credentials, Some(false));
     assert_eq!(codex.token_accounts.has_provider_credentials, Some(false));
 
-    let different_claude_account = super::build_credential_storage_status(
-        ProviderId::Claude,
-        Some("00000000-0000-0000-0000-000000000000"),
-        super::CredentialStorageSources {
-            manual_cookie_file_status: Some(protected()),
-            manual_cookies: Some(&manual_cookies),
-            api_key_file_status: Some(protected()),
-            api_keys: Some(&api_keys),
-            token_account_file_status: protected(),
-            token_accounts: Some(&token_accounts),
-        },
-    );
-    assert_eq!(
-        different_claude_account
-            .token_accounts
-            .has_provider_credentials,
-        Some(false)
-    );
-
     api_keys.remove("claude");
     manual_cookies.remove("claude");
     token_accounts.remove(&ProviderId::Claude);
     let revoked = super::build_credential_storage_status(
         ProviderId::Claude,
-        Some(&token_account_id),
         super::CredentialStorageSources {
             manual_cookie_file_status: Some(protected()),
             manual_cookies: Some(&manual_cookies),
@@ -192,7 +175,6 @@ fn credential_status_is_scoped_to_the_selected_provider() {
 fn unreadable_credential_store_does_not_claim_provider_absence() {
     let status = super::build_credential_storage_status(
         ProviderId::Claude,
-        None,
         super::CredentialStorageSources {
             manual_cookie_file_status: Some(codexbar::secure_file::SecureFileStatus::Unreadable(
                 "secret error".to_string(),
@@ -217,7 +199,7 @@ fn command_inputs_reject_invalid_provider_ids_before_storage_writes() {
     assert!(super::set_manual_cookie("not-a-provider".into(), "a=b".into()).is_err());
     assert!(super::remove_api_key("bad\nprovider".into()).is_err());
     assert!(super::remove_manual_cookie("".into()).is_err());
-    assert!(super::get_credential_storage_status("not-a-provider".into(), None).is_err());
+    assert!(super::get_credential_storage_status("not-a-provider".into()).is_err());
 }
 
 #[test]

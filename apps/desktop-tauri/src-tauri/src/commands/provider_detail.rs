@@ -269,7 +269,6 @@ pub(crate) struct CredentialStorageSources<'a> {
 
 pub(crate) fn build_credential_storage_status(
     provider: ProviderId,
-    account_id: Option<&str>,
     sources: CredentialStorageSources<'_>,
 ) -> CredentialStorageStatusBridge {
     let provider_id = provider.cli_name();
@@ -291,13 +290,7 @@ pub(crate) fn build_credential_storage_status(
             sources.token_accounts.map(|store| {
                 store
                     .get(&provider)
-                    .is_some_and(|accounts| match account_id {
-                        Some(account_id) => accounts
-                            .accounts
-                            .iter()
-                            .any(|account| account.id.to_string() == account_id),
-                        None => !accounts.accounts.is_empty(),
-                    })
+                    .is_some_and(|accounts| !accounts.accounts.is_empty())
             }),
         ),
     }
@@ -306,7 +299,6 @@ pub(crate) fn build_credential_storage_status(
 #[tauri::command]
 pub fn get_credential_storage_status(
     provider_id: String,
-    account_id: Option<String>,
 ) -> Result<CredentialStorageStatusBridge, String> {
     let provider = parse_provider_arg(&provider_id)?;
     let manual_cookie_file_status =
@@ -321,7 +313,6 @@ pub fn get_credential_storage_status(
 
     Ok(build_credential_storage_status(
         provider,
-        account_id.as_deref(),
         CredentialStorageSources {
             manual_cookie_file_status,
             manual_cookies: manual_cookies.as_ref(),

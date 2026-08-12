@@ -10,6 +10,7 @@ import type { CookieInfoBridge } from "../../../types/bridge";
 interface Props {
   providerId: string;
   cookieDomain: string | null;
+  onCredentialsChanged?: () => void;
 }
 
 function cookiePlaceholder(
@@ -29,7 +30,11 @@ function cookiePlaceholder(
  * Per-provider browser cookie management. Renders nothing for providers
  * that do not have a cookieDomain (i.e. don't authenticate via web cookies).
  */
-export function CookieSection({ providerId, cookieDomain }: Props) {
+export function CookieSection({
+  providerId,
+  cookieDomain,
+  onCredentialsChanged,
+}: Props) {
   const { t } = useLocale();
   const [saved, setSaved] = useState<CookieInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -71,6 +76,7 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     try {
       const next = await removeManualCookie(providerId);
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -86,6 +92,7 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
       const next = await setManualCookie(providerId, pasteValue.trim());
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
       setPasteValue("");
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

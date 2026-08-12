@@ -93,6 +93,9 @@ export function ProviderDetailPane({
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [gatewayDraft, setGatewayDraft] = useState(wayfinderGatewayUrl);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const activeProviderIdRef = useRef(providerId);
+  const credentialStatusEpochRef = useRef(0);
+  activeProviderIdRef.current = providerId;
 
   useEffect(() => {
     if (providerId === "wayfinder") setGatewayDraft(wayfinderGatewayUrl);
@@ -134,29 +137,54 @@ export function ProviderDetailPane({
   const selectedAccountIdRef = useRef<string | null>(null);
   selectedAccountIdRef.current = selectedAccountId;
 
+  const refreshCredentialStatus = useCallback(async (id: string) => {
+    const requestEpoch = ++credentialStatusEpochRef.current;
+    try {
+      const storageStatus = await getCredentialStorageStatus(id);
+      if (
+        activeProviderIdRef.current === id &&
+        credentialStatusEpochRef.current === requestEpoch
+      ) {
+        setCredentialStatus(storageStatus);
+      }
+    } catch (e) {
+      if (
+        activeProviderIdRef.current === id &&
+        credentialStatusEpochRef.current === requestEpoch
+      ) {
+        setError(String(e));
+      }
+    }
+  }, []);
+
   const load = useCallback(async (
     id: string,
     signal?: { stale: boolean },
     accountId: string | null = null,
   ) => {
+    const credentialRequestEpoch = ++credentialStatusEpochRef.current;
     setLoading(true);
     setError(null);
     try {
       const [next, regionOpts, storageStatus] = await Promise.all([
         getProviderDetail(id, accountId),
         getProviderRegionOptions(id),
-        getCredentialStorageStatus(id, accountId),
+        getCredentialStorageStatus(id),
       ]);
       if (signal?.stale) return;
       setDetail(next);
       setRegionOptions(regionOpts);
-      setCredentialStatus(storageStatus);
+      if (credentialStatusEpochRef.current === credentialRequestEpoch) {
+        setCredentialStatus(storageStatus);
+      }
     } catch (e) {
       if (signal?.stale) return;
       setError(String(e));
       setDetail(null);
       setRegionOptions([]);
-      setCredentialStatus(null);
+      if (credentialStatusEpochRef.current === credentialRequestEpoch) {
+        setCredentialStatus(null);
+      }
     // A selection belongs to one provider; carrying it across panes would
     // ask for an account that provider does not have.
     setSelectedAccountId(null);
@@ -439,16 +467,19 @@ export function ProviderDetailPane({
             key={`token-${detail.id}-${credentialRevision}`}
             providerId={detail.id}
             compact
+            onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
           />
         )}
         <ApiKeySection
           key={`api-${detail.id}-${credentialRevision}`}
           providerId={detail.id}
+          onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
         />
         <CookieSection
           key={`cookie-${detail.id}-${credentialRevision}`}
           providerId={detail.id}
           cookieDomain={cookieDomain}
+          onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
         />
         <ChartsSection
           providerId={detail.id}
@@ -542,11 +573,7 @@ function CredentialStorageSection({
   t: ReturnType<typeof useLocale>["t"];
 }) {
   if (!status) return null;
-  const hasProviderCredentials = [
-    status.apiKeys,
-    status.manualCookies,
-    status.tokenAccounts,
-  ].some((entry) => entry.hasProviderCredentials === true);
+  const hasProviderCredentials = shouldShowCredentialRevoke(status);
 
   return (
     <section className="provider-detail-section provider-detail-credential-storage">
@@ -571,6 +598,14 @@ function CredentialStorageSection({
         <dd>{storageLabel(status.tokenAccounts, t)}</dd>
       </dl>
     </section>
+  );
+}
+
+export function shouldShowCredentialRevoke(
+  status: CredentialStorageStatus,
+): boolean {
+  return [status.apiKeys, status.manualCookies, status.tokenAccounts].some(
+    (entry) => entry.hasProviderCredentials !== false,
   );
 }
 

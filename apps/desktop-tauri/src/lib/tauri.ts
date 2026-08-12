@@ -160,11 +160,9 @@ export function getWorkAreaRect(): Promise<WorkAreaRect> {
 
 export function getCredentialStorageStatus(
   providerId: string,
-  accountId: string | null = null,
 ): Promise<CredentialStorageStatus> {
   return invoke<CredentialStorageStatus>("get_credential_storage_status", {
     providerId,
-    accountId,
   });
 }
 

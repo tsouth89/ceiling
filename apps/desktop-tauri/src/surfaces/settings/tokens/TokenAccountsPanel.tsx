@@ -19,6 +19,7 @@ import { CopyIconButton } from "../../../components/MenuCard";
 
 interface Props {
   providerId: string;
+  onCredentialsChanged?: () => void;
   /**
    * When `true`, renders a tight collapsible variant suitable for embedding
    * inside the Providers → detail pane (Phase 6e inline surface).
@@ -39,7 +40,11 @@ interface Props {
  *   - `Settings.tsx::TokenAccountsTab` (compact=false, standalone tab)
  *   - `ProviderDetailPane.tsx` (compact=true, inline in detail pane)
  */
-export function TokenAccountsPanel({ providerId, compact = false }: Props) {
+export function TokenAccountsPanel({
+  providerId,
+  compact = false,
+  onCredentialsChanged,
+}: Props) {
   const { t } = useLocale();
   const [data, setData] = useState<ProviderTokenAccountsBridge | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,6 +123,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       setData(next);
       setAddLabel("");
       setAddToken("");
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -132,6 +138,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     try {
       const next = await removeTokenAccount(providerId, accountId);
       setData(next);
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -164,6 +171,7 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     try {
       await triggerProviderLogin(providerId);
       await load();
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
