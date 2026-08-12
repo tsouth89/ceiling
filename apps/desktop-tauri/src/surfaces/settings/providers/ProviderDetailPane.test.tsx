@@ -39,7 +39,13 @@ vi.mock("./sections/DataSourceSection", () => ({ DataSourceSection: () => null }
 vi.mock("./sections/UsageSection", () => ({ UsageSection: () => null }));
 vi.mock("./sections/PaceSection", () => ({ PaceSection: () => null }));
 vi.mock("./sections/CostSection", () => ({ CostSection: () => null }));
-vi.mock("./sections/QuickActionsSection", () => ({ QuickActionsSection: () => null }));
+vi.mock("./sections/QuickActionsSection", () => ({
+  QuickActionsSection: ({
+    onSwitchAccount,
+  }: {
+    onSwitchAccount: () => void;
+  }) => <button onClick={onSwitchAccount}>switch-account</button>,
+}));
 vi.mock("./sections/charts/ChartsSection", () => ({ ChartsSection: () => null }));
 vi.mock("./sections/RegionSection", () => ({ RegionSection: () => null }));
 vi.mock("./sections/credentials/GeminiCliCreds", () => ({ GeminiCliCreds: () => null }));
@@ -143,6 +149,8 @@ describe("ProviderDetailPane request ordering", () => {
     tauriMocks.getProviderRegionOptions.mockResolvedValue([]);
     tauriMocks.getTokenAccountProviders.mockResolvedValue([]);
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
+    tauriMocks.revokeProviderCredentials.mockResolvedValue(undefined);
+    tauriMocks.triggerProviderLogin.mockResolvedValue(undefined);
   });
 
   it("keeps the newest account when account requests resolve out of order", async () => {
@@ -232,6 +240,140 @@ describe("ProviderDetailPane request ordering", () => {
     });
     await waitFor(() =>
       expect(tauriMocks.getProviderDetail).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("does not let a completed switch-account flow clear a newer provider selection", async () => {
+    const login = deferred<void>();
+    tauriMocks.triggerProviderLogin.mockReturnValue(login.promise);
+    tauriMocks.getProviderDetail.mockImplementation(
+      (providerId: string, accountId: string | null) =>
+        Promise.resolve({
+          ...detail(
+            providerId,
+            accountId ?? "personal",
+            `${accountId ?? "personal"}@${providerId}.example.com`,
+          ),
+          accounts: [
+            { accountId: "personal", label: "Personal", tint: null },
+            { accountId: "work", label: "Work", tint: null },
+          ],
+        }),
+    );
+
+    const view = renderPane("codex");
+    await screen.findByTestId("provider-identity");
+    fireEvent.click(screen.getByRole("button", { name: "switch-account" }));
+
+    view.rerender(
+      <ProviderDetailPane
+        providerId="claude"
+        resetTimeRelative
+        providerMetrics={{}}
+        wayfinderGatewayUrl=""
+        settingsDisabled={false}
+        onSettingsChange={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+        "claude:personal:personal@claude.example.com",
+      ),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Work" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+        "claude:work:work@claude.example.com",
+      ),
+    );
+
+    await act(async () => login.resolve());
+    await waitFor(() => expect(tauriMocks.refreshProviders).toHaveBeenCalled());
+    expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+      "claude:work:work@claude.example.com",
+    );
+  });
+
+  it("falls back to ambient detail when the selected account fails", async () => {
+    tauriMocks.getProviderDetail.mockImplementation(
+      (providerId: string, accountId: string | null) => {
+        if (accountId === "work") return Promise.reject(new Error("missing account"));
+        return Promise.resolve(detail(providerId, "personal", "personal@example.com"));
+      },
+    );
+
+    renderPane("codex");
+    await screen.findByTestId("provider-identity");
+    fireEvent.click(screen.getByRole("tab", { name: "Work" }));
+
+    await waitFor(() =>
+      expect(tauriMocks.getProviderDetail).toHaveBeenLastCalledWith("codex", null),
+    );
+    expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+      "codex:personal:personal@example.com",
+    );
+    expect(screen.getByRole("tab", { name: "Personal" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("cancels a queued provider refresh when an account is selected manually", async () => {
+    tauriMocks.getProviderDetail.mockImplementation(
+      (providerId: string, accountId: string | null) =>
+        Promise.resolve(
+          detail(
+            providerId,
+            accountId ?? "personal",
+            `${accountId ?? "personal"}@example.com`,
+          ),
+        ),
+    );
+
+    renderPane("codex");
+    await screen.findByTestId("provider-identity");
+    act(() => {
+      emitProviderUpdated("codex");
+      fireEvent.click(screen.getByRole("tab", { name: "Work" }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+        "codex:work:work@example.com",
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 75));
+    });
+    expect(tauriMocks.getProviderDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns to ambient detail after revoking credentials", async () => {
+    tauriMocks.getProviderDetail.mockImplementation(
+      (providerId: string, accountId: string | null) =>
+        Promise.resolve(
+          detail(
+            providerId,
+            accountId ?? "personal",
+            `${accountId ?? "personal"}@example.com`,
+          ),
+        ),
+    );
+
+    renderPane("codex");
+    await screen.findByTestId("provider-identity");
+    fireEvent.click(screen.getByRole("tab", { name: "Work" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+        "codex:work:work@example.com",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "CredentialRevokeStored" }));
+    await waitFor(() =>
+      expect(tauriMocks.getProviderDetail).toHaveBeenLastCalledWith("codex", null),
+    );
+    expect(screen.getByTestId("provider-identity")).toHaveTextContent(
+      "codex:personal:personal@example.com",
     );
   });
 });
