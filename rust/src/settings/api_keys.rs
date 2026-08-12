@@ -58,6 +58,14 @@ impl ApiKeys {
         Self::try_load().unwrap_or_default()
     }
 
+    /// Load the store fallibly for read-only status/diagnostic callers.
+    ///
+    /// Unlike [`load`](Self::load), this preserves an unreadable result so a
+    /// caller cannot mistake decode failure for provider credential absence.
+    pub fn try_load_for_read() -> anyhow::Result<Self> {
+        Self::try_load()
+    }
+
     /// Load API keys for a read-modify-write cycle, failing closed.
     ///
     /// [`save`](Self::save) replaces the entire file, so mutating a store that

@@ -45,6 +45,12 @@ function emitLoginPhaseChanged(payload: unknown) {
   }
 }
 
+async function waitForLoginPhaseListener() {
+  await waitFor(() =>
+    expect(eventMocks.listeners.get("login-phase-changed")).toHaveLength(1),
+  );
+}
+
 describe("TokenAccountsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -71,6 +77,7 @@ describe("TokenAccountsPanel", () => {
     );
 
     await screen.findByText("TokenAccountGithubLoginButton");
+    await waitForLoginPhaseListener();
 
     act(() => {
       emitLoginPhaseChanged({
@@ -101,6 +108,7 @@ describe("TokenAccountsPanel", () => {
     );
 
     await screen.findByText("TokenAccountGithubLoginButton");
+    await waitForLoginPhaseListener();
 
     act(() => {
       emitLoginPhaseChanged({
@@ -131,6 +139,7 @@ describe("TokenAccountsPanel", () => {
     );
 
     await screen.findByText("TokenAccountGithubLoginButton");
+    await waitForLoginPhaseListener();
     act(() => {
       emitLoginPhaseChanged({
         providerId: "copilot",
@@ -162,6 +171,7 @@ describe("TokenAccountsPanel", () => {
     );
 
     await screen.findByText("TokenAccountGithubLoginButton");
+    await waitForLoginPhaseListener();
     act(() => {
       emitLoginPhaseChanged({
         providerId: "copilot",
@@ -200,6 +210,7 @@ describe("TokenAccountsPanel", () => {
     );
 
     await screen.findByText("TokenAccountGithubLoginButton");
+    await waitForLoginPhaseListener();
 
     act(() => {
       emitLoginPhaseChanged({ providerId: "copilot", phase: "requesting" });
@@ -216,6 +227,7 @@ describe("TokenAccountsPanel", () => {
     );
 
     await screen.findByText("TokenAccountGithubLoginButton");
+    await waitForLoginPhaseListener();
 
     act(() => {
       emitLoginPhaseChanged({
