@@ -148,8 +148,15 @@ export function TextInput({
 // ShortcutCapture) manage their own accessible name and are left alone.
 const CONTROLS_WITH_ARIA_LABEL: unknown[] = [Toggle, Select, NumberInput, TextInput];
 
-function isHostElement(type: unknown): type is string {
-  return typeof type === "string";
+// Native elements whose role accepts an accessible name. `aria-label` is
+// prohibited on a bare `<div>` or `<span>`, whose implicit `generic` role does
+// not support naming, and GeneralTab wraps two Fields around a layout `<div>`.
+// Injecting there would emit invalid ARIA that assistive technology discards,
+// without naming the button or toggle inside it.
+const NAMEABLE_HOST_ELEMENTS = ["input", "select", "textarea", "button"];
+
+function isNameableHostElement(type: unknown): type is string {
+  return typeof type === "string" && NAMEABLE_HOST_ELEMENTS.includes(type);
 }
 
 export function Field({
@@ -169,7 +176,7 @@ export function Field({
   // or - for `Toggle` - its own wrapping `label`, which already supplies one).
   let control = children;
   if (isValidElement<{ ariaLabel?: string; label?: string; "aria-label"?: string }>(children)) {
-    if (isHostElement(children.type)) {
+    if (isNameableHostElement(children.type)) {
       if (!children.props["aria-label"] && !children.props.label) {
         control = cloneElement(children, { "aria-label": label });
       }

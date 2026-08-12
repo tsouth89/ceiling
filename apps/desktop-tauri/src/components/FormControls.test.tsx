@@ -86,6 +86,23 @@ describe("Field", () => {
     // Guard against regressing back to the invalid camelCase attribute name.
     expect(input.getAttribute("arialabel")).toBeNull();
   });
+
+  it("leaves a layout wrapper unnamed rather than emitting invalid ARIA", () => {
+    // GeneralTab wraps two Fields around a `sound-enabled-row` div. `aria-label`
+    // is prohibited on the implicit `generic` role, so naming the wrapper would
+    // be markup assistive technology discards — and it would still leave the
+    // button inside anonymous. The controls in there carry their own names.
+    const { container } = render(
+      <Field label="Test notification" leading>
+        <div className="sound-enabled-row">
+          <button type="button">Send test</button>
+        </div>
+      </Field>,
+    );
+    const wrapper = container.querySelector(".sound-enabled-row");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.getAttribute("aria-label")).toBeNull();
+  });
 });
 
 describe("TextInput", () => {
