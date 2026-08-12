@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  CredentialStoreStatus,
   CredentialStorageStatus,
   ProviderDetail,
   RegionOption,
@@ -144,7 +145,7 @@ export function ProviderDetailPane({
       const [next, regionOpts, storageStatus] = await Promise.all([
         getProviderDetail(id, accountId),
         getProviderRegionOptions(id),
-        getCredentialStorageStatus(),
+        getCredentialStorageStatus(id, accountId),
       ]);
       if (signal?.stale) return;
       setDetail(next);
@@ -541,18 +542,25 @@ function CredentialStorageSection({
   t: ReturnType<typeof useLocale>["t"];
 }) {
   if (!status) return null;
+  const hasProviderCredentials = [
+    status.apiKeys,
+    status.manualCookies,
+    status.tokenAccounts,
+  ].some((entry) => entry.hasProviderCredentials === true);
 
   return (
     <section className="provider-detail-section provider-detail-credential-storage">
       <div className="provider-detail-section__header">
         <h4>{t("CredentialStorageTitle")}</h4>
-        <button
-          className="credential-btn credential-btn--danger"
-          disabled={busy}
-          onClick={onRevoke}
-        >
-          {t("CredentialRevokeStored")}
-        </button>
+        {hasProviderCredentials && (
+          <button
+            className="credential-btn credential-btn--danger"
+            disabled={busy}
+            onClick={onRevoke}
+          >
+            {t("CredentialRevokeStored")}
+          </button>
+        )}
       </div>
       <dl className="provider-detail-grid provider-detail-grid--storage">
         <dt>{t("CredentialApiKeys")}</dt>
@@ -566,7 +574,25 @@ function CredentialStorageSection({
   );
 }
 
-function storageLabel(value: string, t: ReturnType<typeof useLocale>["t"]): string {
+export function storageLabel(
+  value: CredentialStoreStatus,
+  t: ReturnType<typeof useLocale>["t"],
+): string {
+  if (value.hasProviderCredentials === false) {
+    return t("CredentialStatusNotCreated");
+  }
+  if (value.hasProviderCredentials === null) {
+    return value.fileStatus === "unavailable"
+      ? t("CredentialStatusUnavailable")
+      : t("CredentialStatusUnreadable");
+  }
+  return credentialFileStatusLabel(value.fileStatus, t);
+}
+
+function credentialFileStatusLabel(
+  value: string,
+  t: ReturnType<typeof useLocale>["t"],
+): string {
   if (value.startsWith("protected:")) {
     return `${t("CredentialProtectedPrefix")} (${value.slice("protected:".length)})`;
   }

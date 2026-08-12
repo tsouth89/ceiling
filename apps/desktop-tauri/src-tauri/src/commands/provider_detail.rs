@@ -211,12 +211,23 @@ pub fn revoke_provider_credentials(provider_id: String) -> Result<(), String> {
     codexbar::settings::revoke_managed_credentials(id).map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialStoreStatusBridge {
+    /// Protection/readability of the shared file that contains credentials for
+    /// every provider. This is deliberately distinct from provider presence.
+    pub file_status: String,
+    /// Whether the selected provider has an entry in this store. `None` means
+    /// the store could not be decoded, so absence cannot be asserted safely.
+    pub has_provider_credentials: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialStorageStatusBridge {
-    pub manual_cookies: String,
-    pub api_keys: String,
-    pub token_accounts: String,
+    pub manual_cookies: CredentialStoreStatusBridge,
+    pub api_keys: CredentialStoreStatusBridge,
+    pub token_accounts: CredentialStoreStatusBridge,
 }
 
 pub(crate) fn credential_file_status_label(status: SecureFileStatus) -> String {
@@ -228,18 +239,96 @@ pub(crate) fn credential_file_status_label(status: SecureFileStatus) -> String {
     }
 }
 
-fn optional_credential_status(path: Option<std::path::PathBuf>) -> String {
-    path.map(|path| credential_file_status_label(secure_file::status(&path)))
-        .unwrap_or_else(|| "unavailable".to_string())
+fn provider_store_status(
+    file_status: Option<SecureFileStatus>,
+    has_provider_credentials: Option<bool>,
+) -> CredentialStoreStatusBridge {
+    let has_provider_credentials = match file_status.as_ref() {
+        Some(SecureFileStatus::Missing) => Some(false),
+        Some(SecureFileStatus::Unreadable(_)) | None => None,
+        Some(SecureFileStatus::Plaintext | SecureFileStatus::Protected(_)) => {
+            has_provider_credentials
+        }
+    };
+    CredentialStoreStatusBridge {
+        file_status: file_status
+            .map(credential_file_status_label)
+            .unwrap_or_else(|| "unavailable".to_string()),
+        has_provider_credentials,
+    }
+}
+
+pub(crate) struct CredentialStorageSources<'a> {
+    pub manual_cookie_file_status: Option<SecureFileStatus>,
+    pub manual_cookies: Option<&'a ManualCookies>,
+    pub api_key_file_status: Option<SecureFileStatus>,
+    pub api_keys: Option<&'a ApiKeys>,
+    pub token_account_file_status: SecureFileStatus,
+    pub token_accounts: Option<&'a HashMap<ProviderId, ProviderAccountData>>,
+}
+
+pub(crate) fn build_credential_storage_status(
+    provider: ProviderId,
+    account_id: Option<&str>,
+    sources: CredentialStorageSources<'_>,
+) -> CredentialStorageStatusBridge {
+    let provider_id = provider.cli_name();
+    CredentialStorageStatusBridge {
+        manual_cookies: provider_store_status(
+            sources.manual_cookie_file_status,
+            sources
+                .manual_cookies
+                .map(|store| store.get(provider_id).is_some()),
+        ),
+        api_keys: provider_store_status(
+            sources.api_key_file_status,
+            sources
+                .api_keys
+                .map(|store| store.get(provider_id).is_some()),
+        ),
+        token_accounts: provider_store_status(
+            Some(sources.token_account_file_status),
+            sources.token_accounts.map(|store| {
+                store
+                    .get(&provider)
+                    .is_some_and(|accounts| match account_id {
+                        Some(account_id) => accounts
+                            .accounts
+                            .iter()
+                            .any(|account| account.id.to_string() == account_id),
+                        None => !accounts.accounts.is_empty(),
+                    })
+            }),
+        ),
+    }
 }
 
 #[tauri::command]
-pub fn get_credential_storage_status() -> CredentialStorageStatusBridge {
-    CredentialStorageStatusBridge {
-        manual_cookies: optional_credential_status(ManualCookies::cookies_path()),
-        api_keys: optional_credential_status(ApiKeys::keys_path()),
-        token_accounts: credential_file_status_label(secure_file::status(
-            &TokenAccountStore::default_path(),
-        )),
-    }
+pub fn get_credential_storage_status(
+    provider_id: String,
+    account_id: Option<String>,
+) -> Result<CredentialStorageStatusBridge, String> {
+    let provider = parse_provider_arg(&provider_id)?;
+    let manual_cookie_file_status =
+        ManualCookies::cookies_path().map(|path| secure_file::status(&path));
+    let api_key_file_status = ApiKeys::keys_path().map(|path| secure_file::status(&path));
+    let token_store = TokenAccountStore::new();
+    let token_account_file_status = secure_file::status(&TokenAccountStore::default_path());
+
+    let manual_cookies = ManualCookies::try_load_for_read().ok();
+    let api_keys = ApiKeys::try_load_for_read().ok();
+    let token_accounts = token_store.load().ok();
+
+    Ok(build_credential_storage_status(
+        provider,
+        account_id.as_deref(),
+        CredentialStorageSources {
+            manual_cookie_file_status,
+            manual_cookies: manual_cookies.as_ref(),
+            api_key_file_status,
+            api_keys: api_keys.as_ref(),
+            token_account_file_status,
+            token_accounts: token_accounts.as_ref(),
+        },
+    ))
 }

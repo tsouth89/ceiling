@@ -158,8 +158,14 @@ export function getWorkAreaRect(): Promise<WorkAreaRect> {
   return invoke<WorkAreaRect>("get_work_area_rect");
 }
 
-export function getCredentialStorageStatus(): Promise<CredentialStorageStatus> {
-  return invoke<CredentialStorageStatus>("get_credential_storage_status");
+export function getCredentialStorageStatus(
+  providerId: string,
+  accountId: string | null = null,
+): Promise<CredentialStorageStatus> {
+  return invoke<CredentialStorageStatus>("get_credential_storage_status", {
+    providerId,
+    accountId,
+  });
 }
 
 export function getUpdateState(): Promise<UpdateStatePayload> {
