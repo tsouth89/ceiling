@@ -443,7 +443,10 @@ export default function PopOutPanel({
                 hideEmail={settings.hidePersonalInfo}
               />
             ) : activeSection === "charts" ? (
-              <ChartsPanel providers={sorted} />
+              <ChartsPanel
+                providers={sorted}
+                hideEmail={settings.hidePersonalInfo}
+              />
             ) : activeSection === "accounts" ? (
               <AccountsPanel
                 providers={sorted}

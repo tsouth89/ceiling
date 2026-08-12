@@ -1216,7 +1216,9 @@ fn non_claude_error_message_is_preserved() {
 
 #[test]
 fn chart_data_serde_roundtrip_preserves_fields() {
-    use super::{DailyCostPoint, DailyUsageBreakdown, ProviderChartData, ServiceUsagePoint};
+    use super::{
+        DailyCostPoint, DailyUsageBreakdown, LocalUsageScope, ProviderChartData, ServiceUsagePoint,
+    };
 
     let original = ProviderChartData {
         provider_id: "codex".into(),
@@ -1249,6 +1251,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
             total_credits_used: 13.5,
         }],
         local_usage: None,
+        local_usage_scope: LocalUsageScope::Account,
         quota_history: Vec::new(),
     };
 
@@ -1261,6 +1264,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert!(json.contains("\"creditsHistory\""));
     assert!(json.contains("\"usageBreakdown\""));
     assert!(json.contains("\"localUsage\":null"));
+    assert!(json.contains("\"localUsageScope\":\"account\""));
     assert!(json.contains("\"quotaHistory\":[]"));
     assert!(json.contains("\"creditsUsed\":10.0"));
     assert!(json.contains("\"totalCreditsUsed\":13.5"));
@@ -1272,6 +1276,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert_eq!(back.credits_history[0].value, 42.0);
     assert_eq!(back.usage_breakdown[0].services.len(), 2);
     assert_eq!(back.usage_breakdown[0].total_credits_used, 13.5);
+    assert_eq!(back.local_usage_scope, LocalUsageScope::Account);
 }
 
 #[test]
