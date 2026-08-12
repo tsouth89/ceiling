@@ -19,6 +19,9 @@ pub struct TaskbarLayout {
 pub struct TaskbarLandmarks {
     pub widgets: Option<Rect>,
     pub start: Option<Rect>,
+    /// The `TrayNotifyWnd` notification-area rect, when found. Anchor point
+    /// for the taskbar widget's Start-to-tray fallback lane.
+    pub tray: Option<Rect>,
 }
 
 impl TaskbarLayout {
@@ -197,13 +200,18 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
             (&mut context as *mut ChildEnumContext).cast::<std::ffi::c_void>() as isize,
         );
 
+        let mut landmarks = TaskbarLandmarks::default();
+
         // Reserve the notification area when this taskbar exposes one. Some
         // Windows versions omit TrayNotifyWnd from secondary taskbars; child
         // enumeration still captures the controls that are actually present.
+        // Also promote it to a landmark: it's the anchor for the taskbar
+        // widget's Start-to-tray fallback lane.
         let tray_class = wide("TrayNotifyWnd");
         let tray = FindWindowExW(hwnd, 0, tray_class.as_ptr(), std::ptr::null());
         if let Some(tray_rect) = window_rect(tray) {
             context.obstacles.push(tray_rect);
+            landmarks.tray = Some(tray_rect);
         }
 
         // Windows 11 renders Widgets, Start, Search, and app buttons as XAML.
@@ -212,7 +220,6 @@ unsafe fn layout_for_taskbar(hwnd: isize, primary: bool) -> Option<TaskbarLayout
         // Failure is intentionally non-fatal; the native widget then uses the
         // conservative preferred anchor and classic HWND obstacles.
         let automation_buttons = uia_buttons(hwnd);
-        let mut landmarks = TaskbarLandmarks::default();
         for button in &automation_buttons {
             match button.automation_id.as_str() {
                 "WidgetsButton" => landmarks.widgets = Some(button.bounds),

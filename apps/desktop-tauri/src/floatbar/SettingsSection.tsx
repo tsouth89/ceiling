@@ -44,7 +44,7 @@ function taskbarWidgetStatusMessage(status: TaskbarWidgetStatus | null): string 
     case "active":
       return `Shown on ${status.taskbars} taskbar${status.taskbars === 1 ? "" : "s"}.`;
     case "noFit":
-      return "Hidden: no free space on the taskbar between Widgets and Start.";
+      return "Hidden: no free space on the taskbar.";
     case "waitingLandmarks":
       return "Waiting for taskbar landmarks (Start button not found). A taskbar mod may be interfering.";
     case "noProviders":
