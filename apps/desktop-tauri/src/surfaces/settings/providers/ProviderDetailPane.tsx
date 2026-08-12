@@ -185,19 +185,22 @@ export function ProviderDetailPane({
       if (credentialStatusEpochRef.current === credentialRequestEpoch) {
         setCredentialStatus(null);
       }
-    // A selection belongs to one provider; carrying it across panes would
-    // ask for an account that provider does not have.
-    setSelectedAccountId(null);
-    selectedAccountIdRef.current = null;
+      setSelectedAccountId(null);
+      selectedAccountIdRef.current = null;
     } finally {
       if (!signal?.stale) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // ProvidersTab keeps one pane instance. A Claude directory-account tab
+    // must not be sent to the next provider as getProviderDetail(accountId).
+    setSelectedAccountId(null);
+    selectedAccountIdRef.current = null;
     if (!providerId) {
       setDetail(null);
       setRegionOptions([]);
+      setCredentialStatus(null);
       return;
     }
     // Clear stale detail immediately so we don't render the old provider
@@ -205,7 +208,7 @@ export function ProviderDetailPane({
     setRegionOptions([]);
     setCredentialStatus(null);
     const signal = { stale: false };
-    void load(providerId, signal, selectedAccountIdRef.current);
+    void load(providerId, signal, null);
     return () => { signal.stale = true; };
   }, [providerId, load]);
 

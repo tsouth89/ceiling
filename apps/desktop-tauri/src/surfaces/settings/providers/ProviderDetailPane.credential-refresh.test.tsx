@@ -139,4 +139,90 @@ describe("ProviderDetailPane credential status refresh", () => {
       screen.getByRole("button", { name: "CredentialRevokeStored" }),
     ).toBeInTheDocument();
   });
+
+  it("does not leak a Claude account tab into the next provider's token status", async () => {
+    const claudeWorkId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const claudePersonalId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const claudeDetail: ProviderDetail = {
+      ...providerDetail,
+      accountId: claudeWorkId,
+      accounts: [
+        { accountId: claudeWorkId, label: "Work", tint: null },
+        { accountId: claudePersonalId, label: "Personal", tint: null },
+      ],
+    };
+    const cursorDetail: ProviderDetail = {
+      ...providerDetail,
+      id: "cursor",
+      displayName: "Cursor",
+    };
+    const tokenPresentStatus: CredentialStorageStatus = {
+      ...absentStatus,
+      tokenAccounts: {
+        fileStatus: "protected:windows-dpapi-user",
+        hasProviderCredentials: true,
+      },
+    };
+
+    tauriMocks.getProviderDetail.mockImplementation(
+      async (id: string, accountId: string | null) => {
+        if (id === "cursor") return cursorDetail;
+        if (accountId === claudePersonalId) {
+          return { ...claudeDetail, accountId: claudePersonalId };
+        }
+        return claudeDetail;
+      },
+    );
+    tauriMocks.getCredentialStorageStatus.mockImplementation(async (id: string) =>
+      id === "cursor" ? tokenPresentStatus : absentStatus,
+    );
+
+    const view = render(
+      <ProviderDetailPane
+        providerId="claude"
+        resetTimeRelative
+        providerMetrics={{}}
+        wayfinderGatewayUrl=""
+        settingsDisabled={false}
+        onSettingsChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Personal" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Personal" }));
+    await waitFor(() =>
+      expect(tauriMocks.getProviderDetail).toHaveBeenCalledWith(
+        "claude",
+        claudePersonalId,
+      ),
+    );
+
+    view.rerender(
+      <ProviderDetailPane
+        providerId="cursor"
+        resetTimeRelative
+        providerMetrics={{}}
+        wayfinderGatewayUrl=""
+        settingsDisabled={false}
+        onSettingsChange={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "CredentialProtectedPrefix (windows-dpapi-user)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "CredentialRevokeStored" }),
+    ).toBeInTheDocument();
+    expect(tauriMocks.getProviderDetail).toHaveBeenCalledWith("cursor", null);
+    expect(tauriMocks.getProviderDetail).not.toHaveBeenCalledWith(
+      "cursor",
+      claudePersonalId,
+    );
+    expect(tauriMocks.getCredentialStorageStatus).toHaveBeenCalledWith("cursor");
+  });
 });
