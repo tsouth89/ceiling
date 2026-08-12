@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderDetail } from "../../../types/bridge";
+import type {
+  CredentialStorageStatus,
+  ProviderDetail,
+} from "../../../types/bridge";
 import { ProviderDetailPane } from "./ProviderDetailPane";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -123,6 +126,20 @@ function renderPane(providerId: string | null) {
   );
 }
 
+const absentStatus: CredentialStorageStatus = {
+  apiKeys: { fileStatus: "missing", hasProviderCredentials: false },
+  manualCookies: { fileStatus: "missing", hasProviderCredentials: false },
+  tokenAccounts: { fileStatus: "missing", hasProviderCredentials: false },
+};
+
+const presentStatus: CredentialStorageStatus = {
+  ...absentStatus,
+  apiKeys: {
+    fileStatus: "protected:windows-dpapi-user",
+    hasProviderCredentials: true,
+  },
+};
+
 function emitProviderUpdated(providerId: string) {
   for (const handler of eventMocks.handlers.get("provider-updated") ?? []) {
     handler({ payload: { providerId } });
@@ -132,6 +149,10 @@ function emitProviderUpdated(providerId: string) {
 describe("ProviderDetailPane request ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    tauriMocks.getProviderDetail.mockReset();
+    tauriMocks.getCredentialStorageStatus.mockReset();
+    tauriMocks.triggerProviderLogin.mockReset();
+    tauriMocks.revokeProviderCredentials.mockReset();
     eventMocks.handlers.clear();
     eventMocks.listen.mockImplementation(
       async (eventName: string, handler: (event: { payload: unknown }) => void) => {
@@ -141,11 +162,7 @@ describe("ProviderDetailPane request ordering", () => {
         return () => handlers.delete(handler);
       },
     );
-    tauriMocks.getCredentialStorageStatus.mockResolvedValue({
-      manualCookies: "missing",
-      apiKeys: "missing",
-      tokenAccounts: "missing",
-    });
+    tauriMocks.getCredentialStorageStatus.mockResolvedValue(absentStatus);
     tauriMocks.getProviderRegionOptions.mockResolvedValue([]);
     tauriMocks.getTokenAccountProviders.mockResolvedValue([]);
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
@@ -359,6 +376,7 @@ describe("ProviderDetailPane request ordering", () => {
         ),
     );
 
+    tauriMocks.getCredentialStorageStatus.mockResolvedValue(presentStatus);
     renderPane("codex");
     await screen.findByTestId("provider-identity");
     fireEvent.click(screen.getByRole("tab", { name: "Work" }));
