@@ -17,7 +17,7 @@ import { providerSupportsChartData } from "../lib/providerCharts";
 import { accountIdentityLabel } from "../lib/providerRow";
 import {
   allMeasuredWindows,
-  codexResetCredits,
+  bankedResetCredits,
   formatShortDuration,
 } from "../lib/capacityPresentation";
 
@@ -310,7 +310,7 @@ export default function ProviderDetailView({
   // A drill-in opens a specific account, so name it whenever there is an email.
   // Without this, two accounts on one provider open two identical detail views.
   const accountName = accountIdentityLabel(provider, hideEmail);
-  const resetCredits = codexResetCredits(provider);
+  const resetCredits = bankedResetCredits(provider);
   const updated = Number.isNaN(Date.parse(provider.updatedAt))
     ? provider.updatedAt
     : formatRelativeUpdated(Date.parse(provider.updatedAt), t);

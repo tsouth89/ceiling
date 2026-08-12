@@ -5,6 +5,7 @@
 //! - browser cookies for grok.com when available.
 //!
 //! Billing RPC: `GrokBuildBilling/GetGrokCreditsConfig` (weekly shared usage pool).
+//! Banked resets: `prod_mc_billing.ConsumerUiSvc/GetRemainingResets`.
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
@@ -21,8 +22,15 @@ use crate::core::{
 };
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+const RESETS_ENDPOINT: &str = "https://grok.com/prod_mc_billing.ConsumerUiSvc/GetRemainingResets";
 const SUBSCRIPTIONS_ENDPOINT: &str = "https://grok.com/rest/subscriptions";
 const WEEKLY_MINUTES: u32 = 7 * 24 * 60;
+
+/// `ConsumerGetRemainingResetsResp.tokens` / `ConsumerResetToken` field numbers
+/// from grok.com's `consumer_ui.proto`.
+const RESET_TOKEN_FIELD: u64 = 10;
+const RESET_TOKEN_ID_FIELD: u64 = 10;
+const RESET_TOKEN_END_FIELD: u64 = 30;
 
 /// Whether a usable `~/.grok/auth.json` (or `$GROK_HOME/auth.json`) exists.
 /// True when an access token or refresh token is present (expired access is OK
@@ -195,30 +203,42 @@ impl GrokProvider {
                 let retry_header = format!("Bearer {}", refreshed.access_token);
                 let billing = self.fetch_billing(Some(retry_header.clone()), None).await?;
                 let plan = self
-                    .fetch_plan_name(Some(retry_header), None)
+                    .fetch_plan_name(Some(retry_header.clone()), None)
                     .await
                     .or_else(|| refreshed.login_method());
-                return Ok(result_from_billing(
-                    billing,
-                    source_label,
-                    refreshed.email.clone(),
-                    refreshed.team_id.clone(),
-                    plan,
-                ));
+                return Ok(self
+                    .with_remaining_resets(
+                        result_from_billing(
+                            billing,
+                            source_label,
+                            refreshed.email.clone(),
+                            refreshed.team_id.clone(),
+                            plan,
+                        ),
+                        Some(retry_header),
+                        None,
+                    )
+                    .await);
             }
             Err(e) => return Err(e),
         };
         let plan = self
-            .fetch_plan_name(Some(auth_header), None)
+            .fetch_plan_name(Some(auth_header.clone()), None)
             .await
             .or_else(|| credentials.login_method());
-        Ok(result_from_billing(
-            billing,
-            source_label,
-            credentials.email.clone(),
-            credentials.team_id.clone(),
-            plan,
-        ))
+        Ok(self
+            .with_remaining_resets(
+                result_from_billing(
+                    billing,
+                    source_label,
+                    credentials.email.clone(),
+                    credentials.team_id.clone(),
+                    plan,
+                ),
+                Some(auth_header),
+                None,
+            )
+            .await)
     }
 
     async fn fetch_with_cookie(
@@ -231,13 +251,31 @@ impl GrokProvider {
         let plan = self
             .fetch_plan_name(None, Some(cookie_header.to_string()))
             .await;
-        Ok(result_from_billing(
-            billing,
-            "grok-browser",
-            None,
-            None,
-            plan,
-        ))
+        Ok(self
+            .with_remaining_resets(
+                result_from_billing(billing, "grok-browser", None, None, plan),
+                None,
+                Some(cookie_header.to_string()),
+            )
+            .await)
+    }
+
+    async fn with_remaining_resets(
+        &self,
+        mut result: ProviderFetchResult,
+        authorization: Option<String>,
+        cookie_header: Option<String>,
+    ) -> ProviderFetchResult {
+        match self
+            .fetch_remaining_resets(authorization, cookie_header)
+            .await
+        {
+            Ok(count) => result.usage.reset_credits_available = Some(count),
+            Err(err) => {
+                tracing::debug!("Grok remaining resets unavailable: {err}");
+            }
+        }
+        result
     }
 
     async fn fetch_billing(
@@ -245,9 +283,35 @@ impl GrokProvider {
         authorization: Option<String>,
         cookie_header: Option<String>,
     ) -> Result<GrokBillingSnapshot, ProviderError> {
+        let (headers, bytes) = self
+            .post_grpc_web(BILLING_ENDPOINT, authorization, cookie_header, "billing")
+            .await?;
+        validate_grpc_headers(&headers)?;
+        parse_grpc_web_response(&bytes)
+    }
+
+    async fn fetch_remaining_resets(
+        &self,
+        authorization: Option<String>,
+        cookie_header: Option<String>,
+    ) -> Result<u32, ProviderError> {
+        let (headers, bytes) = self
+            .post_grpc_web(RESETS_ENDPOINT, authorization, cookie_header, "resets")
+            .await?;
+        validate_grpc_headers(&headers)?;
+        parse_remaining_resets(&bytes)
+    }
+
+    async fn post_grpc_web(
+        &self,
+        url: &str,
+        authorization: Option<String>,
+        cookie_header: Option<String>,
+        label: &str,
+    ) -> Result<(reqwest::header::HeaderMap, Vec<u8>), ProviderError> {
         let mut request = self
             .client
-            .post(BILLING_ENDPOINT)
+            .post(url)
             .body(vec![0, 0, 0, 0, 0])
             .header("Origin", "https://grok.com")
             .header("Referer", "https://grok.com/?_s=usage")
@@ -274,11 +338,10 @@ impl GrokProvider {
                 return Err(ProviderError::AuthRequired);
             }
             return Err(ProviderError::Other(format!(
-                "Grok web billing returned status {status}"
+                "Grok web {label} returned status {status}"
             )));
         }
-        validate_grpc_headers(&headers)?;
-        parse_grpc_web_response(&bytes)
+        Ok((headers, bytes.to_vec()))
     }
 
     /// Best-effort plan label from grok.com (e.g. SuperGrok Heavy).
@@ -760,6 +823,194 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
     })
 }
 
+/// Count still-valid banked resets from `GetRemainingResets`.
+///
+/// A known zero is an empty grpc-web data frame (optionally with grpc-status 0).
+/// Tokens missing an id or whose `validity_end` is in the past are ignored,
+/// matching grok.com's own filter. Trailer errors, unframed bodies, truncated
+/// proto, and messages with no `tokens` field stay unknown rather than 0.
+fn parse_remaining_resets(data: &[u8]) -> Result<u32, ProviderError> {
+    let body = grpc_web_split(data)?;
+    validate_grpc_status_trailers(&body.trailers)?;
+    if body.frames.is_empty() {
+        return Err(ProviderError::Parse(
+            "Grok remaining resets returned no payload".to_string(),
+        ));
+    }
+    let now = Utc::now();
+    let mut count = 0u32;
+    for frame in &body.frames {
+        if frame.is_empty() {
+            continue;
+        }
+        let (n, saw_tokens) = count_reset_tokens(frame, now)?;
+        if !saw_tokens {
+            return Err(ProviderError::Parse(
+                "Grok remaining resets payload had no reset tokens".to_string(),
+            ));
+        }
+        count = count.saturating_add(n);
+    }
+    Ok(count)
+}
+
+fn validate_grpc_status_trailers(trailers: &[Vec<u8>]) -> Result<(), ProviderError> {
+    for trailer in trailers {
+        if let Some(status) = grpc_status_from_trailer_block(trailer)
+            && status != 0
+        {
+            if status == 16 {
+                return Err(ProviderError::AuthRequired);
+            }
+            return Err(ProviderError::Other(format!(
+                "Grok RPC failed with status {status}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn grpc_status_from_trailer_block(block: &[u8]) -> Option<u16> {
+    let text = std::str::from_utf8(block).ok()?;
+    for line in text.split(['\r', '\n']) {
+        let line = line.trim();
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("grpc-status") {
+            return value.trim().parse().ok();
+        }
+    }
+    None
+}
+
+fn count_reset_tokens(data: &[u8], now: DateTime<Utc>) -> Result<(u32, bool), ProviderError> {
+    let mut count = 0u32;
+    let mut saw_tokens = false;
+    for field in proto_fields(data)? {
+        if field.number == RESET_TOKEN_FIELD && field.wire == 2 {
+            saw_tokens = true;
+            if reset_token_is_available(field.bytes, now)? {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    Ok((count, saw_tokens))
+}
+
+fn reset_token_is_available(data: &[u8], now: DateTime<Utc>) -> Result<bool, ProviderError> {
+    let mut token_id = None;
+    let mut validity_end = None;
+    for field in proto_fields(data)? {
+        match (field.number, field.wire) {
+            (RESET_TOKEN_ID_FIELD, 2) => {
+                token_id = std::str::from_utf8(field.bytes)
+                    .ok()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned);
+            }
+            (RESET_TOKEN_END_FIELD, 2) => {
+                validity_end = proto_timestamp(field.bytes)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(token_id.is_some() && validity_end.is_some_and(|end| end > now))
+}
+
+fn proto_timestamp(data: &[u8]) -> Result<Option<DateTime<Utc>>, ProviderError> {
+    for field in proto_fields(data)? {
+        if field.number == 1 && field.wire == 0 {
+            return Ok(Utc.timestamp_opt(field.varint as i64, 0).single());
+        }
+    }
+    Ok(None)
+}
+
+struct ProtoField<'a> {
+    number: u64,
+    wire: u64,
+    varint: u64,
+    bytes: &'a [u8],
+}
+
+fn proto_fields(data: &[u8]) -> Result<Vec<ProtoField<'_>>, ProviderError> {
+    let mut fields = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let Some((key, next)) = read_varint(data, i) else {
+            return Err(resets_parse_error());
+        };
+        i = next;
+        let number = key >> 3;
+        let wire = key & 0x07;
+        match wire {
+            0 => {
+                let Some((value, next)) = read_varint(data, i) else {
+                    return Err(resets_parse_error());
+                };
+                i = next;
+                fields.push(ProtoField {
+                    number,
+                    wire,
+                    varint: value,
+                    bytes: &[],
+                });
+            }
+            1 => {
+                let end = i.saturating_add(8);
+                if end > data.len() {
+                    return Err(resets_parse_error());
+                }
+                fields.push(ProtoField {
+                    number,
+                    wire,
+                    varint: 0,
+                    bytes: &data[i..end],
+                });
+                i = end;
+            }
+            2 => {
+                let Some((len, next)) = read_varint(data, i) else {
+                    return Err(resets_parse_error());
+                };
+                i = next;
+                let end = i.saturating_add(len as usize);
+                if end > data.len() {
+                    return Err(resets_parse_error());
+                }
+                fields.push(ProtoField {
+                    number,
+                    wire,
+                    varint: 0,
+                    bytes: &data[i..end],
+                });
+                i = end;
+            }
+            5 => {
+                let end = i.saturating_add(4);
+                if end > data.len() {
+                    return Err(resets_parse_error());
+                }
+                fields.push(ProtoField {
+                    number,
+                    wire,
+                    varint: 0,
+                    bytes: &data[i..end],
+                });
+                i = end;
+            }
+            _ => return Err(resets_parse_error()),
+        }
+    }
+    Ok(fields)
+}
+
+fn resets_parse_error() -> ProviderError {
+    ProviderError::Parse("Grok remaining resets payload is malformed".to_string())
+}
+
 fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
     let mut frames = Vec::new();
     let mut index = 0;
@@ -780,6 +1031,43 @@ fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
         index = end;
     }
     frames
+}
+
+struct GrpcWebBody {
+    frames: Vec<Vec<u8>>,
+    trailers: Vec<Vec<u8>>,
+}
+
+fn grpc_web_split(data: &[u8]) -> Result<GrpcWebBody, ProviderError> {
+    let mut frames = Vec::new();
+    let mut trailers = Vec::new();
+    let mut index = 0;
+    while index + 5 <= data.len() {
+        let flags = data[index];
+        let len = ((data[index + 1] as usize) << 24)
+            | ((data[index + 2] as usize) << 16)
+            | ((data[index + 3] as usize) << 8)
+            | (data[index + 4] as usize);
+        let start = index + 5;
+        let end = start.saturating_add(len);
+        if end > data.len() {
+            return Err(ProviderError::Parse(
+                "Grok remaining resets frame is truncated".to_string(),
+            ));
+        }
+        if flags & 0x80 != 0 {
+            trailers.push(data[start..end].to_vec());
+        } else {
+            frames.push(data[start..end].to_vec());
+        }
+        index = end;
+    }
+    if index != data.len() {
+        return Err(ProviderError::Parse(
+            "Grok remaining resets frame is truncated".to_string(),
+        ));
+    }
+    Ok(GrpcWebBody { frames, trailers })
 }
 
 #[derive(Default)]
@@ -1052,7 +1340,103 @@ mod tests {
         );
         assert_eq!(result.usage.primary.window_minutes, Some(WEEKLY_MINUTES));
         assert!(result.usage.secondary.is_none());
+        assert!(result.usage.reset_credits_available.is_none());
         assert!((result.usage.primary.used_percent - 12.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn remaining_resets_empty_payload_is_a_known_zero() {
+        assert_eq!(parse_remaining_resets(&grpc_frame(&[])).unwrap(), 0);
+        let ok_empty = [grpc_frame(&[]), grpc_trailer(0)].concat();
+        assert_eq!(parse_remaining_resets(&ok_empty).unwrap(), 0);
+    }
+
+    #[test]
+    fn remaining_resets_rpc_error_trailer_is_not_a_known_zero() {
+        // grpc-web errors are HTTP 200 plus a trailer status. Empty data
+        // frames would look like a successful zero if the trailer is ignored.
+        assert!(parse_remaining_resets(&grpc_trailer(12)).is_err());
+        assert!(parse_remaining_resets(&grpc_trailer(13)).is_err());
+        assert!(matches!(
+            parse_remaining_resets(&grpc_trailer(16)),
+            Err(ProviderError::AuthRequired)
+        ));
+    }
+
+    #[test]
+    fn remaining_resets_unframed_or_unmatched_bodies_are_not_zero() {
+        assert!(parse_remaining_resets(&[]).is_err());
+        assert!(parse_remaining_resets(b"<html>not grpc</html>").is_err());
+        let mut unmatched = Vec::new();
+        write_key(&mut unmatched, 1, 0);
+        write_varint(&mut unmatched, 5);
+        assert!(parse_remaining_resets(&grpc_frame(&unmatched)).is_err());
+    }
+
+    #[test]
+    fn remaining_resets_truncated_varint_is_not_zero() {
+        let mut truncated = Vec::new();
+        write_key(&mut truncated, RESET_TOKEN_FIELD, 2);
+        write_varint(&mut truncated, 20);
+        truncated.extend_from_slice(&[1, 2, 3]);
+        assert!(parse_remaining_resets(&grpc_frame(&truncated)).is_err());
+        assert!(parse_remaining_resets(&grpc_frame(&[0x80])).is_err());
+    }
+
+    #[test]
+    fn remaining_resets_counts_unexpired_tokens_only() {
+        let future = Utc::now() + chrono::Duration::days(30);
+        let past = Utc::now() - chrono::Duration::days(1);
+        let payload = encode_remaining_resets(&[
+            ("restok_live", future),
+            ("", future),
+            ("restok_expired", past),
+            ("restok_other", future),
+        ]);
+        assert_eq!(parse_remaining_resets(&payload).unwrap(), 2);
+    }
+
+    #[test]
+    fn remaining_resets_decodes_live_shaped_token() {
+        // Field numbers 10/20/30 match consumer_ui.proto as shipped by grok.com.
+        let end = Utc::now() + chrono::Duration::days(30);
+        let payload = encode_remaining_resets(&[("restok_example", end)]);
+        assert_eq!(parse_remaining_resets(&payload).unwrap(), 1);
+    }
+
+    fn encode_remaining_resets(tokens: &[(&str, DateTime<Utc>)]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        for (id, end) in tokens {
+            let mut token = Vec::new();
+            write_key(&mut token, RESET_TOKEN_ID_FIELD, 2);
+            write_varint(&mut token, id.len() as u64);
+            token.extend_from_slice(id.as_bytes());
+            let mut ts = Vec::new();
+            write_key(&mut ts, 1, 0);
+            write_varint(&mut ts, end.timestamp() as u64);
+            write_key(&mut token, RESET_TOKEN_END_FIELD, 2);
+            write_varint(&mut token, ts.len() as u64);
+            token.extend_from_slice(&ts);
+            write_key(&mut payload, RESET_TOKEN_FIELD, 2);
+            write_varint(&mut payload, token.len() as u64);
+            payload.extend_from_slice(&token);
+        }
+        grpc_frame(&payload)
+    }
+
+    fn grpc_frame(payload: &[u8]) -> Vec<u8> {
+        grpc_web_frame(0, payload)
+    }
+
+    fn grpc_trailer(status: u16) -> Vec<u8> {
+        grpc_web_frame(0x80, format!("grpc-status: {status}\r\n").as_bytes())
+    }
+
+    fn grpc_web_frame(flags: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![flags];
+        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        frame.extend_from_slice(payload);
+        frame
     }
 
     fn write_key(buf: &mut Vec<u8>, field: u64, wire: u64) {

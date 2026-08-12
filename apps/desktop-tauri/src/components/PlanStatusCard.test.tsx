@@ -135,6 +135,20 @@ describe("PlanStatusCard", () => {
     expect(screen.getByText(/1 reset available/)).toBeInTheDocument();
   });
 
+  it("shows an available Grok reset as a quiet chip", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          providerId: "grok",
+          displayName: "Grok",
+          resetCreditsAvailable: 1,
+        })}
+        resetTimeRelative
+      />,
+    );
+    expect(screen.getByText(/1 reset available/)).toBeInTheDocument();
+  });
+
   it("shows logo, plan, pool hero, and hot companion", () => {
     render(
       <PlanStatusCard
