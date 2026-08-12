@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  CredentialStoreStatus,
   CredentialStorageStatus,
   ProviderDetail,
   RegionOption,
@@ -92,6 +93,9 @@ export function ProviderDetailPane({
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [gatewayDraft, setGatewayDraft] = useState(wayfinderGatewayUrl);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const activeProviderIdRef = useRef(providerId);
+  const credentialStatusEpochRef = useRef(0);
+  activeProviderIdRef.current = providerId;
 
   useEffect(() => {
     if (providerId === "wayfinder") setGatewayDraft(wayfinderGatewayUrl);
@@ -133,42 +137,70 @@ export function ProviderDetailPane({
   const selectedAccountIdRef = useRef<string | null>(null);
   selectedAccountIdRef.current = selectedAccountId;
 
+  const refreshCredentialStatus = useCallback(async (id: string) => {
+    const requestEpoch = ++credentialStatusEpochRef.current;
+    try {
+      const storageStatus = await getCredentialStorageStatus(id);
+      if (
+        activeProviderIdRef.current === id &&
+        credentialStatusEpochRef.current === requestEpoch
+      ) {
+        setCredentialStatus(storageStatus);
+      }
+    } catch (e) {
+      if (
+        activeProviderIdRef.current === id &&
+        credentialStatusEpochRef.current === requestEpoch
+      ) {
+        setError(String(e));
+      }
+    }
+  }, []);
+
   const load = useCallback(async (
     id: string,
     signal?: { stale: boolean },
     accountId: string | null = null,
   ) => {
+    const credentialRequestEpoch = ++credentialStatusEpochRef.current;
     setLoading(true);
     setError(null);
     try {
       const [next, regionOpts, storageStatus] = await Promise.all([
         getProviderDetail(id, accountId),
         getProviderRegionOptions(id),
-        getCredentialStorageStatus(),
+        getCredentialStorageStatus(id),
       ]);
       if (signal?.stale) return;
       setDetail(next);
       setRegionOptions(regionOpts);
-      setCredentialStatus(storageStatus);
+      if (credentialStatusEpochRef.current === credentialRequestEpoch) {
+        setCredentialStatus(storageStatus);
+      }
     } catch (e) {
       if (signal?.stale) return;
       setError(String(e));
       setDetail(null);
       setRegionOptions([]);
-      setCredentialStatus(null);
-    // A selection belongs to one provider; carrying it across panes would
-    // ask for an account that provider does not have.
-    setSelectedAccountId(null);
-    selectedAccountIdRef.current = null;
+      if (credentialStatusEpochRef.current === credentialRequestEpoch) {
+        setCredentialStatus(null);
+      }
+      setSelectedAccountId(null);
+      selectedAccountIdRef.current = null;
     } finally {
       if (!signal?.stale) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // ProvidersTab keeps one pane instance. A Claude directory-account tab
+    // must not be sent to the next provider as getProviderDetail(accountId).
+    setSelectedAccountId(null);
+    selectedAccountIdRef.current = null;
     if (!providerId) {
       setDetail(null);
       setRegionOptions([]);
+      setCredentialStatus(null);
       return;
     }
     // Clear stale detail immediately so we don't render the old provider
@@ -176,7 +208,7 @@ export function ProviderDetailPane({
     setRegionOptions([]);
     setCredentialStatus(null);
     const signal = { stale: false };
-    void load(providerId, signal, selectedAccountIdRef.current);
+    void load(providerId, signal, null);
     return () => { signal.stale = true; };
   }, [providerId, load]);
 
@@ -438,16 +470,19 @@ export function ProviderDetailPane({
             key={`token-${detail.id}-${credentialRevision}`}
             providerId={detail.id}
             compact
+            onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
           />
         )}
         <ApiKeySection
           key={`api-${detail.id}-${credentialRevision}`}
           providerId={detail.id}
+          onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
         />
         <CookieSection
           key={`cookie-${detail.id}-${credentialRevision}`}
           providerId={detail.id}
           cookieDomain={cookieDomain}
+          onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
         />
         <ChartsSection
           providerId={detail.id}
@@ -541,18 +576,21 @@ function CredentialStorageSection({
   t: ReturnType<typeof useLocale>["t"];
 }) {
   if (!status) return null;
+  const hasProviderCredentials = shouldShowCredentialRevoke(status);
 
   return (
     <section className="provider-detail-section provider-detail-credential-storage">
       <div className="provider-detail-section__header">
         <h4>{t("CredentialStorageTitle")}</h4>
-        <button
-          className="credential-btn credential-btn--danger"
-          disabled={busy}
-          onClick={onRevoke}
-        >
-          {t("CredentialRevokeStored")}
-        </button>
+        {hasProviderCredentials && (
+          <button
+            className="credential-btn credential-btn--danger"
+            disabled={busy}
+            onClick={onRevoke}
+          >
+            {t("CredentialRevokeStored")}
+          </button>
+        )}
       </div>
       <dl className="provider-detail-grid provider-detail-grid--storage">
         <dt>{t("CredentialApiKeys")}</dt>
@@ -566,7 +604,33 @@ function CredentialStorageSection({
   );
 }
 
-function storageLabel(value: string, t: ReturnType<typeof useLocale>["t"]): string {
+export function shouldShowCredentialRevoke(
+  status: CredentialStorageStatus,
+): boolean {
+  return [status.apiKeys, status.manualCookies, status.tokenAccounts].some(
+    (entry) => entry.hasProviderCredentials !== false,
+  );
+}
+
+export function storageLabel(
+  value: CredentialStoreStatus,
+  t: ReturnType<typeof useLocale>["t"],
+): string {
+  if (value.hasProviderCredentials === false) {
+    return t("CredentialStatusNotCreated");
+  }
+  if (value.hasProviderCredentials === null) {
+    return value.fileStatus === "unavailable"
+      ? t("CredentialStatusUnavailable")
+      : t("CredentialStatusUnreadable");
+  }
+  return credentialFileStatusLabel(value.fileStatus, t);
+}
+
+function credentialFileStatusLabel(
+  value: string,
+  t: ReturnType<typeof useLocale>["t"],
+): string {
   if (value.startsWith("protected:")) {
     return `${t("CredentialProtectedPrefix")} (${value.slice("protected:".length)})`;
   }
