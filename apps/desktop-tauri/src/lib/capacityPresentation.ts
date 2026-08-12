@@ -396,15 +396,17 @@ export function resetCreditsAvailable(
 }
 
 /**
- * Codex banked resets for the persistent indicator. Codex is the only provider
- * with this concept, so it is shown Codex-only and always (including the `0`
- * state) whenever we have a trustworthy reading, keeping the feature visible
- * and building trust that Ceiling is tracking it.
+ * Provider-reported banked resets for the persistent indicator. Codex and Grok
+ * are the only providers with this concept, so the chip stays scoped to them
+ * and always shows (including the `0` state) whenever we have a trustworthy
+ * reading.
  */
-export function codexResetCredits(
+export function bankedResetCredits(
   provider: ProviderUsageSnapshot,
 ): number | null {
-  if (provider.providerId !== "codex") return null;
+  if (provider.providerId !== "codex" && provider.providerId !== "grok") {
+    return null;
+  }
   return resetCreditsAvailable(provider);
 }
 
