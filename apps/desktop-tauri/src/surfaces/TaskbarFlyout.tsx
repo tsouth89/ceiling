@@ -6,7 +6,7 @@ import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { orderProviderSnapshots } from "../lib/providerOrder";
-import { allMeasuredWindows, codexResetCredits, type ConstrainingWindow } from "../lib/capacityPresentation";
+import { allMeasuredWindows, bankedResetCredits, type ConstrainingWindow } from "../lib/capacityPresentation";
 import {
   dismissTrayPanel,
   getTaskbarSurfaceColor,
@@ -157,7 +157,7 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
     );
   }
   const windows = flyoutWindows(provider);
-  const resetCredits = codexResetCredits(provider);
+  const resetCredits = bankedResetCredits(provider);
   const hiddenWindowCount = Math.max(
     0,
     allMeasuredWindows(provider).filter(isMeteredWindow).length - windows.length,
