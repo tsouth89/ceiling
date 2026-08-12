@@ -1,4 +1,5 @@
 import type React from "react";
+import { cloneElement, isValidElement } from "react";
 
 import { Dropdown } from "./Dropdown";
 
@@ -118,11 +119,13 @@ export function TextInput({
   placeholder,
   onChange,
   disabled,
+  ariaLabel,
 }: {
   value: string;
   placeholder?: string;
   onChange: (v: string) => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <input
@@ -130,6 +133,7 @@ export function TextInput({
       className="text-input"
       value={value}
       placeholder={placeholder}
+      aria-label={ariaLabel}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     />
@@ -137,6 +141,23 @@ export function TextInput({
 }
 
 // ── field row ────────────────────────────────────────────────────────
+
+// Controls in this file that accept an `ariaLabel` prop and forward it to
+// the underlying element as `aria-label`. Field only auto-wires its label
+// into these (or into a bare native element) — other custom children (e.g.
+// ShortcutCapture) manage their own accessible name and are left alone.
+const CONTROLS_WITH_ARIA_LABEL: unknown[] = [Toggle, Select, NumberInput, TextInput];
+
+// Native elements whose role accepts an accessible name. `aria-label` is
+// prohibited on a bare `<div>` or `<span>`, whose implicit `generic` role does
+// not support naming, and GeneralTab wraps two Fields around a layout `<div>`.
+// Injecting there would emit invalid ARIA that assistive technology discards,
+// without naming the button or toggle inside it.
+const NAMEABLE_HOST_ELEMENTS = ["input", "select", "textarea", "button"];
+
+function isNameableHostElement(type: unknown): type is string {
+  return typeof type === "string" && NAMEABLE_HOST_ELEMENTS.includes(type);
+}
 
 export function Field({
   label,
@@ -149,16 +170,33 @@ export function Field({
   children: React.ReactNode;
   leading?: boolean;
 }) {
+  // Wire the row's visible label into the control it wraps so every control
+  // built with Field has a reachable accessible name, without stomping on a
+  // name the caller already gave it explicitly (an `ariaLabel`/`aria-label`,
+  // or - for `Toggle` - its own wrapping `label`, which already supplies one).
+  let control = children;
+  if (isValidElement<{ ariaLabel?: string; label?: string; "aria-label"?: string }>(children)) {
+    if (isNameableHostElement(children.type)) {
+      if (!children.props["aria-label"] && !children.props.label) {
+        control = cloneElement(children, { "aria-label": label });
+      }
+    } else if (CONTROLS_WITH_ARIA_LABEL.includes(children.type)) {
+      if (!children.props.ariaLabel && !children.props.label) {
+        control = cloneElement(children, { ariaLabel: label });
+      }
+    }
+  }
+
   return (
     <div className={`settings-field${leading ? " settings-field--leading" : ""}`}>
-      {leading && <div className="settings-field__control">{children}</div>}
+      {leading && <div className="settings-field__control">{control}</div>}
       <div className="settings-field__text">
         <span className="settings-field__label">{label}</span>
         {description && (
           <span className="settings-field__desc">{description}</span>
         )}
       </div>
-      {!leading && <div className="settings-field__control">{children}</div>}
+      {!leading && <div className="settings-field__control">{control}</div>}
     </div>
   );
 }
