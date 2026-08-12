@@ -531,23 +531,34 @@ fn placement_outcome(
         .collect::<Vec<_>>();
 
     // Lane 1 (Widgets→Start), exactly today's policy, always preferred.
-    let gap = best_gap(lane1_left, lane1_right, &band_obstacles, minimum_width).or_else(|| {
-        // No qualifying gap in lane 1 — e.g. Start pinned at the taskbar's
-        // left edge (stock "Taskbar alignment = Left", or Windhawk's "Start
-        // button always on left"). Try a second lane between Start and the
-        // tray, with the same obstacle verification.
-        let lane2_left = start.right.saturating_add(8);
-        let lane2_right = landmarks
-            .tray
-            .filter(|tray| overlaps_taskbar_band(*tray))
-            .map(|tray| tray.left.saturating_sub(8))
-            // Secondary taskbars can omit TrayNotifyWnd.
-            .unwrap_or_else(|| bounds.right.saturating_sub(8));
-        if lane2_right <= lane2_left {
-            return None;
+    let gap = match best_gap(lane1_left, lane1_right, &band_obstacles, minimum_width) {
+        Some(gap) => Some(gap),
+        None => {
+            // No qualifying gap in lane 1 — e.g. Start pinned at the
+            // taskbar's left edge (stock "Taskbar alignment = Left", or
+            // Windhawk's "Start button always on left"). Try a second lane
+            // between Start and the tray, with the same obstacle
+            // verification.
+            let lane2_left = start.right.saturating_add(8);
+            let lane2_right = match landmarks.tray {
+                // A tray rect off the taskbar band is stale (mid layout or
+                // DPI change) — wait for a clean pass instead of letting a
+                // garbage rect widen the lane over the tray's true
+                // position. Same policy as an off-band Start or Widgets.
+                Some(tray) if !overlaps_taskbar_band(tray) => {
+                    return PlacementOutcome::TransientLandmarks;
+                }
+                Some(tray) => tray.left.saturating_sub(8),
+                // Secondary taskbars can omit TrayNotifyWnd.
+                None => bounds.right.saturating_sub(8),
+            };
+            if lane2_right <= lane2_left {
+                None
+            } else {
+                best_gap(lane2_left, lane2_right, &band_obstacles, minimum_width)
+            }
         }
-        best_gap(lane2_left, lane2_right, &band_obstacles, minimum_width)
-    });
+    };
     let Some((gap_left, gap_right)) = gap else {
         return PlacementOutcome::VerifiedNoFit;
     };
@@ -2452,13 +2463,10 @@ mod tests {
         assert_eq!(placement.width, 312);
     }
 
-    /// This is the test that closes #261: stock Windows 11 "Taskbar
-    /// alignment = Left" (or Windhawk's "Start button always on left") pins
-    /// Start at the taskbar's left edge, starving lane 1 (its right edge
-    /// goes negative). The widget now falls into lane 2, between Start and
-    /// the tray, centered in the verified gap after the last icon.
-    #[test]
-    fn left_aligned_start_falls_back_to_the_tray_lane() {
+    /// Left-aligned-Start fixture shared by the lane-2 fallback tests:
+    /// Start pinned at the taskbar's left edge (lane 1's right edge goes
+    /// negative), one icon-row obstacle at 56..700, tray as given.
+    fn left_aligned_taskbar(tray: Option<Rect>) -> (TaskbarLayout, TaskbarLandmarks) {
         let taskbar = layout(
             Rect {
                 left: 0,
@@ -2481,13 +2489,24 @@ mod tests {
                 right: 48,
                 bottom: 1080,
             }),
-            tray: Some(Rect {
-                left: 1700,
-                top: 1032,
-                right: 1920,
-                bottom: 1080,
-            }),
+            tray,
         };
+        (taskbar, landmarks)
+    }
+
+    /// This is the test that closes #261: stock Windows 11 "Taskbar
+    /// alignment = Left" (or Windhawk's "Start button always on left") pins
+    /// Start at the taskbar's left edge, starving lane 1 (its right edge
+    /// goes negative). The widget now falls into lane 2, between Start and
+    /// the tray, centered in the verified gap after the last icon.
+    #[test]
+    fn left_aligned_start_falls_back_to_the_tray_lane() {
+        let (taskbar, landmarks) = left_aligned_taskbar(Some(Rect {
+            left: 1700,
+            top: 1032,
+            right: 1920,
+            bottom: 1080,
+        }));
 
         let placement =
             child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit after the icons");
@@ -2500,30 +2519,7 @@ mod tests {
     /// edge falls back to the taskbar's own right edge.
     #[test]
     fn missing_tray_landmark_falls_back_to_the_taskbar_right_edge() {
-        let taskbar = layout(
-            Rect {
-                left: 0,
-                top: 1032,
-                right: 1920,
-                bottom: 1080,
-            },
-            vec![Rect {
-                left: 56,
-                top: 1032,
-                right: 700,
-                bottom: 1080,
-            }],
-        );
-        let landmarks = TaskbarLandmarks {
-            widgets: None,
-            start: Some(Rect {
-                left: 0,
-                top: 1032,
-                right: 48,
-                bottom: 1080,
-            }),
-            tray: None,
-        };
+        let (taskbar, landmarks) = left_aligned_taskbar(None);
 
         let placement =
             child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit after the icons");
@@ -2531,46 +2527,52 @@ mod tests {
         assert_eq!(placement.width, 312);
     }
 
-    /// A tray rect present but off the taskbar band (stale, or copied from a
-    /// differently-positioned taskbar) must be treated exactly like a
-    /// missing tray: fall back to the taskbar's own right edge.
+    /// A tray rect present but off the taskbar band is stale (mid layout or
+    /// DPI change). Treating it as "missing" would widen lane 2 over the
+    /// tray's true position, so it reports transient instead — the same
+    /// policy as an off-band Start or Widgets rect — and the next watchdog
+    /// pass retries with fresh rects.
     #[test]
-    fn tray_rect_failing_the_band_check_is_treated_as_missing() {
-        let taskbar = layout(
-            Rect {
-                left: 0,
-                top: 1032,
-                right: 1920,
-                bottom: 1080,
-            },
-            vec![Rect {
-                left: 56,
-                top: 1032,
-                right: 700,
-                bottom: 1080,
-            }],
-        );
-        let landmarks = TaskbarLandmarks {
-            widgets: None,
-            start: Some(Rect {
-                left: 0,
-                top: 1032,
-                right: 48,
-                bottom: 1080,
-            }),
-            // Off-band: entirely above the taskbar's top edge.
-            tray: Some(Rect {
-                left: 1700,
-                top: 0,
-                right: 1920,
-                bottom: 40,
-            }),
-        };
+    fn tray_rect_failing_the_band_check_is_transient() {
+        // Off-band: entirely above the taskbar's top edge.
+        let (taskbar, landmarks) = left_aligned_taskbar(Some(Rect {
+            left: 1700,
+            top: 0,
+            right: 1920,
+            bottom: 40,
+        }));
 
-        let placement =
-            child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit after the icons");
-        assert_eq!(placement.x, 1154);
-        assert_eq!(placement.width, 312);
+        assert_eq!(
+            placement_outcome(&taskbar, landmarks, 3),
+            PlacementOutcome::TransientLandmarks
+        );
+    }
+
+    /// Documents a deliberately-kept pre-existing corner: when UIA reports
+    /// the Widgets button at or right of Start, the sanity guard still
+    /// treats the geometry as transient and lane 2 is never consulted —
+    /// even when it has a verified gap. Changing that guard would alter
+    /// lane-1 semantics and is out of scope for the #261 fix; this test
+    /// pins the current behavior so a future change is a conscious one.
+    #[test]
+    fn widgets_reported_right_of_start_stays_transient_without_fallback() {
+        let (taskbar, mut landmarks) = left_aligned_taskbar(Some(Rect {
+            left: 1700,
+            top: 1032,
+            right: 1920,
+            bottom: 1080,
+        }));
+        landmarks.widgets = Some(Rect {
+            left: 56,
+            top: 1032,
+            right: 104,
+            bottom: 1080,
+        });
+
+        assert_eq!(
+            placement_outcome(&taskbar, landmarks, 3),
+            PlacementOutcome::TransientLandmarks
+        );
     }
 
     /// Centered alignment (today's common case): lane 1 has ample room and a
