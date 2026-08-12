@@ -8,7 +8,7 @@ import {
   activePromoInclusions,
   providerGlanceStatus,
   resetCreditsAvailable,
-  codexResetCredits,
+  bankedResetCredits,
   calmPresentation,
   formatShortDuration,
   stripAmountLabel,
@@ -631,18 +631,22 @@ describe("capacityPresentation", () => {
     expect(resetCreditsAvailable(provider({ resetCreditsAvailable: 0 }))).toBe(0);
   });
 
-  it("exposes Codex banked resets only for Codex, including the zero state", () => {
-    // Codex is the only provider with banked resets, so the persistent
-    // indicator stays Codex-scoped and shows even when the count is zero.
+  it("exposes banked resets only for Codex and Grok, including the zero state", () => {
     expect(
-      codexResetCredits(provider({ providerId: "codex", resetCreditsAvailable: 0 })),
+      bankedResetCredits(provider({ providerId: "codex", resetCreditsAvailable: 0 })),
     ).toBe(0);
     expect(
-      codexResetCredits(provider({ providerId: "codex", resetCreditsAvailable: 3 })),
+      bankedResetCredits(provider({ providerId: "codex", resetCreditsAvailable: 3 })),
     ).toBe(3);
-    // Another provider reporting the field must never light up the Codex chip.
     expect(
-      codexResetCredits(provider({ providerId: "cursor", resetCreditsAvailable: 2 })),
+      bankedResetCredits(provider({ providerId: "grok", resetCreditsAvailable: 0 })),
+    ).toBe(0);
+    expect(
+      bankedResetCredits(provider({ providerId: "grok", resetCreditsAvailable: 1 })),
+    ).toBe(1);
+    // Another provider reporting the field must never light up the chip.
+    expect(
+      bankedResetCredits(provider({ providerId: "cursor", resetCreditsAvailable: 2 })),
     ).toBeNull();
   });
 
