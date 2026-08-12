@@ -827,13 +827,45 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
 ///
 /// A successful empty response is a known zero. Tokens missing an id or whose
 /// `validity_end` is in the past are ignored, matching grok.com's own filter.
+/// A grpc-web trailer with a non-zero status is an RPC failure, not a zero.
 fn parse_remaining_resets(data: &[u8]) -> Result<u32, ProviderError> {
+    validate_grpc_trailers(data)?;
     let now = Utc::now();
     let mut count = 0u32;
     for frame in grpc_web_data_frames(data) {
         count = count.saturating_add(count_reset_tokens(&frame, now));
     }
     Ok(count)
+}
+
+fn validate_grpc_trailers(data: &[u8]) -> Result<(), ProviderError> {
+    for trailer in grpc_web_trailer_frames(data) {
+        if let Some(status) = grpc_status_from_trailer_block(&trailer)
+            && status != 0
+        {
+            if status == 16 {
+                return Err(ProviderError::AuthRequired);
+            }
+            return Err(ProviderError::Other(format!(
+                "Grok RPC failed with status {status}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn grpc_status_from_trailer_block(block: &[u8]) -> Option<u16> {
+    let text = std::str::from_utf8(block).ok()?;
+    for line in text.split(['\r', '\n']) {
+        let line = line.trim();
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("grpc-status") {
+            return value.trim().parse().ok();
+        }
+    }
+    None
 }
 
 fn count_reset_tokens(data: &[u8], now: DateTime<Utc>) -> u32 {
@@ -959,6 +991,14 @@ fn proto_fields(data: &[u8]) -> Vec<ProtoField<'_>> {
 }
 
 fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
+    grpc_web_frames(data, false)
+}
+
+fn grpc_web_trailer_frames(data: &[u8]) -> Vec<Vec<u8>> {
+    grpc_web_frames(data, true)
+}
+
+fn grpc_web_frames(data: &[u8], trailers: bool) -> Vec<Vec<u8>> {
     let mut frames = Vec::new();
     let mut index = 0;
     while index + 5 <= data.len() {
@@ -972,7 +1012,7 @@ fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
         if end > data.len() {
             break;
         }
-        if flags & 0x80 == 0 {
+        if (flags & 0x80 != 0) == trailers {
             frames.push(data[start..end].to_vec());
         }
         index = end;
@@ -1258,6 +1298,19 @@ mod tests {
     fn remaining_resets_empty_payload_is_a_known_zero() {
         assert_eq!(parse_remaining_resets(&[]).unwrap(), 0);
         assert_eq!(parse_remaining_resets(&grpc_frame(&[])).unwrap(), 0);
+        let ok_empty = [grpc_frame(&[]), grpc_trailer(0)].concat();
+        assert_eq!(parse_remaining_resets(&ok_empty).unwrap(), 0);
+    }
+
+    #[test]
+    fn remaining_resets_rpc_error_trailer_is_not_a_known_zero() {
+        // grpc-web errors are HTTP 200 plus a trailer status. Empty data
+        // frames would look like a successful zero if the trailer is ignored.
+        assert!(parse_remaining_resets(&grpc_trailer(13)).is_err());
+        assert!(matches!(
+            parse_remaining_resets(&grpc_trailer(16)),
+            Err(ProviderError::AuthRequired)
+        ));
     }
 
     #[test]
@@ -1305,7 +1358,15 @@ mod tests {
     }
 
     fn grpc_frame(payload: &[u8]) -> Vec<u8> {
-        let mut frame = vec![0];
+        grpc_web_frame(0, payload)
+    }
+
+    fn grpc_trailer(status: u16) -> Vec<u8> {
+        grpc_web_frame(0x80, format!("grpc-status: {status}\r\n").as_bytes())
+    }
+
+    fn grpc_web_frame(flags: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![flags];
         frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         frame.extend_from_slice(payload);
         frame
