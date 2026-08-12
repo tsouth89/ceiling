@@ -502,13 +502,23 @@ fn placement_outcome(
         return PlacementOutcome::TransientLandmarks;
     }
 
+    // Lane 1's left boundary. `None` means lane 1 doesn't exist: with
+    // "Taskbar alignment = Left" and Windows Widgets enabled, Windows
+    // renders the Widgets entry by the tray, so UIA reports it at or right
+    // of Start permanently — that is real geometry, not a mid-animation
+    // state, and treating it as transient froze a stale widget in place
+    // while never consulting lane 2.
     let lane1_left = if let Some(widgets) = landmarks.widgets {
-        if !overlaps_taskbar_band(widgets) || widgets.right >= start.left {
+        if !overlaps_taskbar_band(widgets) {
             return PlacementOutcome::TransientLandmarks;
         }
-        widgets.right.saturating_add(8)
+        if widgets.right >= start.left {
+            None
+        } else {
+            Some(widgets.right.saturating_add(8))
+        }
     } else {
-        bounds.left.saturating_add(8)
+        Some(bounds.left.saturating_add(8))
     };
     let lane1_right = start.left.saturating_sub(8);
     let Ok(provider_count) = i32::try_from(provider_count) else {
@@ -523,15 +533,24 @@ fn placement_outcome(
     // UI Automation can expose Search, Task View, or pinned-app buttons in
     // either lane. Never cover one: use only a fully empty sub-gap and hide
     // the widget if no verified gap can fit in either lane.
-    let band_obstacles = layout
+    let mut band_obstacles = layout
         .obstacles
         .iter()
         .copied()
         .filter(|rect| rect.top < bounds.bottom && rect.bottom > bounds.top)
         .collect::<Vec<_>>();
+    if lane1_left.is_none()
+        && let Some(widgets) = landmarks.widgets
+    {
+        // The Widgets entry sits in lane 2's territory when it isn't a
+        // lane-1 boundary — it's a real control there; never cover it.
+        band_obstacles.push(widgets);
+    }
 
     // Lane 1 (Widgets→Start), exactly today's policy, always preferred.
-    let gap = match best_gap(lane1_left, lane1_right, &band_obstacles, minimum_width) {
+    let gap = match lane1_left
+        .and_then(|lane1_left| best_gap(lane1_left, lane1_right, &band_obstacles, minimum_width))
+    {
         Some(gap) => Some(gap),
         None => {
             // No qualifying gap in lane 1 — e.g. Start pinned at the
@@ -2548,14 +2567,15 @@ mod tests {
         );
     }
 
-    /// Documents a deliberately-kept pre-existing corner: when UIA reports
-    /// the Widgets button at or right of Start, the sanity guard still
-    /// treats the geometry as transient and lane 2 is never consulted —
-    /// even when it has a verified gap. Changing that guard would alter
-    /// lane-1 semantics and is out of scope for the #261 fix; this test
-    /// pins the current behavior so a future change is a conscious one.
+    /// Stock Windows 11 with "Taskbar alignment = Left" AND Windows Widgets
+    /// enabled (the default): Windows renders the Widgets entry by the
+    /// tray, so UIA reports it right of Start — permanent geometry, not a
+    /// mid-animation state. The old guard returned TransientLandmarks here
+    /// forever, freezing a stale widget in place. Now lane 1 is simply
+    /// absent, lane 2 places the widget, and the Widgets entry joins the
+    /// obstacle set so the verified gap ends before it.
     #[test]
-    fn widgets_reported_right_of_start_stays_transient_without_fallback() {
+    fn widgets_rendered_by_the_tray_becomes_a_lane_two_obstacle() {
         let (taskbar, mut landmarks) = left_aligned_taskbar(Some(Rect {
             left: 1700,
             top: 1032,
@@ -2563,10 +2583,31 @@ mod tests {
             bottom: 1080,
         }));
         landmarks.widgets = Some(Rect {
-            left: 56,
+            left: 1600,
             top: 1032,
-            right: 104,
+            right: 1690,
             bottom: 1080,
+        });
+
+        let placement = child_placement(&taskbar, landmarks, 3)
+            .expect("lane 2 should fit between the icons and the Widgets entry");
+        // Largest verified gap is (708, 1600): after the icon row, ending at
+        // the Widgets entry — not at the tray. Centered 312px within it.
+        assert_eq!(placement.x, 998);
+        assert_eq!(placement.width, 312);
+        assert!(placement.x + placement.width <= 1600);
+    }
+
+    /// An off-band Widgets rect is still stale-landmark territory — the
+    /// transient policy is unchanged for genuinely garbage rects.
+    #[test]
+    fn off_band_widgets_rect_is_still_transient() {
+        let (taskbar, mut landmarks) = left_aligned_taskbar(None);
+        landmarks.widgets = Some(Rect {
+            left: 0,
+            top: 0,
+            right: 48,
+            bottom: 40,
         });
 
         assert_eq!(
