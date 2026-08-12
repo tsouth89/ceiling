@@ -9,13 +9,16 @@ vi.mock("./settings/providers/sections/charts/ChartsSection", () => ({
   ChartsSection: ({
     providerId,
     accountEmail,
+    accountId,
   }: {
     providerId: string;
     accountEmail?: string | null;
+    accountId?: string | null;
   }) => (
     <div data-testid="charts-section">
       {providerId}
       {accountEmail ? `:${accountEmail}` : ""}
+      {accountId ? `:${accountId}` : ""}
     </div>
   ),
 }));
@@ -158,9 +161,7 @@ describe("ChartsPanel", () => {
     expect(panel.getAttribute("aria-labelledby")).toBe(compare.id);
   });
 
-  it("collapses a provider's accounts into a single tab, since local logs are machine-wide", () => {
-    // Local activity is scanned from logs that carry no account identity, so
-    // two Codex accounts must not present as two tabs of separable data.
+  it("shows and selects each configured account independently", () => {
     const { getAllByRole, getByTestId } = render(
       <ChartsPanel
         providers={[
@@ -181,13 +182,35 @@ describe("ChartsPanel", () => {
       />,
     );
 
-    // One Codex tab, one Claude tab, plus Compare — not one tab per account.
-    expect(getAllByRole("tab", { name: /Codex/ })).toHaveLength(1);
+    expect(getAllByRole("tab", { name: /Codex/ })).toHaveLength(2);
     expect(getAllByRole("tab", { name: /Claude/ })).toHaveLength(1);
 
-    fireEvent.click(getAllByRole("tab", { name: /Codex/ })[0]);
-    // One Codex section, not one per account.
-    expect(getByTestId("charts-section").textContent).toMatch(/^codex/);
+    fireEvent.click(getAllByRole("tab", { name: /Codex — bts@cssi\.us/ })[0]);
+    expect(getByTestId("charts-section").textContent).toBe(
+      "codex:bts@cssi.us:acct-work",
+    );
+  });
+
+  it("masks account identities in tabs when personal info is hidden", () => {
+    const { getAllByRole } = render(
+      <ChartsPanel
+        hideEmail
+        providers={[
+          provider({
+            accountId: "acct-personal",
+            accountEmail: "personal@example.com",
+          }),
+          provider({
+            accountId: "acct-work",
+            accountEmail: "work@example.com",
+          }),
+        ]}
+      />,
+    );
+
+    const names = getAllByRole("tab").map((tab) => tab.textContent ?? "");
+    expect(names.join(" ")).not.toContain("personal@example.com");
+    expect(names.join(" ")).not.toContain("work@example.com");
   });
 
   it("omits the selector when only one provider is supported", () => {

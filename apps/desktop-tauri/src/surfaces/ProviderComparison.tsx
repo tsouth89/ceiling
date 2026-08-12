@@ -101,7 +101,6 @@ export default function ProviderComparison({ providers }: {
     const windows = providerLocalUsageWindows(provider);
     return JSON.stringify({
       providerId: provider.providerId,
-      accountEmail: provider.accountEmail ?? null,
       windows,
     });
   }).join("|"), [providers]);
@@ -125,11 +124,14 @@ export default function ProviderComparison({ providers }: {
         const results = await Promise.all(providers.map(async (provider) => {
           const result = await getProviderChartData(
             provider.providerId,
-            provider.accountEmail ?? undefined,
-            provider.accountId ?? undefined,
+            // Compare is the one explicit all-account view. Omitting account
+            // identity selects the machine-wide scope instead of silently
+            // choosing whichever account represents the provider tab.
+            undefined,
+            undefined,
             providerLocalUsageWindows(provider),
             undefined,
-            provider.accountOrganization ?? undefined,
+            undefined,
           );
           return [provider.providerId, result] as const;
         }));

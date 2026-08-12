@@ -8,7 +8,8 @@ import { ChartsSection } from "./settings/providers/sections/charts/ChartsSectio
 import ProviderComparison from "./ProviderComparison";
 import { TotalApiValueCard } from "../components/TotalApiValueCard";
 import {
-  onePerProvider,
+  accountIdentityLabel,
+  hasMultipleAccounts,
   representativeForProvider,
 } from "../lib/providerRow";
 
@@ -32,17 +33,17 @@ export function chartSectionKey(provider: ProviderUsageSnapshot): string {
  */
 export default function ChartsPanel({
   providers,
+  hideEmail = false,
 }: {
   providers: ProviderUsageSnapshot[];
+  hideEmail?: boolean;
 }) {
   const { t } = useLocale();
 
   const supported = useMemo(
     () =>
-      onePerProvider(
-        providers.filter(
-          (p) => providerSupportsChartData(p.providerId) && !p.error,
-        ),
+      providers.filter(
+        (p) => providerSupportsChartData(p.providerId) && !p.error,
       ),
     [providers],
   );
@@ -65,19 +66,19 @@ export default function ChartsPanel({
     }
     setSelectedId((prev) =>
       prev &&
-      (supported.some((p) => p.providerId === prev) ||
+      (supported.some((p) => chartSectionKey(p) === prev) ||
         (prev === COMPARE_ID && comparisonProviders))
         ? prev
         : comparisonProviders
           ? COMPARE_ID
-          : supported[0].providerId,
+          : chartSectionKey(supported[0]),
     );
   }, [supported, comparisonProviders]);
 
   const tabIds = useMemo(
     () => [
       ...(comparisonProviders ? [COMPARE_ID] : []),
-      ...supported.map((p) => p.providerId),
+      ...supported.map(chartSectionKey),
     ],
     [comparisonProviders, supported],
   );
@@ -87,7 +88,9 @@ export default function ChartsPanel({
   // the body actually renders: the first supported provider.
   const activeTabId = comparing
     ? COMPARE_ID
-    : (tabIds.includes(selectedId ?? "") ? selectedId : supported[0]?.providerId) ?? null;
+    : (tabIds.includes(selectedId ?? "")
+        ? selectedId
+        : supported[0] && chartSectionKey(supported[0])) ?? null;
 
   // Manual activation: picking a provider remounts ChartsSection, which loads
   // that provider's history. Arrowing across the strip should not fire a load
@@ -115,7 +118,7 @@ export default function ChartsPanel({
   }
 
   const selected =
-    supported.find((p) => p.providerId === selectedId) ?? supported[0];
+    supported.find((p) => chartSectionKey(p) === activeTabId) ?? supported[0];
   const tabCount = tabIds.length;
 
   return (
@@ -136,15 +139,19 @@ export default function ChartsPanel({
             </button>
           )}
           {supported.map((p) => {
-            const isActive = p.providerId === activeTabId;
+            const tabId = chartSectionKey(p);
+            const isActive = tabId === activeTabId;
+            const accountName = hasMultipleAccounts(supported, p.providerId)
+              ? accountIdentityLabel(p, hideEmail) ?? p.accountId ?? "Account"
+              : null;
             return (
               <button
-                key={p.providerId}
+                key={tabId}
                 type="button"
-                {...getTabProps(p.providerId)}
+                {...getTabProps(tabId)}
                 className="charts-provider-tab"
                 data-active={isActive ? "true" : "false"}
-                onClick={() => setSelectedId(p.providerId)}
+                onClick={() => setSelectedId(tabId)}
               >
                 <ProviderIcon
                   providerId={p.providerId}
@@ -152,7 +159,7 @@ export default function ChartsPanel({
                   className="charts-provider-tab__icon"
                   title={p.displayName}
                 />
-                <span>{p.displayName}</span>
+                <span>{accountName ? `${p.displayName} — ${accountName}` : p.displayName}</span>
               </button>
             );
           })}

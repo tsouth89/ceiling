@@ -531,6 +531,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
     setEnriching(
       cached !== null &&
       !cached.localUsage &&
+      cached.localUsageScope !== "unresolvedAccount" &&
       ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
     );
     setFailed(false);
@@ -553,7 +554,9 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
           chartDataCache.set(cacheKey, d);
           setData(d);
           setEnriching(
-            !d.localUsage && ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
+            !d.localUsage &&
+            d.localUsageScope !== "unresolvedAccount" &&
+            ["codex", "claude", "grok"].includes(providerId.toLowerCase()),
           );
           setLoading(false);
         }
@@ -613,9 +616,14 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
     if (
       !data ||
       data.localUsage ||
+      data.localUsageScope === "unresolvedAccount" ||
       !["codex", "claude", "grok"].includes(providerId.toLowerCase())
     ) {
-      if (data?.localUsage || !["codex", "claude", "grok"].includes(providerId.toLowerCase())) {
+      if (
+        data?.localUsage ||
+        data?.localUsageScope === "unresolvedAccount" ||
+        !["codex", "claude", "grok"].includes(providerId.toLowerCase())
+      ) {
         setEnriching(false);
       }
       return;

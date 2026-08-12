@@ -24,10 +24,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-// Version 7: Codex priority/fast (2x) pricing for local cost. Entries cached at
-// version 6 still hold pre-2x standard dollars for reset windows, so the
-// Weekly window card could show ~half of the API-value ring after 1.5.13.
-const CHART_CACHE_VERSION: u8 = 8;
+// Version 9: account scope is part of every chart cache key. Older entries can
+// conflate an unresolved account with the machine-wide scan.
+const CHART_CACHE_VERSION: u8 = 9;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,7 +339,83 @@ pub struct ProviderChartData {
     pub usage_breakdown: Vec<DailyUsageBreakdown>,
     pub local_usage: Option<ProviderLocalUsageSummary>,
     #[serde(default)]
+    pub local_usage_scope: LocalUsageScope,
+    #[serde(default)]
     pub quota_history: Vec<crate::usage_history::UsageHistoryPoint>,
+}
+
+/// Scope used for local transcript-derived usage in this response.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LocalUsageScope {
+    #[default]
+    MachineWide,
+    Account,
+    UnresolvedAccount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChartAccountScope {
+    MachineWide,
+    Account {
+        account_id: String,
+        config_dir: PathBuf,
+    },
+    UnresolvedAccount {
+        account_id: String,
+    },
+}
+
+impl ChartAccountScope {
+    fn kind(&self) -> LocalUsageScope {
+        match self {
+            Self::MachineWide => LocalUsageScope::MachineWide,
+            Self::Account { .. } => LocalUsageScope::Account,
+            Self::UnresolvedAccount { .. } => LocalUsageScope::UnresolvedAccount,
+        }
+    }
+
+    fn cache_identity(
+        &self,
+        _account_email: Option<&str>,
+        _account_organization: Option<&str>,
+    ) -> String {
+        match self {
+            Self::Account { account_id, .. } => {
+                format!("account:{}", account_id.trim().to_ascii_lowercase())
+            }
+            Self::UnresolvedAccount { account_id } => {
+                format!("unresolved:{}", account_id.trim().to_ascii_lowercase())
+            }
+            // The underlying scan covers the whole machine, so requests from a
+            // provider tab and the identity-free Compare view must share it.
+            Self::MachineWide => "machine".to_string(),
+        }
+    }
+}
+
+fn resolve_chart_account_scope(
+    provider_id: &str,
+    account_id: Option<&str>,
+    accounts: &codexbar::core::ConfiguredAccounts,
+) -> ChartAccountScope {
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return ChartAccountScope::MachineWide;
+    };
+    let Some(provider) = codexbar::core::ProviderId::from_cli_name(provider_id) else {
+        return ChartAccountScope::UnresolvedAccount {
+            account_id: account_id.to_string(),
+        };
+    };
+    match accounts.config_dir_for_account(provider, account_id) {
+        Some(config_dir) => ChartAccountScope::Account {
+            account_id: account_id.to_string(),
+            config_dir,
+        },
+        None => ChartAccountScope::UnresolvedAccount {
+            account_id: account_id.to_string(),
+        },
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -395,21 +470,21 @@ pub async fn get_provider_chart_data(
     account_organization: Option<String>,
 ) -> ProviderChartData {
     let usage_windows = usage_windows.unwrap_or_default();
-    // An account's local logs live under its own config directory. Scanning
-    // that directory is what makes its charts distinct from another account's;
-    // without it every account shows the same machine-wide totals.
-    let scoped_home = account_id.as_deref().and_then(|id| {
-        codexbar::core::ProviderId::from_cli_name(&provider_id).and_then(|provider| {
-            codexbar::core::ConfiguredAccounts::load().config_dir_for_account(provider, id)
-        })
-    });
+    // Missing account identity is the intentional machine-wide case. A supplied
+    // id that no longer resolves must stay distinct: silently treating it as
+    // machine-wide can display another account's activity under the stale id.
+    let account_scope = resolve_chart_account_scope(
+        &provider_id,
+        account_id.as_deref(),
+        &codexbar::core::ConfiguredAccounts::load(),
+    );
     let cache_key = chart_cache_key(
         &provider_id,
         account_email.as_deref(),
-        account_id.as_deref(),
         account_organization.as_deref(),
         source_label.as_deref(),
         &usage_windows,
+        &account_scope,
     );
     if let Some(mut cached) = cached_chart_data(&cache_key) {
         cached.data.quota_history = crate::usage_history::provider_history(
@@ -427,7 +502,7 @@ pub async fn get_provider_chart_data(
                 account_email,
                 account_id,
                 account_organization,
-                scoped_home.clone(),
+                account_scope.clone(),
                 usage_windows,
             );
         }
@@ -441,7 +516,8 @@ pub async fn get_provider_chart_data(
         account_organization.as_deref(),
     );
     if !quota_history.is_empty() {
-        let mut immediate = ProviderChartData::empty(provider_id.clone());
+        let mut immediate =
+            ProviderChartData::empty_with_scope(provider_id.clone(), account_scope.kind());
         immediate.quota_history = quota_history;
         schedule_chart_cache_refresh(
             cache_key,
@@ -449,13 +525,14 @@ pub async fn get_provider_chart_data(
             account_email,
             account_id,
             account_organization,
-            scoped_home.clone(),
+            account_scope.clone(),
             usage_windows,
         );
         return immediate;
     }
 
     let fallback_provider_id = provider_id.clone();
+    let fallback_scope = account_scope.kind();
     let cancel = register_chart_scan(&provider_id);
     let result = tauri::async_runtime::spawn_blocking(move || {
         build_provider_chart_data_with_cancel(
@@ -463,7 +540,7 @@ pub async fn get_provider_chart_data(
             account_email,
             account_id,
             account_organization,
-            scoped_home,
+            account_scope,
             usage_windows,
             Some(cancel),
         )
@@ -471,7 +548,7 @@ pub async fn get_provider_chart_data(
     .await
     .unwrap_or_else(|err| {
         tracing::warn!("Provider chart data worker failed: {}", err);
-        ProviderChartData::empty(fallback_provider_id)
+        ProviderChartData::empty_with_scope(fallback_provider_id, fallback_scope)
     });
     store_chart_data(cache_key, result.clone());
     result
@@ -512,7 +589,7 @@ fn schedule_chart_cache_refresh(
     account_email: Option<String>,
     account_id: Option<String>,
     account_organization: Option<String>,
-    scoped_home: Option<std::path::PathBuf>,
+    account_scope: ChartAccountScope,
     usage_windows: Vec<LocalUsageWindowRequest>,
 ) {
     let Ok(mut active) = active_cache_refreshes().lock() else {
@@ -531,7 +608,7 @@ fn schedule_chart_cache_refresh(
                 account_email,
                 account_id,
                 account_organization,
-                scoped_home,
+                account_scope,
                 usage_windows,
                 None,
             )
@@ -550,26 +627,12 @@ fn schedule_chart_cache_refresh(
 fn chart_cache_key(
     provider_id: &str,
     account_email: Option<&str>,
-    account_id: Option<&str>,
     account_organization: Option<&str>,
     source_label: Option<&str>,
     usage_windows: &[LocalUsageWindowRequest],
+    account_scope: &ChartAccountScope,
 ) -> String {
-    let identity = account_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            account_email
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .or_else(|| {
-            account_organization
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or("anonymous")
-        .to_ascii_lowercase();
+    let identity = account_scope.cache_identity(account_email, account_organization);
     let windows = usage_windows
         .iter()
         .map(|window| format!("{}:{}:{}", window.id, window.starts_at, window.ends_at))
@@ -1161,7 +1224,7 @@ pub(crate) fn build_provider_chart_data(
         account_email,
         None,
         None,
-        None,
+        ChartAccountScope::MachineWide,
         Vec::new(),
         None,
     )
@@ -1172,7 +1235,7 @@ fn build_provider_chart_data_with_cancel(
     account_email: Option<String>,
     account_id: Option<String>,
     account_organization: Option<String>,
-    scoped_home: Option<std::path::PathBuf>,
+    account_scope: ChartAccountScope,
     usage_window_requests: Vec<LocalUsageWindowRequest>,
     cancel: Option<Arc<AtomicBool>>,
 ) -> ProviderChartData {
@@ -1197,7 +1260,15 @@ fn build_provider_chart_data_with_cancel(
     // reset-aligned windows so one pass over the logs serves both.
     let (comparison_specs, comparison_windows) = comparison_period_specs(Utc::now());
     usage_windows.extend(comparison_windows);
-    let report = get_cost_usage_report_scoped(&provider_id, 30, &usage_windows, scoped_home);
+    let report = match &account_scope {
+        ChartAccountScope::MachineWide => {
+            get_cost_usage_report_scoped(&provider_id, 30, &usage_windows, None)
+        }
+        ChartAccountScope::Account { config_dir, .. } => {
+            get_cost_usage_report_scoped(&provider_id, 30, &usage_windows, Some(config_dir.clone()))
+        }
+        ChartAccountScope::UnresolvedAccount { .. } => None,
+    };
     let cost_history: Vec<DailyCostPoint> = report
         .as_ref()
         .map(|report| {
@@ -1220,17 +1291,19 @@ fn build_provider_chart_data_with_cancel(
     {
         None
     } else {
-        report
-            .as_ref()
-            .and_then(|report| {
-                local_usage_summary_from_report(
-                    &provider_id,
-                    report,
-                    &usage_window_requests,
-                    &comparison_specs,
-                )
-            })
-            .or_else(|| load_local_usage_summary_cached(&provider_id, cancel.as_deref()))
+        let scoped_summary = report.as_ref().and_then(|report| {
+            local_usage_summary_from_report(
+                &provider_id,
+                report,
+                &usage_window_requests,
+                &comparison_specs,
+            )
+        });
+        if scoped_summary.is_some() || account_scope != ChartAccountScope::MachineWide {
+            scoped_summary
+        } else {
+            load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+        }
     };
 
     ProviderChartData {
@@ -1245,6 +1318,7 @@ fn build_provider_chart_data_with_cancel(
         credits_history,
         usage_breakdown,
         local_usage,
+        local_usage_scope: account_scope.kind(),
     }
 }
 
@@ -1349,13 +1423,14 @@ fn local_usage_summary_from_report(
 }
 
 impl ProviderChartData {
-    fn empty(provider_id: String) -> Self {
+    fn empty_with_scope(provider_id: String, local_usage_scope: LocalUsageScope) -> Self {
         Self {
             provider_id,
             cost_history: Vec::new(),
             credits_history: Vec::new(),
             usage_breakdown: Vec::new(),
             local_usage: None,
+            local_usage_scope,
             quota_history: Vec::new(),
         }
     }
@@ -1846,19 +1921,22 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
-        LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary, api_value_period,
-        chart_cache_key, comparison_period_specs, cost_fetch_failure_allows_early_retry,
-        daily_series_from_report, effort_breakdown, format_cost_csv, local_midnight_in_tz,
-        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
-        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
-        pricing_coverage_tokens, project_breakdown, spend_budget_period_details, token_breakdown,
-        token_cost_cache_is_fresh,
+        ChartAccountScope, CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage,
+        LocalProjectCost, LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary,
+        api_value_period, chart_cache_key, comparison_period_specs,
+        cost_fetch_failure_allows_early_retry, daily_series_from_report, effort_breakdown,
+        format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        local_yesterday_window_utc, localized_estimate_note, model_breakdown,
+        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
+        project_breakdown, resolve_chart_account_scope, spend_budget_period_details,
+        token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
+    use codexbar::core::{CodexIdentity, ConfiguredAccounts, DirectoryAccount};
     use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
     use codexbar::settings::Language;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1866,21 +1944,94 @@ mod tests {
         let personal = chart_cache_key(
             "codex",
             Some("shared@example.com"),
-            Some("acct-personal"),
             None,
             Some("oauth"),
             &[],
+            &ChartAccountScope::Account {
+                account_id: "acct-personal".into(),
+                config_dir: PathBuf::from("personal"),
+            },
         );
         let work = chart_cache_key(
             "codex",
             Some("shared@example.com"),
-            Some("acct-work"),
             None,
             Some("oauth"),
             &[],
+            &ChartAccountScope::Account {
+                account_id: "acct-work".into(),
+                config_dir: PathBuf::from("work"),
+            },
         );
 
         assert_ne!(personal, work);
+    }
+
+    #[test]
+    fn machine_wide_cache_identity_matches_charts_panel_and_compare() {
+        let scope = ChartAccountScope::MachineWide;
+        let charts_panel_with_email = scope.cache_identity(Some("person@example.com"), None);
+        let charts_panel_with_organization =
+            scope.cache_identity(None, Some("Example Organization"));
+        let compare = scope.cache_identity(None, None);
+
+        assert_eq!(compare, "machine");
+        assert_eq!(charts_panel_with_email, compare);
+        assert_eq!(charts_panel_with_organization, compare);
+    }
+
+    #[test]
+    fn chart_scope_distinguishes_machine_wide_resolved_and_stale_accounts() {
+        let mut accounts = ConfiguredAccounts::default();
+        let account_id = accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("work".into()),
+                PathBuf::from("/homes/work"),
+            ))
+            .to_string();
+
+        assert_eq!(
+            resolve_chart_account_scope("codex", None, &accounts),
+            ChartAccountScope::MachineWide
+        );
+        assert_eq!(
+            resolve_chart_account_scope("codex", Some(&account_id), &accounts),
+            ChartAccountScope::Account {
+                account_id: account_id.clone(),
+                config_dir: PathBuf::from("/homes/work"),
+            }
+        );
+        assert_eq!(
+            resolve_chart_account_scope("codex", Some("removed-account"), &accounts),
+            ChartAccountScope::UnresolvedAccount {
+                account_id: "removed-account".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn unresolved_account_never_shares_the_machine_wide_chart_cache() {
+        let machine = chart_cache_key(
+            "claude",
+            Some("same@example.com"),
+            None,
+            Some("oauth"),
+            &[],
+            &ChartAccountScope::MachineWide,
+        );
+        let unresolved = chart_cache_key(
+            "claude",
+            Some("same@example.com"),
+            None,
+            Some("oauth"),
+            &[],
+            &ChartAccountScope::UnresolvedAccount {
+                account_id: "stale-id".into(),
+            },
+        );
+
+        assert_ne!(machine, unresolved);
     }
 
     #[test]

@@ -860,6 +860,8 @@ export interface ProviderChartData {
   creditsHistory: DailyCostPoint[];
   usageBreakdown: DailyUsageBreakdown[];
   localUsage: ProviderLocalUsageSummary | null;
+  /** Explicit transcript scope; absent only for payloads cached by older builds. */
+  localUsageScope?: "machineWide" | "account" | "unresolvedAccount";
   quotaHistory: UsageHistoryPoint[];
 }
 
