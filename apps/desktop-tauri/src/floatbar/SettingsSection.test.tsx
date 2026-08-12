@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingsSnapshot, TaskbarWidgetStatus } from "../types/bridge";
 import FloatBarSettingsSection from "./SettingsSection";
@@ -14,8 +14,12 @@ vi.mock("../lib/tauri", () => ({
   getTaskbarWidgetStatus: () => getTaskbarWidgetStatus(),
 }));
 
+const statusListeners = vi.hoisted(() => [] as Array<() => void>);
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn((event: string, handler: () => void) => {
+    if (event === "taskbar-widget-status-changed") statusListeners.push(handler);
+    return Promise.resolve(() => {});
+  }),
 }));
 
 const settings = {
@@ -44,6 +48,7 @@ describe("FloatBar settings", () => {
   beforeEach(() => {
     getDirectoryAccounts.mockResolvedValue([]);
     getTaskbarWidgetStatus.mockResolvedValue({ kind: "active", taskbars: 1 });
+    statusListeners.length = 0;
   });
 
   it("does not offer the legacy API-equivalent cost toggle", () => {
@@ -265,6 +270,41 @@ describe("FloatBar settings", () => {
     );
 
     expect(await screen.findByRole("status")).toHaveTextContent(text);
+  });
+
+  it("ignores a stale status read that resolves after a newer one", async () => {
+    let resolveFirst!: (status: TaskbarWidgetStatus) => void;
+    let resolveSecond!: (status: TaskbarWidgetStatus) => void;
+    getTaskbarWidgetStatus.mockClear();
+    getTaskbarWidgetStatus
+      .mockReturnValueOnce(
+        new Promise<TaskbarWidgetStatus>((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<TaskbarWidgetStatus>((resolve) => {
+          resolveSecond = resolve;
+        }),
+      );
+    render(
+      <FloatBarSettingsSection settings={settings} saving={false} set={vi.fn()} />,
+    );
+
+    await waitFor(() => expect(statusListeners.length).toBeGreaterThan(0));
+    statusListeners[0]();
+    await waitFor(() => expect(getTaskbarWidgetStatus).toHaveBeenCalledTimes(2));
+
+    resolveSecond({ kind: "noFit" });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Hidden: no free space on the taskbar between Widgets and Start.",
+    );
+
+    resolveFirst({ kind: "active", taskbars: 3 });
+    await act(async () => {});
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Hidden: no free space on the taskbar between Widgets and Start.",
+    );
   });
 
   it("hides the status row when the native widget is disabled or unavailable", async () => {

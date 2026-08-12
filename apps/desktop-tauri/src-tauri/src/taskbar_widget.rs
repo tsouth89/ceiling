@@ -618,6 +618,19 @@ fn should_report_waiting_landmarks(streak: u32) -> bool {
     streak >= TRANSIENT_LANDMARKS_DEBOUNCE
 }
 
+/// Status to report while `apply_state` keeps the widget hidden. Native mode
+/// on without a configured provider must surface as `NoProviders`: the
+/// Settings row hides `Disabled`, which would leave that misconfiguration
+/// silent — the exact failure mode this status exists to prevent.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn status_when_hidden(native_mode_enabled: bool) -> TaskbarWidgetStatus {
+    if native_mode_enabled {
+        TaskbarWidgetStatus::NoProviders
+    } else {
+        TaskbarWidgetStatus::Disabled
+    }
+}
+
 pub fn install(app: &tauri::AppHandle) {
     #[cfg(windows)]
     windows_host::install(app);
@@ -752,7 +765,7 @@ mod windows_host {
         } else {
             hide_existing();
             TRANSIENT_STREAK.store(0, Ordering::Release);
-            set_status(app, TaskbarWidgetStatus::Disabled);
+            set_status(app, status_when_hidden(native_mode_enabled(settings)));
         }
     }
 
@@ -2919,6 +2932,12 @@ mod tests {
             status_from_preparation(&Err(PrepareFailure::TransientLandmarks)),
             None
         );
+    }
+
+    #[test]
+    fn hidden_state_reports_no_providers_while_native_mode_is_still_enabled() {
+        assert_eq!(status_when_hidden(true), TaskbarWidgetStatus::NoProviders);
+        assert_eq!(status_when_hidden(false), TaskbarWidgetStatus::Disabled);
     }
 
     #[test]

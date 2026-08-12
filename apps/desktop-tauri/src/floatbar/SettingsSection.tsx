@@ -124,10 +124,14 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
   );
   useEffect(() => {
     let cancelled = false;
+    let latestRequest = 0;
     const refreshTaskbarStatus = () => {
+      const request = ++latestRequest;
       getTaskbarWidgetStatus()
         .then((status) => {
-          if (!cancelled) setTaskbarStatus(status);
+          // Reads race: a re-fetch triggered by a newer status event may
+          // resolve before an older one. Only the latest request may write.
+          if (!cancelled && request === latestRequest) setTaskbarStatus(status);
         })
         .catch(() => {
           // Leave the last known status in place if the read fails.
