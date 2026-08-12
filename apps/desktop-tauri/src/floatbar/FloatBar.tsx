@@ -38,6 +38,7 @@ import {
   constrainingWindow,
   activePromoBoosts,
   calmPresentation,
+  stripAmountLabel,
   type CapacityFreshness,
   type ConstrainingWindow,
 } from "../lib/capacityPresentation";
@@ -173,7 +174,12 @@ function ProviderPill({
   else if (pressureRemaining <= highRemaining) tone = "warn";
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
+  // A lane billed in currency leads with the money. "62%" of a spend cap is not
+  // the number you act on — the amount owed is (SBS-191).
+  const spend = hero.amount ? stripAmountLabel(hero.amount, showAsUsed) : null;
+  const label = provider.error
+    ? "—"
+    : (spend ?? `${Math.round(displayPercent)}%`);
   const resetText = useFormattedResetTime(
     hero.window.resetsAt,
     hero.window.resetDescription,
