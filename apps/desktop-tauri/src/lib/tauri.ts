@@ -32,6 +32,7 @@ import type {
   RegionOption,
   SafeDiagnostics,
   CredentialStorageStatus,
+  TaskbarWidgetStatus,
   WorkAreaRect,
   AgentSession,
   AgentSessionDiscoveryResult,
@@ -88,6 +89,11 @@ export function dismissTrayPanel(): Promise<void> {
 /** Sample the current Windows taskbar material for the native glance flyout. */
 export function getTaskbarSurfaceColor(): Promise<string | null> {
   return invoke<string | null>("get_taskbar_surface_color");
+}
+
+/** Current native taskbar widget visibility, and why it's hidden if so. */
+export function getTaskbarWidgetStatus(): Promise<TaskbarWidgetStatus> {
+  return invoke<TaskbarWidgetStatus>("get_taskbar_widget_status");
 }
 
 /** Hide the primary dashboard while Ceiling continues running in the tray. */

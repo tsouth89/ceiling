@@ -12,6 +12,13 @@ const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5)
 /// order come from `float_bar_provider_ids` (or enabled providers in display order).
 const MAX_TASKBAR_WIDGET_PROVIDERS: usize = 5;
 
+/// Consecutive transient-landmark misses before the Settings row reports
+/// `WaitingLandmarks`. The watchdog runs every `WATCHDOG_INTERVAL`, so this
+/// is roughly 30s of persistent misses — long enough to ride out Explorer
+/// surfaces (Start, Search, Widgets) opening and closing, short enough to
+/// still feel responsive.
+const TRANSIENT_LANDMARKS_DEBOUNCE: u32 = 6;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChildPlacement {
     x: i32,
@@ -527,6 +534,90 @@ fn placement_outcome(
     })
 }
 
+/// Reported native taskbar widget visibility, mirrored to the Settings UI so
+/// a hidden widget is never silent. Declared outside `windows_host` so
+/// `get_taskbar_widget_status` compiles (and returns `Unavailable`) on
+/// non-Windows targets.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TaskbarWidgetStatus {
+    /// Not Windows; the native widget does not exist on this platform.
+    #[cfg_attr(windows, allow(dead_code))]
+    Unavailable,
+    /// Native taskbar mode is turned off in Settings.
+    Disabled,
+    NoProviders,
+    WaitingLandmarks,
+    NoFit,
+    Active {
+        taskbars: usize,
+    },
+}
+
+/// Why [`prepare_widgets`] could not produce placements this pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrepareFailure {
+    Disabled,
+    NoProviders,
+    /// No taskbar produced a placement, but none was conclusively rejected
+    /// either — Start/Widgets/Search were transiently unavailable to UI
+    /// Automation. Distinct from [`PlacementOutcome::VerifiedNoFit`], which
+    /// is conclusive.
+    TransientLandmarks,
+}
+
+impl std::fmt::Display for PrepareFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PrepareFailure::Disabled => "Native taskbar mode is disabled",
+            PrepareFailure::NoProviders => {
+                "No enabled providers are available for the taskbar widget"
+            }
+            PrepareFailure::TransientLandmarks => {
+                "No verified taskbar lane can fit the native widget"
+            }
+        })
+    }
+}
+
+struct PreparedWidget {
+    taskbar: isize,
+    placement: ChildPlacement,
+}
+
+struct PreparedWidgets {
+    widgets: Vec<PreparedWidget>,
+    rejected_taskbars: Vec<isize>,
+    all_monitors: bool,
+    model: WidgetModel,
+}
+
+/// Pure mapping from a preparation attempt to the status it implies, absent
+/// debounce. `None` for [`PrepareFailure::TransientLandmarks`]: the caller
+/// must consult the debounce counter (see [`should_report_waiting_landmarks`])
+/// to decide whether to keep the previous status or surface
+/// `WaitingLandmarks`.
+fn status_from_preparation(
+    prepared: &Result<PreparedWidgets, PrepareFailure>,
+) -> Option<TaskbarWidgetStatus> {
+    match prepared {
+        Ok(prepared) if !prepared.widgets.is_empty() => Some(TaskbarWidgetStatus::Active {
+            taskbars: prepared.widgets.len(),
+        }),
+        Ok(_) => Some(TaskbarWidgetStatus::NoFit),
+        Err(PrepareFailure::Disabled) => Some(TaskbarWidgetStatus::Disabled),
+        Err(PrepareFailure::NoProviders) => Some(TaskbarWidgetStatus::NoProviders),
+        Err(PrepareFailure::TransientLandmarks) => None,
+    }
+}
+
+/// Whether `streak` consecutive transient-landmark misses should flip the
+/// status to `WaitingLandmarks`. Pure so the debounce threshold is testable
+/// without touching the watchdog's global counter.
+fn should_report_waiting_landmarks(streak: u32) -> bool {
+    streak >= TRANSIENT_LANDMARKS_DEBOUNCE
+}
+
 pub fn install(app: &tauri::AppHandle) {
     #[cfg(windows)]
     windows_host::install(app);
@@ -552,12 +643,23 @@ pub fn get_taskbar_surface_color() -> Option<String> {
     None
 }
 
+/// Current native taskbar widget visibility, mirrored from the same
+/// watchdog pass that shows or hides the strip, so the Settings row and the
+/// strip never disagree.
+#[tauri::command]
+pub fn get_taskbar_widget_status() -> TaskbarWidgetStatus {
+    #[cfg(windows)]
+    return windows_host::current_status();
+    #[cfg(not(windows))]
+    TaskbarWidgetStatus::Unavailable
+}
+
 #[cfg(windows)]
 mod windows_host {
     use super::*;
     use std::sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     };
     use tauri::Manager;
 
@@ -612,24 +714,14 @@ mod windows_host {
         model: WidgetModel,
     }
 
-    struct PreparedWidget {
-        taskbar: isize,
-        placement: ChildPlacement,
-    }
-
-    struct PreparedWidgets {
-        widgets: Vec<PreparedWidget>,
-        rejected_taskbars: Vec<isize>,
-        all_monitors: bool,
-        model: WidgetModel,
-    }
-
     static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
     static HOST: OnceLock<Mutex<HostState>> = OnceLock::new();
     static CLASS_REGISTERED: OnceLock<bool> = OnceLock::new();
     static RECOVERY_PENDING: AtomicBool = AtomicBool::new(false);
     static HOVER_TRACKING: AtomicBool = AtomicBool::new(false);
     static HOVER_FLYOUT_OPEN: AtomicBool = AtomicBool::new(false);
+    static STATUS: Mutex<TaskbarWidgetStatus> = Mutex::new(TaskbarWidgetStatus::Disabled);
+    static TRANSIENT_STREAK: AtomicU32 = AtomicU32::new(0);
 
     pub(super) fn install(app: &tauri::AppHandle) {
         let _ = APP.set(app.clone());
@@ -659,6 +751,31 @@ mod windows_host {
             schedule_recovery(app);
         } else {
             hide_existing();
+            TRANSIENT_STREAK.store(0, Ordering::Release);
+            set_status(app, TaskbarWidgetStatus::Disabled);
+        }
+    }
+
+    pub(super) fn current_status() -> TaskbarWidgetStatus {
+        STATUS
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or(TaskbarWidgetStatus::Disabled)
+    }
+
+    /// Persist the widget status and emit `taskbar-widget-status-changed`
+    /// only when it actually changes, so Settings doesn't re-fetch on every
+    /// watchdog tick.
+    fn set_status(app: &tauri::AppHandle, status: TaskbarWidgetStatus) {
+        let changed = match STATUS.lock() {
+            Ok(mut guard) if *guard != status => {
+                *guard = status;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            crate::events::emit_taskbar_widget_status_changed(app);
         }
     }
 
@@ -716,20 +833,43 @@ mod windows_host {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             let prepared = tauri::async_runtime::spawn_blocking(prepare_widgets).await;
+            let status_app = app.clone();
             let dispatched = app.run_on_main_thread(move || {
                 match prepared {
-                    Ok(Ok(prepared)) => {
-                        if let Err(error) = apply_prepared(prepared) {
-                            tracing::warn!(%error, "Native taskbar widget proof update failed");
+                    Ok(outcome) => {
+                        let status = status_from_preparation(&outcome);
+                        match outcome {
+                            Ok(prepared) => {
+                                TRANSIENT_STREAK.store(0, Ordering::Release);
+                                if let Err(error) = apply_prepared(prepared) {
+                                    tracing::warn!(%error, "Native taskbar widget proof update failed");
+                                } else if let Some(status) = status {
+                                    set_status(&status_app, status);
+                                }
+                            }
+                            Err(error @ PrepareFailure::TransientLandmarks) => {
+                                // Start, Search, Widgets, and other Explorer surfaces
+                                // can temporarily make UI Automation landmarks
+                                // unavailable. Keep the last known healthy child
+                                // visible rather than turning a transient discovery
+                                // miss into user-visible flicker and a slow
+                                // rediscovery cycle; only report `WaitingLandmarks`
+                                // after several consecutive misses so a single
+                                // missed watchdog tick doesn't flash the Settings row.
+                                let streak = TRANSIENT_STREAK.fetch_add(1, Ordering::AcqRel) + 1;
+                                tracing::debug!(%error, streak, "Native taskbar widget recovery deferred; preserving the current widget");
+                                if should_report_waiting_landmarks(streak) {
+                                    set_status(&status_app, TaskbarWidgetStatus::WaitingLandmarks);
+                                }
+                            }
+                            Err(error) => {
+                                TRANSIENT_STREAK.store(0, Ordering::Release);
+                                tracing::debug!(%error, "Native taskbar widget recovery deferred; preserving the current widget");
+                                if let Some(status) = status {
+                                    set_status(&status_app, status);
+                                }
+                            }
                         }
-                    }
-                    Ok(Err(error)) => {
-                        // Start, Search, Widgets, and other Explorer surfaces can
-                        // temporarily make UI Automation landmarks unavailable.
-                        // Keep the last known healthy child visible rather than
-                        // turning a transient discovery miss into user-visible
-                        // flicker and a slow rediscovery cycle.
-                        tracing::debug!(%error, "Native taskbar widget recovery deferred; preserving the current widget");
                     }
                     Err(error) => {
                         tracing::warn!(%error, "Native taskbar discovery worker failed; preserving the current widget");
@@ -743,14 +883,23 @@ mod windows_host {
         });
     }
 
-    fn prepare_widgets() -> Result<PreparedWidgets, String> {
+    fn prepare_widgets() -> Result<PreparedWidgets, PrepareFailure> {
         let settings = codexbar::settings::Settings::load();
         if !native_mode_enabled(&settings) {
-            return Err("Native taskbar mode is disabled".to_string());
+            return Err(PrepareFailure::Disabled);
         }
-        let model = widget_model()?;
+        let model = match widget_model() {
+            Ok(model) => model,
+            Err(error) => {
+                // App-handle/state-poisoning failures are internal and rare;
+                // fold them into the transient-landmarks bucket rather than
+                // adding a fourth status the UI cannot act on differently.
+                tracing::debug!(%error, "Native taskbar widget model unavailable this pass");
+                return Err(PrepareFailure::TransientLandmarks);
+            }
+        };
         if model.providers.is_empty() {
-            return Err("No enabled providers are available for the taskbar widget".to_string());
+            return Err(PrepareFailure::NoProviders);
         }
         let layouts = crate::floatbar::taskbar::discover_all();
         let (_, rejected_taskbars, placements) = taskbar_placements(
@@ -763,7 +912,7 @@ mod windows_host {
             .map(|(taskbar, placement)| PreparedWidget { taskbar, placement })
             .collect::<Vec<_>>();
         if widgets.is_empty() && rejected_taskbars.is_empty() {
-            return Err("No verified taskbar lane can fit the native widget".to_string());
+            return Err(PrepareFailure::TransientLandmarks);
         }
 
         Ok(PreparedWidgets {
@@ -2711,5 +2860,80 @@ mod tests {
         let cache = [calm_session, busy_session];
         let picked = select_strip_snapshot(cache.iter(), "claude", None).unwrap();
         assert_eq!(picked.account_id.as_deref(), Some("a"));
+    }
+
+    fn prepared_widgets(taskbar_count: usize, rejected_count: usize) -> PreparedWidgets {
+        PreparedWidgets {
+            widgets: (0..taskbar_count)
+                .map(|index| PreparedWidget {
+                    taskbar: index as isize + 1,
+                    placement: ChildPlacement {
+                        x: 0,
+                        y: 0,
+                        width: 104,
+                        height: 48,
+                    },
+                })
+                .collect(),
+            rejected_taskbars: (0..rejected_count)
+                .map(|index| index as isize + 100)
+                .collect(),
+            all_monitors: false,
+            model: WidgetModel::default(),
+        }
+    }
+
+    #[test]
+    fn status_from_preparation_reports_active_with_the_taskbar_count() {
+        let result: Result<PreparedWidgets, PrepareFailure> = Ok(prepared_widgets(2, 0));
+        assert_eq!(
+            status_from_preparation(&result),
+            Some(TaskbarWidgetStatus::Active { taskbars: 2 })
+        );
+    }
+
+    #[test]
+    fn status_from_preparation_reports_no_fit_when_every_taskbar_is_rejected() {
+        let result: Result<PreparedWidgets, PrepareFailure> = Ok(prepared_widgets(0, 1));
+        assert_eq!(
+            status_from_preparation(&result),
+            Some(TaskbarWidgetStatus::NoFit)
+        );
+    }
+
+    #[test]
+    fn status_from_preparation_maps_disabled_and_no_providers() {
+        assert_eq!(
+            status_from_preparation(&Err(PrepareFailure::Disabled)),
+            Some(TaskbarWidgetStatus::Disabled)
+        );
+        assert_eq!(
+            status_from_preparation(&Err(PrepareFailure::NoProviders)),
+            Some(TaskbarWidgetStatus::NoProviders)
+        );
+    }
+
+    #[test]
+    fn status_from_preparation_defers_transient_landmarks_to_the_debounce() {
+        assert_eq!(
+            status_from_preparation(&Err(PrepareFailure::TransientLandmarks)),
+            None
+        );
+    }
+
+    #[test]
+    fn debounce_waits_for_six_consecutive_transient_misses() {
+        for streak in 1..TRANSIENT_LANDMARKS_DEBOUNCE {
+            assert!(
+                !should_report_waiting_landmarks(streak),
+                "streak {streak} should not yet report WaitingLandmarks"
+            );
+        }
+        assert!(should_report_waiting_landmarks(
+            TRANSIENT_LANDMARKS_DEBOUNCE
+        ));
+        assert!(should_report_waiting_landmarks(
+            TRANSIENT_LANDMARKS_DEBOUNCE + 1
+        ));
     }
 }

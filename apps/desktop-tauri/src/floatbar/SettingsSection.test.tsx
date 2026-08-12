@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SettingsSnapshot } from "../types/bridge";
+import type { SettingsSnapshot, TaskbarWidgetStatus } from "../types/bridge";
 import FloatBarSettingsSection from "./SettingsSection";
 
 vi.mock("../hooks/useLocale", () => ({
@@ -8,8 +8,14 @@ vi.mock("../hooks/useLocale", () => ({
 }));
 
 const getDirectoryAccounts = vi.fn();
+const getTaskbarWidgetStatus = vi.fn();
 vi.mock("../lib/tauri", () => ({
   getDirectoryAccounts: () => getDirectoryAccounts(),
+  getTaskbarWidgetStatus: () => getTaskbarWidgetStatus(),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
 const settings = {
@@ -37,6 +43,7 @@ const settings = {
 describe("FloatBar settings", () => {
   beforeEach(() => {
     getDirectoryAccounts.mockResolvedValue([]);
+    getTaskbarWidgetStatus.mockResolvedValue({ kind: "active", taskbars: 1 });
   });
 
   it("does not offer the legacy API-equivalent cost toggle", () => {
@@ -228,5 +235,62 @@ describe("FloatBar settings", () => {
     expect(
       screen.queryByRole("combobox", { name: /Taskbar account/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows how many taskbars the widget is active on", async () => {
+    getTaskbarWidgetStatus.mockResolvedValue({ kind: "active", taskbars: 2 });
+    render(
+      <FloatBarSettingsSection settings={settings} saving={false} set={vi.fn()} />,
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Shown on 2 taskbars.",
+    );
+  });
+
+  it.each<[TaskbarWidgetStatus, string]>([
+    [
+      { kind: "noFit" },
+      "Hidden: no free space on the taskbar between Widgets and Start.",
+    ],
+    [
+      { kind: "waitingLandmarks" },
+      "Waiting for taskbar landmarks (Start button not found). A taskbar mod may be interfering.",
+    ],
+    [{ kind: "noProviders" }, "No enabled providers to show."],
+  ])("surfaces the %o status as a status row", async (status, text) => {
+    getTaskbarWidgetStatus.mockResolvedValue(status);
+    render(
+      <FloatBarSettingsSection settings={settings} saving={false} set={vi.fn()} />,
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent(text);
+  });
+
+  it("hides the status row when the native widget is disabled or unavailable", async () => {
+    for (const status of [{ kind: "disabled" }, { kind: "unavailable" }] as const) {
+      getTaskbarWidgetStatus.mockResolvedValue(status);
+      const { unmount } = render(
+        <FloatBarSettingsSection settings={settings} saving={false} set={vi.fn()} />,
+      );
+
+      await waitFor(() => expect(getTaskbarWidgetStatus).toHaveBeenCalled());
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("hides the status row when Show Taskbar Usage is off, even with an active status", async () => {
+    getTaskbarWidgetStatus.mockResolvedValue({ kind: "active", taskbars: 1 });
+    render(
+      <FloatBarSettingsSection
+        settings={{ ...settings, taskbarWidgetEnabled: false }}
+        saving={false}
+        set={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(getTaskbarWidgetStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

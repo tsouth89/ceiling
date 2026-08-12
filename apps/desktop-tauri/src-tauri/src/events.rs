@@ -22,6 +22,7 @@ pub const PROOF_STATE_CHANGED: &str = "proof-state-changed";
 pub const LOCALE_CHANGED: &str = "locale-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
 pub const CAPACITY_EVENT: &str = "capacity-event";
+pub const TASKBAR_WIDGET_STATUS_CHANGED: &str = "taskbar-widget-status-changed";
 
 // ── Payloads ─────────────────────────────────────────────────────────
 
@@ -151,6 +152,13 @@ pub fn emit_proof_state_changed(app: &AppHandle, payload: &ProofStatePayload) {
 /// do not share React state. Payload-less; listeners re-fetch the snapshot.
 pub fn emit_settings_changed(app: &AppHandle) {
     let _ = app.emit(SETTINGS_CHANGED, ());
+}
+
+/// Broadcast when the native taskbar widget's visibility status changes
+/// (shown, or hidden and why), so the Settings row updates live instead of
+/// polling. Payload-less; listeners re-fetch via `get_taskbar_widget_status`.
+pub fn emit_taskbar_widget_status_changed(app: &AppHandle) {
+    let _ = app.emit(TASKBAR_WIDGET_STATUS_CHANGED, ());
 }
 
 pub fn emit_capacity_event(

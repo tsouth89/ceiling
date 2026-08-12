@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Field, Select, Toggle } from "../components/FormControls";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
-import { getDirectoryAccounts } from "../lib/tauri";
+import { getDirectoryAccounts, getTaskbarWidgetStatus } from "../lib/tauri";
 import type {
   FloatBarOrientation,
   FloatBarContrast,
@@ -10,6 +11,7 @@ import type {
   ProviderAccountsBridge,
   SettingsSnapshot,
   SettingsUpdate,
+  TaskbarWidgetStatus,
 } from "../types/bridge";
 
 /** Keep in sync with `MAX_TASKBAR_WIDGET_PROVIDERS` in taskbar_widget.rs. */
@@ -33,6 +35,24 @@ interface Props {
 
 function providerLabel(id: string): string {
   return PROVIDER_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** English status line for the Taskbar Usage group; `null` hides the row. */
+function taskbarWidgetStatusMessage(status: TaskbarWidgetStatus | null): string | null {
+  if (!status) return null;
+  switch (status.kind) {
+    case "active":
+      return `Shown on ${status.taskbars} taskbar${status.taskbars === 1 ? "" : "s"}.`;
+    case "noFit":
+      return "Hidden: no free space on the taskbar between Widgets and Start.";
+    case "waitingLandmarks":
+      return "Waiting for taskbar landmarks (Start button not found). A taskbar mod may be interfering.";
+    case "noProviders":
+      return "No enabled providers to show.";
+    case "disabled":
+    case "unavailable":
+      return null;
+  }
 }
 
 /** Providers that can track more than one config-directory account. */
@@ -98,6 +118,40 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
   const commitScale = () => {
     scale.commit(scale.draft, (value) => set({ floatBarScale: value }));
   };
+
+  const [taskbarStatus, setTaskbarStatus] = useState<TaskbarWidgetStatus | null>(
+    null,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    const refreshTaskbarStatus = () => {
+      getTaskbarWidgetStatus()
+        .then((status) => {
+          if (!cancelled) setTaskbarStatus(status);
+        })
+        .catch(() => {
+          // Leave the last known status in place if the read fails.
+        });
+    };
+    refreshTaskbarStatus();
+
+    let unlisten: (() => void) | undefined;
+    Promise.resolve(listen("taskbar-widget-status-changed", refreshTaskbarStatus))
+      .then((fn) => {
+        if (cancelled) {
+          fn?.();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+  const taskbarStatusMessage = taskbarWidgetStatusMessage(taskbarStatus);
 
   const [directoryAccounts, setDirectoryAccounts] = useState<
     ProviderAccountsBridge[]
@@ -242,6 +296,11 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
               onChange={(v) => set({ floatBarShowResetInline: v })}
             />
           </Field>
+          {settings.taskbarWidgetEnabled && taskbarStatusMessage && (
+            <p className="settings-section__hint" role="status">
+              {taskbarStatusMessage}
+            </p>
+          )}
         </div>
 
         <div className="settings-section__group taskbar-provider-picker">
