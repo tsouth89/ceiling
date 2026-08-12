@@ -12,6 +12,7 @@ import type {
 
 interface Props {
   providerId: string;
+  onCredentialsChanged?: () => void;
 }
 
 /**
@@ -19,7 +20,7 @@ interface Props {
  * Mirrors the upstream macOS layout where credential management lives next
  * to provider state instead of in a separate tab.
  */
-export function ApiKeySection({ providerId }: Props) {
+export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
   const [info, setInfo] = useState<ApiKeyProviderInfoBridge | null>(null);
   const [saved, setSaved] = useState<ApiKeyInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -89,6 +90,7 @@ export function ApiKeySection({ providerId }: Props) {
       setEditing(false);
       setEditValue("");
       setEditLabel("");
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -102,6 +104,7 @@ export function ApiKeySection({ providerId }: Props) {
     try {
       const next = await removeApiKey(providerId);
       setSaved(next.find((k) => k.providerId === providerId) ?? null);
+      onCredentialsChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

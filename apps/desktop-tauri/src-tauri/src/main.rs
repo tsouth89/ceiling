@@ -147,6 +147,7 @@ fn main() {
             commands::set_surface_mode,
             commands::dismiss_tray_panel,
             taskbar_widget::get_taskbar_surface_color,
+            taskbar_widget::get_taskbar_widget_status,
             commands::hide_dashboard_to_tray,
             commands::begin_flyout_gesture,
             commands::end_flyout_gesture,

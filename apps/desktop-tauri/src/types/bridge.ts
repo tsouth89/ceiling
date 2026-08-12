@@ -207,6 +207,15 @@ export interface ProviderSummary {
   order: number;
 }
 
+/** Mirrors the Rust `TaskbarWidgetStatus` enum (`taskbar_widget.rs`). */
+export type TaskbarWidgetStatus =
+  | { kind: "unavailable" }
+  | { kind: "disabled" }
+  | { kind: "noProviders" }
+  | { kind: "waitingLandmarks" }
+  | { kind: "noFit" }
+  | { kind: "active"; taskbars: number };
+
 export interface SettingsSnapshot {
   enabledProviders: string[];
   providerOrder?: string[];
@@ -570,10 +579,17 @@ export interface SafeDiagnostics {
   refreshIntervalSecs: number;
 }
 
+export interface CredentialStoreStatus {
+  /** Protection/readability of the shared file for every provider. */
+  fileStatus: string;
+  /** Provider-specific entry presence; null when the file cannot be decoded. */
+  hasProviderCredentials: boolean | null;
+}
+
 export interface CredentialStorageStatus {
-  manualCookies: string;
-  apiKeys: string;
-  tokenAccounts: string;
+  manualCookies: CredentialStoreStatus;
+  apiKeys: CredentialStoreStatus;
+  tokenAccounts: CredentialStoreStatus;
 }
 
 // ── Update state types ───────────────────────────────────────────────

@@ -11,6 +11,7 @@ commands.allow = [
   "set_surface_mode",
   "dismiss_tray_panel",
   "get_taskbar_surface_color",
+  "get_taskbar_widget_status",
   "hide_dashboard_to_tray",
   "begin_flyout_gesture",
   "end_flyout_gesture",
