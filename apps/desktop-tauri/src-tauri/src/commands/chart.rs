@@ -377,8 +377,8 @@ impl ChartAccountScope {
 
     fn cache_identity(
         &self,
-        account_email: Option<&str>,
-        account_organization: Option<&str>,
+        _account_email: Option<&str>,
+        _account_organization: Option<&str>,
     ) -> String {
         match self {
             Self::Account { account_id, .. } => {
@@ -387,19 +387,9 @@ impl ChartAccountScope {
             Self::UnresolvedAccount { account_id } => {
                 format!("unresolved:{}", account_id.trim().to_ascii_lowercase())
             }
-            Self::MachineWide => {
-                let identity = account_email
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| {
-                        account_organization
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                    })
-                    .unwrap_or("anonymous")
-                    .to_ascii_lowercase();
-                format!("machine:{identity}")
-            }
+            // The underlying scan covers the whole machine, so requests from a
+            // provider tab and the identity-free Compare view must share it.
+            Self::MachineWide => "machine".to_string(),
         }
     }
 }
@@ -1975,6 +1965,19 @@ mod tests {
         );
 
         assert_ne!(personal, work);
+    }
+
+    #[test]
+    fn machine_wide_cache_identity_matches_charts_panel_and_compare() {
+        let scope = ChartAccountScope::MachineWide;
+        let charts_panel_with_email = scope.cache_identity(Some("person@example.com"), None);
+        let charts_panel_with_organization =
+            scope.cache_identity(None, Some("Example Organization"));
+        let compare = scope.cache_identity(None, None);
+
+        assert_eq!(compare, "machine");
+        assert_eq!(charts_panel_with_email, compare);
+        assert_eq!(charts_panel_with_organization, compare);
     }
 
     #[test]
