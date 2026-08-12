@@ -186,6 +186,43 @@ describe("ActivityTimeline", () => {
     expect(text).not.toContain("Promotional");
   });
 
+  it("reports a currency-billed lane in money rather than percent", () => {
+    // SBS-191: Activity listed On-demand but headlined it "56% used" — the
+    // shape of the bar, not the bill.
+    const { container } = render(
+      <ActivityTimeline
+        providers={[
+          provider({
+            providerId: "cursor",
+            displayName: "Cursor",
+            primary: window(100, 8 * DAY),
+            primaryLabel: "Plan",
+            extraRateWindows: [
+              {
+                id: "cursor-on-demand",
+                title: "On-demand",
+                window: window(62, 8 * DAY),
+                amount: {
+                  used: 1112.92,
+                  limit: 1800,
+                  currencyCode: "USD",
+                  formattedUsed: "$1112.92",
+                  formattedLimit: "$1800.00",
+                },
+              },
+            ],
+          }),
+        ]}
+      />,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("$1112.92 of $1800.00");
+    expect(text).not.toContain("62% used");
+    // Percentage lanes are untouched.
+    expect(text).toContain("100% used");
+  });
+
   it("shows an empty state when nothing is scheduled", () => {
     const providers = [
       provider({ primary: window(30, null), primaryLabel: "Weekly" }),

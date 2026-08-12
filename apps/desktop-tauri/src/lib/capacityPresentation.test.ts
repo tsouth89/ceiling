@@ -11,6 +11,7 @@ import {
   codexResetCredits,
   calmPresentation,
   formatShortDuration,
+  stripAmountLabel,
 } from "./capacityPresentation";
 import type {
   PaceSnapshot,
@@ -643,6 +644,56 @@ describe("capacityPresentation", () => {
     expect(
       codexResetCredits(provider({ providerId: "cursor", resetCreditsAvailable: 2 })),
     ).toBeNull();
+  });
+
+  describe("stripAmountLabel", () => {
+    const capped = {
+      used: 1112.92,
+      limit: 1800,
+      currencyCode: "USD",
+      formattedUsed: "$1112.92",
+      formattedLimit: "$1800.00",
+    };
+
+    it("leads with spend, not the fraction of the cap", () => {
+      expect(stripAmountLabel(capped, true)).toBe("$1112.92");
+    });
+
+    it("reports headroom in currency when showing remaining", () => {
+      expect(stripAmountLabel(capped, false)).toBe("$687.08");
+    });
+
+    it("falls back to spend when on-demand is uncapped", () => {
+      // No denominator means no headroom exists. Blanking here is what hid
+      // spend from uncapped users entirely (SBS-191).
+      expect(
+        stripAmountLabel(
+          {
+            used: 42.5,
+            limit: null,
+            currencyCode: "USD",
+            formattedUsed: "$42.50",
+            formattedLimit: null,
+          },
+          false,
+        ),
+      ).toBe("$42.50");
+    });
+
+    it("keeps non-USD currencies readable", () => {
+      expect(
+        stripAmountLabel(
+          {
+            used: 10,
+            limit: 40,
+            currencyCode: "EUR",
+            formattedUsed: "€10.00",
+            formattedLimit: "€40.00",
+          },
+          false,
+        ),
+      ).toBe("€30.00");
+    });
   });
 
   describe("calmPresentation", () => {
