@@ -256,7 +256,7 @@ describe("FloatBar settings", () => {
   it.each<[TaskbarWidgetStatus, string]>([
     [
       { kind: "noFit" },
-      "Hidden: no free space on the taskbar between Widgets and Start.",
+      "Hidden: no free space on the taskbar.",
     ],
     [
       { kind: "waitingLandmarks" },
@@ -297,13 +297,13 @@ describe("FloatBar settings", () => {
 
     resolveSecond({ kind: "noFit" });
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Hidden: no free space on the taskbar between Widgets and Start.",
+      "Hidden: no free space on the taskbar.",
     );
 
     resolveFirst({ kind: "active", taskbars: 3 });
     await act(async () => {});
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Hidden: no free space on the taskbar between Widgets and Start.",
+      "Hidden: no free space on the taskbar.",
     );
   });
 
