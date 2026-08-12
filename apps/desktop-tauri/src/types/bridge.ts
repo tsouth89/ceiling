@@ -207,6 +207,15 @@ export interface ProviderSummary {
   order: number;
 }
 
+/** Mirrors the Rust `TaskbarWidgetStatus` enum (`taskbar_widget.rs`). */
+export type TaskbarWidgetStatus =
+  | { kind: "unavailable" }
+  | { kind: "disabled" }
+  | { kind: "noProviders" }
+  | { kind: "waitingLandmarks" }
+  | { kind: "noFit" }
+  | { kind: "active"; taskbars: number };
+
 export interface SettingsSnapshot {
   enabledProviders: string[];
   providerOrder?: string[];
