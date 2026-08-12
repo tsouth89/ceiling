@@ -770,25 +770,54 @@ mod windows_host {
     }
 
     pub(super) fn current_status() -> TaskbarWidgetStatus {
+        // A poisoned lock still holds the last stored status. Recover it: a
+        // possibly-stale reading beats reporting `Disabled`, which would hide
+        // the status row — the silent failure this feature exists to prevent.
         STATUS
             .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or(TaskbarWidgetStatus::Disabled)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Persist the widget status and emit `taskbar-widget-status-changed`
     /// only when it actually changes, so Settings doesn't re-fetch on every
     /// watchdog tick.
     fn set_status(app: &tauri::AppHandle, status: TaskbarWidgetStatus) {
-        let changed = match STATUS.lock() {
-            Ok(mut guard) if *guard != status => {
+        let changed = {
+            let mut guard = STATUS
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *guard != status {
                 *guard = status;
                 true
+            } else {
+                false
             }
-            _ => false,
         };
         if changed {
             crate::events::emit_taskbar_widget_status_changed(app);
+        }
+    }
+
+    #[cfg(test)]
+    mod status_lock_tests {
+        use super::*;
+
+        #[test]
+        fn current_status_survives_a_poisoned_lock() {
+            *STATUS
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                TaskbarWidgetStatus::Active { taskbars: 2 };
+            let poisoner = std::thread::spawn(|| {
+                let _guard = STATUS.lock();
+                panic!("poison the status lock");
+            });
+            assert!(poisoner.join().is_err());
+            assert_eq!(
+                current_status(),
+                TaskbarWidgetStatus::Active { taskbars: 2 }
+            );
         }
     }
 
