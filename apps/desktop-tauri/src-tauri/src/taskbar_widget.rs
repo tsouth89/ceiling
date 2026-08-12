@@ -444,6 +444,41 @@ fn child_placement(
     }
 }
 
+/// Largest fully-empty sub-gap of `[lane_left, lane_right]` that is at
+/// least `minimum_width` wide, after removing `obstacles` that fall inside
+/// the lane. `obstacles` is expected to already be filtered to the taskbar
+/// band (top/bottom) by the caller, since that filter doesn't depend on the
+/// lane. Shared by `placement_outcome`'s two lanes so both use the exact
+/// same gap-scan policy.
+fn best_gap(
+    lane_left: i32,
+    lane_right: i32,
+    obstacles: &[crate::floatbar::placement::Rect],
+    minimum_width: i32,
+) -> Option<(i32, i32)> {
+    let mut obstacles = obstacles
+        .iter()
+        .copied()
+        .filter(|rect| rect.right > lane_left && rect.left < lane_right)
+        .collect::<Vec<_>>();
+    obstacles.sort_by_key(|rect| (rect.left, rect.right));
+
+    let mut gap_left = lane_left;
+    let mut gaps = Vec::new();
+    for obstacle in obstacles {
+        let obstacle_left = obstacle.left.max(lane_left);
+        if obstacle_left.saturating_sub(gap_left) >= minimum_width {
+            gaps.push((gap_left, obstacle_left));
+        }
+        gap_left = gap_left.max(obstacle.right.saturating_add(8));
+    }
+    if lane_right.saturating_sub(gap_left) >= minimum_width {
+        gaps.push((gap_left, lane_right));
+    }
+    gaps.into_iter()
+        .max_by_key(|(left, right)| right.saturating_sub(*left))
+}
+
 fn placement_outcome(
     layout: &TaskbarLayout,
     landmarks: TaskbarLandmarks,
@@ -467,7 +502,7 @@ fn placement_outcome(
         return PlacementOutcome::TransientLandmarks;
     }
 
-    let lane_left = if let Some(widgets) = landmarks.widgets {
+    let lane1_left = if let Some(widgets) = landmarks.widgets {
         if !overlaps_taskbar_band(widgets) || widgets.right >= start.left {
             return PlacementOutcome::TransientLandmarks;
         }
@@ -475,7 +510,7 @@ fn placement_outcome(
     } else {
         bounds.left.saturating_add(8)
     };
-    let lane_right = start.left.saturating_sub(8);
+    let lane1_right = start.left.saturating_sub(8);
     let Ok(provider_count) = i32::try_from(provider_count) else {
         return PlacementOutcome::VerifiedNoFit;
     };
@@ -486,37 +521,34 @@ fn placement_outcome(
     let minimum_width = provider_count.saturating_mul(72);
 
     // UI Automation can expose Search, Task View, or pinned-app buttons in
-    // the apparent Widgets-to-Start lane. Never cover one: use only a fully
-    // empty sub-gap and hide the proof if no verified gap can fit.
-    let mut obstacles = layout
+    // either lane. Never cover one: use only a fully empty sub-gap and hide
+    // the widget if no verified gap can fit in either lane.
+    let band_obstacles = layout
         .obstacles
         .iter()
         .copied()
-        .filter(|rect| {
-            rect.top < bounds.bottom
-                && rect.bottom > bounds.top
-                && rect.right > lane_left
-                && rect.left < lane_right
-        })
+        .filter(|rect| rect.top < bounds.bottom && rect.bottom > bounds.top)
         .collect::<Vec<_>>();
-    obstacles.sort_by_key(|rect| (rect.left, rect.right));
 
-    let mut gap_left = lane_left;
-    let mut gaps = Vec::new();
-    for obstacle in obstacles {
-        let obstacle_left = obstacle.left.max(lane_left);
-        if obstacle_left.saturating_sub(gap_left) >= minimum_width {
-            gaps.push((gap_left, obstacle_left));
+    // Lane 1 (Widgets→Start), exactly today's policy, always preferred.
+    let gap = best_gap(lane1_left, lane1_right, &band_obstacles, minimum_width).or_else(|| {
+        // No qualifying gap in lane 1 — e.g. Start pinned at the taskbar's
+        // left edge (stock "Taskbar alignment = Left", or Windhawk's "Start
+        // button always on left"). Try a second lane between Start and the
+        // tray, with the same obstacle verification.
+        let lane2_left = start.right.saturating_add(8);
+        let lane2_right = landmarks
+            .tray
+            .filter(|tray| overlaps_taskbar_band(*tray))
+            .map(|tray| tray.left.saturating_sub(8))
+            // Secondary taskbars can omit TrayNotifyWnd.
+            .unwrap_or_else(|| bounds.right.saturating_sub(8));
+        if lane2_right <= lane2_left {
+            return None;
         }
-        gap_left = gap_left.max(obstacle.right.saturating_add(8));
-    }
-    if lane_right.saturating_sub(gap_left) >= minimum_width {
-        gaps.push((gap_left, lane_right));
-    }
-    let Some((gap_left, gap_right)) = gaps
-        .into_iter()
-        .max_by_key(|(left, right)| right.saturating_sub(*left))
-    else {
+        best_gap(lane2_left, lane2_right, &band_obstacles, minimum_width)
+    });
+    let Some((gap_left, gap_right)) = gap else {
         return PlacementOutcome::VerifiedNoFit;
     };
     let available_width = gap_right.saturating_sub(gap_left);
@@ -2057,6 +2089,7 @@ mod tests {
                     right: -992,
                     bottom: 1080,
                 }),
+                tray: None,
             },
             primary: false,
             ..layout(secondary_bounds, Vec::new())
@@ -2080,6 +2113,7 @@ mod tests {
         TaskbarLandmarks {
             widgets: Some(widgets),
             start: Some(start),
+            tray: None,
         }
     }
 
@@ -2333,6 +2367,7 @@ mod tests {
                     right: 848,
                     bottom: 1080,
                 }),
+                tray: None,
             },
             3,
         )
@@ -2415,6 +2450,363 @@ mod tests {
 
         assert_eq!(placement.x, 454);
         assert_eq!(placement.width, 312);
+    }
+
+    /// This is the test that closes #261: stock Windows 11 "Taskbar
+    /// alignment = Left" (or Windhawk's "Start button always on left") pins
+    /// Start at the taskbar's left edge, starving lane 1 (its right edge
+    /// goes negative). The widget now falls into lane 2, between Start and
+    /// the tray, centered in the verified gap after the last icon.
+    #[test]
+    fn left_aligned_start_falls_back_to_the_tray_lane() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![Rect {
+                left: 56,
+                top: 1032,
+                right: 700,
+                bottom: 1080,
+            }],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: None,
+            start: Some(Rect {
+                left: 0,
+                top: 1032,
+                right: 48,
+                bottom: 1080,
+            }),
+            tray: Some(Rect {
+                left: 1700,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            }),
+        };
+
+        let placement =
+            child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit after the icons");
+        assert_eq!(placement.x, 1044);
+        assert_eq!(placement.width, 312);
+    }
+
+    /// Same left-aligned-Start scenario, but the taskbar has no
+    /// `TrayNotifyWnd` (secondary taskbars can omit it) — lane 2's right
+    /// edge falls back to the taskbar's own right edge.
+    #[test]
+    fn missing_tray_landmark_falls_back_to_the_taskbar_right_edge() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![Rect {
+                left: 56,
+                top: 1032,
+                right: 700,
+                bottom: 1080,
+            }],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: None,
+            start: Some(Rect {
+                left: 0,
+                top: 1032,
+                right: 48,
+                bottom: 1080,
+            }),
+            tray: None,
+        };
+
+        let placement =
+            child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit after the icons");
+        assert_eq!(placement.x, 1154);
+        assert_eq!(placement.width, 312);
+    }
+
+    /// A tray rect present but off the taskbar band (stale, or copied from a
+    /// differently-positioned taskbar) must be treated exactly like a
+    /// missing tray: fall back to the taskbar's own right edge.
+    #[test]
+    fn tray_rect_failing_the_band_check_is_treated_as_missing() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![Rect {
+                left: 56,
+                top: 1032,
+                right: 700,
+                bottom: 1080,
+            }],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: None,
+            start: Some(Rect {
+                left: 0,
+                top: 1032,
+                right: 48,
+                bottom: 1080,
+            }),
+            // Off-band: entirely above the taskbar's top edge.
+            tray: Some(Rect {
+                left: 1700,
+                top: 0,
+                right: 1920,
+                bottom: 40,
+            }),
+        };
+
+        let placement =
+            child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit after the icons");
+        assert_eq!(placement.x, 1154);
+        assert_eq!(placement.width, 312);
+    }
+
+    /// Centered alignment (today's common case): lane 1 has ample room and a
+    /// tray landmark is also present with room to spare in lane 2. Lane 1
+    /// must still win — placement is pixel-identical to a world with no
+    /// tray landmark at all.
+    #[test]
+    fn centered_alignment_still_prefers_lane_one_even_when_lane_two_would_fit() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: Some(Rect {
+                left: 0,
+                top: 1032,
+                right: 160,
+                bottom: 1080,
+            }),
+            start: Some(Rect {
+                left: 960,
+                top: 1032,
+                right: 1008,
+                bottom: 1080,
+            }),
+            tray: Some(Rect {
+                left: 1700,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            }),
+        };
+
+        let placement = child_placement(&taskbar, landmarks, 3).expect("lane 1 has plenty of room");
+        assert_eq!(placement.x, 404);
+        assert_eq!(placement.width, 312);
+    }
+
+    /// Lane 1 has a non-negative but too-small gap (a crowded centered
+    /// taskbar, not the left-aligned #261 case) — falls through to lane 2.
+    #[test]
+    fn lane_one_too_small_but_non_negative_falls_through_to_lane_two() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: Some(Rect {
+                left: 0,
+                top: 1032,
+                right: 780,
+                bottom: 1080,
+            }),
+            start: Some(Rect {
+                left: 800,
+                top: 1032,
+                right: 848,
+                bottom: 1080,
+            }),
+            tray: Some(Rect {
+                left: 1700,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            }),
+        };
+
+        // Lane 1 is (788, 792) -- 4px wide, well under the 216px minimum for
+        // 3 providers -- non-negative but too small, unlike the left-aligned
+        // #261 case where lane 1's right edge goes negative.
+        let placement = child_placement(&taskbar, landmarks, 3).expect("lane 2 should fit");
+        assert_eq!(placement.x, 1118);
+        assert_eq!(placement.width, 312);
+    }
+
+    /// Lane 2 fully obstructed (an icon row spans the whole taskbar) →
+    /// neither lane has a verified gap, so the widget hides.
+    #[test]
+    fn fully_obstructed_lane_two_still_reports_verified_no_fit() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+            vec![Rect {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            }],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: None,
+            start: Some(Rect {
+                left: 0,
+                top: 1032,
+                right: 48,
+                bottom: 1080,
+            }),
+            tray: Some(Rect {
+                left: 1700,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            }),
+        };
+
+        assert_eq!(
+            placement_outcome(&taskbar, landmarks, 3),
+            PlacementOutcome::VerifiedNoFit
+        );
+    }
+
+    /// A vertical taskbar rejects placement before either lane (or the tray
+    /// landmark) is ever consulted.
+    #[test]
+    fn vertical_taskbar_early_return_is_unaffected_by_a_tray_landmark() {
+        let taskbar = layout(
+            Rect {
+                left: 0,
+                top: 0,
+                right: 48,
+                bottom: 1080,
+            },
+            vec![],
+        );
+        let landmarks = TaskbarLandmarks {
+            widgets: Some(Rect {
+                left: 0,
+                top: 0,
+                right: 48,
+                bottom: 60,
+            }),
+            start: Some(Rect {
+                left: 0,
+                top: 500,
+                right: 48,
+                bottom: 548,
+            }),
+            tray: Some(Rect {
+                left: 0,
+                top: 1000,
+                right: 48,
+                bottom: 1080,
+            }),
+        };
+
+        assert_eq!(
+            placement_outcome(&taskbar, landmarks, 3),
+            PlacementOutcome::VerifiedNoFit
+        );
+    }
+
+    /// Multi-monitor: both taskbars are left-aligned (lane 2), and each must
+    /// anchor against its own tray rect, not the other's.
+    #[test]
+    fn multi_monitor_lane_two_uses_each_taskbars_own_tray_rect() {
+        let primary = TaskbarLayout {
+            window_handle: 1,
+            landmarks: TaskbarLandmarks {
+                widgets: None,
+                start: Some(Rect {
+                    left: 0,
+                    top: 1392,
+                    right: 48,
+                    bottom: 1440,
+                }),
+                tray: Some(Rect {
+                    left: 2400,
+                    top: 1392,
+                    right: 2560,
+                    bottom: 1440,
+                }),
+            },
+            ..layout(
+                Rect {
+                    left: 0,
+                    top: 1392,
+                    right: 2560,
+                    bottom: 1440,
+                },
+                Vec::new(),
+            )
+        };
+        let secondary_bounds = Rect {
+            left: -1920,
+            top: 1032,
+            right: 0,
+            bottom: 1080,
+        };
+        let secondary = TaskbarLayout {
+            window_handle: 2,
+            primary: false,
+            landmarks: TaskbarLandmarks {
+                widgets: None,
+                start: Some(Rect {
+                    left: -1920,
+                    top: 1032,
+                    right: -1872,
+                    bottom: 1080,
+                }),
+                tray: Some(Rect {
+                    left: -260,
+                    top: 1032,
+                    right: 0,
+                    bottom: 1080,
+                }),
+            },
+            ..layout(secondary_bounds, Vec::new())
+        };
+
+        let (discovered, rejected, placements) = taskbar_placements(&[primary, secondary], true, 3);
+        assert_eq!(discovered, vec![1, 2]);
+        assert!(rejected.is_empty());
+        assert_eq!(placements.len(), 2);
+        assert_eq!(placements[0].0, 1);
+        assert_eq!(placements[0].1.x, 1068);
+        assert_eq!(placements[1].0, 2);
+        assert_eq!(placements[1].1.x, 698);
+        assert!(
+            placements
+                .iter()
+                .all(|(_, placement)| placement.width == 312 && placement.height == 48)
+        );
     }
 
     fn rate_window(used: f64, minutes: Option<u32>) -> crate::commands::RateWindowSnapshot {
