@@ -95,7 +95,11 @@ export function ProviderDetailPane({
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const activeProviderIdRef = useRef(providerId);
   const credentialStatusEpochRef = useRef(0);
+  const requestEpochRef = useRef(0);
+  const providerRefreshTimerRef = useRef<number | null>(null);
+  const providerIdRef = useRef(providerId);
   activeProviderIdRef.current = providerId;
+  providerIdRef.current = providerId;
 
   useEffect(() => {
     if (providerId === "wayfinder") setGatewayDraft(wayfinderGatewayUrl);
@@ -159,57 +163,81 @@ export function ProviderDetailPane({
 
   const load = useCallback(async (
     id: string,
-    signal?: { stale: boolean },
     accountId: string | null = null,
   ) => {
+    if (providerRefreshTimerRef.current !== null) {
+      window.clearTimeout(providerRefreshTimerRef.current);
+      providerRefreshTimerRef.current = null;
+    }
+    if (providerIdRef.current !== id) return;
+    const requestEpoch = ++requestEpochRef.current;
     const credentialRequestEpoch = ++credentialStatusEpochRef.current;
+    let requestedAccountId = accountId;
+    const isCurrentRequest = () =>
+      requestEpoch === requestEpochRef.current &&
+      providerIdRef.current === id &&
+      selectedAccountIdRef.current === requestedAccountId;
     setLoading(true);
     setError(null);
     try {
-      const [next, regionOpts, storageStatus] = await Promise.all([
-        getProviderDetail(id, accountId),
-        getProviderRegionOptions(id),
-        getCredentialStorageStatus(id),
-      ]);
-      if (signal?.stale) return;
-      setDetail(next);
-      setRegionOptions(regionOpts);
-      if (credentialStatusEpochRef.current === credentialRequestEpoch) {
-        setCredentialStatus(storageStatus);
+      while (true) {
+        try {
+          const [next, regionOpts, storageStatus] = await Promise.all([
+            getProviderDetail(id, requestedAccountId),
+            getProviderRegionOptions(id),
+            getCredentialStorageStatus(id),
+          ]);
+          if (!isCurrentRequest()) return;
+          setDetail(next);
+          setRegionOptions(regionOpts);
+          if (credentialStatusEpochRef.current === credentialRequestEpoch) {
+            setCredentialStatus(storageStatus);
+          }
+          return;
+        } catch (e) {
+          if (!isCurrentRequest()) return;
+          if (requestedAccountId !== null) {
+            selectedAccountIdRef.current = null;
+            setSelectedAccountId(null);
+            requestedAccountId = null;
+            continue;
+          }
+          setError(String(e));
+          setDetail(null);
+          setRegionOptions([]);
+          if (credentialStatusEpochRef.current === credentialRequestEpoch) {
+            setCredentialStatus(null);
+          }
+          return;
+        }
       }
-    } catch (e) {
-      if (signal?.stale) return;
-      setError(String(e));
-      setDetail(null);
-      setRegionOptions([]);
-      if (credentialStatusEpochRef.current === credentialRequestEpoch) {
-        setCredentialStatus(null);
-      }
-      setSelectedAccountId(null);
-      selectedAccountIdRef.current = null;
     } finally {
-      if (!signal?.stale) setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     // ProvidersTab keeps one pane instance. A Claude directory-account tab
     // must not be sent to the next provider as getProviderDetail(accountId).
-    setSelectedAccountId(null);
     selectedAccountIdRef.current = null;
+    setSelectedAccountId(null);
+    ++requestEpochRef.current;
     if (!providerId) {
       setDetail(null);
       setRegionOptions([]);
       setCredentialStatus(null);
+      setError(null);
+      setLoading(false);
       return;
     }
     // Clear stale detail immediately so we don't render the old provider
     setDetail(null);
     setRegionOptions([]);
     setCredentialStatus(null);
-    const signal = { stale: false };
-    void load(providerId, signal, null);
-    return () => { signal.stale = true; };
+    void load(providerId);
+    return () => {
+      ++requestEpochRef.current;
+    };
   }, [providerId, load]);
 
   // Live-refresh when a new snapshot lands for this provider.
@@ -221,12 +249,27 @@ export function ProviderDetailPane({
       (event) => {
         const pid = event.payload?.providerId;
         if (!pid || pid === providerId) {
-          void load(providerId, signal, selectedAccountIdRef.current);
+          // Snapshot bursts can contain several updates for one provider.
+          // Collapse the burst into a single detail request using the account
+          // that is selected when the refresh actually starts.
+          if (providerRefreshTimerRef.current !== null) {
+            window.clearTimeout(providerRefreshTimerRef.current);
+          }
+          providerRefreshTimerRef.current = window.setTimeout(() => {
+            providerRefreshTimerRef.current = null;
+            if (!signal.stale) {
+              void load(providerId, selectedAccountIdRef.current);
+            }
+          }, 50);
         }
       },
     );
     return () => {
       signal.stale = true;
+      if (providerRefreshTimerRef.current !== null) {
+        window.clearTimeout(providerRefreshTimerRef.current);
+        providerRefreshTimerRef.current = null;
+      }
       void unlistenPromise.then((fn) => fn());
     };
   }, [providerId, load]);
@@ -253,8 +296,9 @@ export function ProviderDetailPane({
 
   const selectAccount = useCallback(
     (accountId: string) => {
+      selectedAccountIdRef.current = accountId;
       setSelectedAccountId(accountId);
-      if (providerId) void load(providerId, undefined, accountId);
+      if (providerId) void load(providerId, accountId);
     },
     [load, providerId],
   );
@@ -315,15 +359,19 @@ export function ProviderDetailPane({
   };
 
   const handleSwitchAccount = async () => {
+    const switchedProviderId = detail.id;
     setBusy(true);
     setLoginPhase(null);
     setLoginCode(null);
     setLoginUrl(null);
     try {
-      await triggerProviderLogin(detail.id);
+      await triggerProviderLogin(switchedProviderId);
       setCredentialRevision((value) => value + 1);
       await refreshProviders();
-      await load(detail.id);
+      if (providerIdRef.current !== switchedProviderId) return;
+      selectedAccountIdRef.current = null;
+      setSelectedAccountId(null);
+      await load(switchedProviderId);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -332,12 +380,16 @@ export function ProviderDetailPane({
   };
 
   const handleRevokeCredentials = async () => {
+    const revokedProviderId = detail.id;
     setBusy(true);
     setError(null);
     try {
-      await revokeProviderCredentials(detail.id);
+      await revokeProviderCredentials(revokedProviderId);
       setCredentialRevision((value) => value + 1);
-      await load(detail.id);
+      if (providerIdRef.current !== revokedProviderId) return;
+      selectedAccountIdRef.current = null;
+      setSelectedAccountId(null);
+      await load(revokedProviderId);
     } catch (e) {
       setError(String(e));
     } finally {
