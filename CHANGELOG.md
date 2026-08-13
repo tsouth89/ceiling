@@ -3,7 +3,7 @@
 ## [Ceiling] Unreleased
 
 ### Fixed
-- **`diagnose` no longer copies provider error text into an export meant to be shared.** The command already withheld cookies, tokens, account emails, and response bodies, but a failed fetch put the provider's own error string straight into the payload, and that string can carry a signed URL, an account identifier, or an echoed request header. Every failure now reports a local category and a fixed local message instead of anything the provider said. Truncation also lands on a character boundary, so a multi-byte message can no longer be cut mid-character.
+- **`diagnose` no longer copies provider error text into an export meant to be shared.** The command already withheld cookies, tokens, account emails, and response bodies, but a failed fetch put the provider's own error string straight into the payload, and that string can carry a signed URL, an account identifier, or an echoed request header. Every failure now reports a local category and a fixed local message instead of anything the provider said.
 
 ## [Ceiling] 1.5.30 - 2026-08-13
 
