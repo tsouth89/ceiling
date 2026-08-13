@@ -1,4 +1,4 @@
-//! System tray icon setup: left-click opens the tray panel, right-click native menu.
+//! System tray icon setup: left-click toggles the dashboard, right-click native menu.
 
 use std::sync::Mutex;
 
@@ -238,7 +238,8 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
 
 /// Initialise the system tray icon, context menu, and event handlers.
 ///
-/// - **Left-click** reveals and foregrounds the primary dashboard.
+/// - **Left-click** toggles the primary dashboard: show it when hidden, hide it
+///   when it is already visible.
 /// - **Right-click** opens the native context menu with shell actions.
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
@@ -265,17 +266,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 let app = tray.app_handle();
                 if button == MouseButton::Left && button_state == MouseButtonState::Up {
                     store_anchor(app, &rect, position);
-                    // Left-click opens the dashboard (SurfaceMode::PopOut on
+                    // Left-click toggles the dashboard (SurfaceMode::PopOut on
                     // `main`) — the same surface as "Pop Out Dashboard".
-                    // `reopen_to_target` transitions the existing `main` window
-                    // (no WebviewWindowBuilder), so the sync-IPC build deadlock
-                    // does not apply on this native event-loop callback.
-                    let _ = shell::reopen_to_target(
-                        app,
-                        SurfaceMode::PopOut,
-                        SurfaceTarget::Dashboard,
-                        None,
-                    );
+                    // `toggle_dashboard` only reopens via `reopen_to_target` on
+                    // the existing `main` window (no WebviewWindowBuilder), so
+                    // the sync-IPC build deadlock does not apply on this
+                    // native event-loop callback.
+                    shell::toggle_dashboard(app);
                 }
             }
         })

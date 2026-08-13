@@ -146,6 +146,9 @@ pub struct AppState {
     /// Instant when the tray panel was last shown — used to suppress
     /// spurious blur-dismiss during the show animation on Windows.
     pub last_shown_at: Option<std::time::Instant>,
+    /// Last tray-icon dashboard show or hide. Separate from `last_shown_at`
+    /// so flyout blur-dismiss does not swallow a tray click.
+    pub last_tray_dashboard_toggle_at: Option<std::time::Instant>,
     /// One-shot grace for a blur event caused while revealing the tray panel
     /// during explicit startup.
     pub startup_tray_blur_grace_until: Option<std::time::Instant>,
@@ -205,6 +208,7 @@ impl AppState {
             capacity_event_observer: crate::capacity_events::CapacityEventObserver::load_default(),
             enforcement_tracker: crate::enforcement::EnforcementTracker::new(),
             last_shown_at: None,
+            last_tray_dashboard_toggle_at: None,
             startup_tray_blur_grace_until: None,
             suppress_geometry_capture_until: None,
             startup_tray_reveal_pending: false,
@@ -224,6 +228,19 @@ impl AppState {
     ) -> bool {
         self.last_shown_at
             .is_some_and(|shown_at| now.saturating_duration_since(shown_at) < max_age)
+    }
+
+    pub fn mark_tray_dashboard_toggled(&mut self, toggled_at: std::time::Instant) {
+        self.last_tray_dashboard_toggle_at = Some(toggled_at);
+    }
+
+    pub fn was_tray_dashboard_recently_toggled(
+        &self,
+        now: std::time::Instant,
+        max_age: std::time::Duration,
+    ) -> bool {
+        self.last_tray_dashboard_toggle_at
+            .is_some_and(|toggled_at| now.saturating_duration_since(toggled_at) < max_age)
     }
 
     #[allow(dead_code)]
