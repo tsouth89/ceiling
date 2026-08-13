@@ -224,12 +224,15 @@ fn ensure_ambient_registered<I: Displayable>() {
     if !data.accounts.is_empty() {
         return;
     }
-    let ambient = I::ambient_dir();
-    if !I::is_signed_in(&ambient) {
+    if !I::is_signed_in(&I::ambient_dir()) {
         return;
     }
     if let Err(error) = store.try_update(|data| {
-        if data.accounts.is_empty() {
+        if !data.accounts.is_empty() {
+            return Ok(());
+        }
+        let ambient = I::ambient_dir();
+        if I::is_signed_in(&ambient) {
             data.add_account(DirectoryAccount::<I>::new(None, ambient));
         }
         Ok(())
