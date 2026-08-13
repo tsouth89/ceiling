@@ -14,15 +14,34 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+/// On-disk schema for [`CostUsageCache`]. Version 1 was implicit i32 totals.
+/// Live scan paths do not load this file today; the version still exists so a
+/// later wire-up cannot reuse a truncated cache as u64.
+const COST_USAGE_CACHE_VERSION: u32 = 2;
+
 /// Cache for scanned file data
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostUsageCache {
+    /// On-disk schema version. Missing or mismatched values are discarded.
+    #[serde(default)]
+    pub version: u32,
     /// Last scan timestamp in milliseconds
     pub last_scan_unix_ms: i64,
     /// Per-file usage data
     pub files: HashMap<String, CostUsageFileUsage>,
     /// Aggregated daily data: day_key -> model -> [input, cached, output]
     pub days: HashMap<String, HashMap<String, Vec<u64>>>,
+}
+
+impl Default for CostUsageCache {
+    fn default() -> Self {
+        Self {
+            version: COST_USAGE_CACHE_VERSION,
+            last_scan_unix_ms: 0,
+            files: HashMap::new(),
+            days: HashMap::new(),
+        }
+    }
 }
 
 /// Per-file usage tracking
@@ -378,17 +397,15 @@ impl CodexParserState {
         // Seed `previous_totals` first — even while gated or out of range — so a
         // replayed parent total (often dated before the scan window) advances
         // the baseline instead of being re-emitted by the next in-range line.
-        let Some((delta_input, delta_cached, delta_output)) = self.token_deltas(payload) else {
-            return;
-        };
+        let deltas = self.token_deltas(payload);
         if self.replay_gate.is_some() {
             return;
         }
-        // Learn the plan before the zero-delta and range exits below. A
-        // token_count can announce a new plan while billing nothing, and
-        // returning first would attribute the next billed record to the
-        // previous plan. Kept after the replay gate so a child's replayed
-        // parent history cannot install a stale plan.
+        // Learn the plan before the corrupt-total, zero-delta, and range exits
+        // below. A token_count can announce a new plan on a line whose totals
+        // are unreadable, and later billed lines often omit rate_limits.
+        // Kept after the replay gate so a child's replayed parent history
+        // cannot install a stale plan.
         if let Some(plan) = payload
             .get("rate_limits")
             .and_then(|limits| limits.get("plan_type"))
@@ -397,6 +414,9 @@ impl CodexParserState {
         {
             self.current_plan = Some(plan.to_string());
         }
+        let Some((delta_input, delta_cached, delta_output)) = deltas else {
+            return;
+        };
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
             return;
         }
@@ -549,23 +569,16 @@ impl CodexParserState {
 
     fn total_usage_delta(&mut self, total: &Value) -> Option<(u64, u64, u64)> {
         let totals = read_token_totals(total)?;
-        let previous = self.previous_totals.as_ref();
-        let delta_input = totals
-            .input
-            .saturating_sub(previous.map_or(0, |value| value.input));
-        let delta_cached = totals
-            .cached
-            .saturating_sub(previous.map_or(0, |value| value.cached));
-        let delta_output = totals
-            .output
-            .saturating_sub(previous.map_or(0, |value| value.output));
-
-        self.previous_totals = Some(totals);
-        Some((delta_input, delta_cached, delta_output))
+        Some(self.apply_cumulative_totals(totals))
     }
 
     fn fast_total_usage_delta(&mut self, total: CodexFastTotals) -> (u64, u64, u64) {
-        let totals = codex_totals_from_fast(total);
+        self.apply_cumulative_totals(codex_totals_from_fast(total))
+    }
+
+    /// Diff against the last accepted totals. A dip is billed as zero and
+    /// leaves the baseline alone so the next higher total does not over-count.
+    fn apply_cumulative_totals(&mut self, totals: CodexTotals) -> (u64, u64, u64) {
         let previous = self.previous_totals.as_ref();
         let delta_input = totals
             .input
@@ -577,7 +590,14 @@ impl CodexParserState {
             .output
             .saturating_sub(previous.map_or(0, |value| value.output));
 
-        self.previous_totals = Some(totals);
+        let advance = previous.is_none_or(|previous| {
+            totals.input >= previous.input
+                && totals.cached >= previous.cached
+                && totals.output >= previous.output
+        });
+        if advance {
+            self.previous_totals = Some(totals);
+        }
         (delta_input, delta_cached, delta_output)
     }
 }
@@ -886,7 +906,8 @@ impl JsonlScanner {
         let cache_path = Self::cache_path(provider, cache_root);
 
         if let Ok(contents) = fs::read_to_string(&cache_path)
-            && let Ok(cache) = serde_json::from_str(&contents)
+            && let Ok(cache) = serde_json::from_str::<CostUsageCache>(&contents)
+            && cache.version == COST_USAGE_CACHE_VERSION
         {
             return cache;
         }
@@ -1190,6 +1211,103 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// A -1 total is corrupt and bills nothing, but it can still announce a
+    /// plan. Later billed lines often omit rate_limits, so that plan must
+    /// carry forward.
+    #[test]
+    fn corrupt_total_still_learns_plan_for_the_next_billed_record() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"team"},"info":{"total_token_usage":{"input_tokens":-1,"cached_input_tokens":0,"output_tokens":11}}}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":15}}}}"#,
+            &range,
+        );
+
+        assert_eq!(parser.records.len(), 1);
+        assert_eq!(parser.records[0].plan.as_deref(), Some("team"));
+        assert_eq!(
+            (parser.records[0].input, parser.records[0].output),
+            (150, 15)
+        );
+    }
+
+    /// A valid but decreasing cumulative total must not lower the baseline.
+    /// 100 → 50 → 150 bills 100, then 0, then 50 — not 100 again.
+    #[test]
+    fn decreasing_totals_do_not_lower_the_baseline() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for (second, input) in [(1, 100u64), (2, 50), (3, 150)] {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"2026-05-31T10:00:{second:02}.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+                ),
+                &range,
+            );
+            if second == 2 {
+                assert_eq!(
+                    parser.previous_totals.as_ref().map(|totals| totals.input),
+                    Some(100),
+                    "the dip must leave the baseline at 100"
+                );
+            }
+        }
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| record.input)
+                .collect::<Vec<_>>(),
+            vec![100, 50]
+        );
+        assert_eq!(parser.previous_totals.expect("last totals").input, 150);
+    }
+
+    /// The unused on-disk cache still cannot reuse an old i32 document if a
+    /// later caller wires load_cache up.
+    #[test]
+    fn load_cache_ignores_pre_u64_schema() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("codex_cost_cache.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "last_scan_unix_ms": 1,
+                "files": {
+                    "session.jsonl": {
+                        "mtime_unix_ms": 1,
+                        "size": 10,
+                        "days": {"2026-05-31": {"gpt-5": [2147483647, 0, 1]}},
+                        "parsed_bytes": 10,
+                        "last_model": "gpt-5",
+                        "last_totals": {"input": 2147483647, "cached": 0, "output": 1}
+                    }
+                },
+                "days": {"2026-05-31": {"gpt-5": [2147483647, 0, 1]}}
+            }"#,
+        )
+        .expect("write old cache");
+
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(dir.path()));
+        assert_eq!(cache.version, COST_USAGE_CACHE_VERSION);
+        assert!(cache.files.is_empty());
+        assert!(cache.days.is_empty());
+        assert_eq!(cache.last_scan_unix_ms, 0);
     }
 
     /// A null token field means "not reported", not "corrupt". Discarding the
