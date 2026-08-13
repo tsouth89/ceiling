@@ -631,6 +631,24 @@ impl TokenAccountStore {
         })
         .map_err(TokenAccountError::Io)
     }
+
+    /// Mutate one provider's latest account snapshot as a single locked
+    /// transaction, preserving other providers and unrecognized provider ids.
+    pub fn try_update_provider<T>(
+        &self,
+        provider: ProviderId,
+        operation: impl FnOnce(&mut ProviderAccountData) -> Result<T, String>,
+    ) -> anyhow::Result<(ProviderAccountData, T)> {
+        crate::secure_file::with_state_write_lock(|| {
+            let mut all = self.load().map_err(io::Error::other)?;
+            let data = all.entry(provider).or_default();
+            let result = operation(data).map_err(io::Error::other)?;
+            let updated = data.clone();
+            self.save_unlocked(&all).map_err(io::Error::other)?;
+            Ok((updated, result))
+        })
+        .map_err(Into::into)
+    }
 }
 
 impl Default for TokenAccountStore {
@@ -830,6 +848,51 @@ mod tests {
         let stored = TokenAccountStore::with_path(path).load().expect("reload");
         assert!(stored.contains_key(&ProviderId::Claude));
         assert!(stored.contains_key(&ProviderId::Cursor));
+    }
+
+    #[test]
+    fn transactional_updates_preserve_two_same_provider_adds() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-accounts.json");
+        let barrier = Arc::new(Barrier::new(3));
+        let writers: Vec<_> = ["personal", "work"]
+            .into_iter()
+            .map(|label| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    TokenAccountStore::with_path(path)
+                        .try_update_provider(ProviderId::Claude, |data| {
+                            data.add_account(TokenAccount::new(
+                                label,
+                                format!("sessionKey={label}"),
+                            ));
+                            Ok(())
+                        })
+                        .expect("transactional token account update");
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored = TokenAccountStore::with_path(path)
+            .load_provider(ProviderId::Claude)
+            .expect("reload");
+        assert_eq!(stored.count(), 2);
+        assert!(
+            stored
+                .accounts
+                .iter()
+                .any(|entry| entry.label == "personal")
+        );
+        assert!(stored.accounts.iter().any(|entry| entry.label == "work"));
     }
 
     /// Removing a known provider must still remove it — preservation applies

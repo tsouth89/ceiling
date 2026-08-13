@@ -125,9 +125,12 @@ pub fn add_token_account(
     let label = super::sanitize_optional_label(Some(label))?
         .unwrap_or_else(|| id.display_name().to_string());
     let store = TokenAccountStore::new();
-    let mut data = store.load_provider(id).map_err(|e| e.to_string())?;
-    data.add_account(TokenAccount::new(label, token.trim()));
-    store.save_provider(id, &data).map_err(|e| e.to_string())?;
+    let (data, ()) = store
+        .try_update_provider(id, |data| {
+            data.add_account(TokenAccount::new(label, token.trim()));
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
     let active = data.clamped_active_index();
     Ok(build_provider_token_accounts(
         id,
@@ -148,9 +151,12 @@ pub fn remove_token_account(
         .ok_or_else(|| format!("Provider {provider_id} does not support token accounts"))?;
     let uuid = uuid::Uuid::parse_str(&account_id).map_err(|e| e.to_string())?;
     let store = TokenAccountStore::new();
-    let mut data = store.load_provider(id).map_err(|e| e.to_string())?;
-    data.remove_account(uuid);
-    store.save_provider(id, &data).map_err(|e| e.to_string())?;
+    let (data, ()) = store
+        .try_update_provider(id, |data| {
+            data.remove_account(uuid);
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
     let active = data.clamped_active_index();
     Ok(build_provider_token_accounts(
         id,
@@ -171,9 +177,12 @@ pub fn set_active_token_account(
         .ok_or_else(|| format!("Provider {provider_id} does not support token accounts"))?;
     let uuid = uuid::Uuid::parse_str(&account_id).map_err(|e| e.to_string())?;
     let store = TokenAccountStore::new();
-    let mut data = store.load_provider(id).map_err(|e| e.to_string())?;
-    data.set_active_by_id(uuid);
-    store.save_provider(id, &data).map_err(|e| e.to_string())?;
+    let (data, ()) = store
+        .try_update_provider(id, |data| {
+            data.set_active_by_id(uuid);
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
     let active = data.clamped_active_index();
     Ok(build_provider_token_accounts(
         id,

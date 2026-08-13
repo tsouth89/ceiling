@@ -387,8 +387,34 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
         Ok(serde_json::from_str(&data)?)
     }
 
+    /// Apply a mutation to the latest on-disk snapshot while holding the shared
+    /// cross-process state lock for the complete read-modify-write cycle.
+    ///
+    /// Callers should perform provider or network I/O before entering this
+    /// closure. Only the local account mutation and its atomic save belong in
+    /// the transaction.
+    pub fn try_update<T>(
+        &self,
+        operation: impl FnOnce(&mut DirectoryAccountData<I>) -> Result<T, String>,
+    ) -> anyhow::Result<(DirectoryAccountData<I>, T)> {
+        crate::secure_file::with_state_write_lock(|| {
+            let mut data = self.load().map_err(io::Error::other)?;
+            let result = operation(&mut data).map_err(io::Error::other)?;
+            self.save_unlocked(&data).map_err(io::Error::other)?;
+            Ok((data, result))
+        })
+        .map_err(Into::into)
+    }
+
     /// Save accounts to disk
     pub fn save(&self, data: &DirectoryAccountData<I>) -> Result<(), AccountStoreError> {
+        crate::secure_file::with_state_write_lock(|| {
+            self.save_unlocked(data).map_err(io::Error::other)
+        })
+        .map_err(AccountStoreError::Io)
+    }
+
+    fn save_unlocked(&self, data: &DirectoryAccountData<I>) -> Result<(), AccountStoreError> {
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -562,5 +588,47 @@ mod tests {
         let loaded = store.load().expect("load");
         assert_eq!(loaded.count(), 2);
         assert_eq!(loaded.active_account().map(|a| a.id), Some(work));
+    }
+
+    #[test]
+    fn transactional_updates_preserve_two_concurrent_directory_account_adds() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test-accounts.json");
+        let barrier = Arc::new(Barrier::new(3));
+        let writers: Vec<_> = ["personal", "work"]
+            .into_iter()
+            .map(|label| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    DirectoryAccountStore::<TestIdentity>::with_path(path)
+                        .try_update(|data| {
+                            data.add_account(account(label, &format!("/dirs/{label}")));
+                            Ok(())
+                        })
+                        .expect("transactional directory account update");
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored = DirectoryAccountStore::<TestIdentity>::with_path(path)
+            .load()
+            .expect("reload");
+        assert_eq!(stored.count(), 2);
+        assert!(
+            stored
+                .accounts
+                .iter()
+                .any(|entry| entry.label == "personal")
+        );
+        assert!(stored.accounts.iter().any(|entry| entry.label == "work"));
     }
 }
