@@ -2,6 +2,24 @@
 
 ## [Ceiling] Unreleased
 
+## [Ceiling] 1.5.30 - 2026-08-13
+
+Stops a few places from showing the wrong account or the wrong credential, gives the taskbar widget somewhere to sit when the usual gap is gone, and lets a second click on the tray icon hide the window. Grok banked resets now show the same way Codex already did.
+
+### Added
+- **A second click on the tray icon hides the dashboard.** Left-click always reopened the stats window, so a glance meant hunting for the close button. First click shows it, second click hides it. A Windows double-click is ignored so the window does not flash open and disappear. Right-click and the keyboard shortcut are unchanged. Closes #280.
+- **Grok banked resets show up the way Codex already did.** Grok's Settings → Usage now lists redeemable reset tokens. Ceiling already counted those for Codex and left Grok's chip blank. The same count now appears on Overview, provider detail, and the taskbar flyout. Redeeming still happens on grok.com. Ceiling only displays how many are left.
+- **Settings says why the taskbar widget is hidden.** The native strip can vanish because there is no gap, because Start cannot be found, or because no providers are enabled, and none of that was visible anywhere, so the feature looked broken. The Taskbar Usage group now reports "Shown on N taskbar(s)", no free space, waiting for landmarks, or no enabled providers. The row stays off when the widget is disabled.
+
+### Fixed
+- **Charts no longer mix one account's usage into another.** A removed or unresolved account could inherit the machine-wide transcript cache, so Charts showed someone else's tokens under the wrong tab. Each configured account now has its own chart tab and its own cache identity. Compare stays an explicit aggregate. Polling stops for identities that no longer resolve.
+- **Provider detail no longer applies a stale refresh.** Switching providers or accounts quickly could let an older request finish last and paint the previous seat's numbers onto the new one. Detail commits now require a matching request epoch plus provider and account identity, account selection resets at provider boundaries, and bursty provider updates coalesce before a refresh.
+- **Credential status is scoped to the provider you have selected.** Shared credential-file protection was treated as "this provider has a credential", so opening provider B could show a protected store and a revoke action that belonged to provider A. Presence is now per selected provider, and per selected token account. An unreadable store stays unknown instead of reporting a false absence.
+- **The taskbar widget takes a second lane when the usual one does not fit.** On a left-aligned taskbar, Start sits at the left edge and the Widgets-to-Start gap's right edge goes negative, so the strip hid with no explanation. Windhawk's "Start button always on left" did the same. The Widgets-to-Start lane is still preferred. If it has no verified gap, the widget tries the stretch between Start and the tray and lands in the largest empty gap, never covering a pinned icon. Left alignment with Windows Widgets enabled used to freeze the strip on top of the app icons instead. That path now places into the fallback lane and treats the Widgets entry as an obstacle. Closes #261.
+
+### Internal
+- The privileged PR-review runner pins `actions/checkout` to a reviewed commit instead of a moving tag.
+
 ## [Ceiling] 1.5.29 - 2026-08-12
 
 Finishes what 1.5.27 started: Cursor's on-demand spend now reads as money on every surface that shows it, not only the Overview card. Also lets a monthly quota raise a pace warning, and gives every settings control a name a screen reader can reach.
