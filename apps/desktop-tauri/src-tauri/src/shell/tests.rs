@@ -8,12 +8,11 @@ use super::position::{
     visible_surface_position_for_mode_with_fallbacks,
 };
 use super::transition::{
-    SurfaceSnapshot, TransitionResolution, hidden_surface_snapshot,
+    SurfaceSnapshot, TransitionResolution, TrayDashboardAction, hidden_surface_snapshot,
     monitor_for_preserved_visible_position, reclamp_preserved_visible_position,
     recovery_snapshot_for_failed_transition, resolve_transition_position,
     resolve_transition_request, restore_recovery_surface, restore_surface_snapshot,
-    should_force_tray_panel_reveal, should_hide_dashboard_on_tray_click,
-    should_synthesize_default_position,
+    should_force_tray_panel_reveal, should_synthesize_default_position, tray_dashboard_action,
 };
 use super::window::{
     hide_to_tray_state, logical_size_from_geometry, prepare_hide_to_tray_if_current,
@@ -65,12 +64,24 @@ fn conditional_hide_to_tray_leaves_non_matching_surface_alone() {
 
 #[test]
 fn tray_toggle_hides_only_when_dashboard_window_is_visible() {
-    assert!(should_hide_dashboard_on_tray_click(true, false));
-    assert!(!should_hide_dashboard_on_tray_click(false, false));
-    // A second Left+Up from a Windows double-click arrives while the
-    // just-opened dashboard is still inside the show grace.
-    assert!(!should_hide_dashboard_on_tray_click(true, true));
-    assert!(!should_hide_dashboard_on_tray_click(false, true));
+    assert_eq!(
+        tray_dashboard_action(true, false),
+        TrayDashboardAction::Hide
+    );
+    assert_eq!(
+        tray_dashboard_action(false, false),
+        TrayDashboardAction::Show
+    );
+    // Second Left+Up of a double-click after show must not hide.
+    assert_eq!(
+        tray_dashboard_action(true, true),
+        TrayDashboardAction::Ignore
+    );
+    // Second Left+Up of a double-click after hide must not reopen.
+    assert_eq!(
+        tray_dashboard_action(false, true),
+        TrayDashboardAction::Ignore
+    );
 }
 
 #[test]
