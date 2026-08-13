@@ -576,10 +576,19 @@ impl CodexParserState {
         self.apply_cumulative_totals(codex_totals_from_fast(total))
     }
 
-    /// Diff against the last accepted totals. A dip is billed as zero and
-    /// leaves the baseline alone so the next higher total does not over-count.
+    /// Diff against the last accepted totals. A dip, or a missing/null counter
+    /// parsed as zero, is billed as nothing and leaves the baseline alone so
+    /// the next complete total accounts for the interval only once.
     fn apply_cumulative_totals(&mut self, totals: CodexTotals) -> (u64, u64, u64) {
         let previous = self.previous_totals.as_ref();
+        let advance = previous.is_none_or(|previous| {
+            totals.input >= previous.input
+                && totals.cached >= previous.cached
+                && totals.output >= previous.output
+        });
+        if !advance {
+            return (0, 0, 0);
+        }
         let delta_input = totals
             .input
             .saturating_sub(previous.map_or(0, |value| value.input));
@@ -589,15 +598,7 @@ impl CodexParserState {
         let delta_output = totals
             .output
             .saturating_sub(previous.map_or(0, |value| value.output));
-
-        let advance = previous.is_none_or(|previous| {
-            totals.input >= previous.input
-                && totals.cached >= previous.cached
-                && totals.output >= previous.output
-        });
-        if advance {
-            self.previous_totals = Some(totals);
-        }
+        self.previous_totals = Some(totals);
         (delta_input, delta_cached, delta_output)
     }
 }
@@ -1276,6 +1277,51 @@ mod tests {
             vec![100, 50]
         );
         assert_eq!(parser.previous_totals.expect("last totals").input, 150);
+    }
+
+    /// A missing counter is parsed as zero, which looks like a dip on that
+    /// field. That line must not emit the other counters, or the next
+    /// complete total double-counts them against the still-old baseline.
+    #[test]
+    fn partial_totals_do_not_emit_or_shift_the_baseline() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":2}}}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0}}}}"#,
+            &range,
+        );
+
+        assert_eq!(parser.records.len(), 1);
+        assert_eq!(
+            parser
+                .previous_totals
+                .as_ref()
+                .map(|totals| (totals.input, totals.output)),
+            Some((10, 2)),
+            "the partial line must leave the first complete baseline in place"
+        );
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0,"output_tokens":3}}}}"#,
+            &range,
+        );
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| (record.input, record.output))
+                .collect::<Vec<_>>(),
+            vec![(10, 2), (5, 1)]
+        );
     }
 
     /// The unused on-disk cache still cannot reuse an old i32 document if a
