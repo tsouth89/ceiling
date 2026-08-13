@@ -166,13 +166,12 @@ impl GrokProvider {
             .filter(|s| !s.is_empty())
             .ok_or(ProviderError::AuthRequired)?
             .to_string();
-        let new_refresh = body
+        let issued_refresh = body
             .get("refresh_token")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .or_else(|| current.refresh_token.clone());
+            .map(ToOwned::to_owned);
         let ttl = body
             .get("expires_in")
             .and_then(Value::as_i64)
@@ -181,7 +180,8 @@ impl GrokProvider {
         let expires_at = Some(Utc::now() + chrono::Duration::seconds(ttl));
         let mut next = current;
         next.access_token = access_token;
-        next.refresh_token = new_refresh;
+        next.rotated_refresh_token = issued_refresh.clone();
+        next.refresh_token = issued_refresh.or(next.refresh_token);
         next.expires_at = expires_at;
         if let Err(err) = next.persist_to_disk() {
             tracing::warn!("Grok token refreshed but could not persist auth.json: {err}");
@@ -510,6 +510,8 @@ struct GrokCredentials {
     scope: String,
     access_token: String,
     refresh_token: Option<String>,
+    /// Set only when the token endpoint returned a replacement refresh token.
+    rotated_refresh_token: Option<String>,
     auth_mode: Option<String>,
     email: Option<String>,
     team_id: Option<String>,
@@ -577,6 +579,7 @@ impl GrokCredentials {
             scope,
             access_token,
             refresh_token,
+            rotated_refresh_token: None,
             auth_mode: text_field(entry, "auth_mode"),
             email: text_field(entry, "email"),
             team_id: text_field(entry, "team_id"),
@@ -607,9 +610,12 @@ impl GrokCredentials {
 
     fn persist_to_path(&self, path: &Path) -> Result<(), String> {
         crate::secure_file::with_file_write_lock(path, || {
-            let text = std::fs::read_to_string(path)?;
-            let mut root: Value = serde_json::from_str(&text)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            let mut root = match std::fs::read_to_string(path) {
+                Ok(text) => serde_json::from_str(&text)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+                Err(error) => return Err(error),
+            };
             apply_refresh_to_auth_json(&mut root, self)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
             let encoded = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
@@ -633,16 +639,27 @@ fn apply_refresh_to_auth_json(
     root: &mut Value,
     credentials: &GrokCredentials,
 ) -> Result<(), String> {
-    let entry = root
+    let map = root
         .as_object_mut()
-        .and_then(|map| map.get_mut(&credentials.scope))
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| "auth scope missing".to_string())?;
+        .ok_or_else(|| "Grok auth.json root is not an object".to_string())?;
+    let entry = map
+        .entry(credentials.scope.clone())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let entry = entry
+        .as_object_mut()
+        .ok_or_else(|| "auth scope is not an object".to_string())?;
     entry.insert(
         "key".to_string(),
         Value::String(credentials.access_token.clone()),
     );
-    if let Some(refresh) = &credentials.refresh_token {
+    let persist_refresh = credentials.rotated_refresh_token.as_ref().or_else(|| {
+        if entry.contains_key("refresh_token") {
+            None
+        } else {
+            credentials.refresh_token.as_ref()
+        }
+    });
+    if let Some(refresh) = persist_refresh {
         entry.insert("refresh_token".to_string(), Value::String(refresh.clone()));
     }
     if let Some(exp) = credentials.expires_at {
@@ -1212,6 +1229,7 @@ mod tests {
             scope: "https://auth.x.ai::test".to_string(),
             access_token: access_token.to_string(),
             refresh_token: Some(format!("refresh-{access_token}")),
+            rotated_refresh_token: None,
             auth_mode: Some("oidc".to_string()),
             email: Some("user@example.com".to_string()),
             team_id: Some("team".to_string()),
@@ -1250,7 +1268,7 @@ mod tests {
                 .expect("valid result");
         let entry = &stored["https://auth.x.ai::test"];
         assert_eq!(entry["key"], "new-access");
-        assert_eq!(entry["refresh_token"], "refresh-new-access");
+        assert_eq!(entry["refresh_token"], "old-refresh");
         assert_eq!(entry["future_field"]["keep"], true);
         assert_eq!(
             stored["https://accounts.x.ai/sign-in"]["key"],
@@ -1317,6 +1335,52 @@ mod tests {
                 .is_err()
         );
         assert_eq!(std::fs::read(&path).expect("read original"), original);
+    }
+
+    #[test]
+    fn persist_leaves_newer_disk_refresh_token() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "https://auth.x.ai::test": {
+                    "key": "old",
+                    "refresh_token": "newer-disk-refresh"
+                }
+            }"#,
+        )
+        .expect("seed auth file");
+
+        let mut credentials = refreshed_credentials("new-access");
+        credentials.refresh_token = Some("stale-struct-refresh".to_string());
+        credentials.persist_to_path(&path).expect("persist refresh");
+
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert_eq!(stored["https://auth.x.ai::test"]["key"], "new-access");
+        assert_eq!(
+            stored["https://auth.x.ai::test"]["refresh_token"],
+            "newer-disk-refresh"
+        );
+    }
+
+    #[test]
+    fn persist_creates_auth_file_when_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+
+        refreshed_credentials("new-access")
+            .persist_to_path(&path)
+            .expect("persist refresh into a missing file");
+
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        let entry = &stored["https://auth.x.ai::test"];
+        assert_eq!(entry["key"], "new-access");
+        assert_eq!(entry["refresh_token"], "refresh-new-access");
     }
 
     #[test]

@@ -192,8 +192,13 @@ impl GeminiApi {
             new_creds.expiry_date = Some(expiry_ms);
         }
 
-        // Save updated credentials
-        self.save_credentials(&new_creds)?;
+        // Persist after Google has already issued tokens. A locked or missing
+        // file must not drop the in-memory refresh.
+        if let Err(error) = self.save_credentials(&new_creds) {
+            tracing::warn!(
+                "Gemini token refreshed but could not persist oauth_creds.json: {error}"
+            );
+        }
 
         tracing::info!("Gemini token refreshed successfully");
         Ok(new_creds)
@@ -547,9 +552,12 @@ fn persist_refreshed_credentials(
     credentials: &OAuthCredentials,
 ) -> Result<(), ProviderError> {
     crate::secure_file::with_file_write_lock(path, || {
-        let content = std::fs::read_to_string(path)?;
-        let mut root: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut root = match std::fs::read_to_string(path) {
+            Ok(content) => serde_json::from_str(&content)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(error) => return Err(error),
+        };
         apply_refresh_to_credentials_json(&mut root, credentials)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let encoded = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
@@ -583,6 +591,14 @@ fn apply_refresh_to_credentials_json(
         let expiry = serde_json::Number::from_f64(expiry_date)
             .ok_or_else(|| "refreshed Gemini expiry is not finite".to_string())?;
         object.insert("expiry_date".to_string(), serde_json::Value::Number(expiry));
+    }
+    if !object.contains_key("refresh_token")
+        && let Some(refresh_token) = &credentials.refresh_token
+    {
+        object.insert(
+            "refresh_token".to_string(),
+            serde_json::Value::String(refresh_token.clone()),
+        );
     }
     Ok(())
 }
@@ -816,6 +832,22 @@ mod tests {
             persist_refreshed_credentials(&path, &refreshed_credentials("new-access")).is_err()
         );
         assert_eq!(std::fs::read(&path).expect("read original"), original);
+    }
+
+    #[test]
+    fn persist_creates_credentials_file_when_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+
+        persist_refreshed_credentials(&path, &refreshed_credentials("new-access"))
+            .expect("persist refresh into a missing file");
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert_eq!(stored["access_token"], "new-access");
+        assert_eq!(stored["id_token"], "id-new-access");
+        assert_eq!(stored["refresh_token"], "stale-struct-refresh");
     }
 
     #[test]
