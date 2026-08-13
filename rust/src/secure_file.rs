@@ -321,10 +321,229 @@ fn atomic_write_with_permissions(
         Ok(())
     })();
 
-    if result.is_err() {
+    if result.is_err() && !keep_replacement_temp(&result, path) {
         let _ = std::fs::remove_file(&temp_path);
     }
     result
+}
+
+/// `ERROR_UNABLE_TO_MOVE_REPLACEMENT` (1176). `ReplaceFileW` has already
+/// removed the destination; the new bytes exist only at the replacement path.
+#[cfg(any(windows, test))]
+const WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT: u32 = 0x498;
+#[cfg(test)]
+const WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: u32 = 0x499;
+#[cfg(any(windows, test))]
+const WIN32_ERROR_ACCESS_DENIED: u32 = 5;
+#[cfg(any(windows, test))]
+const WIN32_ERROR_SHARING_VIOLATION: u32 = 32;
+#[cfg(any(windows, test))]
+const WIN32_ERROR_LOCK_VIOLATION: u32 = 33;
+
+/// Whether the temp file is the only remaining copy of the new bytes.
+///
+/// `ERROR_UNABLE_TO_MOVE_REPLACEMENT` means the destination is already gone,
+/// so deleting the temp would destroy the credential file. Trust that error
+/// code even if a later `exists()` check races. Any other failure that leaves
+/// no destination also keeps the temp.
+#[cfg(any(windows, test))]
+fn keep_temp_after_replace_failure(win32_code: u32, destination_still_exists: bool) -> bool {
+    win32_code == WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT || !destination_still_exists
+}
+
+#[cfg(any(windows, test))]
+fn is_sharing_or_access_failure(win32_code: u32) -> bool {
+    matches!(
+        win32_code,
+        WIN32_ERROR_ACCESS_DENIED | WIN32_ERROR_SHARING_VIOLATION | WIN32_ERROR_LOCK_VIOLATION
+    )
+}
+
+fn keep_replacement_temp(result: &io::Result<()>, dest: &Path) -> bool {
+    let Err(error) = result else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        if let Some(raw) = error.raw_os_error() {
+            return keep_temp_after_replace_failure(raw as u32, dest.exists());
+        }
+        !dest.exists()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = dest;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn win32_error_code(error: &windows::core::Error) -> u32 {
+    (error.code().0 as u32) & 0xffff
+}
+
+#[cfg(windows)]
+fn win32_io_error(context: &str, error: windows::core::Error) -> io::Error {
+    let code = win32_error_code(&error);
+    io::Error::new(
+        io::Error::from_raw_os_error(code as i32).kind(),
+        format!("{context}: {error}"),
+    )
+}
+
+#[cfg(windows)]
+struct CapturedFileSecurity {
+    descriptor: Vec<usize>,
+    control: u16,
+}
+
+#[cfg(windows)]
+fn capture_file_security(path: &Path) -> io::Result<CapturedFileSecurity> {
+    use std::mem::size_of;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, GetFileSecurityW,
+        GetSecurityDescriptorControl, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    };
+    use windows::core::PCWSTR;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let requested =
+        OWNER_SECURITY_INFORMATION.0 | GROUP_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0;
+    let mut needed = 0u32;
+    unsafe {
+        let _ = GetFileSecurityW(
+            PCWSTR(wide.as_ptr()),
+            requested,
+            PSECURITY_DESCRIPTOR(std::ptr::null_mut()),
+            0,
+            &mut needed,
+        );
+    }
+    if needed == 0 {
+        return Err(io::Error::other(
+            "GetFileSecurityW returned an empty descriptor",
+        ));
+    }
+
+    let words = (needed as usize).div_ceil(size_of::<usize>());
+    let mut descriptor = vec![0usize; words];
+    unsafe {
+        GetFileSecurityW(
+            PCWSTR(wide.as_ptr()),
+            requested,
+            PSECURITY_DESCRIPTOR(descriptor.as_mut_ptr().cast()),
+            needed,
+            &mut needed,
+        )
+        .ok()
+        .map_err(|error| io::Error::other(format!("GetFileSecurityW failed: {error}")))?;
+
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        GetSecurityDescriptorControl(
+            PSECURITY_DESCRIPTOR(descriptor.as_mut_ptr().cast()),
+            &mut control,
+            &mut revision,
+        )
+        .map_err(|error| {
+            io::Error::other(format!("GetSecurityDescriptorControl failed: {error}"))
+        })?;
+        Ok(CapturedFileSecurity {
+            descriptor,
+            control,
+        })
+    }
+}
+
+#[cfg(windows)]
+fn apply_file_security(path: &Path, captured: &CapturedFileSecurity) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+        SetFileSecurityW, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    use windows::core::PCWSTR;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut info =
+        OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    if captured.control & SE_DACL_PROTECTED.0 != 0 {
+        info |= PROTECTED_DACL_SECURITY_INFORMATION;
+    } else {
+        info |= UNPROTECTED_DACL_SECURITY_INFORMATION;
+    }
+    unsafe {
+        SetFileSecurityW(
+            PCWSTR(wide.as_ptr()),
+            info,
+            PSECURITY_DESCRIPTOR(captured.descriptor.as_ptr() as *mut _),
+        )
+        .ok()
+        .map_err(|error| io::Error::other(format!("SetFileSecurityW failed: {error}")))
+    }
+}
+
+#[cfg(windows)]
+fn restore_captured_security(
+    path: &Path,
+    captured: Option<&CapturedFileSecurity>,
+) -> io::Result<()> {
+    match captured {
+        Some(security) => apply_file_security(path, security),
+        None => Ok(()),
+    }
+}
+
+#[cfg(windows)]
+fn move_file_replace(from: &Path, to: &Path) -> Result<(), windows::core::Error> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+
+    let wide_from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide_to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(wide_from.as_ptr()),
+            PCWSTR(wide_to.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+}
+
+#[cfg(windows)]
+fn retry_move_file_replace(from: &Path, to: &Path) -> Result<(), windows::core::Error> {
+    const ATTEMPTS: u32 = 5;
+    const RETRY: std::time::Duration = std::time::Duration::from_millis(20);
+    let mut last = None;
+    for attempt in 0..ATTEMPTS {
+        match move_file_replace(from, to) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if is_sharing_or_access_failure(win32_error_code(&error))
+                    && attempt + 1 < ATTEMPTS =>
+            {
+                last = Some(error);
+                std::thread::sleep(RETRY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last.expect("sharing retry records the last error"))
+}
+
+#[cfg(windows)]
+fn sharing_replace_error(error: windows::core::Error) -> io::Error {
+    win32_io_error(
+        "could not replace the file because another process has it open without delete sharing",
+        error,
+    )
 }
 
 #[cfg(windows)]
@@ -334,46 +553,50 @@ fn atomic_replace(
     permission_mode: AtomicWritePermissions,
 ) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, REPLACE_FILE_FLAGS,
-        ReplaceFileW,
-    };
+    use windows::Win32::Storage::FileSystem::{REPLACE_FILE_FLAGS, ReplaceFileW};
     use windows::core::PCWSTR;
 
     let destination_exists = to.exists();
-    let wide_from: Vec<u16> = from
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let wide_to: Vec<u16> = to
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        if permission_mode == AtomicWritePermissions::PreserveExisting && destination_exists {
-            ReplaceFileW(
-                PCWSTR(wide_to.as_ptr()),
-                PCWSTR(wide_from.as_ptr()),
-                PCWSTR::null(),
-                REPLACE_FILE_FLAGS(0),
-                None,
-                None,
-            )
-            .map_err(|error| {
-                io::Error::other(format!(
-                    "metadata-preserving file replacement failed: {error}"
-                ))
-            })
-        } else {
-            MoveFileExW(
-                PCWSTR(wide_from.as_ptr()),
-                PCWSTR(wide_to.as_ptr()),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-            .map_err(|error| io::Error::other(format!("atomic file replacement failed: {error}")))
+    if permission_mode != AtomicWritePermissions::PreserveExisting || !destination_exists {
+        return move_file_replace(from, to)
+            .map_err(|error| win32_io_error("atomic file replacement failed", error));
+    }
+
+    let captured = capture_file_security(to).ok();
+    let wide_from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide_to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    let replace_result = unsafe {
+        ReplaceFileW(
+            PCWSTR(wide_to.as_ptr()),
+            PCWSTR(wide_from.as_ptr()),
+            PCWSTR::null(),
+            REPLACE_FILE_FLAGS(0),
+            None,
+            None,
+        )
+    };
+    match replace_result {
+        Ok(()) => restore_captured_security(to, captured.as_ref()),
+        Err(error) if win32_error_code(&error) == WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT => {
+            // Destination is already gone; new bytes live only at `from`.
+            match move_file_replace(from, to) {
+                Ok(()) => restore_captured_security(to, captured.as_ref()),
+                Err(move_error) => Err(win32_io_error(
+                    "metadata-preserving replacement removed the destination; new bytes remain at the temporary path",
+                    move_error,
+                )),
+            }
         }
+        Err(error) if is_sharing_or_access_failure(win32_error_code(&error)) => {
+            match retry_move_file_replace(from, to) {
+                Ok(()) => restore_captured_security(to, captured.as_ref()),
+                Err(move_error) => Err(sharing_replace_error(move_error)),
+            }
+        }
+        Err(error) => Err(win32_io_error(
+            "metadata-preserving file replacement failed",
+            error,
+        )),
     }
 }
 
@@ -392,8 +615,8 @@ fn prepare_temp_permissions(
     _permission_mode: AtomicWritePermissions,
     _existing_permissions: Option<&std::fs::Permissions>,
 ) -> io::Result<()> {
-    // ReplaceFileW transfers the destination's metadata to the replacement.
-    // Keep the temporary secret current-user-only until that atomic swap.
+    // Keep the temporary secret current-user-only until the swap. Destination
+    // owner/DACL are copied back onto the replaced file afterwards.
     restrict_file_permissions(path)
 }
 
@@ -612,16 +835,88 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keep_temp_when_replace_already_removed_destination() {
+        assert!(keep_temp_after_replace_failure(
+            WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT,
+            false
+        ));
+        assert!(keep_temp_after_replace_failure(
+            WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT,
+            true
+        ));
+        assert!(!keep_temp_after_replace_failure(
+            WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT_2,
+            true
+        ));
+        assert!(keep_temp_after_replace_failure(
+            WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT_2,
+            false
+        ));
+        assert!(!keep_temp_after_replace_failure(
+            WIN32_ERROR_SHARING_VIOLATION,
+            true
+        ));
+        assert!(keep_temp_after_replace_failure(
+            WIN32_ERROR_SHARING_VIOLATION,
+            false
+        ));
+        assert!(is_sharing_or_access_failure(WIN32_ERROR_ACCESS_DENIED));
+        assert!(is_sharing_or_access_failure(WIN32_ERROR_SHARING_VIOLATION));
+        assert!(is_sharing_or_access_failure(WIN32_ERROR_LOCK_VIOLATION));
+        assert!(!is_sharing_or_access_failure(
+            WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT
+        ));
+    }
+
     #[cfg(windows)]
-    fn windows_dacl(path: &Path) -> Vec<u8> {
+    fn current_user_sid() -> (Vec<usize>, windows::Win32::Security::PSID) {
+        use std::mem::size_of;
+
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        unsafe {
+            let mut token = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).unwrap();
+            let mut token_bytes = 0u32;
+            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut token_bytes);
+            assert!(token_bytes >= size_of::<TOKEN_USER>() as u32);
+            let token_words = (token_bytes as usize).div_ceil(size_of::<usize>());
+            let mut token_buffer = vec![0usize; token_words];
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(token_buffer.as_mut_ptr().cast()),
+                token_bytes,
+                &mut token_bytes,
+            )
+            .unwrap();
+            CloseHandle(token).unwrap();
+            let token_user = &*token_buffer.as_ptr().cast::<TOKEN_USER>();
+            let sid = token_user.User.Sid;
+            (token_buffer, sid)
+        }
+    }
+
+    #[cfg(windows)]
+    fn dacl_has_noninherited_user_full_control(path: &Path) -> bool {
         use std::mem::size_of;
         use std::os::windows::ffi::OsStrExt;
 
+        use windows::Win32::Foundation::BOOL;
         use windows::Win32::Security::{
-            DACL_SECURITY_INFORMATION, GetFileSecurityW, PSECURITY_DESCRIPTOR,
+            ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+            DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetFileSecurityW,
+            GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERITED_ACE,
+            PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
         };
+        use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+        use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
         use windows::core::PCWSTR;
 
+        let (_token_buffer, user_sid) = current_user_sid();
         let wide_path: Vec<u16> = path
             .as_os_str()
             .encode_wide()
@@ -640,21 +935,62 @@ mod tests {
         assert!(descriptor_bytes > 0);
 
         let descriptor_words = (descriptor_bytes as usize).div_ceil(size_of::<usize>());
-        let mut descriptor = vec![0usize; descriptor_words];
+        let mut descriptor_buffer = vec![0usize; descriptor_words];
+        let descriptor = PSECURITY_DESCRIPTOR(descriptor_buffer.as_mut_ptr().cast());
         unsafe {
             GetFileSecurityW(
                 PCWSTR(wide_path.as_ptr()),
                 DACL_SECURITY_INFORMATION.0,
-                PSECURITY_DESCRIPTOR(descriptor.as_mut_ptr().cast()),
+                descriptor,
                 descriptor_bytes,
                 &mut descriptor_bytes,
             )
             .ok()
             .unwrap();
-        }
-        unsafe {
-            std::slice::from_raw_parts(descriptor.as_ptr().cast::<u8>(), descriptor_bytes as usize)
-                .to_vec()
+
+            let mut control = 0u16;
+            let mut revision = 0u32;
+            GetSecurityDescriptorControl(descriptor, &mut control, &mut revision).unwrap();
+            if control & SE_DACL_PROTECTED.0 == 0 {
+                return false;
+            }
+
+            let mut present = BOOL::default();
+            let mut defaulted = BOOL::default();
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted).unwrap();
+            if !present.as_bool() || dacl.is_null() {
+                return false;
+            }
+
+            let mut info = ACL_SIZE_INFORMATION::default();
+            GetAclInformation(
+                dacl,
+                (&mut info as *mut ACL_SIZE_INFORMATION).cast(),
+                size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+            .unwrap();
+
+            for index in 0..info.AceCount {
+                let mut ace_ptr = std::ptr::null_mut();
+                GetAce(dacl, index, &mut ace_ptr).unwrap();
+                let ace = &*ace_ptr.cast::<ACCESS_ALLOWED_ACE>();
+                if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
+                    continue;
+                }
+                if u32::from(ace.Header.AceFlags) & INHERITED_ACE.0 != 0 {
+                    continue;
+                }
+                if ace.Mask != FILE_ALL_ACCESS.0 {
+                    continue;
+                }
+                let ace_sid = PSID((&ace.SidStart as *const u32).cast_mut().cast());
+                if EqualSid(ace_sid, user_sid).is_ok() {
+                    return true;
+                }
+            }
+            false
         }
     }
 
@@ -664,11 +1000,58 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
         std::fs::write(&path, b"original").unwrap();
-        let before = windows_dacl(&path);
+        crate::windows_security::restrict_path_to_current_user(&path).unwrap();
+        assert!(dacl_has_noninherited_user_full_control(&path));
 
         atomic_write_preserving_permissions(&path, b"replacement").unwrap();
 
-        assert_eq!(windows_dacl(&path), before);
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert!(
+            dacl_has_noninherited_user_full_control(&path),
+            "destination DACL lost the explicit current-user ACE"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_preserving_write_errors_when_destination_has_no_delete_share() {
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows::Win32::Foundation::{CloseHandle, GENERIC_READ};
+        use windows::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        use windows::core::PCWSTR;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        std::fs::write(&path, b"original").unwrap();
+
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                GENERIC_READ.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+        }
+        .expect("open dest without delete sharing");
+
+        let error = atomic_write_preserving_permissions(&path, b"replacement").unwrap_err();
+        unsafe {
+            CloseHandle(handle).ok();
+        }
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        let message = error.to_string();
+        assert!(
+            message.contains("delete sharing"),
+            "expected a clear sharing error, got {message}"
+        );
     }
 
     #[cfg(windows)]
