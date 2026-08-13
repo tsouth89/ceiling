@@ -2,6 +2,7 @@
 //! recovery, and snapshot bookkeeping.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager, WebviewWindow};
 
@@ -164,35 +165,58 @@ pub fn reopen_to_target(
     )
 }
 
+/// Windows delivers two Left+Up tray events for a double-click. Ignore hide
+/// for this long after a tray-initiated show so the dashboard does not flash
+/// open and disappear.
+const TRAY_TOGGLE_GRACE: Duration = Duration::from_millis(500);
+
 /// Toggle the primary dashboard from the tray icon: hide if it is already
 /// showing, otherwise reveal it. `reopen_to_target` stays on the existing
 /// `main` window (no WebviewWindowBuilder), so this is safe to call from the
 /// native tray event-loop callback.
 pub fn toggle_dashboard(app: &AppHandle) {
-    let current = match app.try_state::<Mutex<AppState>>() {
-        Some(state) => state
-            .lock()
-            .map(|guard| guard.surface_machine.current())
-            .unwrap_or(SurfaceMode::Hidden),
-        None => SurfaceMode::Hidden,
+    let recently_shown = match app.try_state::<Mutex<AppState>>() {
+        Some(state) => {
+            let guard = state.lock().unwrap_or_else(|error| error.into_inner());
+            guard.was_tray_panel_recently_shown(std::time::Instant::now(), TRAY_TOGGLE_GRACE)
+        }
+        None => false,
     };
-    let main_window_visible = app
-        .get_webview_window("main")
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
+    let main_window_visible = match app.get_webview_window("main") {
+        Some(window) => match window.is_visible() {
+            Ok(visible) => visible,
+            Err(error) => {
+                tracing::debug!("shell: tray dashboard visibility check failed: {error}");
+                false
+            }
+        },
+        None => false,
+    };
 
-    if should_hide_dashboard_on_tray_click(current, main_window_visible) {
-        let _ = super::window::hide_to_tray(app);
-    } else {
-        let _ = reopen_to_target(app, SurfaceMode::PopOut, SurfaceTarget::Dashboard, None);
+    if should_hide_dashboard_on_tray_click(main_window_visible, recently_shown) {
+        if let Err(error) = super::window::hide_to_tray(app) {
+            tracing::debug!("shell: tray dashboard hide failed: {error}");
+        }
+        return;
+    }
+
+    if main_window_visible {
+        // Extra Left+Up from a Windows double-click while the dashboard we
+        // just opened is still settling.
+        return;
+    }
+
+    match reopen_to_target(app, SurfaceMode::PopOut, SurfaceTarget::Dashboard, None) {
+        Ok(_) => mark_tray_panel_shown(app),
+        Err(error) => tracing::debug!("shell: tray dashboard reopen failed: {error}"),
     }
 }
 
 pub(super) fn should_hide_dashboard_on_tray_click(
-    current: SurfaceMode,
     main_window_visible: bool,
+    recently_shown: bool,
 ) -> bool {
-    current == SurfaceMode::PopOut && main_window_visible
+    main_window_visible && !recently_shown
 }
 
 fn apply_transition_request_with_strategy(

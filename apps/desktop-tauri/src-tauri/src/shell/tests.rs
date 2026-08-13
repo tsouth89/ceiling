@@ -65,26 +65,12 @@ fn conditional_hide_to_tray_leaves_non_matching_surface_alone() {
 
 #[test]
 fn tray_toggle_hides_only_when_dashboard_window_is_visible() {
-    assert!(should_hide_dashboard_on_tray_click(
-        SurfaceMode::PopOut,
-        true
-    ));
-    assert!(!should_hide_dashboard_on_tray_click(
-        SurfaceMode::PopOut,
-        false
-    ));
-    assert!(!should_hide_dashboard_on_tray_click(
-        SurfaceMode::Hidden,
-        true
-    ));
-    assert!(!should_hide_dashboard_on_tray_click(
-        SurfaceMode::TrayPanel,
-        true
-    ));
-    assert!(!should_hide_dashboard_on_tray_click(
-        SurfaceMode::Settings,
-        true
-    ));
+    assert!(should_hide_dashboard_on_tray_click(true, false));
+    assert!(!should_hide_dashboard_on_tray_click(false, false));
+    // A second Left+Up from a Windows double-click arrives while the
+    // just-opened dashboard is still inside the show grace.
+    assert!(!should_hide_dashboard_on_tray_click(true, true));
+    assert!(!should_hide_dashboard_on_tray_click(false, true));
 }
 
 #[test]
