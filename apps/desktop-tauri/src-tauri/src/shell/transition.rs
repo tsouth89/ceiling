@@ -164,6 +164,37 @@ pub fn reopen_to_target(
     )
 }
 
+/// Toggle the primary dashboard from the tray icon: hide if it is already
+/// showing, otherwise reveal it. `reopen_to_target` stays on the existing
+/// `main` window (no WebviewWindowBuilder), so this is safe to call from the
+/// native tray event-loop callback.
+pub fn toggle_dashboard(app: &AppHandle) {
+    let current = match app.try_state::<Mutex<AppState>>() {
+        Some(state) => state
+            .lock()
+            .map(|guard| guard.surface_machine.current())
+            .unwrap_or(SurfaceMode::Hidden),
+        None => SurfaceMode::Hidden,
+    };
+    let main_window_visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+
+    if should_hide_dashboard_on_tray_click(current, main_window_visible) {
+        let _ = super::window::hide_to_tray(app);
+    } else {
+        let _ = reopen_to_target(app, SurfaceMode::PopOut, SurfaceTarget::Dashboard, None);
+    }
+}
+
+pub(super) fn should_hide_dashboard_on_tray_click(
+    current: SurfaceMode,
+    main_window_visible: bool,
+) -> bool {
+    current == SurfaceMode::PopOut && main_window_visible
+}
+
 fn apply_transition_request_with_strategy(
     app: &AppHandle,
     request: ShellTransitionRequest,
@@ -607,9 +638,3 @@ pub(super) fn apply_transition(
         }
     }
 }
-
-// The old `handle_tray_panel_click` / `toggle_tray_panel` /
-// `should_hide_tray_panel_on_toggle` trio (tray-icon left-click handling for
-// the shared `main` window's TrayPanel state) was removed here: the flyout is
-// now its own dedicated window, while tray-icon left-click opens the
-// dashboard instead of going through the `main`-window tray-panel state.
