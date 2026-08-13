@@ -11,10 +11,11 @@ name: PR review
 
 on:
   pull_request_target:
-    # one-review-per-PR: synchronize removed 2026-08-08 — a review on
-    # every push had agents in an endless fix-review loop. Reviews now
-    # fire once when the PR opens and again if it is marked ready.
-    types: [opened, ready_for_review, labeled]
+    # Pushes trigger again, but the round budget lives in CodeRev: two
+    # rounds per PR, four on a large diff, then silence. Removing the
+    # trigger entirely also removed the follow-up pass that catches
+    # fix-introduced bugs, which was too blunt.
+    types: [opened, synchronize, ready_for_review, labeled]
 
 # A second push reviews the new head, not race the old one.
 concurrency:
@@ -54,7 +55,7 @@ jobs:
       # Pin the reviewed action commit: mutable refs must not execute on a
       # persistent self-hosted machine with repository secrets.
       - name: Review
-        uses: tsouth89/coderev@ac21b7418a2957cc91b9a459f0373a034c0bba5e
+        uses: tsouth89/coderev@97c7f3b3e5de5ef06f87e3e5ff5f11d66fc84336
         with:
           provider: exec
           model: grok-subscription
@@ -65,6 +66,4 @@ jobs:
           find2-model: muse-spark-1.2-contributor
           find2-api-key: ${{ secrets.REVIEW_FIND2_API_KEY }}
           # Phase one isolates Grok generation quality; DeepSeek remains the panel.
-          refute-provider: deepseek
-          refute-api-key: ${{ secrets.REVIEW_API_KEY }}
           conventions: AGENTS.md
