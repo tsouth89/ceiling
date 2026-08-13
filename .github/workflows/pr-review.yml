@@ -1,6 +1,6 @@
 # CodeRev shadow review.
 #
-# The Grok subscription canary changes generation only. DeepSeek keeps judging
+# Grok both hunts and judges here: it generates candidates and runs the
 # the panel so generator quality can be measured independently before the
 # riskier panel swap. Keep rates and wall time come from run logs; do not scale
 # this workflow until they hold at 30-50% and under roughly five minutes.
@@ -65,5 +65,5 @@ jobs:
           find2-provider: meta
           find2-model: muse-spark-1.2-contributor
           find2-api-key: ${{ secrets.REVIEW_FIND2_API_KEY }}
-          # Phase one isolates Grok generation quality; DeepSeek remains the panel.
+          # batched refutation panel (one call per lens). Muse is the second generator.
           conventions: AGENTS.md
