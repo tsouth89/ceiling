@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use reqwest::Client;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -602,26 +602,20 @@ impl GrokCredentials {
 
     fn persist_to_disk(&self) -> Result<(), String> {
         let path = GrokProvider::auth_file_path().ok_or_else(|| "no auth path".to_string())?;
-        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let mut root: Value =
-            serde_json::from_str(&text).map_err(|e| format!("decode auth.json: {e}"))?;
-        let entry = root
-            .as_object_mut()
-            .and_then(|map| map.get_mut(&self.scope))
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| "auth scope missing".to_string())?;
-        entry.insert("key".to_string(), Value::String(self.access_token.clone()));
-        if let Some(refresh) = &self.refresh_token {
-            entry.insert("refresh_token".to_string(), Value::String(refresh.clone()));
-        }
-        if let Some(exp) = self.expires_at {
-            entry.insert(
-                "expires_at".to_string(),
-                Value::String(exp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
-            );
-        }
-        let encoded = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-        std::fs::write(&path, encoded).map_err(|e| e.to_string())
+        self.persist_to_path(&path)
+    }
+
+    fn persist_to_path(&self, path: &Path) -> Result<(), String> {
+        crate::secure_file::with_file_write_lock(path, || {
+            let text = std::fs::read_to_string(path)?;
+            let mut root: Value = serde_json::from_str(&text)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            apply_refresh_to_auth_json(&mut root, self)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            let encoded = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
+            crate::secure_file::atomic_write_preserving_permissions(path, &encoded)
+        })
+        .map_err(|error| format!("update auth.json: {error}"))
     }
 
     fn login_method(&self) -> Option<String> {
@@ -633,6 +627,31 @@ impl GrokCredentials {
             None => None,
         }
     }
+}
+
+fn apply_refresh_to_auth_json(
+    root: &mut Value,
+    credentials: &GrokCredentials,
+) -> Result<(), String> {
+    let entry = root
+        .as_object_mut()
+        .and_then(|map| map.get_mut(&credentials.scope))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "auth scope missing".to_string())?;
+    entry.insert(
+        "key".to_string(),
+        Value::String(credentials.access_token.clone()),
+    );
+    if let Some(refresh) = &credentials.refresh_token {
+        entry.insert("refresh_token".to_string(), Value::String(refresh.clone()));
+    }
+    if let Some(exp) = credentials.expires_at {
+        entry.insert(
+            "expires_at".to_string(),
+            Value::String(exp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        );
+    }
+    Ok(())
 }
 
 fn parse_expires_at(raw: &str) -> Option<DateTime<Utc>> {
@@ -1187,6 +1206,118 @@ fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refreshed_credentials(access_token: &str) -> GrokCredentials {
+        GrokCredentials {
+            scope: "https://auth.x.ai::test".to_string(),
+            access_token: access_token.to_string(),
+            refresh_token: Some(format!("refresh-{access_token}")),
+            auth_mode: Some("oidc".to_string()),
+            email: Some("user@example.com".to_string()),
+            team_id: Some("team".to_string()),
+            expires_at: DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+                .ok()
+                .map(|date| date.with_timezone(&Utc)),
+            oidc_issuer: Some("https://auth.x.ai".to_string()),
+            oidc_client_id: Some("client".to_string()),
+        }
+    }
+
+    #[test]
+    fn refresh_persistence_preserves_unknown_scopes_and_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "https://auth.x.ai::test": {
+                    "key": "old",
+                    "refresh_token": "old-refresh",
+                    "future_field": {"keep": true}
+                },
+                "https://accounts.x.ai/sign-in": {"key": "other-scope"},
+                "future_root": "keep"
+            }"#,
+        )
+        .expect("seed auth file");
+
+        refreshed_credentials("new-access")
+            .persist_to_path(&path)
+            .expect("persist refresh");
+
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        let entry = &stored["https://auth.x.ai::test"];
+        assert_eq!(entry["key"], "new-access");
+        assert_eq!(entry["refresh_token"], "refresh-new-access");
+        assert_eq!(entry["future_field"]["keep"], true);
+        assert_eq!(
+            stored["https://accounts.x.ai/sign-in"]["key"],
+            "other-scope"
+        );
+        assert_eq!(stored["future_root"], "keep");
+    }
+
+    #[test]
+    fn concurrent_refresh_persistence_keeps_valid_complete_auth_json() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "https://auth.x.ai::test": {"key":"old","unknown":"keep"},
+                "other": {"key":"other"}
+            }"#,
+        )
+        .expect("seed auth file");
+        let barrier = Arc::new(Barrier::new(3));
+        let writers: Vec<_> = ["refresh-a", "refresh-b"]
+            .into_iter()
+            .map(|access_token| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    refreshed_credentials(access_token)
+                        .persist_to_path(&path)
+                        .expect("persist concurrent refresh");
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert!(matches!(
+            stored["https://auth.x.ai::test"]["key"].as_str(),
+            Some("refresh-a" | "refresh-b")
+        ));
+        assert_eq!(stored["https://auth.x.ai::test"]["unknown"], "keep");
+        assert_eq!(stored["other"]["key"], "other");
+    }
+
+    #[test]
+    fn failed_refresh_persistence_leaves_original_auth_file_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+        let original = b"{not valid json";
+        std::fs::write(&path, original).expect("seed invalid auth file");
+
+        assert!(
+            refreshed_credentials("new-access")
+                .persist_to_path(&path)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).expect("read original"), original);
+    }
 
     #[test]
     fn parses_auth_file_prefer_oidc() {

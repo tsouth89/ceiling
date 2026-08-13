@@ -40,6 +40,27 @@ pub(crate) fn with_state_write_lock_at<T>(
     operation()
 }
 
+/// Serialize writes to a third-party state file without folding unrelated
+/// credential paths into Ceiling's global state lock.
+pub(crate) fn with_file_write_lock<T>(
+    file_path: &Path,
+    operation: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    let parent = file_path.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "state file path has no parent")
+    })?;
+    let file_name = file_path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "state file path has no file name",
+        )
+    })?;
+    let mut lock_name = OsString::from(".");
+    lock_name.push(file_name);
+    lock_name.push(".ceiling-write.lock");
+    with_state_write_lock_at(&parent.join(lock_name), operation)
+}
+
 struct StateWriteLock {
     #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,
@@ -217,6 +238,26 @@ pub fn write_string(path: &Path, contents: &str) -> io::Result<()> {
 /// on one filesystem. A crash can leave a harmless temp file, but it cannot
 /// truncate the last known-good settings or credential file.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with_permissions(path, bytes, AtomicWritePermissions::Private)
+}
+
+/// Atomically replace a file owned by another application while retaining its
+/// existing permission boundary.
+pub(crate) fn atomic_write_preserving_permissions(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with_permissions(path, bytes, AtomicWritePermissions::PreserveExisting)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AtomicWritePermissions {
+    Private,
+    PreserveExisting,
+}
+
+fn atomic_write_with_permissions(
+    path: &Path,
+    bytes: &[u8],
+    permission_mode: AtomicWritePermissions,
+) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "state file path has no parent")
     })?;
@@ -262,13 +303,20 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })?;
     let mut temp_file = temp_file.expect("temp path and file are assigned together");
 
+    let existing_permissions = if permission_mode == AtomicWritePermissions::PreserveExisting {
+        std::fs::metadata(path)
+            .ok()
+            .map(|metadata| metadata.permissions())
+    } else {
+        None
+    };
+
     let result = (|| {
-        // Apply the private ACL/mode before secret bytes reach disk.
-        restrict_file_permissions(&temp_path)?;
+        prepare_temp_permissions(&temp_path, permission_mode, existing_permissions.as_ref())?;
         temp_file.write_all(bytes)?;
         temp_file.sync_all()?;
         drop(temp_file);
-        atomic_replace(&temp_path, path)?;
+        atomic_replace(&temp_path, path, permission_mode)?;
         sync_parent_directory(parent)?;
         Ok(())
     })();
@@ -280,36 +328,87 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
+fn atomic_replace(
+    from: &Path,
+    to: &Path,
+    permission_mode: AtomicWritePermissions,
+) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, REPLACE_FILE_FLAGS,
+        ReplaceFileW,
     };
     use windows::core::PCWSTR;
 
-    let from: Vec<u16> = from
+    let destination_exists = to.exists();
+    let wide_from: Vec<u16> = from
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let to: Vec<u16> = to
+    let wide_to: Vec<u16> = to
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
     unsafe {
-        MoveFileExW(
-            PCWSTR(from.as_ptr()),
-            PCWSTR(to.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-        .map_err(|error| io::Error::other(format!("atomic file replacement failed: {error}")))
+        if permission_mode == AtomicWritePermissions::PreserveExisting && destination_exists {
+            ReplaceFileW(
+                PCWSTR(wide_to.as_ptr()),
+                PCWSTR(wide_from.as_ptr()),
+                PCWSTR::null(),
+                REPLACE_FILE_FLAGS(0),
+                None,
+                None,
+            )
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "metadata-preserving file replacement failed: {error}"
+                ))
+            })
+        } else {
+            MoveFileExW(
+                PCWSTR(wide_from.as_ptr()),
+                PCWSTR(wide_to.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+            .map_err(|error| io::Error::other(format!("atomic file replacement failed: {error}")))
+        }
     }
 }
 
 #[cfg(not(windows))]
-fn atomic_replace(from: &Path, to: &Path) -> io::Result<()> {
+fn atomic_replace(
+    from: &Path,
+    to: &Path,
+    _permission_mode: AtomicWritePermissions,
+) -> io::Result<()> {
     std::fs::rename(from, to)
+}
+
+#[cfg(windows)]
+fn prepare_temp_permissions(
+    path: &Path,
+    _permission_mode: AtomicWritePermissions,
+    _existing_permissions: Option<&std::fs::Permissions>,
+) -> io::Result<()> {
+    // ReplaceFileW transfers the destination's metadata to the replacement.
+    // Keep the temporary secret current-user-only until that atomic swap.
+    restrict_file_permissions(path)
+}
+
+#[cfg(not(windows))]
+fn prepare_temp_permissions(
+    path: &Path,
+    permission_mode: AtomicWritePermissions,
+    existing_permissions: Option<&std::fs::Permissions>,
+) -> io::Result<()> {
+    if permission_mode == AtomicWritePermissions::PreserveExisting
+        && let Some(permissions) = existing_permissions
+    {
+        return std::fs::set_permissions(path, permissions.clone());
+    }
+    restrict_file_permissions(path)
 }
 
 #[cfg(unix)]
@@ -477,6 +576,99 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect::<Vec<_>>();
         assert_eq!(names, vec![OsString::from("secure.json")]);
+    }
+
+    #[test]
+    fn failed_metadata_preserving_replacement_keeps_destination_and_cleans_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(atomic_write_preserving_permissions(&path, b"replacement").is_err());
+        assert!(path.is_dir());
+        let temp_artifacts = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains("ceiling-tmp"))
+            .count();
+        assert_eq!(temp_artifacts, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_preserving_write_keeps_unix_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        std::fs::write(&path, b"original").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        atomic_write_preserving_permissions(&path, b"replacement").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[cfg(windows)]
+    fn windows_dacl(path: &Path) -> Vec<u8> {
+        use std::mem::size_of;
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows::Win32::Security::{
+            DACL_SECURITY_INFORMATION, GetFileSecurityW, PSECURITY_DESCRIPTOR,
+        };
+        use windows::core::PCWSTR;
+
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut descriptor_bytes = 0u32;
+        unsafe {
+            let _ = GetFileSecurityW(
+                PCWSTR(wide_path.as_ptr()),
+                DACL_SECURITY_INFORMATION.0,
+                PSECURITY_DESCRIPTOR(std::ptr::null_mut()),
+                0,
+                &mut descriptor_bytes,
+            );
+        }
+        assert!(descriptor_bytes > 0);
+
+        let descriptor_words = (descriptor_bytes as usize).div_ceil(size_of::<usize>());
+        let mut descriptor = vec![0usize; descriptor_words];
+        unsafe {
+            GetFileSecurityW(
+                PCWSTR(wide_path.as_ptr()),
+                DACL_SECURITY_INFORMATION.0,
+                PSECURITY_DESCRIPTOR(descriptor.as_mut_ptr().cast()),
+                descriptor_bytes,
+                &mut descriptor_bytes,
+            )
+            .ok()
+            .unwrap();
+        }
+        unsafe {
+            std::slice::from_raw_parts(descriptor.as_ptr().cast::<u8>(), descriptor_bytes as usize)
+                .to_vec()
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_preserving_write_keeps_windows_dacl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        std::fs::write(&path, b"original").unwrap();
+        let before = windows_dacl(&path);
+
+        atomic_write_preserving_permissions(&path, b"replacement").unwrap();
+
+        assert_eq!(windows_dacl(&path), before);
     }
 
     #[cfg(windows)]

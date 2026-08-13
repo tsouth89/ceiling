@@ -201,11 +201,7 @@ impl GeminiApi {
 
     fn save_credentials(&self, creds: &OAuthCredentials) -> Result<(), ProviderError> {
         let creds_path = self.home_dir.join(".gemini").join("oauth_creds.json");
-        let content =
-            serde_json::to_string_pretty(creds).map_err(|e| ProviderError::Parse(e.to_string()))?;
-        std::fs::write(&creds_path, content)
-            .map_err(|e| ProviderError::Other(format!("Failed to save credentials: {}", e)))?;
-        Ok(())
+        persist_refreshed_credentials(&creds_path, creds)
     }
 
     fn extract_oauth_client_credentials(&self) -> Result<OAuthClientCredentials, ProviderError> {
@@ -546,6 +542,51 @@ impl OAuthCredentials {
     }
 }
 
+fn persist_refreshed_credentials(
+    path: &Path,
+    credentials: &OAuthCredentials,
+) -> Result<(), ProviderError> {
+    crate::secure_file::with_file_write_lock(path, || {
+        let content = std::fs::read_to_string(path)?;
+        let mut root: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        apply_refresh_to_credentials_json(&mut root, credentials)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let encoded = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
+        crate::secure_file::atomic_write_preserving_permissions(path, &encoded)
+    })
+    .map_err(|error| ProviderError::Other(format!("Failed to update Gemini credentials: {error}")))
+}
+
+fn apply_refresh_to_credentials_json(
+    root: &mut serde_json::Value,
+    credentials: &OAuthCredentials,
+) -> Result<(), String> {
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| "Gemini credentials root is not an object".to_string())?;
+    let access_token = credentials
+        .access_token
+        .as_ref()
+        .ok_or_else(|| "refreshed Gemini access token is missing".to_string())?;
+    object.insert(
+        "access_token".to_string(),
+        serde_json::Value::String(access_token.clone()),
+    );
+    if let Some(id_token) = &credentials.id_token {
+        object.insert(
+            "id_token".to_string(),
+            serde_json::Value::String(id_token.clone()),
+        );
+    }
+    if let Some(expiry_date) = credentials.expiry_date {
+        let expiry = serde_json::Number::from_f64(expiry_date)
+            .ok_or_else(|| "refreshed Gemini expiry is not finite".to_string())?;
+        object.insert("expiry_date".to_string(), serde_json::Value::Number(expiry));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct OAuthClientCredentials {
     client_id: String,
@@ -683,6 +724,99 @@ fn jwt_payload(token: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refreshed_credentials(access_token: &str) -> OAuthCredentials {
+        OAuthCredentials {
+            access_token: Some(access_token.to_string()),
+            id_token: Some(format!("id-{access_token}")),
+            refresh_token: Some("stale-struct-refresh".to_string()),
+            expiry_date: Some(1_800_000_000_000.0),
+        }
+    }
+
+    #[test]
+    fn refresh_persistence_preserves_unknown_and_unmodified_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "access_token": "old-access",
+                "id_token": "old-id",
+                "refresh_token": "newer-disk-refresh",
+                "expiry_date": 1,
+                "token_type": "Bearer",
+                "future_cli_state": {"keep": true}
+            }"#,
+        )
+        .expect("seed credentials");
+
+        persist_refreshed_credentials(&path, &refreshed_credentials("new-access"))
+            .expect("persist refresh");
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert_eq!(stored["access_token"], "new-access");
+        assert_eq!(stored["id_token"], "id-new-access");
+        assert_eq!(stored["refresh_token"], "newer-disk-refresh");
+        assert_eq!(stored["token_type"], "Bearer");
+        assert_eq!(stored["future_cli_state"]["keep"], true);
+    }
+
+    #[test]
+    fn concurrent_refresh_persistence_keeps_valid_complete_json() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+        std::fs::write(
+            &path,
+            r#"{"access_token":"old","refresh_token":"keep","unknown":"keep"}"#,
+        )
+        .expect("seed credentials");
+        let barrier = Arc::new(Barrier::new(3));
+        let writers: Vec<_> = ["refresh-a", "refresh-b"]
+            .into_iter()
+            .map(|access_token| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    persist_refreshed_credentials(&path, &refreshed_credentials(access_token))
+                        .expect("persist concurrent refresh");
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert!(matches!(
+            stored["access_token"].as_str(),
+            Some("refresh-a" | "refresh-b")
+        ));
+        assert_eq!(stored["refresh_token"], "keep");
+        assert_eq!(stored["unknown"], "keep");
+    }
+
+    #[test]
+    fn failed_refresh_persistence_leaves_original_file_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+        let original = b"{not valid json";
+        std::fs::write(&path, original).expect("seed invalid credentials");
+
+        assert!(
+            persist_refreshed_credentials(&path, &refreshed_credentials("new-access")).is_err()
+        );
+        assert_eq!(std::fs::read(&path).expect("read original"), original);
+    }
 
     #[test]
     fn extracts_oauth_constants_from_current_cli_bundle() {
