@@ -205,6 +205,7 @@ mod tests {
         // GitHub CLI carries an embedded Authenticode signature, unlike many
         // Windows inbox binaries whose trust comes from a separate catalog.
         let Ok(other_publisher_binary) = which::which("gh.exe") else {
+            eprintln!("skipped: gh.exe not found on PATH");
             return;
         };
 
@@ -216,6 +217,7 @@ mod tests {
     #[test]
     fn signed_ceiling_release_fixture_is_accepted_when_provided() {
         let Some(path) = std::env::var_os("CEILING_SIGNED_INSTALLER_TEST_PATH") else {
+            eprintln!("skipped: CEILING_SIGNED_INSTALLER_TEST_PATH not set");
             return;
         };
 

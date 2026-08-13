@@ -53,7 +53,11 @@ impl UpdateInfo {
     }
 
     pub fn supports_auto_download(&self) -> bool {
-        self.delivery == UpdateDelivery::Installer && self.expected_sha256.is_some()
+        // Authenticode is the independent trust check. If we cannot verify the
+        // installer signature, do not auto-download it.
+        installer_signature_verification_available()
+            && self.delivery == UpdateDelivery::Installer
+            && self.expected_sha256.is_some()
     }
 }
 
@@ -275,6 +279,10 @@ pub async fn download_update(
     let _ = progress_tx.send(UpdateState::Ready(file_path.clone()));
 
     Ok(file_path)
+}
+
+fn installer_signature_verification_available() -> bool {
+    cfg!(target_os = "windows")
 }
 
 fn validate_auto_download(update_info: &UpdateInfo) -> Result<(), String> {
@@ -1004,7 +1012,43 @@ mod tests {
             "https://example.com/Ceiling-1.2.6-Setup.exe"
         );
         assert!(update.supports_auto_apply());
-        assert!(update.supports_auto_download());
+        assert_eq!(
+            update.supports_auto_download(),
+            installer_signature_verification_available()
+        );
+        assert_eq!(
+            validate_auto_download(&update).is_ok(),
+            installer_signature_verification_available()
+        );
+    }
+
+    #[test]
+    fn auto_download_requires_sha256_and_windows_signature_verification() {
+        let with_hash = UpdateInfo {
+            version: "v9.9.9".to_string(),
+            download_url: "https://example.com/Ceiling-9.9.9-Setup.exe".to_string(),
+            expected_sha256: Some(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ),
+            release_url: "https://example.com/release".to_string(),
+            release_notes: String::new(),
+            delivery: UpdateDelivery::Installer,
+        };
+        let without_hash = UpdateInfo {
+            expected_sha256: None,
+            ..with_hash.clone()
+        };
+
+        assert_eq!(
+            with_hash.supports_auto_download(),
+            installer_signature_verification_available()
+        );
+        assert_eq!(
+            validate_auto_download(&with_hash).is_ok(),
+            installer_signature_verification_available()
+        );
+        assert!(!without_hash.supports_auto_download());
+        assert!(validate_auto_download(&without_hash).is_err());
     }
 
     #[test]
