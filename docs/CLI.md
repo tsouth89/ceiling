@@ -79,7 +79,9 @@ codexbar cost --days 7 --json --pretty
 
 ## `diagnose`
 
-Export safe provider diagnostics as JSON.
+Export safe provider diagnostics as JSON. Identity values, credentials,
+provider response bodies, and raw provider error text are excluded; failures
+use normalized local categories and messages.
 
 ```text
 codexbar diagnose [OPTIONS]
