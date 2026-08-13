@@ -378,7 +378,10 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
             .join(I::store_file_name())
     }
 
-    /// Load accounts from disk, returning empty data when nothing is configured
+    /// Load accounts from disk, returning empty data when nothing is configured.
+    ///
+    /// Read-only. Mutations must go through [`Self::try_update`]; `load` then
+    /// [`Self::save`] can overwrite a concurrent edit from a stale snapshot.
     pub fn load(&self) -> Result<DirectoryAccountData<I>, AccountStoreError> {
         if !self.file_path.exists() {
             return Ok(DirectoryAccountData::new());
@@ -406,7 +409,8 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
         .map_err(Into::into)
     }
 
-    /// Save accounts to disk
+    /// Replace the on-disk snapshot. For a read-modify-write, use
+    /// [`Self::try_update`] so the load stays under the same lock as the save.
     pub fn save(&self, data: &DirectoryAccountData<I>) -> Result<(), AccountStoreError> {
         crate::secure_file::with_state_write_lock(|| {
             self.save_unlocked(data).map_err(io::Error::other)

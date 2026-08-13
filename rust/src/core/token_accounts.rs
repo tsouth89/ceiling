@@ -537,6 +537,9 @@ impl TokenAccountStore {
 
     /// Load all accounts from disk, keyed by the providers this build knows.
     ///
+    /// Read-only. Mutations must go through [`Self::try_update_provider`];
+    /// `load` then [`Self::save`] can overwrite a concurrent edit.
+    ///
     /// Ids that do not resolve are omitted here but are **not** forgotten —
     /// [`save`](Self::save) reads them back off disk and preserves them.
     pub fn load(&self) -> Result<HashMap<ProviderId, ProviderAccountData>, TokenAccountError> {
@@ -549,7 +552,10 @@ impl TokenAccountStore {
         Ok(result)
     }
 
-    /// Save all accounts to disk.
+    /// Replace every recognized provider's on-disk snapshot.
+    ///
+    /// For a read-modify-write, use [`Self::try_update_provider`] so the load
+    /// stays under the same lock as the save.
     ///
     /// `accounts` is authoritative for every provider this build resolves, so
     /// omitting one deletes it. Credentials stored under an id this build does
@@ -609,7 +615,9 @@ impl TokenAccountStore {
         Ok(self.file_path.clone())
     }
 
-    /// Load accounts for a specific provider
+    /// Load accounts for a specific provider.
+    ///
+    /// Read-only. Mutations must go through [`Self::try_update_provider`].
     pub fn load_provider(
         &self,
         provider: ProviderId,
@@ -618,7 +626,10 @@ impl TokenAccountStore {
         Ok(all.get(&provider).cloned().unwrap_or_default())
     }
 
-    /// Save accounts for a specific provider
+    /// Replace one provider's accounts under the state lock.
+    ///
+    /// Safe for a freshly built snapshot. Do not `load_provider`, mutate, then
+    /// call this — that snapshot can be stale. Use [`Self::try_update_provider`].
     pub fn save_provider(
         &self,
         provider: ProviderId,
