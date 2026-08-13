@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Added
+- **Ceiling checks who signed an update before it runs it.** An automatic update was trusted on the strength of the SHA256 that GitHub's release metadata reported, so that metadata was the only thing standing between Ceiling and launching an attacker's installer with the user's privileges. Every downloaded installer is now independently checked against Windows Authenticode and pinned to Ceiling's publisher identity, once when the download completes and again immediately before launch. An installer that fails either check is deleted instead of being left on disk to be retried. The publisher identity is pinned rather than the signing key, because Azure Trusted Signing issues a fresh short-lived leaf certificate for every release and a key pin would reject the next legitimate one.
+
 ### Fixed
 - **`diagnose` no longer copies provider error text into an export meant to be shared.** The command already withheld cookies, tokens, account emails, and response bodies, but a failed fetch put the provider's own error string straight into the payload, and that string can carry a signed URL, an account identifier, or an echoed request header. Every failure now reports a local category and a fixed local message instead of anything the provider said.
 - **Heavy Codex sessions no longer vanish from Charts and cost totals.** Codex usage was parsed into 32-bit integers, so a cumulative total past roughly 2.1 billion tokens wrapped to a negative number, which the next step clamped to zero. The effect was not a wrong number but a missing one: the session's tokens and its dollars simply stopped being counted. Token counts are now 64-bit from the log line through to the summary, cumulative deltas saturate instead of wrapping, a genuinely corrupt total is skipped without poisoning the running baseline, and a decreasing cumulative total no longer lowers that baseline so the next valid line over-counts.

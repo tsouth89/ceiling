@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
+#[cfg(target_os = "windows")]
+mod signature;
+
 const GITHUB_REPO: &str = "tsouth89/ceiling";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -266,6 +269,7 @@ pub async fn download_update(
     let response = start_download(&update_info.download_url).await?;
     write_download_response(response, &file_path, &progress_tx).await?;
     verify_download_hash(&file_path, expected_update_sha256(update_info)?).await?;
+    verify_download_signature(&file_path).await?;
 
     // Signal download complete
     let _ = progress_tx.send(UpdateState::Ready(file_path.clone()));
@@ -386,10 +390,69 @@ async fn verify_download_hash(file_path: &PathBuf, expected_hash: &str) -> Resul
     Ok(())
 }
 
+/// Verify the Authenticode signature without blocking the async download task.
+/// A file that fails this independent trust check must never reach `Ready`.
+async fn verify_download_signature(file_path: &Path) -> Result<(), String> {
+    let path = file_path.to_path_buf();
+    let result = match tokio::task::spawn_blocking(move || verify_installer_signature(&path)).await
+    {
+        Ok(result) => result,
+        Err(error) => Err(format!(
+            "Installer signature verification task failed: {error}"
+        )),
+    };
+
+    if let Err(error) = result {
+        return Err(reject_and_delete_installer(file_path, error));
+    }
+
+    tracing::info!(path = %file_path.display(), "Authenticode verification passed");
+    Ok(())
+}
+
 /// Re-verify an installer immediately before launching it.
 pub fn verify_installer_hash(file_path: &Path, expected_hash: &str) -> Result<(), String> {
     let actual = sha256_file(file_path)?;
     verify_sha256_hex(&actual, expected_hash)
+}
+
+/// Validate the installer's Authenticode chain and the exact Ceiling publisher
+/// identity. This is intentionally independent of GitHub's SHA256 metadata.
+pub fn verify_installer_signature(file_path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        signature::verify(file_path)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = file_path;
+        Err("Automatic installer signature verification is only available on Windows.".to_string())
+    }
+}
+
+fn verify_installer_signature_or_delete(file_path: &Path) -> Result<(), String> {
+    match verify_installer_signature(file_path) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(reject_and_delete_installer(file_path, error)),
+    }
+}
+
+fn reject_and_delete_installer(file_path: &Path, reason: String) -> String {
+    match std::fs::remove_file(file_path) {
+        Ok(()) => format!("{reason} The downloaded file was removed."),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => reason,
+        Err(error) => {
+            tracing::warn!(
+                path = %file_path.display(),
+                %error,
+                "failed to delete rejected update installer"
+            );
+            format!(
+                "{reason} Ceiling could not remove the downloaded file; delete it before retrying."
+            )
+        }
+    }
 }
 
 fn verify_sha256_hex(actual_hash: &str, expected_hash: &str) -> Result<(), String> {
@@ -488,6 +551,9 @@ pub fn apply_update(installer_path: &PathBuf) -> Result<(), String> {
     {
         return Err(reason);
     }
+
+    #[cfg(target_os = "windows")]
+    verify_installer_signature_or_delete(installer_path)?;
 
     #[cfg(target_os = "windows")]
     spawn_windows_installer(
@@ -1042,6 +1108,34 @@ mod tests {
         let wrong = "0".repeat(64);
         let err = verify_installer_hash(&path, &wrong).unwrap_err();
         assert!(err.contains("SHA256 mismatch"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn rejected_download_signature_is_deleted() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("Ceiling-99.0.0-Setup.exe");
+        std::fs::write(&path, b"unsigned installer").expect("write installer");
+
+        let error = verify_download_signature(&path).await.unwrap_err();
+
+        assert!(error.contains("unsigned") || error.contains("invalid or untrusted"));
+        assert!(error.contains("downloaded file was removed"));
+        assert!(!path.exists(), "a rejected download must be removed");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn prelaunch_signature_rejection_deletes_the_installer() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("Ceiling-99.0.0-Setup.exe");
+        std::fs::write(&path, b"unsigned installer").expect("write installer");
+
+        let error = verify_installer_signature_or_delete(&path).unwrap_err();
+
+        assert!(error.contains("unsigned") || error.contains("invalid or untrusted"));
+        assert!(error.contains("downloaded file was removed"));
+        assert!(!path.exists(), "a rejected installer must be removed");
     }
 
     #[cfg(target_os = "windows")]
