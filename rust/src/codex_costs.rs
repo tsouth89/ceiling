@@ -99,12 +99,11 @@ struct CodexTokenCounts {
 }
 
 impl CodexTokenCounts {
-    fn from_values(input: i32, cached: i32, output: i32) -> Self {
-        let input = input.max(0) as u64;
+    fn from_values(input: u64, cached: u64, output: u64) -> Self {
         Self {
             input,
-            cached: (cached.max(0) as u64).min(input),
-            output: output.max(0) as u64,
+            cached: cached.min(input),
+            output,
         }
     }
 
@@ -297,6 +296,37 @@ mod tests {
         assert!(!summary.by_effort.contains_key("medium"));
         assert!(summary.by_effort_tokens.contains_key("high"));
         assert!(summary.by_effort_tokens.contains_key("medium"));
+    }
+
+    #[test]
+    fn summary_preserves_token_counts_above_i32_max() {
+        let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let input = i32::MAX as u64 + 1_000;
+        let cached = i32::MAX as u64 + 500;
+        let records = vec![CodexUsageRecord {
+            day_key: "2026-05-31".to_string(),
+            timestamp: None,
+            model: "gpt-5.6-sol".to_string(),
+            effort: Some("high".to_string()),
+            project: Some("ceiling".to_string()),
+            plan: Some("team".to_string()),
+            input,
+            cached,
+            output: 42,
+        }];
+        let mut summary = CostSummary::default();
+
+        let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
+
+        assert!(has_tokens);
+        assert!(cost > 0.0);
+        assert_eq!(summary.input_tokens, input);
+        assert_eq!(summary.cached_tokens, cached);
+        assert_eq!(summary.output_tokens, 42);
+        assert_eq!(summary.by_model_tokens["gpt-5.6-sol"].input_tokens, input);
+        assert_eq!(summary.by_plan_tokens["team"].cached_tokens, cached);
+        assert_eq!(summary.by_project_tokens["ceiling"].output_tokens, 42);
     }
 
     #[test]
