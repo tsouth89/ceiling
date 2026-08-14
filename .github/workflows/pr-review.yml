@@ -20,7 +20,10 @@ on:
 # A second push reviews the new head, not race the old one.
 concurrency:
   group: pr-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Deliberately false: a second event should queue behind the running review,
+  # not destroy it. Duplicate work is already prevented inside CodeRev by the
+  # diff-hash skip and the per-PR round budget.
+  cancel-in-progress: false
 
 permissions:
   contents: read
