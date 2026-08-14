@@ -492,29 +492,26 @@ async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> 
         (None, None) => "GitHub Copilot".to_string(),
     };
 
-    let store = TokenAccountStore::new();
-    let mut data = store
-        .load_provider(ProviderId::Copilot)
-        .map_err(|e| e.to_string())?;
-    let existing_index = login.as_deref().and_then(|login| {
-        data.accounts.iter().position(|account| {
-            account.label == login || account.label.starts_with(&format!("{login} ("))
+    TokenAccountStore::new()
+        .try_update_provider(ProviderId::Copilot, |data| {
+            let existing_index = login.as_deref().and_then(|login| {
+                data.accounts.iter().position(|account| {
+                    account.label == login || account.label.starts_with(&format!("{login} ("))
+                })
+            });
+
+            if let Some(index) = existing_index {
+                data.accounts[index].token = token;
+                data.accounts[index].label = label;
+                data.set_active(index);
+            } else {
+                let mut account = TokenAccount::new(label, token);
+                account.mark_used();
+                data.add_account(account);
+                data.set_active(data.accounts.len().saturating_sub(1));
+            }
+            Ok(())
         })
-    });
-
-    if let Some(index) = existing_index {
-        data.accounts[index].token = token;
-        data.accounts[index].label = label;
-        data.set_active(index);
-    } else {
-        let mut account = TokenAccount::new(label, token);
-        account.mark_used();
-        data.add_account(account);
-        data.set_active(data.accounts.len().saturating_sub(1));
-    }
-
-    store
-        .save_provider(ProviderId::Copilot, &data)
         .map_err(|e| e.to_string())?;
 
     let _ = app.emit(

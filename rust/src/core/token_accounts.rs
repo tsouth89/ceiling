@@ -328,7 +328,7 @@ impl TokenAccountSupport {
 }
 
 /// A single token account for a provider
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokenAccount {
     /// Unique identifier
     pub id: Uuid,
@@ -378,7 +378,7 @@ impl TokenAccount {
 }
 
 /// Account data for a provider
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProviderAccountData {
     /// File format version
     #[serde(default = "default_version")]
@@ -537,6 +537,9 @@ impl TokenAccountStore {
 
     /// Load all accounts from disk, keyed by the providers this build knows.
     ///
+    /// Read-only. Mutations must go through [`Self::try_update_provider`];
+    /// `load` then [`Self::save`] can overwrite a concurrent edit.
+    ///
     /// Ids that do not resolve are omitted here but are **not** forgotten —
     /// [`save`](Self::save) reads them back off disk and preserves them.
     pub fn load(&self) -> Result<HashMap<ProviderId, ProviderAccountData>, TokenAccountError> {
@@ -549,7 +552,10 @@ impl TokenAccountStore {
         Ok(result)
     }
 
-    /// Save all accounts to disk.
+    /// Replace every recognized provider's on-disk snapshot.
+    ///
+    /// For a read-modify-write, use [`Self::try_update_provider`] so the load
+    /// stays under the same lock as the save.
     ///
     /// `accounts` is authoritative for every provider this build resolves, so
     /// omitting one deletes it. Credentials stored under an id this build does
@@ -561,10 +567,7 @@ impl TokenAccountStore {
         &self,
         accounts: &HashMap<ProviderId, ProviderAccountData>,
     ) -> Result<(), TokenAccountError> {
-        crate::secure_file::with_state_write_lock(|| {
-            self.save_unlocked(accounts).map_err(std::io::Error::other)
-        })
-        .map_err(TokenAccountError::Io)
+        with_store_lock(|| self.save_unlocked(accounts))
     }
 
     pub(crate) fn save_unlocked(
@@ -609,7 +612,9 @@ impl TokenAccountStore {
         Ok(self.file_path.clone())
     }
 
-    /// Load accounts for a specific provider
+    /// Load accounts for a specific provider.
+    ///
+    /// Read-only. Mutations must go through [`Self::try_update_provider`].
     pub fn load_provider(
         &self,
         provider: ProviderId,
@@ -618,19 +623,58 @@ impl TokenAccountStore {
         Ok(all.get(&provider).cloned().unwrap_or_default())
     }
 
-    /// Save accounts for a specific provider
+    /// Replace one provider's accounts under the state lock.
+    ///
+    /// Safe for a freshly built snapshot. Do not `load_provider`, mutate, then
+    /// call this — that snapshot can be stale. Use [`Self::try_update_provider`].
     pub fn save_provider(
         &self,
         provider: ProviderId,
         data: &ProviderAccountData,
     ) -> Result<(), TokenAccountError> {
-        crate::secure_file::with_state_write_lock(|| {
-            let mut all = self.load().map_err(std::io::Error::other)?;
+        with_store_lock(|| {
+            let mut all = self.load()?;
             all.insert(provider, data.clone());
-            self.save_unlocked(&all).map_err(std::io::Error::other)
+            self.save_unlocked(&all)
         })
-        .map_err(TokenAccountError::Io)
     }
+
+    /// Mutate one provider's latest account snapshot as a single locked
+    /// transaction, preserving other providers and unrecognized provider ids.
+    pub fn try_update_provider<T>(
+        &self,
+        provider: ProviderId,
+        operation: impl FnOnce(&mut ProviderAccountData) -> Result<T, String>,
+    ) -> anyhow::Result<(ProviderAccountData, T)> {
+        with_store_lock(|| {
+            let mut all = self.load()?;
+            let mut data = all.get(&provider).cloned().unwrap_or_default();
+            let original = data.clone();
+            let result = operation(&mut data).map_err(io::Error::other)?;
+            // `or_default` would insert an empty provider and write a missing
+            // file even when the mutation added nothing.
+            if data != original {
+                all.insert(provider, data.clone());
+                self.save_unlocked(&all)?;
+            }
+            Ok((data, result))
+        })
+        .map_err(Into::into)
+    }
+}
+
+fn with_store_lock<T>(
+    operation: impl FnOnce() -> Result<T, TokenAccountError>,
+) -> Result<T, TokenAccountError> {
+    let mut op_err = None;
+    crate::secure_file::with_state_write_lock(|| match operation() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            op_err = Some(err);
+            Err(io::Error::other("token account store operation failed"))
+        }
+    })
+    .map_err(|lock_err| op_err.unwrap_or(TokenAccountError::Io(lock_err)))
 }
 
 impl Default for TokenAccountStore {
@@ -830,6 +874,67 @@ mod tests {
         let stored = TokenAccountStore::with_path(path).load().expect("reload");
         assert!(stored.contains_key(&ProviderId::Claude));
         assert!(stored.contains_key(&ProviderId::Cursor));
+    }
+
+    #[test]
+    fn transactional_updates_preserve_two_same_provider_adds() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-accounts.json");
+        let barrier = Arc::new(Barrier::new(3));
+        let writers: Vec<_> = ["personal", "work"]
+            .into_iter()
+            .map(|label| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    TokenAccountStore::with_path(path)
+                        .try_update_provider(ProviderId::Claude, |data| {
+                            data.add_account(TokenAccount::new(
+                                label,
+                                format!("sessionKey={label}"),
+                            ));
+                            Ok(())
+                        })
+                        .expect("transactional token account update");
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored = TokenAccountStore::with_path(path)
+            .load_provider(ProviderId::Claude)
+            .expect("reload");
+        assert_eq!(stored.count(), 2);
+        assert!(
+            stored
+                .accounts
+                .iter()
+                .any(|entry| entry.label == "personal")
+        );
+        assert!(stored.accounts.iter().any(|entry| entry.label == "work"));
+    }
+
+    #[test]
+    fn no_op_try_update_provider_leaves_a_missing_store_file_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-accounts.json");
+        let store = TokenAccountStore::with_path(path.clone());
+
+        store
+            .try_update_provider(ProviderId::Claude, |_| Ok(()))
+            .expect("no-op token account update");
+
+        assert!(
+            !path.exists(),
+            "a no-op must not create an empty token-accounts file"
+        );
     }
 
     /// Removing a known provider must still remove it — preservation applies

@@ -20,7 +20,7 @@ use std::{fs, io};
 use uuid::Uuid;
 
 /// Provider-specific behavior for a directory-backed account.
-pub trait AccountIdentity: Clone + Serialize + DeserializeOwned {
+pub trait AccountIdentity: Clone + PartialEq + Serialize + DeserializeOwned {
     /// The directory the CLI itself would use when the user has configured no
     /// accounts explicitly.
     fn ambient_dir() -> PathBuf;
@@ -42,7 +42,7 @@ pub trait AccountIdentity: Clone + Serialize + DeserializeOwned {
 }
 
 /// A single directory-backed account.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryAccount<I> {
     /// Unique identifier
     pub id: Uuid,
@@ -133,7 +133,7 @@ fn fallback_label(config_dir: &Path) -> String {
 }
 
 /// The set of accounts configured for one provider, and which is active.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryAccountData<I> {
     /// File format version
     #[serde(default = "default_version")]
@@ -378,7 +378,10 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
             .join(I::store_file_name())
     }
 
-    /// Load accounts from disk, returning empty data when nothing is configured
+    /// Load accounts from disk, returning empty data when nothing is configured.
+    ///
+    /// Read-only. Mutations must go through [`Self::try_update`]; `load` then
+    /// [`Self::save`] can overwrite a concurrent edit from a stale snapshot.
     pub fn load(&self) -> Result<DirectoryAccountData<I>, AccountStoreError> {
         if !self.file_path.exists() {
             return Ok(DirectoryAccountData::new());
@@ -387,8 +390,37 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
         Ok(serde_json::from_str(&data)?)
     }
 
-    /// Save accounts to disk
+    /// Apply a mutation to the latest on-disk snapshot while holding the shared
+    /// cross-process state lock for the complete read-modify-write cycle.
+    ///
+    /// Callers should perform provider or network I/O before entering this
+    /// closure. Only the local account mutation and its atomic save belong in
+    /// the transaction.
+    pub fn try_update<T>(
+        &self,
+        operation: impl FnOnce(&mut DirectoryAccountData<I>) -> Result<T, String>,
+    ) -> anyhow::Result<(DirectoryAccountData<I>, T)> {
+        with_store_lock(|| {
+            let mut data = self.load()?;
+            let original = data.clone();
+            let result = operation(&mut data).map_err(io::Error::other)?;
+            // A no-op must not create a missing file or rewrite one and drop
+            // unknown fields the deserialized snapshot never had.
+            if data != original {
+                self.save_unlocked(&data)?;
+            }
+            Ok((data, result))
+        })
+        .map_err(Into::into)
+    }
+
+    /// Replace the on-disk snapshot. For a read-modify-write, use
+    /// [`Self::try_update`] so the load stays under the same lock as the save.
     pub fn save(&self, data: &DirectoryAccountData<I>) -> Result<(), AccountStoreError> {
+        with_store_lock(|| self.save_unlocked(data))
+    }
+
+    fn save_unlocked(&self, data: &DirectoryAccountData<I>) -> Result<(), AccountStoreError> {
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -396,6 +428,20 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
         crate::secure_file::write_string(&self.file_path, &json)?;
         Ok(())
     }
+}
+
+fn with_store_lock<T>(
+    operation: impl FnOnce() -> Result<T, AccountStoreError>,
+) -> Result<T, AccountStoreError> {
+    let mut op_err = None;
+    crate::secure_file::with_state_write_lock(|| match operation() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            op_err = Some(err);
+            Err(io::Error::other("account store operation failed"))
+        }
+    })
+    .map_err(|lock_err| op_err.unwrap_or(AccountStoreError::Io(lock_err)))
 }
 
 impl<I: AccountIdentity> Default for DirectoryAccountStore<I> {
@@ -562,5 +608,146 @@ mod tests {
         let loaded = store.load().expect("load");
         assert_eq!(loaded.count(), 2);
         assert_eq!(loaded.active_account().map(|a| a.id), Some(work));
+    }
+
+    #[test]
+    fn transactional_updates_preserve_two_concurrent_directory_account_adds() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test-accounts.json");
+        let barrier = Arc::new(Barrier::new(3));
+        let writers: Vec<_> = ["personal", "work"]
+            .into_iter()
+            .map(|label| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    DirectoryAccountStore::<TestIdentity>::with_path(path)
+                        .try_update(|data| {
+                            data.add_account(account(label, &format!("/dirs/{label}")));
+                            Ok(())
+                        })
+                        .expect("transactional directory account update");
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored = DirectoryAccountStore::<TestIdentity>::with_path(path)
+            .load()
+            .expect("reload");
+        assert_eq!(stored.count(), 2);
+        assert!(
+            stored
+                .accounts
+                .iter()
+                .any(|entry| entry.label == "personal")
+        );
+        assert!(stored.accounts.iter().any(|entry| entry.label == "work"));
+    }
+
+    #[test]
+    fn no_op_try_update_leaves_a_missing_store_file_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test-accounts.json");
+        let store: DirectoryAccountStore<TestIdentity> =
+            DirectoryAccountStore::with_path(path.clone());
+
+        store
+            .try_update(|_| Ok(()))
+            .expect("no-op directory account update");
+
+        assert!(
+            !path.exists(),
+            "a no-op must not create an empty accounts file"
+        );
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+    struct UnserializableIdentity;
+
+    impl serde::Serialize for UnserializableIdentity {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::Error;
+            Err(S::Error::custom("identity cannot be serialized"))
+        }
+    }
+
+    impl AccountIdentity for UnserializableIdentity {
+        fn ambient_dir() -> PathBuf {
+            PathBuf::from("/ambient")
+        }
+        fn store_file_name() -> &'static str {
+            "unserializable-accounts.json"
+        }
+        fn read(_config_dir: &Path) -> Option<Self> {
+            None
+        }
+        fn is_signed_in(_config_dir: &Path) -> bool {
+            false
+        }
+        fn suggested_label(&self) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn save_keeps_json_errors_as_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store: DirectoryAccountStore<UnserializableIdentity> =
+            DirectoryAccountStore::with_path(dir.path().join("test-accounts.json"));
+
+        let mut data = DirectoryAccountData::<UnserializableIdentity>::new();
+        data.accounts.push(DirectoryAccount {
+            id: Uuid::new_v4(),
+            label: "broken".to_string(),
+            config_dir: PathBuf::from("/dirs/broken"),
+            tint: None,
+            identity: Some(UnserializableIdentity),
+            added_at: 0,
+            last_used: None,
+        });
+
+        let error = store.save(&data).expect_err("serialize must fail");
+        assert!(
+            matches!(error, AccountStoreError::Json(_)),
+            "serde failures must stay Json, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn try_update_keeps_json_errors_as_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store: DirectoryAccountStore<UnserializableIdentity> =
+            DirectoryAccountStore::with_path(dir.path().join("test-accounts.json"));
+
+        let error = store
+            .try_update(|data| {
+                data.accounts.push(DirectoryAccount {
+                    id: Uuid::new_v4(),
+                    label: "broken".to_string(),
+                    config_dir: PathBuf::from("/dirs/broken"),
+                    tint: None,
+                    identity: Some(UnserializableIdentity),
+                    added_at: 0,
+                    last_used: None,
+                });
+                Ok(())
+            })
+            .expect_err("serialize must fail");
+
+        let store_error = error
+            .downcast_ref::<AccountStoreError>()
+            .expect("store error must not be collapsed into io::Error");
+        assert!(
+            matches!(store_error, AccountStoreError::Json(_)),
+            "serde failures must stay Json, got {store_error:?}"
+        );
     }
 }

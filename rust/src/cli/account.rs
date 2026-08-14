@@ -121,20 +121,18 @@ async fn add_account(provider_name: &str, label: &str, token: &str) -> anyhow::R
     }
 
     let store = TokenAccountStore::new();
-    let mut data = store.load_provider(provider)?;
+    store.try_update_provider(provider, |data| {
+        if data
+            .accounts
+            .iter()
+            .any(|a| a.label.eq_ignore_ascii_case(label))
+        {
+            return Err(format!("An account with label '{label}' already exists."));
+        }
 
-    // Check for duplicate label
-    if data
-        .accounts
-        .iter()
-        .any(|a| a.label.eq_ignore_ascii_case(label))
-    {
-        anyhow::bail!("An account with label '{}' already exists.", label);
-    }
-
-    let account = TokenAccount::new(label, token);
-    data.add_account(account);
-    store.save_provider(provider, &data)?;
+        data.add_account(TokenAccount::new(label, token));
+        Ok(())
+    })?;
 
     println!("Added account '{}' for {}.", label, provider.display_name());
     Ok(())
@@ -152,14 +150,13 @@ async fn remove_account(provider_name: &str, account_ref: &str) -> anyhow::Resul
     }
 
     let store = TokenAccountStore::new();
-    let mut data = store.load_provider(provider)?;
-
-    let account = find_account(&data, account_ref)?;
-    let label = account.label.clone();
-    let id = account.id;
-
-    data.remove_account(id);
-    store.save_provider(provider, &data)?;
+    let (_, label) = store.try_update_provider(provider, |data| {
+        let account = find_account(data, account_ref).map_err(|error| error.to_string())?;
+        let label = account.label.clone();
+        let id = account.id;
+        data.remove_account(id);
+        Ok(label)
+    })?;
 
     println!(
         "Removed account '{}' from {}.",
@@ -181,14 +178,13 @@ async fn switch_account(provider_name: &str, account_ref: &str) -> anyhow::Resul
     }
 
     let store = TokenAccountStore::new();
-    let mut data = store.load_provider(provider)?;
-
-    let account = find_account(&data, account_ref)?;
-    let label = account.label.clone();
-    let id = account.id;
-
-    data.set_active_by_id(id);
-    store.save_provider(provider, &data)?;
+    let (_, label) = store.try_update_provider(provider, |data| {
+        let account = find_account(data, account_ref).map_err(|error| error.to_string())?;
+        let label = account.label.clone();
+        let id = account.id;
+        data.set_active_by_id(id);
+        Ok(label)
+    })?;
 
     println!(
         "Switched to account '{}' for {}.",
