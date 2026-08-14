@@ -328,7 +328,7 @@ impl TokenAccountSupport {
 }
 
 /// A single token account for a provider
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokenAccount {
     /// Unique identifier
     pub id: Uuid,
@@ -378,7 +378,7 @@ impl TokenAccount {
 }
 
 /// Account data for a provider
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProviderAccountData {
     /// File format version
     #[serde(default = "default_version")]
@@ -567,10 +567,7 @@ impl TokenAccountStore {
         &self,
         accounts: &HashMap<ProviderId, ProviderAccountData>,
     ) -> Result<(), TokenAccountError> {
-        crate::secure_file::with_state_write_lock(|| {
-            self.save_unlocked(accounts).map_err(std::io::Error::other)
-        })
-        .map_err(TokenAccountError::Io)
+        with_store_lock(|| self.save_unlocked(accounts))
     }
 
     pub(crate) fn save_unlocked(
@@ -635,12 +632,11 @@ impl TokenAccountStore {
         provider: ProviderId,
         data: &ProviderAccountData,
     ) -> Result<(), TokenAccountError> {
-        crate::secure_file::with_state_write_lock(|| {
-            let mut all = self.load().map_err(std::io::Error::other)?;
+        with_store_lock(|| {
+            let mut all = self.load()?;
             all.insert(provider, data.clone());
-            self.save_unlocked(&all).map_err(std::io::Error::other)
+            self.save_unlocked(&all)
         })
-        .map_err(TokenAccountError::Io)
     }
 
     /// Mutate one provider's latest account snapshot as a single locked
@@ -652,14 +648,33 @@ impl TokenAccountStore {
     ) -> anyhow::Result<(ProviderAccountData, T)> {
         crate::secure_file::with_state_write_lock(|| {
             let mut all = self.load().map_err(io::Error::other)?;
-            let data = all.entry(provider).or_default();
-            let result = operation(data).map_err(io::Error::other)?;
-            let updated = data.clone();
-            self.save_unlocked(&all).map_err(io::Error::other)?;
-            Ok((updated, result))
+            let mut data = all.get(&provider).cloned().unwrap_or_default();
+            let original = data.clone();
+            let result = operation(&mut data).map_err(io::Error::other)?;
+            // `or_default` would insert an empty provider and write a missing
+            // file even when the mutation added nothing.
+            if data != original {
+                all.insert(provider, data.clone());
+                self.save_unlocked(&all).map_err(io::Error::other)?;
+            }
+            Ok((data, result))
         })
         .map_err(Into::into)
     }
+}
+
+fn with_store_lock<T>(
+    operation: impl FnOnce() -> Result<T, TokenAccountError>,
+) -> Result<T, TokenAccountError> {
+    let mut op_err = None;
+    crate::secure_file::with_state_write_lock(|| match operation() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            op_err = Some(err);
+            Err(io::Error::other("token account store operation failed"))
+        }
+    })
+    .map_err(|lock_err| op_err.unwrap_or_else(|| TokenAccountError::Io(lock_err)))
 }
 
 impl Default for TokenAccountStore {
@@ -904,6 +919,22 @@ mod tests {
                 .any(|entry| entry.label == "personal")
         );
         assert!(stored.accounts.iter().any(|entry| entry.label == "work"));
+    }
+
+    #[test]
+    fn no_op_try_update_provider_leaves_a_missing_store_file_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-accounts.json");
+        let store = TokenAccountStore::with_path(path.clone());
+
+        store
+            .try_update_provider(ProviderId::Claude, |_| Ok(()))
+            .expect("no-op token account update");
+
+        assert!(
+            !path.exists(),
+            "a no-op must not create an empty token-accounts file"
+        );
     }
 
     /// Removing a known provider must still remove it — preservation applies
