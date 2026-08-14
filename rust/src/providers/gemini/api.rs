@@ -553,11 +553,18 @@ fn persist_refreshed_credentials(
 ) -> Result<(), ProviderError> {
     crate::secure_file::with_file_write_lock(path, || {
         let mut root = match std::fs::read_to_string(path) {
-            Ok(content) => serde_json::from_str(&content)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(value) => value,
+                // Gemini CLI still does a non-atomic write. A torn file is CLI
+                // state, not a user setting; rebuild from the refresh we hold.
+                Err(_) => serde_json::json!({}),
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
             Err(error) => return Err(error),
         };
+        if credential_identities_conflict(&root, credentials) {
+            return Ok(());
+        }
         apply_refresh_to_credentials_json(&mut root, credentials)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let encoded = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
@@ -592,7 +599,7 @@ fn apply_refresh_to_credentials_json(
             .ok_or_else(|| "refreshed Gemini expiry is not finite".to_string())?;
         object.insert("expiry_date".to_string(), serde_json::Value::Number(expiry));
     }
-    if !object.contains_key("refresh_token")
+    if usable_refresh_token(object.get("refresh_token")).is_none()
         && let Some(refresh_token) = &credentials.refresh_token
     {
         object.insert(
@@ -601,6 +608,39 @@ fn apply_refresh_to_credentials_json(
         );
     }
     Ok(())
+}
+
+fn usable_refresh_token(value: Option<&serde_json::Value>) -> Option<&str> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+fn credential_identities_conflict(
+    root: &serde_json::Value,
+    credentials: &OAuthCredentials,
+) -> bool {
+    let disk = root
+        .get("id_token")
+        .and_then(serde_json::Value::as_str)
+        .and_then(jwt_identity);
+    let memory = credentials.id_token.as_deref().and_then(jwt_identity);
+    matches!((disk, memory), (Some(disk), Some(memory)) if disk != memory)
+}
+
+fn jwt_identity(token: &str) -> Option<String> {
+    let payload = jwt_payload(token)?;
+    jwt_text_claim(&payload, "sub").or_else(|| jwt_text_claim(&payload, "email"))
+}
+
+fn jwt_text_claim(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug)]
@@ -750,6 +790,15 @@ mod tests {
         }
     }
 
+    fn test_id_token(sub: &str, email: &str) -> String {
+        let payload = serde_json::json!({ "sub": sub, "email": email });
+        let encoded = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            serde_json::to_vec(&payload).expect("encode jwt payload"),
+        );
+        format!("eyJhbGciOiJub25lIn0.{encoded}.sig")
+    }
+
     #[test]
     fn refresh_persistence_preserves_unknown_and_unmodified_fields() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -825,13 +874,57 @@ mod tests {
     fn failed_refresh_persistence_leaves_original_file_untouched() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("oauth_creds.json");
-        let original = b"{not valid json";
-        std::fs::write(&path, original).expect("seed invalid credentials");
+        std::fs::write(&path, b"{not valid json").expect("seed invalid credentials");
 
-        assert!(
-            persist_refreshed_credentials(&path, &refreshed_credentials("new-access")).is_err()
-        );
-        assert_eq!(std::fs::read(&path).expect("read original"), original);
+        persist_refreshed_credentials(&path, &refreshed_credentials("new-access"))
+            .expect("rebuild torn Gemini credentials");
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert_eq!(stored["access_token"], "new-access");
+        assert_eq!(stored["refresh_token"], "stale-struct-refresh");
+    }
+
+    #[test]
+    fn persist_skips_when_disk_id_token_belongs_to_another_account() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+        let account_b = test_id_token("account-b", "b@example.com");
+        let original = serde_json::json!({
+            "access_token": "b-access",
+            "id_token": account_b,
+            "refresh_token": "b-refresh"
+        });
+        let original_bytes = serde_json::to_vec_pretty(&original).expect("seed bytes");
+        std::fs::write(&path, &original_bytes).expect("seed other-account credentials");
+
+        let mut credentials = refreshed_credentials("a-access");
+        credentials.id_token = Some(test_id_token("account-a", "a@example.com"));
+        persist_refreshed_credentials(&path, &credentials).expect("skip mixed-account persist");
+
+        assert_eq!(std::fs::read(&path).expect("read original"), original_bytes);
+    }
+
+    #[test]
+    fn persist_repairs_null_or_empty_refresh_token() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+
+        for seed in [
+            r#"{"access_token":"old","refresh_token":null}"#,
+            r#"{"access_token":"old","refresh_token":""}"#,
+            r#"{"access_token":"old","refresh_token":"   "}"#,
+        ] {
+            std::fs::write(&path, seed).expect("seed unusable refresh token");
+            persist_refreshed_credentials(&path, &refreshed_credentials("new-access"))
+                .expect("repair refresh token");
+            let stored: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                    .expect("valid result");
+            assert_eq!(stored["access_token"], "new-access");
+            assert_eq!(stored["refresh_token"], "stale-struct-refresh");
+        }
     }
 
     #[test]
