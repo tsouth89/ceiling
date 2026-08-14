@@ -402,4 +402,37 @@ describe("ProviderDetailPane request ordering", () => {
       "codex:personal:personal@example.com",
     );
   });
+
+  it("closes the revoke dialog even when the provider refresh fails", async () => {
+    tauriMocks.getProviderDetail.mockImplementation(
+      (providerId: string, accountId: string | null) =>
+        Promise.resolve(
+          detail(
+            providerId,
+            accountId ?? "personal",
+            `${accountId ?? "personal"}@example.com`,
+          ),
+        ),
+    );
+    tauriMocks.getCredentialStorageStatus
+      .mockResolvedValueOnce(presentStatus)
+      .mockResolvedValue(absentStatus);
+    tauriMocks.refreshProviders.mockRejectedValueOnce(new Error("refresh failed"));
+
+    renderPane("codex");
+    await screen.findByTestId("provider-identity");
+    fireEvent.click(screen.getByRole("button", { name: "CredentialRevokeStored" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRevoke" }));
+
+    await waitFor(() =>
+      expect(tauriMocks.revokeProviderCredentials).toHaveBeenCalledWith("codex"),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("CredentialRevoked");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "CredentialRevokeStored" }),
+      ).toBeNull(),
+    );
+  });
 });

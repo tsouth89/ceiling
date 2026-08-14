@@ -321,7 +321,6 @@ export function ProviderDetailPane({
         if (providerIdRef.current === providerId) {
           setError(String(e));
         }
-        return;
       }
       if (providerIdRef.current !== providerId) return;
       await load(providerId, selectedAccountIdRef.current);
@@ -412,17 +411,24 @@ export function ProviderDetailPane({
     try {
       await revokeProviderCredentials(revokedProviderId);
       if (providerIdRef.current !== revokedProviderId) return;
-      await refreshProviders();
-      if (providerIdRef.current !== revokedProviderId) return;
       setCredentialRevision((value) => value + 1);
       setConfirmingRevoke(false);
       setRevokeStatus(t("CredentialRevoked"));
       selectedAccountIdRef.current = null;
       setSelectedAccountId(null);
+      try {
+        await refreshProviders();
+      } catch (e) {
+        if (providerIdRef.current === revokedProviderId) {
+          setError(String(e));
+        }
+      }
+      if (providerIdRef.current !== revokedProviderId) return;
       await load(revokedProviderId);
     } catch (e) {
       if (providerIdRef.current === revokedProviderId) {
         setError(String(e));
+        setConfirmingRevoke(false);
       }
     } finally {
       setBusy(false);

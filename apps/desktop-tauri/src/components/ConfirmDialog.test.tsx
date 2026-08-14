@@ -86,4 +86,55 @@ describe("ConfirmDialog", () => {
     fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
     expect(confirm).toHaveFocus();
   });
+
+  it("keeps Confirm focused when the parent rerenders a new onCancel", () => {
+    const view = render(
+      <ConfirmDialog
+        open
+        title="Remove cookie?"
+        body="Remove the saved cookie for Claude?"
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    const confirm = screen.getByRole("button", { name: "Remove" });
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(confirm).toHaveFocus();
+    view.rerender(
+      <ConfirmDialog
+        open
+        title="Remove cookie?"
+        body="Remove the saved cookie for Claude?"
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(confirm).toHaveFocus();
+  });
+
+  it("keeps Tab inside the dialog while busy", () => {
+    render(
+      <ConfirmDialog
+        open
+        busy
+        title="Remove cookie?"
+        body="Remove the saved cookie for Claude?"
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", { name: "Remove" });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(cancel).toHaveFocus();
+  });
 });

@@ -134,6 +134,7 @@ describe("ApiKeySection", () => {
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRemove" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("store locked");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.getByText("sk-...test")).toBeInTheDocument();
   });
 });

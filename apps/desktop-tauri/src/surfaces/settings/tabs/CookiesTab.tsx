@@ -72,6 +72,7 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
       setPendingRemove(null);
       setStatus(t("CredentialRemoved"));
     } catch (err: unknown) {
+      setPendingRemove(null);
       setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);

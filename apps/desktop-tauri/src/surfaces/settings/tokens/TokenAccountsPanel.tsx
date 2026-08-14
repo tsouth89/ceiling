@@ -154,6 +154,7 @@ export function TokenAccountsPanel({
       setStatus(t("CredentialRemoved"));
       onCredentialsChanged?.();
     } catch (err: unknown) {
+      setPendingRemove(null);
       setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);

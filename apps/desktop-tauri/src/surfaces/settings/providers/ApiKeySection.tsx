@@ -118,6 +118,7 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
       setStatus(t("CredentialRemoved"));
       onCredentialsChanged?.();
     } catch (err: unknown) {
+      setConfirming(false);
       setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);

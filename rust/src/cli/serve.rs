@@ -387,15 +387,15 @@ async fn read_http_headers(stream: &mut TcpStream) -> io::Result<String> {
         if n == 0 {
             break;
         }
-        buffer.extend_from_slice(&chunk[..n]);
-        if headers_complete(&buffer) {
-            break;
-        }
-        if buffer.len() >= MAX_HEADER_BYTES {
+        if buffer.len().saturating_add(n) > MAX_HEADER_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",
             ));
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+        if headers_complete(&buffer) {
+            break;
         }
     }
     Ok(String::from_utf8_lossy(&buffer).into_owned())
@@ -421,7 +421,13 @@ fn load_or_create_serve_token() -> io::Result<ServeToken> {
 
 fn load_or_create_serve_token_at(path: PathBuf) -> io::Result<ServeToken> {
     if path.exists() {
-        return read_existing_serve_token(path);
+        match read_existing_serve_token(path.clone()) {
+            Ok(token) => return Ok(token),
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                let _ = std::fs::remove_file(&path);
+            }
+            Err(error) => return Err(error),
+        }
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -467,10 +473,18 @@ fn create_new_serve_token(path: &Path) -> io::Result<String> {
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
-    protect_token_file(path)?;
-    file.write_all(token.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
+    let write_result = (|| -> io::Result<()> {
+        protect_token_file(path)?;
+        file.write_all(token.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
     Ok(token)
 }
 
@@ -611,6 +625,22 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn replaces_an_empty_serve_token_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "ceiling-serve-token-empty-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("serve.token");
+        std::fs::write(&path, "").unwrap();
+        let loaded = load_or_create_serve_token_at(path.clone()).unwrap();
+        assert!(loaded.created);
+        assert!(!loaded.token.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), loaded.token);
         let _ = std::fs::remove_dir_all(dir);
     }
 

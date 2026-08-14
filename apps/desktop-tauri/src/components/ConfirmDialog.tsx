@@ -24,14 +24,29 @@ export function ConfirmDialog({
   const bodyId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const wasOpenRef = useRef(false);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const onCancelRef = useRef(onCancel);
+  const onConfirmRef = useRef(onConfirm);
+  onCancelRef.current = onCancel;
+  onConfirmRef.current = onConfirm;
 
   useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      openerRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      cancelRef.current?.focus();
+    }
+    if (!open && wasOpenRef.current) {
+      openerRef.current?.focus();
+      openerRef.current = null;
+    }
+    wasOpenRef.current = open;
     if (!open) return;
-    cancelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) {
         event.preventDefault();
-        onCancel();
+        onCancelRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -51,7 +66,7 @@ export function ConfirmDialog({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onCancel, open]);
+  }, [busy, open]);
 
   if (!open) return null;
 
@@ -77,16 +92,20 @@ export function ConfirmDialog({
             ref={cancelRef}
             type="button"
             className="credential-btn"
-            disabled={busy}
-            onClick={onCancel}
+            aria-disabled={busy || undefined}
+            onClick={() => {
+              if (!busy) onCancelRef.current();
+            }}
           >
             {cancelLabel}
           </button>
           <button
             type="button"
             className="credential-btn credential-btn--danger"
-            disabled={busy}
-            onClick={onConfirm}
+            aria-disabled={busy || undefined}
+            onClick={() => {
+              if (!busy) onConfirmRef.current();
+            }}
           >
             {confirmLabel}
           </button>
