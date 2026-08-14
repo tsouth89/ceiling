@@ -58,4 +58,32 @@ describe("ConfirmDialog", () => {
     );
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
+
+  it("keeps Tab and Shift+Tab inside the dialog", () => {
+    render(
+      <>
+        <button type="button">outside</button>
+        <ConfirmDialog
+          open
+          title="Remove cookie?"
+          body="Remove the saved cookie for Claude?"
+          confirmLabel="Remove"
+          cancelLabel="Cancel"
+          onConfirm={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </>,
+    );
+
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", { name: "Remove" });
+    expect(cancel).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(confirm).toHaveFocus();
+  });
 });

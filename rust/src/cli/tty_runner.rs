@@ -273,7 +273,8 @@ impl TtyCommandRunner {
         {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-            let mut command = Command::new(crate::host::windows_where_exe());
+            let where_exe = crate::host::windows_where_exe()?;
+            let mut command = Command::new(where_exe);
             command
                 .arg(tool)
                 .stdout(Stdio::piped())

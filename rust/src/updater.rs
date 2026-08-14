@@ -679,7 +679,7 @@ fn spawn_windows_installer(installer_path: &Path, relaunch_path: &Path) -> Resul
     use std::process::Command;
 
     let plan = windows_installer_launch_plan(installer_path)?;
-    Command::new(windows_powershell_path())
+    Command::new(windows_powershell_path()?)
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -771,8 +771,9 @@ fn powershell_single_quoted(value: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_powershell_path() -> PathBuf {
+fn windows_powershell_path() -> Result<PathBuf, String> {
     crate::host::windows_powershell_exe()
+        .ok_or_else(|| "Could not find the trusted Windows PowerShell".into())
 }
 
 /// Check if there's a pending update ready to install

@@ -1,7 +1,8 @@
 //! Local HTTP server for scriptable usage/cost JSON.
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use clap::Args;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -15,6 +16,8 @@ use crate::cost_scanner::CostScanner;
 
 const UNAUTHENTICATED_ERROR: &str = "unauthorized";
 const PROVIDER_FAILURE: &str = "provider request failed";
+const MAX_HEADER_BYTES: usize = 8192;
+const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Args, Debug, Clone)]
 pub struct ServeArgs {
@@ -40,10 +43,12 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let expected_token = if args.allow_unauthenticated {
         None
     } else {
-        let (token, path) = load_or_create_serve_token()?;
-        eprintln!("Ceiling server token stored at {}", path.display());
-        eprintln!("Authorization: Bearer {token}");
-        Some(token)
+        let loaded = load_or_create_serve_token()?;
+        eprintln!("Ceiling server token stored at {}", loaded.path.display());
+        if loaded.created {
+            eprintln!("Authorization: Bearer {}", loaded.token);
+        }
+        Some(loaded.token)
     };
     let include_identity = args.include_identity;
     let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
@@ -67,9 +72,7 @@ async fn handle_client(
     expected_token: Option<&str>,
     include_identity: bool,
 ) -> anyhow::Result<()> {
-    let mut buffer = vec![0_u8; 8192];
-    let n = stream.read(&mut buffer).await?;
-    let request = String::from_utf8_lossy(&buffer[..n]);
+    let request = read_http_headers(&mut stream).await?;
     let response = match parse_request(&request) {
         Ok(request) => route_request(&request, expected_token, include_identity).await,
         Err(status) => json_response(status, serde_json::json!({ "error": "bad request" })),
@@ -366,34 +369,125 @@ fn tokens_equal(left: &str, right: &str) -> bool {
         == 0
 }
 
-fn serve_token_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Ceiling")
-        .join("serve.token")
+struct ServeToken {
+    token: String,
+    path: PathBuf,
+    created: bool,
 }
 
-fn load_or_create_serve_token() -> io::Result<(String, PathBuf)> {
-    load_or_create_serve_token_at(serve_token_path())
-}
-
-fn load_or_create_serve_token_at(path: PathBuf) -> io::Result<(String, PathBuf)> {
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let token = existing.trim();
-        if !token.is_empty() {
-            return Ok((token.to_string(), path));
+async fn read_http_headers(stream: &mut TcpStream) -> io::Result<String> {
+    let mut buffer = Vec::with_capacity(1024);
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let n = tokio::time::timeout(HEADER_READ_TIMEOUT, stream.read(&mut chunk))
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "timed out reading request headers")
+            })??;
+        if n == 0 {
+            break;
         }
+        buffer.extend_from_slice(&chunk[..n]);
+        if headers_complete(&buffer) {
+            break;
+        }
+        if buffer.len() >= MAX_HEADER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request headers too large",
+            ));
+        }
+    }
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+fn headers_complete(buffer: &[u8]) -> bool {
+    buffer.windows(4).any(|window| window == b"\r\n\r\n")
+}
+
+fn serve_token_path() -> io::Result<PathBuf> {
+    let config_dir = dirs::config_dir().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "user config directory is unavailable",
+        )
+    })?;
+    Ok(config_dir.join("Ceiling").join("serve.token"))
+}
+
+fn load_or_create_serve_token() -> io::Result<ServeToken> {
+    load_or_create_serve_token_at(serve_token_path()?)
+}
+
+fn load_or_create_serve_token_at(path: PathBuf) -> io::Result<ServeToken> {
+    if path.exists() {
+        return read_existing_serve_token(path);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    match create_new_serve_token(&path) {
+        Ok(token) => Ok(ServeToken {
+            token,
+            path,
+            created: true,
+        }),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            read_existing_serve_token(path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn read_existing_serve_token(path: PathBuf) -> io::Result<ServeToken> {
+    let token = std::fs::read_to_string(&path)?;
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "serve token file is empty",
+        ));
+    }
+    protect_token_file(&path)?;
+    validate_existing_token_file(&path)?;
+    Ok(ServeToken {
+        token: token.to_string(),
+        path,
+        created: false,
+    })
+}
+
+fn create_new_serve_token(path: &Path) -> io::Result<String> {
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let mut file = std::fs::File::create(&path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    protect_token_file(path)?;
     file.write_all(token.as_bytes())?;
     file.write_all(b"\n")?;
     file.sync_all()?;
-    protect_token_file(&path)?;
-    Ok((token, path))
+    Ok(token)
+}
+
+fn validate_existing_token_file(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "serve token file is readable by other users",
+            ));
+        }
+    }
+    let _ = path;
+    Ok(())
 }
 
 fn protect_token_file(path: &std::path::Path) -> io::Result<()> {
@@ -505,10 +599,44 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("serve.token");
-        let (first, _) = load_or_create_serve_token_at(path.clone()).unwrap();
-        let (second, _) = load_or_create_serve_token_at(path.clone()).unwrap();
-        assert_eq!(first, second);
-        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), first);
+        let first = load_or_create_serve_token_at(path.clone()).unwrap();
+        assert!(first.created);
+        let second = load_or_create_serve_token_at(path.clone()).unwrap();
+        assert!(!second.created);
+        assert_eq!(first.token, second.token);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), first.token);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn headers_complete_requires_the_terminator() {
+        assert!(!headers_complete(b"GET /usage HTTP/1.1\r\nHost: localhost"));
+        assert!(headers_complete(
+            b"GET /usage HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\n\r\n"
+        ));
+    }
+
+    #[tokio::test]
+    async fn health_bypasses_auth_and_other_paths_require_token() {
+        let request =
+            parse_request("GET /health HTTP/1.1\r\nHost: localhost:8080\r\n\r\n").unwrap();
+        assert!(
+            route_request(&request, Some("secret-token"), false)
+                .await
+                .starts_with("HTTP/1.1 200")
+        );
+
+        let denied = parse_request("GET /cost HTTP/1.1\r\nHost: localhost:8080\r\n\r\n").unwrap();
+        assert!(
+            route_request(&denied, Some("secret-token"), false)
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
     }
 }

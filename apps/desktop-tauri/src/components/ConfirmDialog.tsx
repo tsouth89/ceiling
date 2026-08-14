@@ -22,6 +22,7 @@ export function ConfirmDialog({
 }) {
   const titleId = useId();
   const bodyId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -31,6 +32,21 @@ export function ConfirmDialog({
       if (event.key === "Escape" && !busy) {
         event.preventDefault();
         onCancel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusable = dialogFocusable(root);
+      if (focusable.length === 0) return;
+      event.preventDefault();
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const index = focusable.findIndex((element) => element === document.activeElement);
+      if (event.shiftKey) {
+        (index <= 0 ? last : focusable[index - 1]).focus();
+      } else {
+        (index === -1 || index === focusable.length - 1 ? first : focusable[index + 1]).focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -42,6 +58,7 @@ export function ConfirmDialog({
   return createPortal(
     <div className="confirm-dialog-backdrop" onClick={() => !busy && onCancel()}>
       <div
+        ref={dialogRef}
         className="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
@@ -77,5 +94,13 @@ export function ConfirmDialog({
       </div>
     </div>,
     document.body,
+  );
+}
+
+function dialogFocusable(root: HTMLElement): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
   );
 }

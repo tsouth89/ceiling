@@ -318,7 +318,9 @@ export function ProviderDetailPane({
       try {
         await refreshProviders();
       } catch (e) {
-        setError(String(e));
+        if (providerIdRef.current === providerId) {
+          setError(String(e));
+        }
         return;
       }
       if (providerIdRef.current !== providerId) return;
@@ -409,16 +411,19 @@ export function ProviderDetailPane({
     setRevokeStatus(null);
     try {
       await revokeProviderCredentials(revokedProviderId);
+      if (providerIdRef.current !== revokedProviderId) return;
       await refreshProviders();
+      if (providerIdRef.current !== revokedProviderId) return;
       setCredentialRevision((value) => value + 1);
       setConfirmingRevoke(false);
       setRevokeStatus(t("CredentialRevoked"));
-      if (providerIdRef.current !== revokedProviderId) return;
       selectedAccountIdRef.current = null;
       setSelectedAccountId(null);
       await load(revokedProviderId);
     } catch (e) {
-      setError(String(e));
+      if (providerIdRef.current === revokedProviderId) {
+        setError(String(e));
+      }
     } finally {
       setBusy(false);
     }
