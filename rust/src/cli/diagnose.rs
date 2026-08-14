@@ -452,25 +452,37 @@ mod tests {
 
     #[test]
     fn raw_provider_error_details_are_never_exported() {
+        // Secrets sit on their own lines so a Display+redact path cannot hide leftover
+        // provider text (signed URL, request id) behind the cookie/Bearer line rule.
         let malicious = concat!(
-            "response body for person@example.com: ",
-            "Bearer secret-access-token Cookie: sessionKey=secret-cookie ",
-            "sk-1234567890abcdef 日本語"
+            "https://api.example.com/v1/usage?sig=signed-url-token ",
+            "request-id=acct-id-canary-42 ",
+            "response body for person@example.com\n",
+            "Bearer secret-access-token\n",
+            "Cookie: sessionKey=secret-cookie\n",
+            "sk-1234567890abcdef 日本語 leftover provider text",
         );
-        let errors = [
-            ProviderError::NotInstalled(malicious.to_string()),
-            ProviderError::OAuth(malicious.to_string()),
-            ProviderError::Parse(malicious.to_string()),
-            ProviderError::Other(malicious.to_string()),
+        let cases = [
+            (
+                ProviderError::NotInstalled(malicious.to_string()),
+                "The provider's required local CLI or credentials were not found.",
+            ),
+            (
+                ProviderError::OAuth(malicious.to_string()),
+                "Provider authentication failed.",
+            ),
+            (
+                ProviderError::Parse(malicious.to_string()),
+                "The provider response could not be parsed.",
+            ),
+            (
+                ProviderError::Other(malicious.to_string()),
+                "The provider returned an unexpected error.",
+            ),
         ];
 
-        for error in errors {
-            let exported = safe_error_message(&error);
-            assert!(!exported.contains("person@example.com"));
-            assert!(!exported.contains("secret-access-token"));
-            assert!(!exported.contains("secret-cookie"));
-            assert!(!exported.contains("1234567890abcdef"));
-            assert!(!exported.contains("日本語"));
+        for (error, expected) in cases {
+            assert_eq!(safe_error_message(&error), expected);
         }
     }
 
