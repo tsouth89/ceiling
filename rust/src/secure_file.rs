@@ -382,13 +382,18 @@ fn win32_error_code(error: &windows::core::Error) -> u32 {
     (error.code().0 as u32) & 0xffff
 }
 
+/// Build an `io::Error` that still reports the Win32 code via `raw_os_error()`.
+///
+/// `Error::new` drops that code, which would make `keep_replacement_temp` miss
+/// `ERROR_UNABLE_TO_MOVE_REPLACEMENT` if the dest name is recreated.
+#[cfg(any(windows, test))]
+fn io_error_from_win32_code(code: u32) -> io::Error {
+    io::Error::from_raw_os_error(code as i32)
+}
+
 #[cfg(windows)]
-fn win32_io_error(context: &str, error: windows::core::Error) -> io::Error {
-    let code = win32_error_code(&error);
-    io::Error::new(
-        io::Error::from_raw_os_error(code as i32).kind(),
-        format!("{context}: {error}"),
-    )
+fn win32_io_error(_context: &str, error: windows::core::Error) -> io::Error {
+    io_error_from_win32_code(win32_error_code(&error))
 }
 
 #[cfg(windows)]
@@ -540,9 +545,12 @@ fn retry_move_file_replace(from: &Path, to: &Path) -> Result<(), windows::core::
 
 #[cfg(windows)]
 fn sharing_replace_error(error: windows::core::Error) -> io::Error {
-    win32_io_error(
-        "could not replace the file because another process has it open without delete sharing",
-        error,
+    let os = io_error_from_win32_code(win32_error_code(&error));
+    io::Error::new(
+        os.kind(),
+        format!(
+            "could not replace the file because another process has it open without delete sharing: {os}"
+        ),
     )
 }
 
@@ -581,10 +589,14 @@ fn atomic_replace(
             // Destination is already gone; new bytes live only at `from`.
             match move_file_replace(from, to) {
                 Ok(()) => restore_captured_security(to, captured.as_ref()),
-                Err(move_error) => Err(win32_io_error(
-                    "metadata-preserving replacement removed the destination; new bytes remain at the temporary path",
-                    move_error,
-                )),
+                Err(_move_error) => {
+                    // Keep the original 0x498 so cleanup will not delete the
+                    // temp even if something recreates the dest name.
+                    Err(win32_io_error(
+                        "metadata-preserving replacement removed the destination; new bytes remain at the temporary path",
+                        error,
+                    ))
+                }
             }
         }
         Err(error) if is_sharing_or_access_failure(win32_error_code(&error)) => {
@@ -867,6 +879,24 @@ mod tests {
         assert!(!is_sharing_or_access_failure(
             WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT
         ));
+    }
+
+    #[test]
+    fn win32_replace_error_keeps_unable_to_move_replacement_os_code() {
+        let error = io_error_from_win32_code(WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT);
+        assert_eq!(
+            error.raw_os_error(),
+            Some(WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT as i32)
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("credentials.json");
+        std::fs::write(&dest, b"reappeared").unwrap();
+        let result: io::Result<()> = Err(error);
+        assert!(
+            keep_replacement_temp(&result, &dest),
+            "0x498 must keep the temp even if the dest name was recreated"
+        );
     }
 
     #[cfg(windows)]
