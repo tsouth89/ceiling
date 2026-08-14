@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **`diagnose` no longer copies provider error text into an export meant to be shared.** The command already withheld cookies, tokens, account emails, and response bodies, but a failed fetch put the provider's own error string straight into the payload, and that string can carry a signed URL, an account identifier, or an echoed request header. Every failure now reports a local category and a fixed local message instead of anything the provider said.
+
 ## [Ceiling] 1.5.30 - 2026-08-13
 
 Stops a few places from showing the wrong account or the wrong credential, gives the taskbar widget somewhere to sit when the usual gap is gone, and lets a second click on the tray icon hide the window. Grok banked resets now show the same way Codex already did.

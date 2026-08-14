@@ -2,6 +2,8 @@
 //!
 //! This intentionally reports configuration shape and fetch outcomes without
 //! printing cookies, tokens, account emails, or provider response bodies.
+//! Exported errors use local templates; provider-supplied error text is never
+//! included in the shareable payload.
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -9,8 +11,8 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::core::{
-    ConfiguredAccounts, CostSnapshot, FetchContext, ProviderError, ProviderFetchResult, ProviderId,
-    RateWindow, SourceMode, instantiate_provider,
+    ConfiguredAccounts, CostSnapshot, FetchContext, PersonalInfoRedactor, ProviderError,
+    ProviderFetchResult, ProviderId, RateWindow, SourceMode, instantiate_provider,
 };
 use crate::settings::{ApiKeys, ManualCookies, Settings};
 
@@ -384,11 +386,38 @@ fn error_category(err: &ProviderError) -> &'static str {
 }
 
 fn safe_error_message(err: &ProviderError) -> String {
-    let message = err.to_string();
-    if message.len() > 240 {
-        format!("{}...", message.chars().take(237).collect::<String>())
+    let message = match err {
+        ProviderError::NotInstalled(_) => {
+            "The provider's required local CLI or credentials were not found.".to_string()
+        }
+        ProviderError::AuthRequired => "Authentication is required.".to_string(),
+        ProviderError::OAuth(_) => "Provider authentication failed.".to_string(),
+        ProviderError::Parse(_) => "The provider response could not be parsed.".to_string(),
+        ProviderError::Network(_) => "The provider request failed.".to_string(),
+        ProviderError::Timeout => "The provider request timed out.".to_string(),
+        ProviderError::UnsupportedSource(source) => format!(
+            "The '{}' source is not supported by this provider.",
+            source_mode_name(*source)
+        ),
+        ProviderError::NoCookies => "No usable web credentials were found.".to_string(),
+        ProviderError::Other(_) if error_category(err) == "api" => {
+            "The provider API rejected or rate-limited the request.".to_string()
+        }
+        ProviderError::Other(_) => "The provider returned an unexpected error.".to_string(),
+    };
+    sanitize_diagnostic_message(&message)
+}
+
+fn sanitize_diagnostic_message(message: &str) -> String {
+    let secret_safe = crate::logging::safe_error_message(message);
+    let privacy_safe =
+        PersonalInfoRedactor::redact_emails_in_text(Some(&secret_safe), true).unwrap_or_default();
+    let mut chars = privacy_safe.chars();
+    let prefix = chars.by_ref().take(237).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}...")
     } else {
-        message
+        privacy_safe
     }
 }
 
@@ -419,6 +448,59 @@ mod tests {
         assert!(value["login_method_present"].as_bool().unwrap());
         assert!(!text.contains("person@example.com"));
         assert!(!text.contains("Team"));
+    }
+
+    #[test]
+    fn raw_provider_error_details_are_never_exported() {
+        // Secrets sit on their own lines so a Display+redact path cannot hide leftover
+        // provider text (signed URL, request id) behind the cookie/Bearer line rule.
+        let malicious = concat!(
+            "https://api.example.com/v1/usage?sig=signed-url-token ",
+            "request-id=acct-id-canary-42 ",
+            "response body for person@example.com\n",
+            "Bearer secret-access-token\n",
+            "Cookie: sessionKey=secret-cookie\n",
+            "sk-1234567890abcdef 日本語 leftover provider text",
+        );
+        let cases = [
+            (
+                ProviderError::NotInstalled(malicious.to_string()),
+                "The provider's required local CLI or credentials were not found.",
+            ),
+            (
+                ProviderError::OAuth(malicious.to_string()),
+                "Provider authentication failed.",
+            ),
+            (
+                ProviderError::Parse(malicious.to_string()),
+                "The provider response could not be parsed.",
+            ),
+            (
+                ProviderError::Other(malicious.to_string()),
+                "The provider returned an unexpected error.",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(safe_error_message(&error), expected);
+        }
+    }
+
+    #[test]
+    fn diagnostic_message_sanitizer_redacts_then_truncates_on_char_boundaries() {
+        let malicious = format!(
+            "person@example.com Bearer access-token\nCookie: sessionKey=cookie\n{}",
+            "界".repeat(300)
+        );
+
+        let sanitized = sanitize_diagnostic_message(&malicious);
+
+        assert!(!sanitized.contains("person@example.com"));
+        assert!(!sanitized.contains("access-token"));
+        assert!(!sanitized.contains("sessionKey=cookie"));
+        assert!(sanitized.ends_with("..."));
+        assert_eq!(sanitized.chars().count(), 240);
+        assert!(std::str::from_utf8(sanitized.as_bytes()).is_ok());
     }
 
     #[test]
