@@ -5,6 +5,9 @@ import {
   setManualCookie,
 } from "../../../lib/tauri";
 import { Select } from "../../../components/FormControls";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
+import { SecretField } from "../../../components/SecretField";
+import { formatLocale } from "../../../lib/formatLocale";
 import { useLocale } from "../../../hooks/useLocale";
 import type {
   CookieInfoBridge,
@@ -20,6 +23,11 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
   // Add-cookie form state
   const [addProviderId, setAddProviderId] = useState("");
   const [addCookieValue, setAddCookieValue] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<{
+    providerId: string;
+    provider: string;
+  } | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -40,6 +48,7 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
     if (!addProviderId || !addCookieValue.trim()) return;
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
       const next = await setManualCookie(addProviderId, addCookieValue.trim());
       setCookies(next);
@@ -52,14 +61,19 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
     }
   };
 
-  const handleRemove = async (providerId: string) => {
+  const handleRemove = async () => {
+    if (!pendingRemove) return;
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
-      const next = await removeManualCookie(providerId);
+      const next = await removeManualCookie(pendingRemove.providerId);
       setCookies(next);
+      setPendingRemove(null);
+      setStatus(t("CredentialRemoved"));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setPendingRemove(null);
+      setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);
     }
@@ -77,7 +91,14 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
       </div>
 
       {error && (
-        <div className="settings-status settings-status--error">{error}</div>
+        <div className="settings-status settings-status--error" role="alert">
+          {error}
+        </div>
+      )}
+      {status && (
+        <div className="settings-status" role="status">
+          {status}
+        </div>
       )}
 
       {cookies.length > 0 ? (
@@ -100,7 +121,12 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
                   <button
                     className="credential-btn credential-btn--danger"
                     disabled={busy}
-                    onClick={() => void handleRemove(c.providerId)}
+                    onClick={() =>
+                      setPendingRemove({
+                        providerId: c.providerId,
+                        provider: c.provider,
+                      })
+                    }
                   >
                     Remove
                   </button>
@@ -134,13 +160,14 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
           onChange={setAddProviderId}
           disabled={busy}
         />
-        <textarea
-          className="text-input credential-textarea"
-          placeholder="Paste cookie header value…"
-          rows={3}
+        <SecretField
+          label={t("SecretFieldCookieLabel")}
           value={addCookieValue}
-          onChange={(e) => setAddCookieValue(e.target.value)}
+          onChange={setAddCookieValue}
+          placeholder="Paste cookie header value…"
           disabled={busy}
+          revealLabel={t("SecretFieldReveal")}
+          hideLabel={t("SecretFieldHide")}
         />
         <button
           className="credential-btn credential-btn--primary"
@@ -150,6 +177,19 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
           Save Cookie
         </button>
       </div>
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        title={t("ConfirmRemoveCookieTitle")}
+        body={formatLocale(
+          t("ConfirmRemoveCookieBody"),
+          pendingRemove?.provider ?? "",
+        )}
+        confirmLabel={t("ConfirmRemove")}
+        cancelLabel={t("ConfirmCancel")}
+        busy={busy}
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={() => void handleRemove()}
+      />
     </section>
   );
 }

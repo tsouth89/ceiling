@@ -132,11 +132,18 @@ Useful options:
 
 - `--port <PORT>` - local HTTP port (default `8080`).
 - `--refresh-interval <SECONDS>` - response cache TTL (default `60`).
+- `--allow-unauthenticated` - skip the per-user bearer token. Any local process can then read usage. Existing scripts that do not send `Authorization` need this flag.
+- `--include-identity` - include account email, organization, login method, and raw provider errors. Those fields are omitted by default.
+
+On first start, Ceiling prints an `Authorization: Bearer …` token and stores it at `<user config dir>/Ceiling/serve.token` (current-user ACL on Windows, mode `0600` elsewhere). Later starts print only the path. `/health` stays unauthenticated. `/usage` and `/cost` require the token unless `--allow-unauthenticated` is set.
 
 Example:
 
 ```sh
 codexbar serve --port 8080
+# Copy the token from the first-start output, or read the stored file:
+TOKEN="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/Ceiling/serve.token")"
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/usage
 ```
 
 ## `statusline`

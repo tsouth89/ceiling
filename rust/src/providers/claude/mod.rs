@@ -801,7 +801,8 @@ fn which_claude() -> Option<std::path::PathBuf> {
 fn find_windows_claude_in_path() -> Option<std::path::PathBuf> {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let mut command = StdCommand::new("where");
+    let where_exe = crate::host::windows_where_exe()?;
+    let mut command = StdCommand::new(where_exe);
     command
         .arg("claude")
         .stdout(Stdio::piped())

@@ -51,7 +51,9 @@ impl AntigravityProvider {
         #[cfg(windows)]
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let mut cmd = Command::new("powershell.exe");
+        let powershell = crate::host::windows_powershell_exe()
+            .ok_or_else(|| ProviderError::Other("Trusted Windows PowerShell not found".into()))?;
+        let mut cmd = Command::new(powershell);
         cmd.args([
             "-ExecutionPolicy",
             "Bypass",
@@ -308,7 +310,10 @@ impl AntigravityProvider {
     fn listening_ports_for_pid(pid: u32) -> Vec<u16> {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let mut cmd = Command::new("powershell.exe");
+        let Some(powershell) = crate::host::windows_powershell_exe() else {
+            return Vec::new();
+        };
+        let mut cmd = Command::new(powershell);
         cmd.args([
             "-ExecutionPolicy",
             "Bypass",

@@ -46,7 +46,7 @@ pub(super) fn open_url_in_browser(url: &str) -> Result<(), String> {
     let url = validate_external_url(url)?;
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(windows_system_binary("rundll32.exe"))
+        std::process::Command::new(windows_system_binary("rundll32.exe")?)
             .arg("url.dll,FileProtocolHandler")
             .arg(url)
             .spawn()
@@ -87,12 +87,9 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_system_binary(name: &str) -> std::path::PathBuf {
-    std::env::var_os("SystemRoot")
-        .map(std::path::PathBuf::from)
-        .map(|root| root.join("System32").join(name))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| std::path::PathBuf::from(name))
+fn windows_system_binary(name: &str) -> Result<std::path::PathBuf, String> {
+    codexbar::host::windows_system_exe(name)
+        .ok_or_else(|| format!("Could not find trusted system binary {name}"))
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -148,7 +145,7 @@ pub fn open_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(windows_system_binary("explorer.exe"))
+        std::process::Command::new(windows_system_binary("explorer.exe")?)
             .arg(&target_str)
             .spawn()
             .map_err(|e| format!("Failed to open path: {e}"))?;
