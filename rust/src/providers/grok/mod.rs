@@ -642,11 +642,18 @@ fn apply_refresh_to_auth_json(
     let map = root
         .as_object_mut()
         .ok_or_else(|| "Grok auth.json root is not an object".to_string())?;
+    if !map.contains_key(&credentials.scope) {
+        if !map.is_empty() {
+            return Err("auth scope missing".to_string());
+        }
+        map.insert(
+            credentials.scope.clone(),
+            Value::Object(serde_json::Map::new()),
+        );
+    }
     let entry = map
-        .entry(credentials.scope.clone())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    let entry = entry
-        .as_object_mut()
+        .get_mut(&credentials.scope)
+        .and_then(Value::as_object_mut)
         .ok_or_else(|| "auth scope is not an object".to_string())?;
     entry.insert(
         "key".to_string(),
@@ -1377,6 +1384,29 @@ mod tests {
             stored["https://auth.x.ai::test"]["refresh_token"],
             "newer-disk-refresh"
         );
+    }
+
+    #[test]
+    fn persist_does_not_create_a_second_scope_when_loaded_scope_is_gone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+        let original = r#"{
+                "https://accounts.x.ai/sign-in": {"key": "session"}
+            }"#;
+        std::fs::write(&path, original).expect("seed other-scope auth file");
+
+        assert!(
+            refreshed_credentials("new-access")
+                .persist_to_path(&path)
+                .is_err()
+        );
+
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                .expect("valid result");
+        assert_eq!(stored["https://accounts.x.ai/sign-in"]["key"], "session");
+        assert!(stored.get("https://auth.x.ai::test").is_none());
+        assert_eq!(stored.as_object().map(|map| map.len()), Some(1));
     }
 
     #[test]
