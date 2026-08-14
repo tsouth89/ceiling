@@ -11,11 +11,12 @@ vi.mock("../lib/tauri", () => tauriMocks);
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({
     t: (key: string) =>
-      key === "ResetCreditsAvailableOne"
-        ? "{} reset available"
-        : key === "ResetCreditsAvailableMany"
-          ? "{} resets available"
-          : key,
+      ({
+        ResetCreditsAvailableOne: "{} reset available",
+        ResetCreditsAvailableMany: "{} resets available",
+        NotCurrentlyEnforced: "Not currently enforced",
+        WindowUnavailable: "Unavailable",
+      }[key] ?? key),
   }),
 }));
 

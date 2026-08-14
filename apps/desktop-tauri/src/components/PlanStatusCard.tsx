@@ -321,7 +321,7 @@ export default function PlanStatusCard({
               <span className="plan-status-card__inactive-name">
                 {notEnforcedSummary}
               </span>
-              <span>not currently enforced</span>
+              <span>{t("NotCurrentlyEnforced")}</span>
             </div>
           )}
           {unavailableSummary && (
@@ -330,7 +330,7 @@ export default function PlanStatusCard({
               <span className="plan-status-card__inactive-name">
                 {unavailableSummary}
               </span>
-              <span>unavailable</span>
+              <span>{t("WindowUnavailable")}</span>
             </div>
           )}
         </div>

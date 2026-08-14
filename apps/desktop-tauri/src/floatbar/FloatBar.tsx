@@ -197,7 +197,7 @@ function ProviderPill({
     `${provider.displayName}: ${label} ${displaySuffix}`,
     hero.label,
     boostTitle ? `promo ${boostTitle}` : null,
-    stateChip ? `state ${stateChip}` : null,
+    stateChip,
     resetText,
   ]
     .filter(Boolean)
@@ -239,7 +239,7 @@ function ProviderPill({
         ? `${hero.label}${resetText ? ` ${resetText}` : ""}`
         : null,
       showExact ? `${label} ${displaySuffix}` : null,
-      stateChip ? `state ${stateChip}` : null,
+      stateChip,
     ]
       .filter(Boolean)
       .join(" ");

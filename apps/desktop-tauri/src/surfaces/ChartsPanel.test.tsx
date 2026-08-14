@@ -87,7 +87,7 @@ describe("ChartsPanel", () => {
         providers={[provider({ providerId: "copilot", displayName: "Copilot" })]}
       />,
     );
-    expect(getByText("No charts yet")).toBeTruthy();
+    expect(getByText("ChartsNoChartsTitle")).toBeTruthy();
     expect(container.querySelector('[data-testid="charts-section"]')).toBeNull();
   });
 

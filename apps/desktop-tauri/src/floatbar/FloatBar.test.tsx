@@ -222,6 +222,24 @@ describe("FloatBar", () => {
     expect(titles[1]).toMatch(/Claude: 20% used/);
   });
 
+  it("does not prefix a localized freshness chip with English state", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({ FreshnessStale: "数据过期" }),
+    );
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 40),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).toBeInTheDocument();
+    });
+    const title = container.querySelector(".floatbar__pill")?.getAttribute("title") ?? "";
+    expect(title).toContain("数据过期");
+    expect(title).not.toContain("state ");
+  });
+
   it("calm mode leads with a pace state and expands to the exact % on click", async () => {
     const calmProvider: ProviderUsageSnapshot = {
       ...snapshot("codex", "Codex", 60, {

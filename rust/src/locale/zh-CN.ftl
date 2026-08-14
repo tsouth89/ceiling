@@ -680,9 +680,12 @@ AccountsSetupStep3 = 回到这里，在下方粘贴该文件夹，然后点击�
 
 # Leftover English (SBS-156)
 StatusConnected = 已连接
-FreshnessStale = 过期
+FreshnessStale = 数据过期
 FreshnessError = 错误
 NotCurrentlyEnforced = 当前未强制执行
+WindowUnavailable = 不可用
+AboutCopyrightMid = ，基于
+AboutCopyrightSuffix = ，作者 Peter Steinberger。
 TaskbarUsageTitle = 任务栏用量
 ShowTaskbarUsage = 显示任务栏用量
 ShowTaskbarUsageHelp = 在 Windows 任务栏控件之间显示实时服务商用量。

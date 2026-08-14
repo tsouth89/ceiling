@@ -183,7 +183,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
         >
           Win-CodexBar
         </button>
-        , which is based on{" "}
+        {t("AboutCopyrightMid")}{" "}
         <button
           type="button"
           className="about-link about-link--inline"
@@ -191,7 +191,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
         >
           CodexBar
         </button>{" "}
-        by Peter Steinberger.
+        {t("AboutCopyrightSuffix")}
       </p>
     </section>
   );

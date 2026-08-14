@@ -6,6 +6,12 @@ const tauriMocks = vi.hoisted(() => ({
   openExternalUrl: vi.fn(),
 }));
 
+const localeStrings = vi.hoisted(() => ({
+  current: {
+    AboutLinkErrorPrefix: "Error:",
+  } as Record<string, string>,
+}));
+
 const updateMocks = vi.hoisted(() => ({
   checkNow: vi.fn(),
   download: vi.fn(),
@@ -17,7 +23,7 @@ const updateMocks = vi.hoisted(() => ({
 vi.mock("../../../lib/tauri", () => tauriMocks);
 vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({
-    t: (key: string) => (key === "AboutLinkErrorPrefix" ? "Error:" : key),
+    t: (key: string) => localeStrings.current[key] ?? key,
   }),
 }));
 vi.mock("../../../hooks/useUpdateState", () => ({
@@ -98,6 +104,7 @@ const settings: SettingsSnapshot = {
 describe("AboutTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localeStrings.current = { AboutLinkErrorPrefix: "Error:" };
     tauriMocks.getAppInfo.mockResolvedValue({
       name: "Ceiling",
       version: "0.30.3",
@@ -143,6 +150,25 @@ describe("AboutTab", () => {
     expect(screen.queryByText("UpdateChannelBetaOption")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Win-CodexBar" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "CodexBar" })).toBeInTheDocument();
+  });
+
+  it("does not leave English copyright fragments when those keys are Chinese", async () => {
+    localeStrings.current = {
+      AboutLinkErrorPrefix: "Error:",
+      AboutCopyrightPrefix: "Ceiling · MIT 许可证 · 派生自",
+      AboutCopyrightMid: "，基于",
+      AboutCopyrightSuffix: "，作者 Peter Steinberger。",
+    };
+
+    const { container } = render(
+      <AboutTab settings={settings} set={vi.fn()} saving={false} />,
+    );
+
+    await screen.findByText("Ceiling");
+    expect(container.textContent).not.toContain("which is based on");
+    expect(container.textContent).not.toContain("by Peter Steinberger");
+    expect(container.textContent).toContain("派生自");
+    expect(container.textContent).toContain("基于");
   });
 
   it("shows a link error if the OS browser launch fails", async () => {

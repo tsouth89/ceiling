@@ -407,7 +407,9 @@ export default function ProviderDetailView({
                   >
                     <strong>{metric.title}</strong>
                     <span className="provider-focus__info" aria-hidden>i</span>
-                    <span>{unavailable ? "Unavailable" : "Not currently enforced"}</span>
+                    <span>
+                      {unavailable ? t("WindowUnavailable") : t("NotCurrentlyEnforced")}
+                    </span>
                   </div>
                 );
               })}
