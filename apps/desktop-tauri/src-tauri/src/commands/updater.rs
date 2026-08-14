@@ -196,26 +196,57 @@ fn finish_download(
 }
 
 #[tauri::command]
-pub fn apply_update(state: tauri::State<'_, Mutex<AppState>>) -> Result<(), String> {
-    apply_ready_update(&state)
+pub fn apply_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    apply_ready_update(&app, &state)
 }
 
-pub(crate) fn apply_ready_update(state: &Mutex<AppState>) -> Result<(), String> {
-    let (path, expected_sha256) = {
-        let guard = state.lock().map_err(|e| e.to_string())?;
-        let path = guard
-            .installer_path
-            .clone()
-            .ok_or("No downloaded update available to apply")?;
-        let expected_sha256 = guard
-            .update_info
-            .as_ref()
-            .and_then(|info| info.expected_sha256.clone())
-            .ok_or("Missing SHA256 digest for downloaded update")?;
-        (path, expected_sha256)
-    };
-    codexbar::updater::verify_installer_hash(&path, &expected_sha256)?;
-    codexbar::updater::apply_update(&path)
+pub(crate) fn apply_ready_update(
+    app: &tauri::AppHandle,
+    state: &Mutex<AppState>,
+) -> Result<(), String> {
+    apply_ready_installer(state).inspect_err(|_| {
+        if let Ok(guard) = state.lock() {
+            events::emit_update_state_changed(app, &guard.update_payload());
+        }
+    })
+}
+
+fn apply_ready_installer(state: &Mutex<AppState>) -> Result<(), String> {
+    let result = (|| {
+        let (path, expected_sha256) = {
+            let guard = state.lock().map_err(|e| e.to_string())?;
+            let path = guard
+                .installer_path
+                .clone()
+                .ok_or("No downloaded update available to apply")?;
+            let expected_sha256 = guard
+                .update_info
+                .as_ref()
+                .and_then(|info| info.expected_sha256.clone())
+                .ok_or("Missing SHA256 digest for downloaded update")?;
+            (path, expected_sha256)
+        };
+        codexbar::updater::verify_installer_hash(&path, &expected_sha256)?;
+        codexbar::updater::apply_update(&path)
+    })();
+
+    if let Err(error) = &result {
+        let _ = record_apply_failure(state, error);
+    }
+    result
+}
+
+fn record_apply_failure(
+    state: &Mutex<AppState>,
+    error: &str,
+) -> Result<UpdateStatePayload, String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    guard.update_state = UpdateState::Error(error.to_string());
+    guard.installer_path = None;
+    Ok(guard.update_payload())
 }
 
 #[tauri::command]
@@ -245,4 +276,69 @@ pub fn open_release_page(state: tauri::State<'_, Mutex<AppState>>) -> Result<(),
             .ok_or("No update information available")?
     };
     open_url_in_browser(&url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{AppState, UpdateState};
+    use codexbar::updater::{UpdateDelivery, UpdateInfo};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn apply_time_signature_reject_does_not_leave_installer_ready() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("Ceiling-99.0.0-Setup.exe");
+        std::fs::write(&path, b"unsigned installer").expect("write installer");
+
+        let state = Mutex::new(AppState::new());
+        {
+            let mut guard = state.lock().expect("lock");
+            guard.update_state = UpdateState::Ready;
+            guard.installer_path = Some(path.clone());
+            guard.update_info = Some(UpdateInfo {
+                version: "v99.0.0".to_string(),
+                download_url: "https://example.com/Ceiling-99.0.0-Setup.exe".to_string(),
+                // sha256("unsigned installer")
+                expected_sha256: Some(
+                    "d27a9d9762922fc761ed69b30eeaf45b03b16931d0f2b2c21c5f02c3dbb1690b".to_string(),
+                ),
+                release_url: "https://example.com/release".to_string(),
+                release_notes: String::new(),
+                delivery: UpdateDelivery::Installer,
+            });
+        }
+
+        let error = apply_ready_installer(&state).unwrap_err();
+        assert!(
+            error.contains("unsigned")
+                || error.contains("invalid or untrusted")
+                || error.contains("downloaded file was removed"),
+            "{error}"
+        );
+        assert!(!path.exists(), "rejected installer must be deleted");
+
+        let guard = state.lock().expect("lock");
+        match &guard.update_state {
+            UpdateState::Error(message) => {
+                assert_eq!(message, &error);
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(
+            guard.installer_path.is_none(),
+            "a deleted installer must not remain applyable"
+        );
+        drop(guard);
+
+        let retry_error = apply_ready_installer(&state).unwrap_err();
+        assert!(
+            retry_error.contains("No downloaded update available to apply"),
+            "{retry_error}"
+        );
+        assert!(matches!(
+            state.lock().expect("lock").update_state,
+            UpdateState::Error(_)
+        ));
+    }
 }

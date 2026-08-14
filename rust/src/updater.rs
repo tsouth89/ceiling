@@ -554,14 +554,14 @@ pub fn apply_update(installer_path: &PathBuf) -> Result<(), String> {
     }
 
     #[cfg(target_os = "windows")]
+    verify_installer_signature_or_delete(installer_path)?;
+
+    #[cfg(target_os = "windows")]
     if let Ok(current_exe) = std::env::current_exe()
         && let Some(reason) = update_would_not_replace_this_copy(&current_exe)
     {
         return Err(reason);
     }
-
-    #[cfg(target_os = "windows")]
-    verify_installer_signature_or_delete(installer_path)?;
 
     #[cfg(target_os = "windows")]
     spawn_windows_installer(
@@ -1180,6 +1180,12 @@ mod tests {
         assert!(error.contains("unsigned") || error.contains("invalid or untrusted"));
         assert!(error.contains("downloaded file was removed"));
         assert!(!path.exists(), "a rejected installer must be removed");
+
+        let missing = apply_update(&path).unwrap_err();
+        assert!(
+            missing.contains("Installer not found"),
+            "a deleted installer must not remain applyable: {missing}"
+        );
     }
 
     #[cfg(target_os = "windows")]
