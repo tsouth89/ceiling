@@ -409,4 +409,40 @@ mod tests {
         dropped.secondary_label = None;
         assert_eq!(tracker.annotate(&mut dropped), vec!["Weekly".to_string()]);
     }
+
+    fn cursor_snapshot() -> ProviderUsageSnapshot {
+        let mut snapshot = codex_snapshot();
+        snapshot.provider_id = "cursor".into();
+        snapshot.display_name = "Cursor".into();
+        snapshot.primary = window(Some(43_200));
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.secondary = None;
+        snapshot.secondary_label = None;
+        snapshot.source_label = "web".into();
+        snapshot
+    }
+
+    #[test]
+    fn cursor_plan_unavailable_does_not_stick_as_monthly() {
+        let mut tracker = EnforcementTracker::new();
+        let mut on_demand_only = cursor_snapshot();
+        on_demand_only.primary = window(None);
+        on_demand_only
+            .inactive_rate_windows
+            .push(InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+        assert!(tracker.annotate(&mut on_demand_only).is_empty());
+
+        let mut with_plan = cursor_snapshot();
+        assert!(tracker.annotate(&mut with_plan).is_empty());
+        assert!(
+            !unavailable_titles(&with_plan)
+                .iter()
+                .any(|title| title == "Monthly")
+        );
+    }
 }

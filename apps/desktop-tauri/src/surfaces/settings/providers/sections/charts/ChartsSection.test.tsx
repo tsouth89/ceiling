@@ -372,13 +372,38 @@ describe("ChartsSection local usage summary", () => {
     });
 
     const { getByLabelText, queryByText } = render(
-      <ChartsSection providerId="cursor" accountEmail={null} t={(key) => key} />,
+      <ChartsSection
+        providerId="cursor"
+        accountEmail="missing-tracking@test"
+        t={(key) => key}
+      />,
     );
 
     const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
     expect(card.textContent).toMatch(/missing data, not zero usage/i);
     expect(card.textContent).toContain("Unavailable");
-    expect(queryByText("History unavailable")).toBeNull();
+    expect(queryByText("History unavailable")).toBeTruthy();
+    expect(card.textContent).toMatch(/not tracking local Composer activity/i);
+  });
+
+  it("does not call a locked tracking database a missing install", async () => {
+    tauriMocks.getProviderChartData.mockRejectedValue(new Error("no history"));
+    tauriMocks.getCursorModelActivity.mockResolvedValue({
+      status: "unreadable",
+      rows: [],
+    });
+
+    const { getByLabelText } = render(
+      <ChartsSection
+        providerId="cursor"
+        accountEmail="locked-tracking@test"
+        t={(key) => key}
+      />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
+    expect(card.textContent).toMatch(/could not read local Composer tracking/i);
+    expect(card.textContent).not.toMatch(/not tracking local Composer activity/i);
   });
 
   it("collapses a long project list behind a show-more toggle", async () => {

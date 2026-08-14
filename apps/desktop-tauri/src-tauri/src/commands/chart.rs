@@ -1110,8 +1110,7 @@ pub struct CursorModelActivityRow {
 
 /// Local Composer activity plus an honest missing-data signal.
 ///
-/// `status` is `available`, `empty`, or `unavailable`. An unavailable database
-/// must not be presented as zero activity.
+/// `status` is `available`, `empty`, `unavailable`, or `unreadable`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorActivitySnapshotBridge {
@@ -1132,6 +1131,9 @@ pub async fn get_cursor_model_activity() -> CursorActivitySnapshotBridge {
                 codexbar::cursor_activity::CursorActivityStatus::Unavailable => {
                     "unavailable".to_string()
                 }
+                codexbar::cursor_activity::CursorActivityStatus::Unreadable => {
+                    "unreadable".to_string()
+                }
             },
             rows: snapshot
                 .rows
@@ -1148,7 +1150,7 @@ pub async fn get_cursor_model_activity() -> CursorActivitySnapshotBridge {
     .unwrap_or_else(|err| {
         tracing::warn!("Cursor model-activity worker failed: {}", err);
         CursorActivitySnapshotBridge {
-            status: "unavailable".to_string(),
+            status: "unreadable".to_string(),
             rows: Vec::new(),
         }
     })

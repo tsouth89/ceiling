@@ -253,9 +253,12 @@ impl CursorApi {
                     NOT_ENFORCED,
                 ));
             } else {
+                // Title must stay Plan so EnforcementTracker shares the
+                // primary identity. "Monthly" would stick as a false
+                // unavailable row after a later plan reading appears.
                 inactives.push(InactiveRateWindow::unavailable(
-                    "cursor-monthly",
-                    "Monthly",
+                    "cursor-plan",
+                    "Plan",
                     NO_USAGE_REPORTED,
                 ));
             }
@@ -441,7 +444,15 @@ fn uses_percent_lanes(plan: &PlanUsage) -> bool {
 }
 
 fn individual_has_usage(individual: &IndividualUsage) -> bool {
-    individual.plan.is_some() || individual.overall.is_some() || individual.on_demand.is_some()
+    if individual.overall.is_some() || individual.on_demand.is_some() {
+        return true;
+    }
+    individual.plan.as_ref().is_some_and(|plan| {
+        plan_monthly_percent(plan).is_some()
+            || plan.auto_percent_used.is_some()
+            || plan.api_percent_used.is_some()
+            || plan_cost_snapshot(plan, None).is_some()
+    })
 }
 
 /// Cursor reports on-demand two ways: as a capped pool that can be metered, or
@@ -737,7 +748,8 @@ mod tests {
         assert!((usage.primary.used_percent).abs() < 0.01);
         assert!(usage.secondary.is_none());
         assert!(usage.extra_rate_windows.is_empty());
-        let monthly = inactive(&usage, "cursor-monthly");
+        let monthly = inactive(&usage, "cursor-plan");
+        assert_eq!(monthly.title, "Plan");
         assert_eq!(monthly.description, NO_USAGE_REPORTED);
         assert_eq!(monthly.state, EnforcementState::Unavailable);
         assert!(cost.is_none());
@@ -771,7 +783,8 @@ mod tests {
         assert_eq!(cost.limit, Some(10.0));
         assert_eq!(cost.period, "On-demand");
         // No plan/overall reading: Monthly is missing, not 0%.
-        let monthly = inactive(&usage, "cursor-monthly");
+        let monthly = inactive(&usage, "cursor-plan");
+        assert_eq!(monthly.title, "Plan");
         assert_eq!(monthly.state, EnforcementState::Unavailable);
     }
 
@@ -1098,7 +1111,8 @@ mod tests {
             partial_cost.expect("partial still bills on-demand").period,
             ON_DEMAND_PERIOD
         );
-        let monthly = inactive(&partial, "cursor-monthly");
+        let monthly = inactive(&partial, "cursor-plan");
+        assert_eq!(monthly.title, "Plan");
         assert_eq!(monthly.state, EnforcementState::Unavailable);
         assert_eq!(monthly.description, NO_USAGE_REPORTED);
 
@@ -1157,7 +1171,26 @@ mod tests {
             !usage
                 .inactive_rate_windows
                 .iter()
-                .any(|window| window.id == "cursor-monthly")
+                .any(|window| window.id == "cursor-monthly" || window.id == "cursor-plan")
+        );
+    }
+
+    #[test]
+    fn empty_plan_object_falls_through_to_team() {
+        let (usage, cost) = api()
+            .build_result(
+                parse_summary(include_str!("../fixtures/cursor/empty-plan-with-team.json")),
+                None,
+            )
+            .expect("empty plan + team");
+        assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
+        let cost = cost.expect("team pooled included units");
+        assert_eq!(cost.period, INCLUDED_PERIOD);
+        assert!(
+            !usage
+                .inactive_rate_windows
+                .iter()
+                .any(|window| window.id == "cursor-plan")
         );
     }
 

@@ -30,8 +30,10 @@ pub enum CursorActivityStatus {
     Available,
     /// The database opened and queried, but no attributed rows were in range.
     Empty,
-    /// The database is missing, locked, or the schema cannot be read.
+    /// The tracking database is missing on this machine.
     Unavailable,
+    /// The database exists but could not be opened or queried.
+    Unreadable,
 }
 
 /// Local Composer activity, or an honest missing-data signal.
@@ -62,6 +64,13 @@ impl CursorActivitySnapshot {
             rows: Vec::new(),
         }
     }
+
+    fn unreadable() -> Self {
+        Self {
+            status: CursorActivityStatus::Unreadable,
+            rows: Vec::new(),
+        }
+    }
 }
 
 /// Default location of Cursor's AI code-tracking database, when present.
@@ -83,9 +92,13 @@ pub fn cursor_model_activity(now_ms: i64, window_days: i64) -> CursorActivitySna
         return CursorActivitySnapshot::unavailable();
     };
     let since_ms = now_ms - window_days.max(0) * DAY_MS;
-    match read_cursor_model_activity(&db, since_ms) {
+    snapshot_from_db(&db, since_ms)
+}
+
+fn snapshot_from_db(db: &Path, since_ms: i64) -> CursorActivitySnapshot {
+    match read_cursor_model_activity(db, since_ms) {
         Ok(rows) => CursorActivitySnapshot::available(rows),
-        Err(_) => CursorActivitySnapshot::unavailable(),
+        Err(_) => CursorActivitySnapshot::unreadable(),
     }
 }
 
@@ -215,6 +228,16 @@ mod tests {
     fn snapshot_treats_missing_source_as_unavailable() {
         let snapshot = CursorActivitySnapshot::unavailable();
         assert_eq!(snapshot.status, CursorActivityStatus::Unavailable);
+        assert!(snapshot.rows.is_empty());
+    }
+
+    #[test]
+    fn existing_unreadable_db_is_not_missing_tracking() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ai-code-tracking.db");
+        std::fs::write(&db, b"not a sqlite database").unwrap();
+        let snapshot = snapshot_from_db(&db, 0);
+        assert_eq!(snapshot.status, CursorActivityStatus::Unreadable);
         assert!(snapshot.rows.is_empty());
     }
 }

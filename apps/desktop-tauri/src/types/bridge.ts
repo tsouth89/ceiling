@@ -780,7 +780,7 @@ export interface CursorModelActivity {
 }
 
 /** Local Composer activity. `unavailable` is missing data, not zero usage. */
-export type CursorActivityStatus = "available" | "empty" | "unavailable";
+export type CursorActivityStatus = "available" | "empty" | "unavailable" | "unreadable";
 
 export interface CursorActivitySnapshot {
   status: CursorActivityStatus;
