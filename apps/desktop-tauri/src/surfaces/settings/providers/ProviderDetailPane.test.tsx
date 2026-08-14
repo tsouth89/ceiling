@@ -387,6 +387,14 @@ describe("ProviderDetailPane request ordering", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "CredentialRevokeStored" }));
+    expect(tauriMocks.revokeProviderCredentials).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRevoke" }));
+    await waitFor(() =>
+      expect(tauriMocks.revokeProviderCredentials).toHaveBeenCalledWith("codex"),
+    );
+    await waitFor(() =>
+      expect(tauriMocks.refreshProviders).toHaveBeenCalled(),
+    );
     await waitFor(() =>
       expect(tauriMocks.getProviderDetail).toHaveBeenLastCalledWith("codex", null),
     );

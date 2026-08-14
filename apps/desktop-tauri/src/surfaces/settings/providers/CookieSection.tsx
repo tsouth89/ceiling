@@ -4,11 +4,15 @@ import {
   removeManualCookie,
   setManualCookie,
 } from "../../../lib/tauri";
+import { formatLocale } from "../../../lib/formatLocale";
 import { useLocale } from "../../../hooks/useLocale";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
+import { SecretField } from "../../../components/SecretField";
 import type { CookieInfoBridge } from "../../../types/bridge";
 
 interface Props {
   providerId: string;
+  providerName?: string;
   cookieDomain: string | null;
   onCredentialsChanged?: () => void;
 }
@@ -32,14 +36,18 @@ function cookiePlaceholder(
  */
 export function CookieSection({
   providerId,
+  providerName,
   cookieDomain,
   onCredentialsChanged,
 }: Props) {
   const { t } = useLocale();
+  const displayName = providerName || providerId;
   const [saved, setSaved] = useState<CookieInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const [pasteValue, setPasteValue] = useState("");
 
@@ -61,8 +69,10 @@ export function CookieSection({
     const signal = { stale: false };
     setLoaded(false);
     setError(null);
+    setStatus(null);
     setPasteValue("");
     setSaved(null);
+    setConfirming(false);
     void reload(signal);
     return () => { signal.stale = true; };
   }, [reload, cookieDomain]);
@@ -73,12 +83,15 @@ export function CookieSection({
   const handleRemove = async () => {
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
       const next = await removeManualCookie(providerId);
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
+      setConfirming(false);
+      setStatus(t("CredentialRemoved"));
       onCredentialsChanged?.();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);
     }
@@ -88,6 +101,7 @@ export function CookieSection({
     if (!pasteValue.trim()) return;
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
       const next = await setManualCookie(providerId, pasteValue.trim());
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
@@ -105,7 +119,14 @@ export function CookieSection({
       <h4>{t("BrowserCookiesSectionTitle")}</h4>
 
       {error && (
-        <div className="settings-status settings-status--error">{error}</div>
+        <div className="settings-status settings-status--error" role="alert">
+          {error}
+        </div>
+      )}
+      {status && (
+        <div className="settings-status" role="status">
+          {status}
+        </div>
       )}
 
       {saved ? (
@@ -124,7 +145,7 @@ export function CookieSection({
                 <button
                   className="credential-btn credential-btn--danger"
                   disabled={busy}
-                  onClick={() => void handleRemove()}
+                  onClick={() => setConfirming(true)}
                 >
                   {t("BrowserCookieRemove")}
                 </button>
@@ -148,13 +169,14 @@ export function CookieSection({
       </div>
 
       <div className="credential-add-form">
-        <textarea
-          className="text-input credential-textarea"
-          placeholder={cookiePlaceholder(providerId, t)}
-          rows={3}
+        <SecretField
+          label={t("SecretFieldCookieLabel")}
           value={pasteValue}
-          onChange={(e) => setPasteValue(e.target.value)}
+          onChange={setPasteValue}
+          placeholder={cookiePlaceholder(providerId, t)}
           disabled={busy}
+          revealLabel={t("SecretFieldReveal")}
+          hideLabel={t("SecretFieldHide")}
         />
         <button
           className="credential-btn credential-btn--primary"
@@ -164,6 +186,17 @@ export function CookieSection({
           {t("BrowserCookieSave")}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirming}
+        title={t("ConfirmRemoveCookieTitle")}
+        body={formatLocale(t("ConfirmRemoveCookieBody"), displayName)}
+        confirmLabel={t("ConfirmRemove")}
+        cancelLabel={t("ConfirmCancel")}
+        busy={busy}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => void handleRemove()}
+      />
     </section>
   );
 }

@@ -9,6 +9,7 @@ const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
   getTokenAccounts: vi.fn(),
+  removeTokenAccount: vi.fn(),
   triggerProviderLogin: vi.fn(),
   openExternalUrl: vi.fn(),
 }));
@@ -55,8 +56,13 @@ describe("TokenAccountsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
-    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({
+        ConfirmRemoveTokenBody: "Remove the {} token account from {}?",
+      }),
+    );
     tauriMocks.getTokenAccounts.mockResolvedValue(emptyAccounts());
+    tauriMocks.removeTokenAccount.mockResolvedValue(emptyAccounts());
     tauriMocks.triggerProviderLogin.mockResolvedValue(undefined);
     tauriMocks.openExternalUrl.mockResolvedValue(undefined);
     eventMocks.listen.mockImplementation(
@@ -250,5 +256,44 @@ describe("TokenAccountsPanel", () => {
     await waitFor(() =>
       expect(screen.queryByText("ABCD-1234")).not.toBeInTheDocument(),
     );
+  });
+
+  it("masks the token field and requires confirmation before removing an account", async () => {
+    const onCredentialsChanged = vi.fn();
+    tauriMocks.getTokenAccounts.mockResolvedValue({
+      ...emptyAccounts(),
+      accounts: [
+        {
+          id: "acct-1",
+          label: "Work",
+          addedAt: "today",
+          lastUsed: null,
+          isActive: true,
+        },
+      ],
+      activeIndex: 0,
+    });
+
+    render(
+      <LocaleProvider>
+        <TokenAccountsPanel
+          providerId="copilot"
+          onCredentialsChanged={onCredentialsChanged}
+        />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByLabelText("SecretFieldTokenLabel")).toHaveClass(
+      "secret-field__input--masked",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "TokenAccountRemove" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmCancel" }));
+    expect(tauriMocks.removeTokenAccount).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "TokenAccountRemove" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Work");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRemove" }));
+    await waitFor(() => expect(onCredentialsChanged).toHaveBeenCalledOnce());
+    expect(tauriMocks.removeTokenAccount).toHaveBeenCalledWith("copilot", "acct-1");
   });
 });

@@ -5,6 +5,9 @@ import {
   removeApiKey,
   setApiKey,
 } from "../../../lib/tauri";
+import { formatLocale } from "../../../lib/formatLocale";
+import { useLocale } from "../../../hooks/useLocale";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
 import type {
   ApiKeyInfoBridge,
   ApiKeyProviderInfoBridge,
@@ -21,11 +24,14 @@ interface Props {
  * to provider state instead of in a separate tab.
  */
 export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
+  const { t } = useLocale();
   const [info, setInfo] = useState<ApiKeyProviderInfoBridge | null>(null);
   const [saved, setSaved] = useState<ApiKeyInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
@@ -55,6 +61,8 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
     setEditValue("");
     setEditLabel("");
     setError(null);
+    setStatus(null);
+    setConfirming(false);
     setInfo(null);
     setSaved(null);
     void reload(signal);
@@ -80,6 +88,7 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
     if (!editValue.trim()) return;
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
       const next = await setApiKey(
         providerId,
@@ -101,12 +110,15 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
   const handleRemove = async () => {
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
       const next = await removeApiKey(providerId);
       setSaved(next.find((k) => k.providerId === providerId) ?? null);
+      setConfirming(false);
+      setStatus(t("CredentialRemoved"));
       onCredentialsChanged?.();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);
     }
@@ -117,7 +129,14 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
       <h4>API Key</h4>
 
       {error && (
-        <div className="settings-status settings-status--error">{error}</div>
+        <div className="settings-status settings-status--error" role="alert">
+          {error}
+        </div>
+      )}
+      {status && (
+        <div className="settings-status" role="status">
+          {status}
+        </div>
       )}
 
       <ul className="credential-list">
@@ -167,7 +186,7 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
                 <button
                   className="credential-btn credential-btn--danger"
                   disabled={busy}
-                  onClick={() => void handleRemove()}
+                  onClick={() => setConfirming(true)}
                 >
                   Remove
                 </button>
@@ -233,6 +252,16 @@ export function ApiKeySection({ providerId, onCredentialsChanged }: Props) {
           )}
         </li>
       </ul>
+      <ConfirmDialog
+        open={confirming}
+        title={t("ConfirmRemoveApiKeyTitle")}
+        body={formatLocale(t("ConfirmRemoveApiKeyBody"), info.displayName)}
+        confirmLabel={t("ConfirmRemove")}
+        cancelLabel={t("ConfirmCancel")}
+        busy={busy}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => void handleRemove()}
+      />
     </section>
   );
 }
