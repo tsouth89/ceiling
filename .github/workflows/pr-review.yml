@@ -31,7 +31,7 @@ jobs:
     name: CodeRev (advisory)
     runs-on: [self-hosted, windows, ceiling, grok]
     continue-on-error: true
-    timeout-minutes: 20
+    timeout-minutes: 35
     # Public-repo boundary: only the owner's own same-repository branches may
     # schedule a job on the local Grok runner. Forks, contributors, and labels
     # never grant access to this machine. pull_request_target supplies secrets
