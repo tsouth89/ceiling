@@ -441,7 +441,7 @@ fn with_store_lock<T>(
             Err(io::Error::other("account store operation failed"))
         }
     })
-    .map_err(|lock_err| op_err.unwrap_or_else(|| AccountStoreError::Io(lock_err)))
+    .map_err(|lock_err| op_err.unwrap_or(AccountStoreError::Io(lock_err)))
 }
 
 impl<I: AccountIdentity> Default for DirectoryAccountStore<I> {

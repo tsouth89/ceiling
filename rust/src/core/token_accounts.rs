@@ -674,7 +674,7 @@ fn with_store_lock<T>(
             Err(io::Error::other("token account store operation failed"))
         }
     })
-    .map_err(|lock_err| op_err.unwrap_or_else(|| TokenAccountError::Io(lock_err)))
+    .map_err(|lock_err| op_err.unwrap_or(TokenAccountError::Io(lock_err)))
 }
 
 impl Default for TokenAccountStore {
