@@ -15,10 +15,9 @@ use std::path::Path;
 use windows::Win32::Foundation::{BOOL, HWND, TRUST_E_NOSIGNATURE};
 use windows::Win32::Security::WinTrust::{
     WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
-    WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOCATION_CHECK_NONE, WTD_REVOKE_NONE,
-    WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE, WTD_UICONTEXT_INSTALL,
-    WTHelperGetProvCertFromChain, WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData,
-    WinVerifyTrust,
+    WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE,
+    WTD_STATEACTION_VERIFY, WTD_UI_NONE, WTD_UICONTEXT_INSTALL, WTHelperGetProvCertFromChain,
+    WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust,
 };
 use windows::core::PCWSTR;
 
@@ -49,16 +48,16 @@ pub(super) fn verify(path: &Path) -> Result<(), String> {
     let mut trust_data = WINTRUST_DATA {
         cbStruct: std::mem::size_of::<WINTRUST_DATA>() as u32,
         dwUIChoice: WTD_UI_NONE,
-        fdwRevocationChecks: WTD_REVOKE_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
         dwUnionChoice: WTD_CHOICE_FILE,
         Anonymous: WINTRUST_DATA_0 {
             pFile: &mut file_info,
         },
         dwStateAction: WTD_STATEACTION_VERIFY,
-        // Signature verification must be deterministic and must not make the
-        // launch path wait on revocation network access. WinVerifyTrust still
-        // validates the Authenticode signature, timestamp, and trust chain.
-        dwProvFlags: WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL,
+        // Check revocation for the whole chain against locally cached data only,
+        // so a revoked signing certificate is rejected without blocking the
+        // launch path on revocation network access.
+        dwProvFlags: WTD_CACHE_ONLY_URL_RETRIEVAL,
         dwUIContext: WTD_UICONTEXT_INSTALL,
         ..Default::default()
     };
