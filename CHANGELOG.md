@@ -6,7 +6,7 @@
 
 Hardens updates, credentials, and the local serve API, and ships the unpublished 1.5.30 work: a second tray click hides the dashboard, Grok banked resets show, and the taskbar strip finds a second lane when the usual gap is gone.
 
-Supersedes 1.5.30, which was tagged and drafted on 2026-08-13 but never published. Everything from it is included here. The `v1.5.30` tag stays as a marker.
+Supersedes 1.5.30. The GitHub release was tagged and drafted on 2026-08-13 but never published; the `v1.5.30` tag stays as a marker. A Microsoft Store submission was created from that tag. Everything from it is included here.
 
 ### Security
 - **Ceiling checks who signed an update before it runs it.** An automatic update was trusted on the strength of the SHA256 that GitHub's release metadata reported, so that metadata was the only thing standing between Ceiling and launching an attacker's installer with the user's privileges. Every downloaded installer is now independently checked against Windows Authenticode and pinned to Ceiling's publisher identity, once when the download completes and again immediately before launch. An installer that fails either check is deleted instead of being left on disk to be retried. The publisher identity is pinned rather than the signing key, because Azure Trusted Signing issues a fresh short-lived leaf certificate for every release and a key pin would reject the next legitimate one.
