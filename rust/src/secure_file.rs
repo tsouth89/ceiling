@@ -313,6 +313,10 @@ fn atomic_write_with_permissions(
 
     let result = (|| {
         prepare_temp_permissions(&temp_path, permission_mode, existing_permissions.as_ref())?;
+        #[cfg(unix)]
+        if permission_mode == AtomicWritePermissions::PreserveExisting {
+            copy_unix_owner(path, &temp_path)?;
+        }
         temp_file.write_all(bytes)?;
         temp_file.sync_all()?;
         drop(temp_file);
@@ -647,6 +651,18 @@ fn prepare_temp_permissions(
 }
 
 #[cfg(unix)]
+fn copy_unix_owner(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, chown};
+
+    let metadata = match std::fs::metadata(from) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    chown(to, Some(metadata.uid()), Some(metadata.gid()))
+}
+
+#[cfg(unix)]
 fn sync_parent_directory(parent: &Path) -> io::Result<()> {
     std::fs::File::open(parent)?.sync_all()
 }
@@ -832,19 +848,21 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn metadata_preserving_write_keeps_unix_file_mode() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, chown};
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
         std::fs::write(&path, b"original").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        chown(&path, Some(before.uid()), Some(before.gid())).unwrap();
 
         atomic_write_preserving_permissions(&path, b"replacement").unwrap();
 
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o640
-        );
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(after.permissions().mode() & 0o777, 0o640);
+        assert_eq!(after.uid(), before.uid());
+        assert_eq!(after.gid(), before.gid());
     }
 
     #[test]
