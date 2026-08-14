@@ -668,6 +668,19 @@ fn apply_refresh_to_auth_json(
             Value::String(exp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
         );
     }
+    for (field, value) in [
+        ("auth_mode", credentials.auth_mode.as_ref()),
+        ("email", credentials.email.as_ref()),
+        ("team_id", credentials.team_id.as_ref()),
+        ("oidc_issuer", credentials.oidc_issuer.as_ref()),
+        ("oidc_client_id", credentials.oidc_client_id.as_ref()),
+    ] {
+        if let Some(value) = value
+            && !entry.contains_key(field)
+        {
+            entry.insert(field.to_string(), Value::String(value.clone()));
+        }
+    }
     Ok(())
 }
 
@@ -1381,6 +1394,11 @@ mod tests {
         let entry = &stored["https://auth.x.ai::test"];
         assert_eq!(entry["key"], "new-access");
         assert_eq!(entry["refresh_token"], "refresh-new-access");
+        assert_eq!(entry["auth_mode"], "oidc");
+        assert_eq!(entry["email"], "user@example.com");
+        assert_eq!(entry["team_id"], "team");
+        assert_eq!(entry["oidc_issuer"], "https://auth.x.ai");
+        assert_eq!(entry["oidc_client_id"], "client");
     }
 
     #[test]

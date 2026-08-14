@@ -467,33 +467,128 @@ fn capture_file_security(path: &Path) -> io::Result<CapturedFileSecurity> {
 }
 
 #[cfg(windows)]
-fn apply_file_security(path: &Path, captured: &CapturedFileSecurity) -> io::Result<()> {
+fn captured_descriptor(
+    captured: &CapturedFileSecurity,
+) -> windows::Win32::Security::PSECURITY_DESCRIPTOR {
+    windows::Win32::Security::PSECURITY_DESCRIPTOR(captured.descriptor.as_ptr() as *mut _)
+}
+
+#[cfg(windows)]
+fn dacl_security_info(
+    captured: &CapturedFileSecurity,
+) -> windows::Win32::Security::OBJECT_SECURITY_INFORMATION {
+    use windows::Win32::Security::{
+        DACL_SECURITY_INFORMATION, OBJECT_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
+        UNPROTECTED_DACL_SECURITY_INFORMATION,
+    };
+
+    let mut info = DACL_SECURITY_INFORMATION.0;
+    if captured.control & SE_DACL_PROTECTED.0 != 0 {
+        info |= PROTECTED_DACL_SECURITY_INFORMATION.0;
+    } else {
+        info |= UNPROTECTED_DACL_SECURITY_INFORMATION.0;
+    }
+    OBJECT_SECURITY_INFORMATION(info)
+}
+
+#[cfg(windows)]
+fn apply_captured_dacl(path: &Path, captured: &CapturedFileSecurity) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Security::Authorization::{SE_FILE_OBJECT, SetNamedSecurityInfoW};
+    use windows::Win32::Security::{ACL, GetSecurityDescriptorDacl, PSID};
+    use windows::core::PCWSTR;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let descriptor = captured_descriptor(captured);
+    let mut present = BOOL::default();
+    let mut defaulted = BOOL::default();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    unsafe {
+        GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted).map_err(
+            |error| io::Error::other(format!("GetSecurityDescriptorDacl failed: {error}")),
+        )?;
+        if !present.as_bool() {
+            return Ok(());
+        }
+        let status = SetNamedSecurityInfoW(
+            PCWSTR(wide.as_ptr()),
+            SE_FILE_OBJECT,
+            dacl_security_info(captured),
+            PSID::default(),
+            PSID::default(),
+            (!dacl.is_null()).then_some(dacl.cast_const()),
+            None,
+        );
+        if status.is_err() {
+            return Err(io::Error::other(format!(
+                "SetNamedSecurityInfoW DACL failed: {status:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_captured_owner(path: &Path, captured: &CapturedFileSecurity) -> io::Result<()> {
+    use std::mem::ManuallyDrop;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Security::Authorization::{SE_FILE_OBJECT, SetNamedSecurityInfoW};
     use windows::Win32::Security::{
-        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
-        SetFileSecurityW, UNPROTECTED_DACL_SECURITY_INFORMATION,
+        GetSecurityDescriptorOwner, OBJECT_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSID,
     };
     use windows::core::PCWSTR;
 
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut info =
-        OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
-    if captured.control & SE_DACL_PROTECTED.0 != 0 {
-        info |= PROTECTED_DACL_SECURITY_INFORMATION;
-    } else {
-        info |= UNPROTECTED_DACL_SECURITY_INFORMATION;
-    }
+    let descriptor = captured_descriptor(captured);
+    let mut owner = ManuallyDrop::new(PSID::default());
+    let mut defaulted = BOOL::default();
     unsafe {
-        SetFileSecurityW(
+        GetSecurityDescriptorOwner(descriptor, &mut *owner, &mut defaulted).map_err(|error| {
+            io::Error::other(format!("GetSecurityDescriptorOwner failed: {error}"))
+        })?;
+        if owner.is_invalid() {
+            return Ok(());
+        }
+        let status = SetNamedSecurityInfoW(
             PCWSTR(wide.as_ptr()),
-            info,
-            PSECURITY_DESCRIPTOR(captured.descriptor.as_ptr() as *mut _),
-        )
-        .ok()
-        .map_err(|error| io::Error::other(format!("SetFileSecurityW failed: {error}")))
+            SE_FILE_OBJECT,
+            OBJECT_SECURITY_INFORMATION(OWNER_SECURITY_INFORMATION.0),
+            *owner,
+            PSID::default(),
+            None,
+            None,
+        );
+        if status.is_err() {
+            return Err(io::Error::other(format!(
+                "SetNamedSecurityInfoW owner failed: {status:?}"
+            )));
+        }
     }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn finish_preserved_security_restore(
+    dacl: io::Result<()>,
+    owner: io::Result<()>,
+) -> io::Result<()> {
+    // WRITE_OWNER / SE_RESTORE is not guaranteed. Keep the replaced bytes
+    // and the restored DACL if only the owner rewrite is denied.
+    let _ = owner;
+    dacl
+}
+
+#[cfg(windows)]
+fn apply_file_security(path: &Path, captured: &CapturedFileSecurity) -> io::Result<()> {
+    finish_preserved_security_restore(
+        apply_captured_dacl(path, captured),
+        apply_captured_owner(path, captured),
+    )
 }
 
 #[cfg(windows)]
@@ -1057,6 +1152,22 @@ mod tests {
         assert!(
             dacl_has_noninherited_user_full_control(&path),
             "destination DACL lost the explicit current-user ACE"
+        );
+    }
+
+    #[test]
+    fn metadata_preserving_write_keeps_dacl_when_owner_cannot_be_rewritten() {
+        let dacl_ok: io::Result<()> = Ok(());
+        let owner_denied = Err(io::Error::from_raw_os_error(
+            WIN32_ERROR_ACCESS_DENIED as i32,
+        ));
+        finish_preserved_security_restore(dacl_ok, owner_denied)
+            .expect("owner restore denial must not fail a successful DACL restore");
+
+        let dacl_err = Err(io::Error::other("SetNamedSecurityInfoW DACL failed"));
+        assert!(
+            finish_preserved_security_restore(dacl_err, Ok(())).is_err(),
+            "a failed DACL restore must still fail the persist"
         );
     }
 
