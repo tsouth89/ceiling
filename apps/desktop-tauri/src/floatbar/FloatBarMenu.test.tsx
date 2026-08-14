@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import FloatBarMenu from "./FloatBarMenu";
 
+vi.mock("../hooks/useLocale", () => ({
+  useLocale: () => ({ t: (key: string) => key }),
+}));
+
 function setup(overrides: Partial<Parameters<typeof FloatBarMenu>[0]> = {}) {
   const props = {
     locked: false,
@@ -19,17 +23,22 @@ function setup(overrides: Partial<Parameters<typeof FloatBarMenu>[0]> = {}) {
 describe("FloatBarMenu", () => {
   it("renders the four purposeful actions", () => {
     const { getByText } = setup();
-    for (const label of ["Lock", "Click-through", "Settings", "Hide"]) {
+    for (const label of [
+      "FloatBarLock",
+      "FloatBarClickThroughMenu",
+      "FloatBarOpenSettings",
+      "FloatBarHide",
+    ]) {
       expect(getByText(label)).toBeTruthy();
     }
   });
 
   it("fires the matching handler for each action", () => {
     const { props, getByText } = setup();
-    fireEvent.click(getByText("Lock"));
-    fireEvent.click(getByText("Click-through"));
-    fireEvent.click(getByText("Settings"));
-    fireEvent.click(getByText("Hide"));
+    fireEvent.click(getByText("FloatBarLock"));
+    fireEvent.click(getByText("FloatBarClickThroughMenu"));
+    fireEvent.click(getByText("FloatBarOpenSettings"));
+    fireEvent.click(getByText("FloatBarHide"));
     expect(props.onToggleLock).toHaveBeenCalledOnce();
     expect(props.onToggleClickThrough).toHaveBeenCalledOnce();
     expect(props.onOpenSettings).toHaveBeenCalledOnce();
@@ -39,7 +48,7 @@ describe("FloatBarMenu", () => {
   it("reflects lock + click-through active state", () => {
     const { getByText, container } = setup({ locked: true, clickThrough: true });
     // Locked flips the label to Unlock.
-    expect(getByText("Unlock")).toBeTruthy();
+    expect(getByText("FloatBarUnlock")).toBeTruthy();
     expect(
       container.querySelectorAll(".floatbar__menu-item--active"),
     ).toHaveLength(2);

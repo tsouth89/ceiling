@@ -4,6 +4,7 @@
 
 ### Fixed
 - **Cursor no longer treats missing usage as zero.** An empty `individualUsage` object used to paint a 0% monthly bar and hide a real team pool sitting next to it. Monthly is now marked unavailable when Cursor reports no reading, and an empty individual object falls through to team usage. On-demand stays billed spend; plan and included dollars are labeled **Included** so they are not read as an invoice. A missing Composer tracking database is shown as unavailable, not as no activity.
+- **Leftover English on glance surfaces now goes through locale keys.** Floatbar settings, freshness chips, account-status labels, Charts tab names, and About update copy used hardcoded English. They now use `en-US.ftl` (and zh-CN) so chips no longer show raw `stale` / `error` tokens.
 
 ### Internal
 - Cursor usage-summary and Composer-activity paths now have deterministic fixtures for normal, partial, duplicate, and malformed data.

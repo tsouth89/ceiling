@@ -6,6 +6,7 @@ import { getProviderIcon } from "./providers/providerIcons";
 import { expectedOverlay } from "../lib/expectedPace";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
+import { formatLocale } from "../lib/formatLocale";
 import {
   capacityFreshness,
   bankedResetCredits,
@@ -211,6 +212,7 @@ export default function PlanStatusCard({
   hideEmail?: boolean;
   onSelect?: () => void;
 }) {
+  const { t } = useLocale();
   const brand = getProviderIcon(provider.providerId).brandColor;
   const meters = glanceMeters(provider);
   const freshness = capacityFreshness(provider);
@@ -274,14 +276,17 @@ export default function PlanStatusCard({
                 <span
                   className={`plan-status-card__chip plan-status-card__chip--${freshness}`}
                 >
-                  {freshness}
+                  {t("FreshnessStale")}
                 </span>
               )}
               {resetCredits != null && (
                 <span
                   className={`plan-status-card__reset-credit${resetCredits === 0 ? " plan-status-card__reset-credit--empty" : ""}`}
                 >
-                  ↻ {resetCredits} {resetCredits === 1 ? "reset available" : "resets available"}
+                  ↻{" "}
+                  {resetCredits === 1
+                    ? formatLocale(t("ResetCreditsAvailableOne"), String(resetCredits))
+                    : formatLocale(t("ResetCreditsAvailableMany"), String(resetCredits))}
                 </span>
               )}
             </div>

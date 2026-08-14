@@ -109,9 +109,8 @@ export default function ChartsPanel({
       <div className="charts-panel">
         <TotalApiValueCard />
         <div className="charts-empty">
-          <strong>No charts yet</strong>
-          Limits and local usage history show up here for providers Ceiling can
-          chart — Codex, Claude, Cursor, OpenAI, and Grok (weekly pool + local sessions).
+          <strong>{t("ChartsNoChartsTitle")}</strong>
+          {t("ChartsNoChartsBody")}
         </div>
       </div>
     );
@@ -125,7 +124,7 @@ export default function ChartsPanel({
     <div className="charts-panel">
       <TotalApiValueCard />
       {tabCount > 1 && (
-        <div className="charts-provider-tabs" {...tabListProps} aria-label="Provider">
+        <div className="charts-provider-tabs" {...tabListProps} aria-label={t("ChartsProviderTabs")}>
           {comparisonProviders && (
             <button
               type="button"
@@ -135,7 +134,7 @@ export default function ChartsPanel({
               onClick={() => setSelectedId(COMPARE_ID)}
             >
               <span className="charts-provider-tab__compare-mark" aria-hidden>↔</span>
-              <span>Compare</span>
+              <span>{t("ChartsCompare")}</span>
             </button>
           )}
           {supported.map((p) => {

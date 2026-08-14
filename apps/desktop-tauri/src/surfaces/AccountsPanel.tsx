@@ -29,11 +29,11 @@ function normalizePlan(planName: string | null): string | null {
   return planName;
 }
 
-const STATUS_LABEL: Record<Status, string> = {
-  connected: "Connected",
-  stale: "Stale",
-  error: "Error",
-};
+const STATUS_KEY = {
+  connected: "StatusConnected",
+  stale: "FreshnessStale",
+  error: "FreshnessError",
+} as const;
 
 function AccountRow({
   provider,
@@ -86,7 +86,7 @@ function AccountRow({
         <span className="account-card__status-line">
           <span className="account-card__dot" data-status={status} aria-hidden />
           <span className="account-card__status-label">
-            {STATUS_LABEL[status]}
+            {t(STATUS_KEY[status])}
           </span>
         </span>
         <span className="account-card__updated">{updated}</span>
@@ -104,6 +104,7 @@ export default function AccountsPanel({
   hideEmail: boolean;
   onManage: () => void;
 }) {
+  const { t } = useLocale();
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -113,14 +114,14 @@ export default function AccountsPanel({
   if (providers.length === 0) {
     return (
       <div className="accounts-empty">
-        <strong>No accounts yet</strong>
-        Add a provider in Settings and Ceiling will start tracking its limits.
+        <strong>{t("AccountsGlanceEmptyTitle")}</strong>
+        {t("AccountsGlanceEmptyBody")}
         <button
           type="button"
           className="accounts-manage-link"
           onClick={onManage}
         >
-          Manage providers
+          {t("AccountsGlanceManage")}
         </button>
       </div>
     );
@@ -140,7 +141,7 @@ export default function AccountsPanel({
         ))}
       </div>
       <button type="button" className="accounts-manage-link" onClick={onManage}>
-        Add or manage providers
+        {t("AccountsGlanceAddOrManage")}
       </button>
     </div>
   );

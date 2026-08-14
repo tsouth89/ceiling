@@ -11,6 +11,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { expectedOverlay } from "../lib/expectedPace";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
+import { formatLocale } from "../lib/formatLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import { getProviderChartData } from "../lib/tauri";
 import { providerSupportsChartData } from "../lib/providerCharts";
@@ -346,7 +347,10 @@ export default function ProviderDetailView({
             <span
               className={`provider-focus__reset-credit${resetCredits === 0 ? " provider-focus__reset-credit--empty" : ""}`}
             >
-              ↻ {resetCredits} {resetCredits === 1 ? "reset available" : "resets available"}
+              ↻{" "}
+              {resetCredits === 1
+                ? formatLocale(t("ResetCreditsAvailableOne"), String(resetCredits))
+                : formatLocale(t("ResetCreditsAvailableMany"), String(resetCredits))}
             </span>
           )}
         </div>

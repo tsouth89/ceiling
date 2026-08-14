@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Field, Select, Toggle } from "../components/FormControls";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
+import { useLocale } from "../hooks/useLocale";
+import { formatLocale } from "../lib/formatLocale";
 import { getDirectoryAccounts, getTaskbarWidgetStatus } from "../lib/tauri";
+import type { LocaleKey } from "../i18n/keys";
 import type {
   FloatBarOrientation,
   FloatBarContrast,
@@ -37,18 +40,23 @@ function providerLabel(id: string): string {
   return PROVIDER_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
 }
 
-/** English status line for the Taskbar Usage group; `null` hides the row. */
-function taskbarWidgetStatusMessage(status: TaskbarWidgetStatus | null): string | null {
+/** Localized status line for the Taskbar Usage group; `null` hides the row. */
+function taskbarWidgetStatusMessage(
+  status: TaskbarWidgetStatus | null,
+  t: (key: LocaleKey) => string,
+): string | null {
   if (!status) return null;
   switch (status.kind) {
     case "active":
-      return `Shown on ${status.taskbars} taskbar${status.taskbars === 1 ? "" : "s"}.`;
+      return status.taskbars === 1
+        ? t("TaskbarWidgetShownOnOne")
+        : formatLocale(t("TaskbarWidgetShownOnMany"), String(status.taskbars));
     case "noFit":
-      return "Hidden: no free space on the taskbar.";
+      return t("TaskbarWidgetNoFit");
     case "waitingLandmarks":
-      return "Waiting for taskbar landmarks (Start button not found). A taskbar mod may be interfering.";
+      return t("TaskbarWidgetWaitingLandmarks");
     case "noProviders":
-      return "No enabled providers to show.";
+      return t("TaskbarWidgetNoProviders");
     case "disabled":
     case "unavailable":
       return null;
@@ -110,6 +118,7 @@ function useDraftNumber(value: number) {
  * Settings UI for the two independent at-a-glance surfaces.
  */
 export default function FloatBarSettingsSection({ settings, saving, set }: Props) {
+  const { t } = useLocale();
   const opacity = useDraftNumber(settings.floatBarOpacity);
   const scale = useDraftNumber(settings.floatBarScale);
   const commitOpacity = () => {
@@ -155,7 +164,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
       unlisten?.();
     };
   }, []);
-  const taskbarStatusMessage = taskbarWidgetStatusMessage(taskbarStatus);
+  const taskbarStatusMessage = taskbarWidgetStatusMessage(taskbarStatus, t);
 
   const [directoryAccounts, setDirectoryAccounts] = useState<
     ProviderAccountsBridge[]
@@ -250,52 +259,52 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
   return (
     <>
       <section className="settings-section">
-        <h3 className="settings-section__title">Taskbar Usage</h3>
+        <h3 className="settings-section__title">{t("TaskbarUsageTitle")}</h3>
         <div className="settings-section__group">
           <Field
-            label="Show Taskbar Usage"
-            description="Show live provider usage between Windows taskbar controls."
+            label={t("ShowTaskbarUsage")}
+            description={t("ShowTaskbarUsageHelp")}
             leading
           >
             <Toggle
               checked={settings.taskbarWidgetEnabled}
-              ariaLabel="Show Taskbar Usage"
+              ariaLabel={t("ShowTaskbarUsage")}
               disabled={saving}
               onChange={(v) => set({ taskbarWidgetEnabled: v })}
             />
           </Field>
           <Field
-            label="Open on Hover"
-            description="Open the usage glance after briefly resting the pointer on the taskbar widget."
+            label={t("OpenOnHover")}
+            description={t("OpenOnHoverHelp")}
             leading
           >
             <Toggle
               checked={settings.taskbarWidgetOpenOnHover}
-              ariaLabel="Open on Hover"
+              ariaLabel={t("OpenOnHover")}
               disabled={saving || !settings.taskbarWidgetEnabled}
               onChange={(v) => set({ taskbarWidgetOpenOnHover: v })}
             />
           </Field>
           <Field
-            label="Show on All Monitors"
-            description="Mirror one usage widget onto each verified Windows taskbar."
+            label={t("ShowOnAllMonitors")}
+            description={t("ShowOnAllMonitorsHelp")}
             leading
           >
             <Toggle
               checked={settings.taskbarWidgetAllMonitors}
-              ariaLabel="Show on All Monitors"
+              ariaLabel={t("ShowOnAllMonitors")}
               disabled={saving || !settings.taskbarWidgetEnabled}
               onChange={(v) => set({ taskbarWidgetAllMonitors: v })}
             />
           </Field>
           <Field
-            label="Show Reset Time Inline"
-            description="Show the reset countdown beside each taskbar percentage when known."
+            label={t("ShowResetTimeInline")}
+            description={t("ShowResetTimeInlineHelp")}
             leading
           >
             <Toggle
               checked={settings.floatBarShowResetInline}
-              ariaLabel="Show Reset Time Inline"
+              ariaLabel={t("ShowResetTimeInline")}
               disabled={saving || !settings.taskbarWidgetEnabled}
               onChange={(v) => set({ floatBarShowResetInline: v })}
             />
@@ -310,11 +319,9 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
         <div className="settings-section__group taskbar-provider-picker">
           <div className="taskbar-provider-picker__header">
             <div>
-              <div className="taskbar-provider-picker__title">Providers on the strip</div>
+              <div className="taskbar-provider-picker__title">{t("StripProvidersTitle")}</div>
               <p className="settings-section__hint">
-                Choose up to {MAX_STRIP_PROVIDERS} enabled providers and their order for the
-                taskbar strip and floating bar. Automatic uses your Providers tab order
-                (Codex, Claude, Cursor, Grok, …).
+                {formatLocale(t("StripProvidersHelp"), String(MAX_STRIP_PROVIDERS))}
               </p>
             </div>
             {customStrip && (
@@ -324,12 +331,12 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                 disabled={saving}
                 onClick={() => commitStripIds([])}
               >
-                Use automatic order
+                {t("StripUseAutomaticOrder")}
               </button>
             )}
           </div>
           {enabledOrdered.length === 0 ? (
-            <p className="settings-section__hint">Enable providers on the Providers tab first.</p>
+            <p className="settings-section__hint">{t("StripEnableProvidersFirst")}</p>
           ) : (
             <ul className="taskbar-provider-picker__list">
               {enabledOrdered.map((id) => {
@@ -351,7 +358,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                             !settings.taskbarWidgetEnabled ||
                             (atCap && !checked)
                           }
-                          aria-label={`Show ${providerLabel(id)} on taskbar strip`}
+                          aria-label={formatLocale(t("StripShowProvider"), providerLabel(id))}
                           onChange={(e) =>
                             toggleStripProvider(id, e.target.checked)
                           }
@@ -372,7 +379,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                         <button
                           type="button"
                           className="providers-sidebar__reorder-button"
-                          aria-label={`Move ${providerLabel(id)} up`}
+                          aria-label={formatLocale(t("StripMoveUp"), providerLabel(id))}
                           disabled={saving || !checked || rank <= 0}
                           onClick={() => moveStripProvider(id, -1)}
                         >
@@ -381,7 +388,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                         <button
                           type="button"
                           className="providers-sidebar__reorder-button"
-                          aria-label={`Move ${providerLabel(id)} down`}
+                          aria-label={formatLocale(t("StripMoveDown"), providerLabel(id))}
                           disabled={
                             saving ||
                             !checked ||
@@ -397,11 +404,11 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                     {multi && checked && (
                       <label className="taskbar-provider-picker__account">
                         <span className="taskbar-provider-picker__account-label">
-                          Taskbar shows
+                          {t("StripTaskbarShows")}
                         </span>
                         <select
                           className="select"
-                          aria-label={`Taskbar account for ${providerLabel(id)}`}
+                          aria-label={formatLocale(t("StripTaskbarAccount"), providerLabel(id))}
                           disabled={saving || !settings.taskbarWidgetEnabled}
                           value={pinnedAccounts[id] ?? ""}
                           onChange={(e) =>
@@ -409,7 +416,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                           }
                         >
                           <option value="">
-                            Auto (closest to limit)
+                            {t("StripAutoClosest")}
                           </option>
                           {multi.accounts.map((account) => (
                             <option key={account.id} value={account.id}>
@@ -426,68 +433,66 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           )}
           {multiAccountByProvider.size > 0 && (
             <p className="settings-section__hint">
-              With two Codex or Claude accounts, pick which one the compact strip
-              shows. Auto keeps the account closest to its limit. This does not
-              change which account is active in the Accounts tab.
+              {t("StripAccountHint")}
             </p>
           )}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section__title">Floating Bar</h3>
+        <h3 className="settings-section__title">{t("FloatingBarTitle")}</h3>
         <div className="settings-section__group">
         <Field
-          label="Show Floating Bar"
-          description="Show a separate always-on-top usage strip on the desktop."
+          label={t("ShowFloatingBar")}
+          description={t("ShowFloatingBarHelp")}
           leading
         >
           <Toggle
             checked={settings.floatBarEnabled}
-            ariaLabel="Show Floating Bar"
+            ariaLabel={t("ShowFloatingBar")}
             disabled={saving}
             onChange={(v) => set({ floatBarEnabled: v })}
           />
         </Field>
           <Field
-            label="Orientation"
-            description="Horizontal sits above a taskbar; vertical sits on a screen edge."
+            label={t("FloatBarOrientation")}
+            description={t("FloatBarOrientationHelp")}
           >
             <Select
               value={settings.floatBarOrientation}
               disabled={saving || !settings.floatBarEnabled}
               options={[
-                { value: "horizontal", label: "Horizontal" },
-                { value: "vertical", label: "Vertical" },
+                { value: "horizontal", label: t("OrientationHorizontal") },
+                { value: "vertical", label: t("OrientationVertical") },
               ]}
               onChange={(v) => set({ floatBarOrientation: v as FloatBarOrientation })}
             />
           </Field>
           <Field
-            label="Density"
-            description="Choose how much information each provider segment shows."
+            label={t("FloatBarDensity")}
+            description={t("FloatBarDensityHelp")}
           >
             <Select
               value={settings.floatBarDensity}
               disabled={saving || !settings.floatBarEnabled}
               options={[
-                { value: "compact", label: "Compact" },
-                { value: "standard", label: "Standard" },
-                { value: "detailed", label: "Detailed" },
+                { value: "compact", label: t("DensityCompact") },
+                { value: "standard", label: t("DensityStandard") },
+                { value: "detailed", label: t("DensityDetailed") },
               ]}
               onChange={(v) => set({ floatBarDensity: v as FloatBarDensity })}
             />
           </Field>
           <Field
-            label="Information"
-            description="Exact shows the percentage. Calm shows a pace state and the next reset, with the exact percentage on click."
+            label={t("FloatBarInformation")}
+            description={t("FloatBarInformationHelp")}
           >
             <Select
               value={settings.floatBarInformationMode}
               disabled={saving || !settings.floatBarEnabled}
               options={[
-                { value: "exact", label: "Exact" },
-                { value: "calm", label: "Calm" },
+                { value: "exact", label: t("InformationExact") },
+                { value: "calm", label: t("InformationCalm") },
               ]}
               onChange={(v) =>
                 set({ floatBarInformationMode: v as FloatBarInformationMode })
@@ -496,23 +501,23 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           </Field>
           <>
             <Field
-              label="Contrast"
-              description="Automatic follows the Windows light or dark appearance."
+              label={t("FloatBarContrast")}
+              description={t("FloatBarContrastHelp")}
             >
               <Select
                 value={settings.floatBarContrast}
                 disabled={saving || !settings.floatBarEnabled}
                 options={[
-                  { value: "auto", label: "Automatic" },
-                  { value: "light-text", label: "Light text" },
-                  { value: "dark-text", label: "Dark text" },
+                  { value: "auto", label: t("Automatic") },
+                  { value: "light-text", label: t("ContrastLightText") },
+                  { value: "dark-text", label: t("ContrastDarkText") },
                 ]}
                 onChange={(v) => set({ floatBarContrast: v as FloatBarContrast })}
               />
             </Field>
             <Field
-              label={`Opacity (${opacity.draft}%)`}
-              description="Lower values make the bar more see-through."
+              label={formatLocale(t("FloatBarOpacity"), String(opacity.draft))}
+              description={t("FloatBarOpacityHelp")}
             >
               <input
                 type="range"
@@ -526,12 +531,12 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                 onTouchEnd={commitOpacity}
                 onBlur={commitOpacity}
                 onKeyUp={commitOpacity}
-                aria-label="Floating bar opacity"
+                aria-label={t("FloatBarOpacityAria")}
               />
             </Field>
             <Field
-              label={`Size (${scale.draft}%)`}
-              description="Scales the floating bar icons, text, and pill spacing."
+              label={formatLocale(t("FloatBarSize"), String(scale.draft))}
+              description={t("FloatBarSizeHelp")}
             >
               <input
                 type="range"
@@ -545,18 +550,18 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                 onTouchEnd={commitScale}
                 onBlur={commitScale}
                 onKeyUp={commitScale}
-                aria-label="Floating bar size"
+                aria-label={t("FloatBarSizeAria")}
               />
             </Field>
           </>
           <Field
-            label="Click-Through"
-            description="Mouse clicks pass through to the window underneath — pure overlay mode."
+            label={t("FloatBarClickThrough")}
+            description={t("FloatBarClickThroughHelp")}
             leading
           >
             <Toggle
               checked={settings.floatBarClickThrough}
-              ariaLabel="Click-Through"
+              ariaLabel={t("FloatBarClickThrough")}
               disabled={saving || !settings.floatBarEnabled}
               onChange={(v) => set({ floatBarClickThrough: v })}
             />
