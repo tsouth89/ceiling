@@ -7,7 +7,9 @@ import type {
   SettingsSnapshot,
   SettingsUpdate,
 } from "../../../types/bridge";
+import { formatLocale } from "../../../lib/formatLocale";
 import { useLocale } from "../../../hooks/useLocale";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
 import { useTabListKeyboard } from "../../../hooks/useTabListKeyboard";
 import {
   getCredentialStorageStatus,
@@ -93,6 +95,8 @@ export function ProviderDetailPane({
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [gatewayDraft, setGatewayDraft] = useState(wayfinderGatewayUrl);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const [confirmingRevoke, setConfirmingRevoke] = useState(false);
+  const [revokeStatus, setRevokeStatus] = useState<string | null>(null);
   const activeProviderIdRef = useRef(providerId);
   const credentialStatusEpochRef = useRef(0);
   const requestEpochRef = useRef(0);
@@ -275,6 +279,11 @@ export function ProviderDetailPane({
   }, [providerId, load]);
 
   useEffect(() => {
+    setConfirmingRevoke(false);
+    setRevokeStatus(null);
+  }, [providerId]);
+
+  useEffect(() => {
     setLoginPhase(null);
     setLoginCode(null);
     setLoginUrl(null);
@@ -302,6 +311,21 @@ export function ProviderDetailPane({
     },
     [load, providerId],
   );
+
+  const handleCredentialsChanged = useCallback(() => {
+    if (!providerId) return;
+    void (async () => {
+      try {
+        await refreshProviders();
+      } catch (e) {
+        if (providerIdRef.current === providerId) {
+          setError(String(e));
+        }
+      }
+      if (providerIdRef.current !== providerId) return;
+      await load(providerId, selectedAccountIdRef.current);
+    })();
+  }, [load, providerId]);
 
   // Manual activation: choosing an account refetches that account from the
   // provider, so arrowing across the strip must not fire a request per tab.
@@ -383,15 +407,29 @@ export function ProviderDetailPane({
     const revokedProviderId = detail.id;
     setBusy(true);
     setError(null);
+    setRevokeStatus(null);
     try {
       await revokeProviderCredentials(revokedProviderId);
-      setCredentialRevision((value) => value + 1);
       if (providerIdRef.current !== revokedProviderId) return;
+      setCredentialRevision((value) => value + 1);
+      setConfirmingRevoke(false);
+      setRevokeStatus(t("CredentialRevoked"));
       selectedAccountIdRef.current = null;
       setSelectedAccountId(null);
+      try {
+        await refreshProviders();
+      } catch (e) {
+        if (providerIdRef.current === revokedProviderId) {
+          setError(String(e));
+        }
+      }
+      if (providerIdRef.current !== revokedProviderId) return;
       await load(revokedProviderId);
     } catch (e) {
-      setError(String(e));
+      if (providerIdRef.current === revokedProviderId) {
+        setError(String(e));
+        setConfirmingRevoke(false);
+      }
     } finally {
       setBusy(false);
     }
@@ -514,7 +552,8 @@ export function ProviderDetailPane({
         <CredentialStorageSection
           status={credentialStatus}
           busy={busy}
-          onRevoke={handleRevokeCredentials}
+          revokeStatus={revokeStatus}
+          onRevoke={() => setConfirmingRevoke(true)}
           t={t}
         />
         {tokenProviderIds.has(detail.id) && (
@@ -522,19 +561,20 @@ export function ProviderDetailPane({
             key={`token-${detail.id}-${credentialRevision}`}
             providerId={detail.id}
             compact
-            onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
+            onCredentialsChanged={handleCredentialsChanged}
           />
         )}
         <ApiKeySection
           key={`api-${detail.id}-${credentialRevision}`}
           providerId={detail.id}
-          onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
+          onCredentialsChanged={handleCredentialsChanged}
         />
         <CookieSection
           key={`cookie-${detail.id}-${credentialRevision}`}
           providerId={detail.id}
+          providerName={detail.displayName}
           cookieDomain={cookieDomain}
-          onCredentialsChanged={() => void refreshCredentialStatus(detail.id)}
+          onCredentialsChanged={handleCredentialsChanged}
         />
         <ChartsSection
           providerId={detail.id}
@@ -558,6 +598,16 @@ export function ProviderDetailPane({
           t={t}
         />
       </div>
+      <ConfirmDialog
+        open={confirmingRevoke}
+        title={t("ConfirmRevokeTitle")}
+        body={formatLocale(t("ConfirmRevokeBody"), detail.displayName)}
+        confirmLabel={t("ConfirmRevoke")}
+        cancelLabel={t("ConfirmCancel")}
+        busy={busy}
+        onCancel={() => setConfirmingRevoke(false)}
+        onConfirm={() => void handleRevokeCredentials()}
+      />
     </div>
   );
 }
@@ -619,11 +669,13 @@ function localizeProviderIssue(
 function CredentialStorageSection({
   status,
   busy,
+  revokeStatus,
   onRevoke,
   t,
 }: {
   status: CredentialStorageStatus | null;
   busy: boolean;
+  revokeStatus: string | null;
   onRevoke: () => void;
   t: ReturnType<typeof useLocale>["t"];
 }) {
@@ -644,6 +696,11 @@ function CredentialStorageSection({
           </button>
         )}
       </div>
+      {revokeStatus && (
+        <div className="settings-status" role="status">
+          {revokeStatus}
+        </div>
+      )}
       <dl className="provider-detail-grid provider-detail-grid--storage">
         <dt>{t("CredentialApiKeys")}</dt>
         <dd>{storageLabel(status.apiKeys, t)}</dd>

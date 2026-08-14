@@ -16,6 +16,9 @@ import {
   type ProviderLoginPhaseChangedPayload,
 } from "../../../lib/providerLogin";
 import { CopyIconButton } from "../../../components/MenuCard";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
+import { SecretField } from "../../../components/SecretField";
+import { formatLocale } from "../../../lib/formatLocale";
 
 interface Props {
   providerId: string;
@@ -55,6 +58,11 @@ export function TokenAccountsPanel({
   const [error, setError] = useState<string | null>(null);
   const [addLabel, setAddLabel] = useState("");
   const [addToken, setAddToken] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<{
+    accountId: string;
+    label: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!providerId) {
@@ -78,6 +86,8 @@ export function TokenAccountsPanel({
     setAddLabel("");
     setAddToken("");
     setError(null);
+    setStatus(null);
+    setPendingRemove(null);
     void load();
   }, [load]);
 
@@ -114,6 +124,7 @@ export function TokenAccountsPanel({
     if (!providerId || !addLabel.trim() || !addToken.trim()) return;
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
       const next = await addTokenAccount(
         providerId,
@@ -131,16 +142,20 @@ export function TokenAccountsPanel({
     }
   };
 
-  const handleRemove = async (accountId: string) => {
-    if (!providerId) return;
+  const handleRemove = async () => {
+    if (!providerId || !pendingRemove) return;
     setBusy(true);
     setError(null);
+    setStatus(null);
     try {
-      const next = await removeTokenAccount(providerId, accountId);
+      const next = await removeTokenAccount(providerId, pendingRemove.accountId);
       setData(next);
+      setPendingRemove(null);
+      setStatus(t("CredentialRemoved"));
       onCredentialsChanged?.();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setPendingRemove(null);
+      setError(err instanceof Error ? err.message : t("CredentialRemoveFailed"));
     } finally {
       setBusy(false);
     }
@@ -192,7 +207,14 @@ export function TokenAccountsPanel({
       )}
 
       {error && (
-        <div className="settings-status settings-status--error">{error}</div>
+        <div className="settings-status settings-status--error" role="alert">
+          {error}
+        </div>
+      )}
+      {status && (
+        <div className="settings-status" role="status">
+          {status}
+        </div>
       )}
       {loginStatusKey && (
         <div className="settings-status" role="status">
@@ -272,7 +294,12 @@ export function TokenAccountsPanel({
                   <button
                     className="credential-btn credential-btn--danger"
                     disabled={busy}
-                    onClick={() => void handleRemove(acct.id)}
+                    onClick={() =>
+                      setPendingRemove({
+                        accountId: acct.id,
+                        label: acct.label,
+                      })
+                    }
                   >
                     {t("TokenAccountRemove")}
                   </button>
@@ -308,13 +335,15 @@ export function TokenAccountsPanel({
           onChange={(e) => setAddLabel(e.target.value)}
           disabled={busy}
         />
-        <textarea
-          className="text-input credential-textarea"
+        <SecretField
+          label={t("SecretFieldTokenLabel")}
+          value={addToken}
+          onChange={setAddToken}
           placeholder={placeholder}
           rows={compact ? 2 : 3}
-          value={addToken}
-          onChange={(e) => setAddToken(e.target.value)}
           disabled={busy}
+          revealLabel={t("SecretFieldReveal")}
+          hideLabel={t("SecretFieldHide")}
         />
         <button
           className="credential-btn credential-btn--primary"
@@ -325,6 +354,23 @@ export function TokenAccountsPanel({
         </button>
       </div>
     </>
+  );
+
+  const removeDialog = (
+    <ConfirmDialog
+      open={pendingRemove !== null}
+      title={t("ConfirmRemoveTokenTitle")}
+      body={formatLocale(
+        t("ConfirmRemoveTokenBody"),
+        pendingRemove?.label ?? "",
+        data?.support.displayName ?? providerId,
+      )}
+      confirmLabel={t("ConfirmRemove")}
+      cancelLabel={t("ConfirmCancel")}
+      busy={busy}
+      onCancel={() => setPendingRemove(null)}
+      onConfirm={() => void handleRemove()}
+    />
   );
 
   if (compact) {
@@ -339,6 +385,7 @@ export function TokenAccountsPanel({
           </span>
         </summary>
         <div className="token-accounts-inline__body">{body}</div>
+        {removeDialog}
       </details>
     );
   }
@@ -347,6 +394,7 @@ export function TokenAccountsPanel({
     <section className="settings-section token-accounts-standalone">
       <h3 className="settings-section__title">{t("SectionTokenAccounts")}</h3>
       {body}
+      {removeDialog}
     </section>
   );
 }

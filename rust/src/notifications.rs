@@ -846,7 +846,14 @@ impl NotificationManager {
 
         // Fire-and-forget on the normal notification path: a provider refresh must
         // never block on PowerShell. Failures are logged, not surfaced.
-        match Command::new("powershell")
+        let Some(powershell) = crate::host::windows_powershell_exe() else {
+            tracing::warn!(
+                "Failed to dispatch toast notification '{}': trusted PowerShell not found",
+                title
+            );
+            return;
+        };
+        match Command::new(powershell)
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -1073,7 +1080,9 @@ pub fn send_test_notification() -> Result<(), String> {
     let title = "Ceiling notifications are on";
     let body = "This is a test. Unexpected resets and usage alerts will look like this.";
 
-    let output = Command::new("powershell")
+    let powershell = crate::host::windows_powershell_exe()
+        .ok_or_else(|| "Could not find the trusted Windows PowerShell".to_string())?;
+    let output = Command::new(powershell)
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
