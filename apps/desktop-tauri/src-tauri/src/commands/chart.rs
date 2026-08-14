@@ -1108,22 +1108,49 @@ pub struct CursorModelActivityRow {
     pub requests: u64,
 }
 
+/// Local Composer activity plus an honest missing-data signal.
+///
+/// `status` is `available`, `empty`, or `unavailable`. An unavailable database
+/// must not be presented as zero activity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorActivitySnapshotBridge {
+    pub status: String,
+    pub rows: Vec<CursorModelActivityRow>,
+}
+
 #[tauri::command]
-pub async fn get_cursor_model_activity() -> Vec<CursorModelActivityRow> {
+pub async fn get_cursor_model_activity() -> CursorActivitySnapshotBridge {
     tauri::async_runtime::spawn_blocking(|| {
-        codexbar::cursor_activity::cursor_model_activity(current_unix_ms(), 30)
-            .into_iter()
-            .map(|activity| CursorModelActivityRow {
-                model: activity.model,
-                contributions: activity.contributions,
-                requests: activity.requests,
-            })
-            .collect()
+        let snapshot = codexbar::cursor_activity::cursor_model_activity(current_unix_ms(), 30);
+        CursorActivitySnapshotBridge {
+            status: match snapshot.status {
+                codexbar::cursor_activity::CursorActivityStatus::Available => {
+                    "available".to_string()
+                }
+                codexbar::cursor_activity::CursorActivityStatus::Empty => "empty".to_string(),
+                codexbar::cursor_activity::CursorActivityStatus::Unavailable => {
+                    "unavailable".to_string()
+                }
+            },
+            rows: snapshot
+                .rows
+                .into_iter()
+                .map(|activity| CursorModelActivityRow {
+                    model: activity.model,
+                    contributions: activity.contributions,
+                    requests: activity.requests,
+                })
+                .collect(),
+        }
     })
     .await
     .unwrap_or_else(|err| {
         tracing::warn!("Cursor model-activity worker failed: {}", err);
-        Vec::new()
+        CursorActivitySnapshotBridge {
+            status: "unavailable".to_string(),
+            rows: Vec::new(),
+        }
     })
 }
 

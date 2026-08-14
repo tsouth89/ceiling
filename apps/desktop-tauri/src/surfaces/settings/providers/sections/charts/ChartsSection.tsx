@@ -12,7 +12,7 @@ import {
   providerSupportsChartData,
 } from "../../../../../lib/providerCharts";
 import type {
-  CursorModelActivity,
+  CursorActivitySnapshot,
   LocalEffortCost,
   LocalModelCost,
   LocalPlanUsage,
@@ -321,39 +321,51 @@ function cursorModelLabel(model: string): string {
   return model === "default" ? "Auto" : model;
 }
 
-function CursorActivity({ rows }: { rows: CursorModelActivity[] }) {
+function CursorActivity({ snapshot }: { snapshot: CursorActivitySnapshot }) {
+  const rows = snapshot.rows;
   const total = rows.reduce((sum, row) => sum + row.contributions, 0);
+  const note =
+    snapshot.status === "unavailable"
+      ? "Cursor is not tracking local Composer activity on this machine. This is missing data, not zero usage."
+      : snapshot.status === "empty"
+        ? "No Composer activity in the last 30 days. This is activity share, not tokens or spend."
+        : "AI code tracked by Cursor Composer, grouped by model. This is activity, not tokens or spend (Cursor does not log either locally). On-demand dollars on glance surfaces are billed spend; included plan units are not an invoice.";
   return (
     <div className="cursor-activity" aria-label="Cursor activity by model over 30 days">
       <div className="cursor-activity__header">
         <span className="cursor-activity__title">Cursor activity by model · 30 days</span>
-        <span className="cursor-activity__total">{formatTokens(total)} edits</span>
+        <span className="cursor-activity__total">
+          {snapshot.status === "unavailable"
+            ? "Unavailable"
+            : snapshot.status === "empty"
+              ? "No data"
+              : `${formatTokens(total)} edits`}
+        </span>
       </div>
-      <ul className="cursor-activity__rows">
-        {rows.map((row) => {
-          const share = total > 0 ? (row.contributions / total) * 100 : 0;
-          return (
-            <li className="cursor-activity__row" key={row.model}>
-              <div className="cursor-activity__row-top">
-                <span className="cursor-activity__name" title={row.model}>
-                  {cursorModelLabel(row.model)}
-                </span>
-                <span className="cursor-activity__share">{Math.round(share)}%</span>
-              </div>
-              <div className="cursor-activity__track" aria-hidden="true">
-                <span style={{ width: `${share}%` }} />
-              </div>
-              <div className="cursor-activity__detail">
-                {formatTokens(row.contributions)} edits · {formatTokens(row.requests)} requests
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      <p className="cursor-activity__note">
-        AI code tracked by Cursor Composer, grouped by model. This is activity, not tokens or
-        spend (Cursor does not log either locally).
-      </p>
+      {rows.length > 0 && (
+        <ul className="cursor-activity__rows">
+          {rows.map((row) => {
+            const share = total > 0 ? (row.contributions / total) * 100 : 0;
+            return (
+              <li className="cursor-activity__row" key={row.model}>
+                <div className="cursor-activity__row-top">
+                  <span className="cursor-activity__name" title={row.model}>
+                    {cursorModelLabel(row.model)}
+                  </span>
+                  <span className="cursor-activity__share">{Math.round(share)}%</span>
+                </div>
+                <div className="cursor-activity__track" aria-hidden="true">
+                  <span style={{ width: `${share}%` }} />
+                </div>
+                <div className="cursor-activity__detail">
+                  {formatTokens(row.contributions)} edits · {formatTokens(row.requests)} requests
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <p className="cursor-activity__note">{note}</p>
     </div>
   );
 }
@@ -484,7 +496,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [cursorActivity, setCursorActivity] = useState<CursorModelActivity[] | null>(null);
+  const [cursorActivity, setCursorActivity] = useState<CursorActivitySnapshot | null>(null);
   const [efficiency, setEfficiency] = useState<QuotaRunEfficiency[]>([]);
   const usageWindows = providerLocalUsageWindows(providerSnapshot);
   const sourceLabel = providerSnapshot?.sourceLabel;
@@ -601,11 +613,13 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
       };
     }
     getCursorModelActivity()
-      .then((rows) => {
-        if (!cancelled) setCursorActivity(rows);
+      .then((snapshot) => {
+        if (!cancelled) setCursorActivity(snapshot);
       })
       .catch(() => {
-        if (!cancelled) setCursorActivity([]);
+        if (!cancelled) {
+          setCursorActivity({ status: "unavailable", rows: [] });
+        }
       });
     return () => {
       cancelled = true;
@@ -687,8 +701,8 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
   // Cursor provider. Guard on the current provider so a stale fetch from a
   // previous selection can't flash in another provider's view.
   const isCursor = providerId.toLowerCase() === "cursor";
-  const cursorRows = isCursor ? cursorActivity ?? [] : [];
-  const hasCursorActivity = cursorRows.length > 0;
+  const cursorSnapshot = isCursor ? cursorActivity : null;
+  const hasCursorActivity = cursorSnapshot != null;
 
   // Derived above the empty and loading states below because the tab-strip hook
   // has to run on every render.
@@ -722,10 +736,10 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
   if (!data || failed) {
     // Chart history is unavailable, but Cursor's local activity may still be
     // readable — show it rather than a bare error.
-    if (hasCursorActivity) {
+    if (cursorSnapshot) {
       return (
         <section className="provider-detail-section provider-detail-charts">
-          <CursorActivity rows={cursorRows} />
+          <CursorActivity snapshot={cursorSnapshot} />
         </section>
       );
     }
@@ -809,7 +823,7 @@ export function ChartsSection({ providerId, accountEmail, accountId, providerSna
           </span>
         </div>
       )}
-      {hasCursorActivity && <CursorActivity rows={cursorRows} />}
+      {cursorSnapshot && <CursorActivity snapshot={cursorSnapshot} />}
       {data.localUsage && (
         <div
           className="usage-periods"

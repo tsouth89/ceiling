@@ -16,7 +16,7 @@ import type {
   ProviderDetail,
   ProviderLocalUsageSummary,
   LocalApiValueProvider,
-  CursorModelActivity,
+  CursorActivitySnapshot,
   ProviderSummary,
   ProviderUsageSnapshot,
   AccountProbeBridge,
@@ -286,8 +286,8 @@ export function getLocalApiValueTotals(options?: {
   return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
 }
 
-export function getCursorModelActivity(): Promise<CursorModelActivity[]> {
-  return invoke<CursorModelActivity[]>("get_cursor_model_activity");
+export function getCursorModelActivity(): Promise<CursorActivitySnapshot> {
+  return invoke<CursorActivitySnapshot>("get_cursor_model_activity");
 }
 
 /** Export the provider's 30-day spend to a CSV in Downloads; resolves to the saved path. */

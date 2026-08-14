@@ -1,0 +1,18 @@
+{
+  "billingCycleStart": "not-a-date",
+  "billingCycleEnd": "also-not-a-date",
+  "membershipType": "pro",
+  "unexpectedVendorField": { "ignored": true },
+  "individualUsage": {
+    "plan": {
+      "used": null,
+      "limit": 5000,
+      "totalPercentUsed": 12.5
+    },
+    "onDemand": {
+      "enabled": true,
+      "used": null,
+      "limit": 2000
+    }
+  }
+}
