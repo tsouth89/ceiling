@@ -621,12 +621,22 @@ fn credential_identities_conflict(
     root: &serde_json::Value,
     credentials: &OAuthCredentials,
 ) -> bool {
-    let disk = root
-        .get("id_token")
-        .and_then(serde_json::Value::as_str)
-        .and_then(jwt_identity);
-    let memory = credentials.id_token.as_deref().and_then(jwt_identity);
-    matches!((disk, memory), (Some(disk), Some(memory)) if disk != memory)
+    let disk_token = root.get("id_token").and_then(serde_json::Value::as_str);
+    let memory_token = credentials.id_token.as_deref();
+    let (Some(disk), Some(memory)) = (disk_token, memory_token) else {
+        return false;
+    };
+    // Prefer the stable JWT subject/email, but fall back to the raw token so a
+    // non-JWT or identity-less id_token still detects a different account.
+    let disk_identity = jwt_identity(disk).unwrap_or_else(|| disk.to_string());
+    let memory_identity = jwt_identity(memory).unwrap_or_else(|| memory.to_string());
+    let conflict = disk_identity != memory_identity;
+    if conflict {
+        tracing::warn!(
+            "skipping Gemini credential persist: on-disk account identity differs from the refreshed account"
+        );
+    }
+    conflict
 }
 
 fn jwt_identity(token: &str) -> Option<String> {
@@ -894,6 +904,25 @@ mod tests {
         let original = serde_json::json!({
             "access_token": "b-access",
             "id_token": account_b,
+            "refresh_token": "b-refresh"
+        });
+        let original_bytes = serde_json::to_vec_pretty(&original).expect("seed bytes");
+        std::fs::write(&path, &original_bytes).expect("seed other-account credentials");
+
+        let mut credentials = refreshed_credentials("a-access");
+        credentials.id_token = Some(test_id_token("account-a", "a@example.com"));
+        persist_refreshed_credentials(&path, &credentials).expect("skip mixed-account persist");
+
+        assert_eq!(std::fs::read(&path).expect("read original"), original_bytes);
+    }
+
+    #[test]
+    fn persist_skips_when_disk_id_token_is_not_a_jwt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oauth_creds.json");
+        let original = serde_json::json!({
+            "access_token": "b-access",
+            "id_token": "opaque-non-jwt-b-token",
             "refresh_token": "b-refresh"
         });
         let original_bytes = serde_json::to_vec_pretty(&original).expect("seed bytes");

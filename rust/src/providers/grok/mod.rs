@@ -659,8 +659,13 @@ fn apply_refresh_to_auth_json(
         "key".to_string(),
         Value::String(credentials.access_token.clone()),
     );
+    let disk_refresh = entry
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
     let persist_refresh = credentials.rotated_refresh_token.as_ref().or_else(|| {
-        if entry.contains_key("refresh_token") {
+        if disk_refresh.is_some() {
             None
         } else {
             credentials.refresh_token.as_ref()
@@ -1384,6 +1389,31 @@ mod tests {
             stored["https://auth.x.ai::test"]["refresh_token"],
             "newer-disk-refresh"
         );
+    }
+
+    #[test]
+    fn persist_repairs_null_or_empty_refresh_token() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+
+        for seed in [
+            r#"{"https://auth.x.ai::test":{"key":"old","refresh_token":null}}"#,
+            r#"{"https://auth.x.ai::test":{"key":"old","refresh_token":""}}"#,
+            r#"{"https://auth.x.ai::test":{"key":"old","refresh_token":"   "}}"#,
+        ] {
+            std::fs::write(&path, seed).expect("seed unusable refresh token");
+            refreshed_credentials("new-access")
+                .persist_to_path(&path)
+                .expect("repair refresh token");
+            let stored: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("read result"))
+                    .expect("valid result");
+            assert_eq!(stored["https://auth.x.ai::test"]["key"], "new-access");
+            assert_eq!(
+                stored["https://auth.x.ai::test"]["refresh_token"],
+                "refresh-new-access"
+            );
+        }
     }
 
     #[test]
