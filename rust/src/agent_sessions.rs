@@ -330,8 +330,10 @@ impl LocalAgentSessionScanner {
     pub async fn scan(&self) -> AgentSessionHostResult {
         let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "localhost".to_string());
         let options = Self::process_options(self.command_timeout);
+        let powershell = crate::host::windows_powershell_exe();
+        let powershell = powershell.to_string_lossy();
         let process_result = CommandRunner::new()
-            .run_async("powershell.exe", None, &options)
+            .run_async(&powershell, None, &options)
             .await;
         let (processes, error) = match process_result {
             Ok(result) if result.timed_out => (

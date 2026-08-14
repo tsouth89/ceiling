@@ -846,7 +846,7 @@ impl NotificationManager {
 
         // Fire-and-forget on the normal notification path: a provider refresh must
         // never block on PowerShell. Failures are logged, not surfaced.
-        match Command::new("powershell")
+        match Command::new(crate::host::windows_powershell_exe())
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -1073,7 +1073,7 @@ pub fn send_test_notification() -> Result<(), String> {
     let title = "Ceiling notifications are on";
     let body = "This is a test. Unexpected resets and usage alerts will look like this.";
 
-    let output = Command::new("powershell")
+    let output = Command::new(crate::host::windows_powershell_exe())
         .args([
             "-NoProfile",
             "-ExecutionPolicy",

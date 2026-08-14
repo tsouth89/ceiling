@@ -51,7 +51,7 @@ impl AntigravityProvider {
         #[cfg(windows)]
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let mut cmd = Command::new("powershell.exe");
+        let mut cmd = Command::new(crate::host::windows_powershell_exe());
         cmd.args([
             "-ExecutionPolicy",
             "Bypass",
@@ -308,7 +308,7 @@ impl AntigravityProvider {
     fn listening_ports_for_pid(pid: u32) -> Vec<u16> {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let mut cmd = Command::new("powershell.exe");
+        let mut cmd = Command::new(crate::host::windows_powershell_exe());
         cmd.args([
             "-ExecutionPolicy",
             "Bypass",

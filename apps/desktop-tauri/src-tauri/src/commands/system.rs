@@ -88,11 +88,7 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn windows_system_binary(name: &str) -> std::path::PathBuf {
-    std::env::var_os("SystemRoot")
-        .map(std::path::PathBuf::from)
-        .map(|root| root.join("System32").join(name))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| std::path::PathBuf::from(name))
+    codexbar::host::windows_system_exe(name)
 }
 
 // ════════════════════════════════════════════════════════════════════════════════

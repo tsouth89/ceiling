@@ -772,16 +772,7 @@ fn powershell_single_quoted(value: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn windows_powershell_path() -> PathBuf {
-    std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .map(|root| {
-            root.join("System32")
-                .join("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe")
-        })
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from("powershell.exe"))
+    crate::host::windows_powershell_exe()
 }
 
 /// Check if there's a pending update ready to install
