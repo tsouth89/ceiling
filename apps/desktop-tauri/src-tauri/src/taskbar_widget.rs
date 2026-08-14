@@ -1748,6 +1748,12 @@ mod windows_host {
             0x03c0, 0x07e0, 0x03e0, 0x07f0, 0x0f78, 0x1e3c, 0x3ff8, 0x1ff0, 0x0fe0, 0x07c0, 0x03c0,
             0x03c0, 0x03c0, 0x03c0, 0x0000, 0x0000,
         ];
+        // OpenCode mark: square ring (outer square minus an inner square hole),
+        // matching ProviderIcon-opencode.svg and the shared OpenCode/OpenCode Go brand.
+        const OPENCODE: [u16; 16] = [
+            0x0000, 0x3ffc, 0x3ffc, 0x3ffc, 0x381c, 0x381c, 0x381c, 0x381c, 0x381c, 0x381c, 0x381c,
+            0x381c, 0x3ffc, 0x3ffc, 0x3ffc, 0x0000,
+        ];
 
         let mask = match provider_id {
             "codex" => Some(&CODEX),
@@ -1756,6 +1762,7 @@ mod windows_host {
             "grok" => Some(&GROK),
             "gemini" => Some(&GEMINI),
             "antigravity" | "agy" => Some(&ANTIGRAVITY),
+            "opencode" | "opencodego" => Some(&OPENCODE),
             _ => None,
         };
         if let Some(mask) = mask {
@@ -1798,6 +1805,8 @@ mod windows_host {
             "gemini" => rgb(171, 135, 234),
             "antigravity" | "agy" => rgb(96, 186, 126),
             "copilot" => rgb(168, 85, 247),
+            // Match the web registry (#3b82f6) so strip and dashboard agree.
+            "opencode" | "opencodego" => rgb(59, 130, 246),
             _ => rgb(204, 211, 220),
         }
     }
