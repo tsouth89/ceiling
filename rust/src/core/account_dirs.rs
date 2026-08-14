@@ -400,14 +400,14 @@ impl<I: AccountIdentity> DirectoryAccountStore<I> {
         &self,
         operation: impl FnOnce(&mut DirectoryAccountData<I>) -> Result<T, String>,
     ) -> anyhow::Result<(DirectoryAccountData<I>, T)> {
-        crate::secure_file::with_state_write_lock(|| {
-            let mut data = self.load().map_err(io::Error::other)?;
+        with_store_lock(|| {
+            let mut data = self.load()?;
             let original = data.clone();
             let result = operation(&mut data).map_err(io::Error::other)?;
             // A no-op must not create a missing file or rewrite one and drop
             // unknown fields the deserialized snapshot never had.
             if data != original {
-                self.save_unlocked(&data).map_err(io::Error::other)?;
+                self.save_unlocked(&data)?;
             }
             Ok((data, result))
         })
@@ -718,6 +718,36 @@ mod tests {
         assert!(
             matches!(error, AccountStoreError::Json(_)),
             "serde failures must stay Json, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn try_update_keeps_json_errors_as_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store: DirectoryAccountStore<UnserializableIdentity> =
+            DirectoryAccountStore::with_path(dir.path().join("test-accounts.json"));
+
+        let error = store
+            .try_update(|data| {
+                data.accounts.push(DirectoryAccount {
+                    id: Uuid::new_v4(),
+                    label: "broken".to_string(),
+                    config_dir: PathBuf::from("/dirs/broken"),
+                    tint: None,
+                    identity: Some(UnserializableIdentity),
+                    added_at: 0,
+                    last_used: None,
+                });
+                Ok(())
+            })
+            .expect_err("serialize must fail");
+
+        let store_error = error
+            .downcast_ref::<AccountStoreError>()
+            .expect("store error must not be collapsed into io::Error");
+        assert!(
+            matches!(store_error, AccountStoreError::Json(_)),
+            "serde failures must stay Json, got {store_error:?}"
         );
     }
 }

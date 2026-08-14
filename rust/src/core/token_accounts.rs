@@ -646,8 +646,8 @@ impl TokenAccountStore {
         provider: ProviderId,
         operation: impl FnOnce(&mut ProviderAccountData) -> Result<T, String>,
     ) -> anyhow::Result<(ProviderAccountData, T)> {
-        crate::secure_file::with_state_write_lock(|| {
-            let mut all = self.load().map_err(io::Error::other)?;
+        with_store_lock(|| {
+            let mut all = self.load()?;
             let mut data = all.get(&provider).cloned().unwrap_or_default();
             let original = data.clone();
             let result = operation(&mut data).map_err(io::Error::other)?;
@@ -655,7 +655,7 @@ impl TokenAccountStore {
             // file even when the mutation added nothing.
             if data != original {
                 all.insert(provider, data.clone());
-                self.save_unlocked(&all).map_err(io::Error::other)?;
+                self.save_unlocked(&all)?;
             }
             Ok((data, result))
         })
