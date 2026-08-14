@@ -14,15 +14,34 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+/// On-disk schema for [`CostUsageCache`]. Version 1 was implicit i32 totals.
+/// Live scan paths do not load this file today; the version still exists so a
+/// later wire-up cannot reuse a truncated cache as u64.
+const COST_USAGE_CACHE_VERSION: u32 = 2;
+
 /// Cache for scanned file data
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostUsageCache {
+    /// On-disk schema version. Missing or mismatched values are discarded.
+    #[serde(default)]
+    pub version: u32,
     /// Last scan timestamp in milliseconds
     pub last_scan_unix_ms: i64,
     /// Per-file usage data
     pub files: HashMap<String, CostUsageFileUsage>,
     /// Aggregated daily data: day_key -> model -> [input, cached, output]
-    pub days: HashMap<String, HashMap<String, Vec<i32>>>,
+    pub days: HashMap<String, HashMap<String, Vec<u64>>>,
+}
+
+impl Default for CostUsageCache {
+    fn default() -> Self {
+        Self {
+            version: COST_USAGE_CACHE_VERSION,
+            last_scan_unix_ms: 0,
+            files: HashMap::new(),
+            days: HashMap::new(),
+        }
+    }
 }
 
 /// Per-file usage tracking
@@ -33,7 +52,7 @@ pub struct CostUsageFileUsage {
     /// File size in bytes
     pub size: i64,
     /// Daily usage data extracted from this file
-    pub days: HashMap<String, HashMap<String, Vec<i32>>>,
+    pub days: HashMap<String, HashMap<String, Vec<u64>>>,
     /// Bytes parsed so far (for incremental parsing)
     pub parsed_bytes: Option<i64>,
     /// Last model seen (for delta calculations)
@@ -45,9 +64,9 @@ pub struct CostUsageFileUsage {
 /// Running totals for Codex token counting
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexTotals {
-    pub input: i32,
-    pub cached: i32,
-    pub output: i32,
+    pub input: u64,
+    pub cached: u64,
+    pub output: u64,
 }
 
 /// Result of parsing a Codex file
@@ -82,9 +101,9 @@ pub struct CodexUsageRecord {
     /// carry to an account, and it is only a proxy: two accounts on the same
     /// plan look identical, and one account changing plans looks like two.
     pub plan: Option<String>,
-    pub input: i32,
-    pub cached: i32,
-    pub output: i32,
+    pub input: u64,
+    pub cached: u64,
+    pub output: u64,
 }
 
 /// Day range for scanning
@@ -186,13 +205,13 @@ struct CodexFastPayload<'a> {
     #[serde(default, borrow)]
     rate_limits: Option<CodexFastRateLimits<'a>>,
     #[serde(default)]
-    input_tokens: Option<i32>,
+    input_tokens: Option<u64>,
     #[serde(default)]
-    cached_input_tokens: Option<i32>,
+    cached_input_tokens: Option<u64>,
     #[serde(default)]
-    cache_read_input_tokens: Option<i32>,
+    cache_read_input_tokens: Option<u64>,
     #[serde(default)]
-    output_tokens: Option<i32>,
+    output_tokens: Option<u64>,
 }
 
 /// Only the plan is read here. It is the closest thing Codex logs carry to an
@@ -218,15 +237,18 @@ struct CodexFastInfo<'a> {
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct CodexFastTotals {
     #[serde(default)]
-    input_tokens: i32,
+    input_tokens: u64,
     #[serde(default)]
-    cached_input_tokens: Option<i32>,
+    cached_input_tokens: Option<u64>,
     #[serde(default)]
-    cache_read_input_tokens: Option<i32>,
+    cache_read_input_tokens: Option<u64>,
     #[serde(default)]
-    output_tokens: i32,
+    output_tokens: u64,
 }
 
+// This value lives only for one line parse. Boxing the token payload would add
+// one heap allocation for every usage event in the scanner's hot path.
+#[allow(clippy::large_enum_variant)]
 enum CodexFastEvent<'a> {
     TurnContext {
         model: Option<&'a str>,
@@ -375,17 +397,15 @@ impl CodexParserState {
         // Seed `previous_totals` first — even while gated or out of range — so a
         // replayed parent total (often dated before the scan window) advances
         // the baseline instead of being re-emitted by the next in-range line.
-        let Some((delta_input, delta_cached, delta_output)) = self.token_deltas(payload) else {
-            return;
-        };
+        let deltas = self.token_deltas(payload);
         if self.replay_gate.is_some() {
             return;
         }
-        // Learn the plan before the zero-delta and range exits below. A
-        // token_count can announce a new plan while billing nothing, and
-        // returning first would attribute the next billed record to the
-        // previous plan. Kept after the replay gate so a child's replayed
-        // parent history cannot install a stale plan.
+        // Learn the plan before the corrupt-total, zero-delta, and range exits
+        // below. A token_count can announce a new plan on a line whose totals
+        // are unreadable, and later billed lines often omit rate_limits.
+        // Kept after the replay gate so a child's replayed parent history
+        // cannot install a stale plan.
         if let Some(plan) = payload
             .get("rate_limits")
             .and_then(|limits| limits.get("plan_type"))
@@ -394,6 +414,9 @@ impl CodexParserState {
         {
             self.current_plan = Some(plan.to_string());
         }
+        let Some((delta_input, delta_cached, delta_output)) = deltas else {
+            return;
+        };
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
             return;
         }
@@ -478,9 +501,9 @@ impl CodexParserState {
         day_key: String,
         timestamp: Option<DateTime<chrono::Utc>>,
         model: &str,
-        input: i32,
-        cached: i32,
-        output: i32,
+        input: u64,
+        cached: u64,
+        output: u64,
     ) {
         self.records.push(CodexUsageRecord {
             day_key,
@@ -505,25 +528,25 @@ impl CodexParserState {
             .unwrap_or_else(|| "gpt-5".to_string())
     }
 
-    fn token_deltas(&mut self, payload: &Value) -> Option<(i32, i32, i32)> {
+    fn token_deltas(&mut self, payload: &Value) -> Option<(u64, u64, u64)> {
         let info = payload.get("info");
         if let Some(total) = info.and_then(|i| i.get("total_token_usage")) {
-            return Some(self.total_usage_delta(total));
+            return self.total_usage_delta(total);
         }
 
         if let Some(last) = info.and_then(|i| i.get("last_token_usage")) {
-            return Some(last_usage_delta(last));
+            return last_usage_delta(last);
         }
 
-        let direct = read_token_totals(payload);
+        let direct = read_token_totals(payload)?;
         (direct.input != 0 || direct.cached != 0 || direct.output != 0).then_some((
-            direct.input.max(0),
-            direct.cached.max(0),
-            direct.output.max(0),
+            direct.input,
+            direct.cached,
+            direct.output,
         ))
     }
 
-    fn fast_token_deltas(&mut self, payload: &CodexFastPayload<'_>) -> Option<(i32, i32, i32)> {
+    fn fast_token_deltas(&mut self, payload: &CodexFastPayload<'_>) -> Option<(u64, u64, u64)> {
         if let Some(total) = payload
             .info
             .as_ref()
@@ -538,30 +561,43 @@ impl CodexParserState {
 
         let direct = fast_totals_from_payload(payload);
         (direct.input != 0 || direct.cached != 0 || direct.output != 0).then_some((
-            direct.input.max(0),
-            direct.cached.max(0),
-            direct.output.max(0),
+            direct.input,
+            direct.cached,
+            direct.output,
         ))
     }
 
-    fn total_usage_delta(&mut self, total: &Value) -> (i32, i32, i32) {
-        let totals = read_token_totals(total);
-        let previous = self.previous_totals.as_ref();
-        let delta_input = (totals.input - previous.map_or(0, |t| t.input)).max(0);
-        let delta_cached = (totals.cached - previous.map_or(0, |t| t.cached)).max(0);
-        let delta_output = (totals.output - previous.map_or(0, |t| t.output)).max(0);
-
-        self.previous_totals = Some(totals);
-        (delta_input, delta_cached, delta_output)
+    fn total_usage_delta(&mut self, total: &Value) -> Option<(u64, u64, u64)> {
+        let totals = read_token_totals(total)?;
+        Some(self.apply_cumulative_totals(totals))
     }
 
-    fn fast_total_usage_delta(&mut self, total: CodexFastTotals) -> (i32, i32, i32) {
-        let totals = codex_totals_from_fast(total);
-        let previous = self.previous_totals.as_ref();
-        let delta_input = (totals.input - previous.map_or(0, |t| t.input)).max(0);
-        let delta_cached = (totals.cached - previous.map_or(0, |t| t.cached)).max(0);
-        let delta_output = (totals.output - previous.map_or(0, |t| t.output)).max(0);
+    fn fast_total_usage_delta(&mut self, total: CodexFastTotals) -> (u64, u64, u64) {
+        self.apply_cumulative_totals(codex_totals_from_fast(total))
+    }
 
+    /// Diff against the last accepted totals. A dip, or a missing/null counter
+    /// parsed as zero, is billed as nothing and leaves the baseline alone so
+    /// the next complete total accounts for the interval only once.
+    fn apply_cumulative_totals(&mut self, totals: CodexTotals) -> (u64, u64, u64) {
+        let previous = self.previous_totals.as_ref();
+        let advance = previous.is_none_or(|previous| {
+            totals.input >= previous.input
+                && totals.cached >= previous.cached
+                && totals.output >= previous.output
+        });
+        if !advance {
+            return (0, 0, 0);
+        }
+        let delta_input = totals
+            .input
+            .saturating_sub(previous.map_or(0, |value| value.input));
+        let delta_cached = totals
+            .cached
+            .saturating_sub(previous.map_or(0, |value| value.cached));
+        let delta_output = totals
+            .output
+            .saturating_sub(previous.map_or(0, |value| value.output));
         self.previous_totals = Some(totals);
         (delta_input, delta_cached, delta_output)
     }
@@ -693,16 +729,20 @@ fn token_count_payload(obj: &Value) -> Option<&Value> {
     (event_msg.get("type").and_then(|v| v.as_str()) == Some("token_count")).then_some(event_msg)
 }
 
-fn read_token_totals(value: &Value) -> CodexTotals {
-    CodexTotals {
-        input: token_i32(value, "input_tokens"),
-        cached: value
-            .get("cached_input_tokens")
-            .or_else(|| value.get("cache_read_input_tokens"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
-        output: token_i32(value, "output_tokens"),
-    }
+fn read_token_totals(value: &Value) -> Option<CodexTotals> {
+    // A key that is absent or explicitly null means "not reported", which is
+    // zero — only a present, non-null value that is not a u64 (negative, or
+    // wider than u64) is corrupt enough to discard the whole record. The
+    // cached fallback must mirror `fast_totals_from_payload`, or a line the
+    // fast parser rejects would be counted differently by this path.
+    Some(CodexTotals {
+        input: token_u64(value, "input_tokens")?,
+        cached: match token_field(value, "cached_input_tokens") {
+            Some(cached) => cached.as_u64()?,
+            None => token_u64(value, "cache_read_input_tokens")?,
+        },
+        output: token_u64(value, "output_tokens")?,
+    })
 }
 
 fn codex_totals_from_fast(value: CodexFastTotals) -> CodexTotals {
@@ -727,26 +767,26 @@ fn fast_totals_from_payload(value: &CodexFastPayload<'_>) -> CodexTotals {
     }
 }
 
-fn token_i32(value: &Value, key: &str) -> i32 {
-    value.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as i32
+/// A reported token field: `None` when the key is absent or JSON null.
+fn token_field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.get(key).filter(|field| !field.is_null())
 }
 
-fn last_usage_delta(last: &Value) -> (i32, i32, i32) {
-    let totals = read_token_totals(last);
-    (
-        totals.input.max(0),
-        totals.cached.max(0),
-        totals.output.max(0),
-    )
+fn token_u64(value: &Value, key: &str) -> Option<u64> {
+    match token_field(value, key) {
+        Some(value) => value.as_u64(),
+        None => Some(0),
+    }
 }
 
-fn fast_last_usage_delta(last: CodexFastTotals) -> (i32, i32, i32) {
+fn last_usage_delta(last: &Value) -> Option<(u64, u64, u64)> {
+    let totals = read_token_totals(last)?;
+    Some((totals.input, totals.cached, totals.output))
+}
+
+fn fast_last_usage_delta(last: CodexFastTotals) -> (u64, u64, u64) {
     let totals = codex_totals_from_fast(last);
-    (
-        totals.input.max(0),
-        totals.cached.max(0),
-        totals.output.max(0),
-    )
+    (totals.input, totals.cached, totals.output)
 }
 
 impl JsonlScanner {
@@ -867,7 +907,8 @@ impl JsonlScanner {
         let cache_path = Self::cache_path(provider, cache_root);
 
         if let Ok(contents) = fs::read_to_string(&cache_path)
-            && let Ok(cache) = serde_json::from_str(&contents)
+            && let Ok(cache) = serde_json::from_str::<CostUsageCache>(&contents)
+            && cache.version == COST_USAGE_CACHE_VERSION
         {
             return cache;
         }
@@ -1056,6 +1097,304 @@ mod tests {
         assert_eq!(totals.input, 1250);
         assert_eq!(totals.cached, 260);
         assert_eq!(totals.output, 90);
+    }
+
+    #[test]
+    fn codex_token_values_preserve_the_i32_boundary() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        let below = i32::MAX as u64 - 1;
+        let at = i32::MAX as u64;
+        let above = i32::MAX as u64 + 1;
+
+        for (second, value) in [(1, below), (2, at), (3, above)] {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"2026-05-31T10:00:{second:02}.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{value},"cached_input_tokens":0,"output_tokens":1}}}}}}}}"#
+                ),
+                &range,
+            );
+        }
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| record.input)
+                .collect::<Vec<_>>(),
+            vec![below, at, above]
+        );
+    }
+
+    #[test]
+    fn cumulative_token_deltas_cross_i32_and_32_bit_boundaries() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        let totals = [
+            i32::MAX as u64 - 1,
+            i32::MAX as u64 + 11,
+            u32::MAX as u64 - 1,
+            u32::MAX as u64 + 21,
+        ];
+
+        for (index, total) in totals.into_iter().enumerate() {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"2026-05-31T10:00:{:02}.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#,
+                    index + 1
+                ),
+                &range,
+            );
+        }
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| record.input)
+                .collect::<Vec<_>>(),
+            vec![
+                i32::MAX as u64 - 1,
+                12,
+                u32::MAX as u64 - i32::MAX as u64 - 12,
+                22,
+            ]
+        );
+        assert_eq!(
+            parser.previous_totals.expect("last totals").input,
+            u32::MAX as u64 + 21
+        );
+    }
+
+    #[test]
+    fn malformed_token_totals_are_ignored_without_poisoning_the_baseline() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for line in [
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":-1,"cached_input_tokens":0,"output_tokens":11}}}}"#,
+            r#"{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":15}}}}"#,
+        ] {
+            parser.process_line(line, &range);
+        }
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| (record.input, record.output))
+                .collect::<Vec<_>>(),
+            vec![(100, 10), (50, 5)]
+        );
+        assert!(
+            read_token_totals(&serde_json::json!({
+                "input_tokens": -1,
+                "output_tokens": 0
+            }))
+            .is_none()
+        );
+        assert!(
+            read_token_totals(
+                &serde_json::from_str::<Value>(
+                    r#"{"input_tokens":18446744073709551616,"output_tokens":0}"#
+                )
+                .expect("JSON number beyond u64")
+            )
+            .is_none()
+        );
+    }
+
+    /// A -1 total is corrupt and bills nothing, but it can still announce a
+    /// plan. Later billed lines often omit rate_limits, so that plan must
+    /// carry forward.
+    #[test]
+    fn corrupt_total_still_learns_plan_for_the_next_billed_record() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"team"},"info":{"total_token_usage":{"input_tokens":-1,"cached_input_tokens":0,"output_tokens":11}}}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":15}}}}"#,
+            &range,
+        );
+
+        assert_eq!(parser.records.len(), 1);
+        assert_eq!(parser.records[0].plan.as_deref(), Some("team"));
+        assert_eq!(
+            (parser.records[0].input, parser.records[0].output),
+            (150, 15)
+        );
+    }
+
+    /// A valid but decreasing cumulative total must not lower the baseline.
+    /// 100 → 50 → 150 bills 100, then 0, then 50 — not 100 again.
+    #[test]
+    fn decreasing_totals_do_not_lower_the_baseline() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for (second, input) in [(1, 100u64), (2, 50), (3, 150)] {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"2026-05-31T10:00:{second:02}.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+                ),
+                &range,
+            );
+            if second == 2 {
+                assert_eq!(
+                    parser.previous_totals.as_ref().map(|totals| totals.input),
+                    Some(100),
+                    "the dip must leave the baseline at 100"
+                );
+            }
+        }
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| record.input)
+                .collect::<Vec<_>>(),
+            vec![100, 50]
+        );
+        assert_eq!(parser.previous_totals.expect("last totals").input, 150);
+    }
+
+    /// A missing counter is parsed as zero, which looks like a dip on that
+    /// field. That line must not emit the other counters, or the next
+    /// complete total double-counts them against the still-old baseline.
+    #[test]
+    fn partial_totals_do_not_emit_or_shift_the_baseline() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":2}}}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0}}}}"#,
+            &range,
+        );
+
+        assert_eq!(parser.records.len(), 1);
+        assert_eq!(
+            parser
+                .previous_totals
+                .as_ref()
+                .map(|totals| (totals.input, totals.output)),
+            Some((10, 2)),
+            "the partial line must leave the first complete baseline in place"
+        );
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":15,"cached_input_tokens":0,"output_tokens":3}}}}"#,
+            &range,
+        );
+
+        assert_eq!(
+            parser
+                .records
+                .iter()
+                .map(|record| (record.input, record.output))
+                .collect::<Vec<_>>(),
+            vec![(10, 2), (5, 1)]
+        );
+    }
+
+    /// The unused on-disk cache still cannot reuse an old i32 document if a
+    /// later caller wires load_cache up.
+    #[test]
+    fn load_cache_ignores_pre_u64_schema() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("codex_cost_cache.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "last_scan_unix_ms": 1,
+                "files": {
+                    "session.jsonl": {
+                        "mtime_unix_ms": 1,
+                        "size": 10,
+                        "days": {"2026-05-31": {"gpt-5": [2147483647, 0, 1]}},
+                        "parsed_bytes": 10,
+                        "last_model": "gpt-5",
+                        "last_totals": {"input": 2147483647, "cached": 0, "output": 1}
+                    }
+                },
+                "days": {"2026-05-31": {"gpt-5": [2147483647, 0, 1]}}
+            }"#,
+        )
+        .expect("write old cache");
+
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(dir.path()));
+        assert_eq!(cache.version, COST_USAGE_CACHE_VERSION);
+        assert!(cache.files.is_empty());
+        assert!(cache.days.is_empty());
+        assert_eq!(cache.last_scan_unix_ms, 0);
+    }
+
+    /// A null token field means "not reported", not "corrupt". Discarding the
+    /// record instead would silently undercount, and would make this path
+    /// disagree with the fast parser on the same line.
+    #[test]
+    fn null_token_fields_count_as_zero_and_still_fall_back_to_cache_read() {
+        let null_cached = serde_json::json!({
+            "input_tokens": 100,
+            "cached_input_tokens": Value::Null,
+            "cache_read_input_tokens": 40,
+            "output_tokens": 10,
+        });
+
+        let totals = read_token_totals(&null_cached).expect("null is not corrupt");
+
+        assert_eq!((totals.input, totals.cached, totals.output), (100, 40, 10));
+
+        let all_null = serde_json::json!({
+            "input_tokens": Value::Null,
+            "cached_input_tokens": Value::Null,
+            "output_tokens": Value::Null,
+        });
+        let totals = read_token_totals(&all_null).expect("null is not corrupt");
+        assert_eq!((totals.input, totals.cached, totals.output), (0, 0, 0));
+    }
+
+    /// The fast and slow parsers must agree, because a line the fast parser
+    /// rejects falls through to the slow one.
+    #[test]
+    fn fast_and_slow_parsers_agree_on_null_token_fields() {
+        let line = r#"{"input_tokens":100,"cached_input_tokens":null,"cache_read_input_tokens":40,"output_tokens":10}"#;
+        let fast: CodexFastPayload<'_> = serde_json::from_str(line).expect("fast payload");
+        let slow = read_token_totals(&serde_json::from_str::<Value>(line).expect("slow value"))
+            .expect("slow totals");
+        let fast = fast_totals_from_payload(&fast);
+
+        assert_eq!(
+            (fast.input, fast.cached, fast.output),
+            (slow.input, slow.cached, slow.output)
+        );
     }
 
     #[test]

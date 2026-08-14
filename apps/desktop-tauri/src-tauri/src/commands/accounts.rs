@@ -201,9 +201,7 @@ fn with_store<I: Displayable>(
     op: impl FnOnce(&mut DirectoryAccountData<I>) -> Result<(), String>,
 ) -> Result<ProviderAccountsBridge, String> {
     let store: DirectoryAccountStore<I> = DirectoryAccountStore::new();
-    let mut data = store.load().map_err(|e| e.to_string())?;
-    op(&mut data)?;
-    store.save(&data).map_err(|e| e.to_string())?;
+    let (data, ()) = store.try_update(op).map_err(|e| e.to_string())?;
     Ok(bridge_provider(&data))
 }
 
@@ -220,18 +218,25 @@ fn with_store<I: Displayable>(
 /// invent an entry for someone who has never authenticated.
 fn ensure_ambient_registered<I: Displayable>() {
     let store: DirectoryAccountStore<I> = DirectoryAccountStore::new();
-    let Ok(mut data) = store.load() else {
+    let Ok(data) = store.load() else {
         return;
     };
     if !data.accounts.is_empty() {
         return;
     }
-    let ambient = I::ambient_dir();
-    if !I::is_signed_in(&ambient) {
+    if !I::is_signed_in(&I::ambient_dir()) {
         return;
     }
-    data.add_account(DirectoryAccount::<I>::new(None, ambient));
-    if let Err(error) = store.save(&data) {
+    if let Err(error) = store.try_update(|data| {
+        if !data.accounts.is_empty() {
+            return Ok(());
+        }
+        let ambient = I::ambient_dir();
+        if I::is_signed_in(&ambient) {
+            data.add_account(DirectoryAccount::<I>::new(None, ambient));
+        }
+        Ok(())
+    }) {
         tracing::warn!("failed to register the signed-in account: {error}");
     }
 }
