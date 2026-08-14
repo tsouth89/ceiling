@@ -626,11 +626,17 @@ fn credential_identities_conflict(
     let (Some(disk), Some(memory)) = (disk_token, memory_token) else {
         return false;
     };
-    // Prefer the stable JWT subject/email, but fall back to the raw token so a
-    // non-JWT or identity-less id_token still detects a different account.
-    let disk_identity = jwt_identity(disk).unwrap_or_else(|| disk.to_string());
-    let memory_identity = jwt_identity(memory).unwrap_or_else(|| memory.to_string());
-    let conflict = disk_identity != memory_identity;
+    // Compare the stable JWT subject/email. When exactly one side carries a JWT
+    // identity the accounts cannot be shown to match, so treat that as a
+    // conflict rather than silently mixing accounts. Two opaque (non-JWT)
+    // tokens carry no identity, so an ordinary token change is not a conflict.
+    let disk_identity = jwt_identity(disk);
+    let memory_identity = jwt_identity(memory);
+    let conflict = match (disk_identity, memory_identity) {
+        (Some(disk), Some(memory)) => disk != memory,
+        (Some(_), None) | (None, Some(_)) => true,
+        (None, None) => false,
+    };
     if conflict {
         tracing::warn!(
             "skipping Gemini credential persist: on-disk account identity differs from the refreshed account"
