@@ -1,12 +1,20 @@
 //! Local HTTP server for scriptable usage/cost JSON.
 
+use std::io::{self, Write};
+use std::path::PathBuf;
+
 use clap::Args;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::usage::ProviderSelection;
-use crate::core::{ConfiguredAccounts, FetchContext, ProviderId, SourceMode, instantiate_provider};
+use crate::core::{
+    ConfiguredAccounts, FetchContext, ProviderId, SourceMode, UsageSnapshot, instantiate_provider,
+};
 use crate::cost_scanner::CostScanner;
+
+const UNAUTHENTICATED_ERROR: &str = "unauthorized";
+const PROVIDER_FAILURE: &str = "provider request failed";
 
 #[derive(Args, Debug, Clone)]
 pub struct ServeArgs {
@@ -17,28 +25,53 @@ pub struct ServeArgs {
     /// Response cache TTL in seconds
     #[arg(long = "refresh-interval", default_value = "60")]
     pub refresh_interval: u64,
+
+    /// Allow any local process to read usage without a bearer token.
+    /// Existing scripts can keep working; this is not the default.
+    #[arg(long)]
+    pub allow_unauthenticated: bool,
+
+    /// Include account identity and raw provider errors in responses.
+    #[arg(long)]
+    pub include_identity: bool,
 }
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
+    let expected_token = if args.allow_unauthenticated {
+        None
+    } else {
+        let (token, path) = load_or_create_serve_token()?;
+        eprintln!("Ceiling server token stored at {}", path.display());
+        eprintln!("Authorization: Bearer {token}");
+        Some(token)
+    };
+    let include_identity = args.include_identity;
     let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
     eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
 
     loop {
         let (stream, _) = listener.accept().await?;
+        let expected_token = expected_token.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_client(stream).await {
+            if let Err(error) =
+                handle_client(stream, expected_token.as_deref(), include_identity).await
+            {
                 tracing::debug!("serve client error: {error}");
             }
         });
     }
 }
 
-async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
+async fn handle_client(
+    mut stream: TcpStream,
+    expected_token: Option<&str>,
+    include_identity: bool,
+) -> anyhow::Result<()> {
     let mut buffer = vec![0_u8; 8192];
     let n = stream.read(&mut buffer).await?;
     let request = String::from_utf8_lossy(&buffer[..n]);
     let response = match parse_request(&request) {
-        Ok(request) => route_request(&request).await,
+        Ok(request) => route_request(&request, expected_token, include_identity).await,
         Err(status) => json_response(status, serde_json::json!({ "error": "bad request" })),
     };
     stream.write_all(response.as_bytes()).await?;
@@ -46,12 +79,19 @@ async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn route_request(request: &ServeRequest) -> String {
+async fn route_request(
+    request: &ServeRequest,
+    expected_token: Option<&str>,
+    include_identity: bool,
+) -> String {
     if request.method != "GET" {
         return json_response(405, serde_json::json!({ "error": "method not allowed" }));
     }
     if !allowed_host(&request.host) {
         return json_response(403, serde_json::json!({ "error": "forbidden host" }));
+    }
+    if request.path != "/health" && !request_is_authorized(request, expected_token) {
+        return json_response(401, serde_json::json!({ "error": UNAUTHENTICATED_ERROR }));
     }
 
     match request.path.as_str() {
@@ -59,13 +99,19 @@ async fn route_request(request: &ServeRequest) -> String {
             200,
             serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }),
         ),
-        "/usage" => usage_response(request.query.get("provider").map(String::as_str)).await,
+        "/usage" => {
+            usage_response(
+                request.query.get("provider").map(String::as_str),
+                include_identity,
+            )
+            .await
+        }
         "/cost" => cost_response(request.query.get("provider").map(String::as_str)).await,
         _ => json_response(404, serde_json::json!({ "error": "not found" })),
     }
 }
 
-async fn usage_response(provider: Option<&str>) -> String {
+async fn usage_response(provider: Option<&str>, include_identity: bool) -> String {
     let selection = match ProviderSelection::from_arg(provider) {
         Ok(selection) => selection,
         Err(error) => {
@@ -96,12 +142,12 @@ async fn usage_response(provider: Option<&str>) -> String {
             Ok(result) => results.push(serde_json::json!({
                 "provider": provider_id.cli_name(),
                 "source": result.source_label,
-                "usage": result.usage,
+                "usage": public_usage(result.usage, include_identity),
                 "cost": result.cost,
             })),
             Err(error) => results.push(serde_json::json!({
                 "provider": provider_id.cli_name(),
-                "error": error.to_string(),
+                "error": public_error(error.to_string(), include_identity),
             })),
         }
     }
@@ -156,6 +202,7 @@ struct ServeRequest {
     method: String,
     path: String,
     host: String,
+    authorization: Option<String>,
     query: std::collections::HashMap<String, String>,
 }
 
@@ -170,6 +217,7 @@ fn parse_request(raw: &str) -> Result<ServeRequest, u16> {
     }
 
     let mut hosts = Vec::new();
+    let mut authorization = None;
     for line in lines {
         if line.is_empty() {
             break;
@@ -179,6 +227,11 @@ fn parse_request(raw: &str) -> Result<ServeRequest, u16> {
         };
         if name.trim().eq_ignore_ascii_case("host") {
             hosts.push(value.trim().to_string());
+        } else if name.trim().eq_ignore_ascii_case("authorization") {
+            if authorization.is_some() {
+                return Err(400);
+            }
+            authorization = Some(value.trim().to_string());
         }
     }
     if hosts.len() != 1 {
@@ -190,6 +243,7 @@ fn parse_request(raw: &str) -> Result<ServeRequest, u16> {
         method,
         path,
         host: hosts.remove(0),
+        authorization,
         query,
     })
 }
@@ -265,11 +319,106 @@ fn url_decode(raw: &str) -> String {
     out
 }
 
+fn public_usage(mut usage: UsageSnapshot, include_identity: bool) -> UsageSnapshot {
+    if !include_identity {
+        usage.account_email = None;
+        usage.account_organization = None;
+        usage.login_method = None;
+    }
+    usage
+}
+
+fn public_error(error: String, include_identity: bool) -> String {
+    if include_identity {
+        crate::core::SecretRedactor::redact(&error)
+    } else {
+        PROVIDER_FAILURE.to_string()
+    }
+}
+
+fn request_is_authorized(request: &ServeRequest, expected_token: Option<&str>) -> bool {
+    let Some(expected) = expected_token else {
+        return true;
+    };
+    let Some(header) = request.authorization.as_deref() else {
+        return false;
+    };
+    bearer_matches(header, expected)
+}
+
+fn bearer_matches(header: &str, expected: &str) -> bool {
+    let Some(provided) = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))
+    else {
+        return false;
+    };
+    tokens_equal(provided.trim(), expected)
+}
+
+fn tokens_equal(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.bytes()
+        .zip(right.bytes())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
+fn serve_token_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Ceiling")
+        .join("serve.token")
+}
+
+fn load_or_create_serve_token() -> io::Result<(String, PathBuf)> {
+    load_or_create_serve_token_at(serve_token_path())
+}
+
+fn load_or_create_serve_token_at(path: PathBuf) -> io::Result<(String, PathBuf)> {
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let token = existing.trim();
+        if !token.is_empty() {
+            return Ok((token.to_string(), path));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(token.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    protect_token_file(&path)?;
+    Ok((token, path))
+}
+
+fn protect_token_file(path: &std::path::Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        crate::windows_security::restrict_path_to_current_user(path)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 fn json_response(status: u16, payload: serde_json::Value) -> String {
     let body = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
@@ -302,5 +451,64 @@ mod tests {
         assert_eq!(request.method, "GET");
         assert_eq!(request.path, "/usage");
         assert_eq!(request.query.get("provider"), Some(&"deepseek".to_string()));
+        assert_eq!(request.authorization, None);
+    }
+
+    #[test]
+    fn rejects_missing_or_wrong_bearer_token() {
+        let request = parse_request("GET /usage HTTP/1.1\r\nHost: localhost:8080\r\n\r\n").unwrap();
+        assert!(!request_is_authorized(&request, Some("secret-token")));
+
+        let wrong = parse_request(
+            "GET /usage HTTP/1.1\r\nHost: localhost:8080\r\nAuthorization: Bearer other\r\n\r\n",
+        )
+        .unwrap();
+        assert!(!request_is_authorized(&wrong, Some("secret-token")));
+    }
+
+    #[test]
+    fn accepts_matching_bearer_token() {
+        let request = parse_request(
+            "GET /usage HTTP/1.1\r\nHost: localhost:8080\r\nAuthorization: Bearer secret-token\r\n\r\n",
+        )
+        .unwrap();
+        assert!(request_is_authorized(&request, Some("secret-token")));
+        assert!(request_is_authorized(&request, None));
+    }
+
+    #[test]
+    fn redacts_identity_and_provider_errors_by_default() {
+        let mut usage = UsageSnapshot::new(crate::core::RateWindow::new(10.0));
+        usage.account_email = Some("user@example.com".into());
+        usage.account_organization = Some("Acme".into());
+        usage.login_method = Some("oauth".into());
+
+        let redacted = public_usage(usage.clone(), false);
+        assert_eq!(redacted.account_email, None);
+        assert_eq!(redacted.account_organization, None);
+        assert_eq!(redacted.login_method, None);
+
+        let full = public_usage(usage, true);
+        assert_eq!(full.account_email.as_deref(), Some("user@example.com"));
+        assert_eq!(
+            public_error("signed URL https://x/y?token=abc".into(), false),
+            PROVIDER_FAILURE
+        );
+        assert!(!public_error("Bearer abcdef".into(), true).contains("abcdef"));
+    }
+
+    #[test]
+    fn persists_and_reuses_a_serve_token() {
+        let dir = std::env::temp_dir().join(format!(
+            "ceiling-serve-token-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("serve.token");
+        let (first, _) = load_or_create_serve_token_at(path.clone()).unwrap();
+        let (second, _) = load_or_create_serve_token_at(path.clone()).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), first);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
