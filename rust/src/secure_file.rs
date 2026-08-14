@@ -244,7 +244,10 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// Atomically replace a file owned by another application while retaining its
 /// existing permission boundary.
 pub(crate) fn atomic_write_preserving_permissions(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    atomic_write_with_permissions(path, bytes, AtomicWritePermissions::PreserveExisting)
+    // Follow a symlinked credential path (dotfile managers, WSL shared targets)
+    // so the atomic replace updates the target instead of replacing the link.
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    atomic_write_with_permissions(&resolved, bytes, AtomicWritePermissions::PreserveExisting)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -686,15 +689,20 @@ fn atomic_replace(
         Ok(()) => restore_captured_security(to, captured.as_ref()),
         Err(error) if win32_error_code(&error) == WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT => {
             // Destination is already gone; new bytes live only at `from`.
-            match move_file_replace(from, to) {
+            match retry_move_file_replace(from, to) {
                 Ok(()) => restore_captured_security(to, captured.as_ref()),
                 Err(_move_error) => {
                     // Keep the original 0x498 so cleanup will not delete the
-                    // temp even if something recreates the dest name.
-                    Err(win32_io_error(
-                        "metadata-preserving replacement removed the destination; new bytes remain at the temporary path",
-                        error,
-                    ))
+                    // temp even if something recreates the dest name, and log
+                    // the temp path so the remaining copy of the tokens stays
+                    // recoverable.
+                    let code = win32_error_code(&error);
+                    tracing::warn!(
+                        temp_path = %from.display(),
+                        win32_code = code,
+                        "metadata-preserving replacement removed the destination and the recovery move failed"
+                    );
+                    Err(io_error_from_win32_code(code))
                 }
             }
         }
@@ -958,6 +966,26 @@ mod tests {
         assert_eq!(after.permissions().mode() & 0o777, 0o640);
         assert_eq!(after.uid(), before.uid());
         assert_eq!(after.gid(), before.gid());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_preserving_write_follows_a_symlinked_credential_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.json");
+        std::fs::write(&target, b"original").unwrap();
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        atomic_write_preserving_permissions(&link, b"replacement").unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"replacement");
     }
 
     #[test]
