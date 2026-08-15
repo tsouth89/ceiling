@@ -32,6 +32,21 @@ const RESET_TOKEN_FIELD: u64 = 10;
 const RESET_TOKEN_ID_FIELD: u64 = 10;
 const RESET_TOKEN_END_FIELD: u64 = 30;
 
+/// `GetGrokCreditsConfig` / `GrokCreditsConfig` field numbers from grok.com's
+/// billing proto (live SuperGrok Heavy responses + existing fixtures).
+const BILLING_CONFIG_FIELD: u64 = 1;
+const CREDIT_USAGE_PERCENT_FIELD: u64 = 1;
+const PERIOD_START_FIELD: u64 = 4;
+const PERIOD_END_FIELD: u64 = 5;
+
+/// `google.protobuf.Timestamp.seconds`.
+const TIMESTAMP_SECONDS_FIELD: u64 = 1;
+
+/// `Cent` / web-client Money `val` (USD cents). Proto3 first field; grok.com
+/// JSON is `{ "val": <cents> }`. The config-level `prepaid_balance` field
+/// number is not published in grok.com comments or this repo's fixtures.
+const MONEY_VAL_FIELD: u64 = 1;
+
 /// Whether a usable `~/.grok/auth.json` (or `$GROK_HOME/auth.json`) exists.
 /// True when an access token or refresh token is present (expired access is OK
 /// if we can refresh, same idea as Claude OAuth).
@@ -873,71 +888,34 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
             "Grok web billing returned no payload".to_string(),
         ));
     }
-    let mut scan = ProtoScan::default();
+    let mut used_percent = None;
+    let mut period_start = None;
+    let mut period_end = None;
     for frame in frames {
-        scan.scan_message(&frame, &mut Vec::new(), 0);
+        let parsed = parse_credits_config_response(&frame)?;
+        if parsed.used_percent.is_some() {
+            used_percent = parsed.used_percent;
+        }
+        if parsed.period_start.is_some() {
+            period_start = parsed.period_start;
+        }
+        if parsed.period_end.is_some() {
+            period_end = parsed.period_end;
+        }
     }
 
     // grok.com UI maps config.creditUsagePercent. Zero-usage responses often
     // omit the float entirely (protobuf default 0), so treat a valid config
     // message without a percent as 0% rather than a hard parse failure.
-    let used_percent = scan
-        .fixed32
-        .iter()
-        .filter(|field| {
-            field.path.last() == Some(&1)
-                && field.value.is_finite()
-                && field.value >= 0.0
-                && field.value <= 100.0
-        })
-        .min_by(|a, b| {
-            a.path
-                .len()
-                .cmp(&b.path.len())
-                .then_with(|| a.order.cmp(&b.order))
-        })
-        .map(|field| field.value as f64)
-        .unwrap_or(0.0);
+    let used_percent = used_percent.unwrap_or(0.0);
+    let resets_at = period_end;
+    let window_minutes = weekly_window_minutes(period_start, period_end);
 
-    // Prefer future timestamps (period end). SuperGrok Heavy returns a weekly
-    // window as nested google.protobuf.Timestamp seconds.
-    let now = Utc::now();
-    let mut future_ts: Vec<DateTime<Utc>> = scan
-        .varints
-        .iter()
-        .filter_map(|field| {
-            (1_700_000_000..=2_100_000_000)
-                .contains(&field.value)
-                .then(|| Utc.timestamp_opt(field.value as i64, 0).single())
-                .flatten()
-        })
-        .filter(|dt| *dt > now)
-        .collect();
-    future_ts.sort();
-    // Period end is the latest future timestamp (start may also still be "future"
-    // relative to fixtures; live accounts usually only have end in the future).
-    let resets_at = future_ts.last().copied();
-
-    // Heuristic: a ~7 day span between timestamps is the shared weekly pool.
-    let window_minutes = if future_ts.len() >= 2 {
-        let span = future_ts
-            .last()
-            .unwrap()
-            .signed_duration_since(*future_ts.first().unwrap());
-        let days = span.num_days().unsigned_abs();
-        if (6..=8).contains(&days) {
-            Some(WEEKLY_MINUTES)
-        } else {
-            None
-        }
-    } else {
-        // Single future reset with no span: still label weekly (current product).
-        resets_at.map(|_| WEEKLY_MINUTES)
-    };
-
-    // Prepaid/extra-credit balance is a nested Money `val` in the web client.
-    // Zero balances are omitted from the protobuf; non-zero shapes need a
-    // field-stable decode. Leave empty rather than guessing from stray varints.
+    // GetGrokCreditsConfig.prepaid_balance is a nested Money/Cent `{ val }`.
+    // Zero balances are omitted. The config field number is not published in
+    // grok.com comments or this repo's fixtures — do not invent one or scan
+    // sibling varints. Decode Money.val only when that documented payload is
+    // supplied to proto_money_cents.
     let prepaid_balance_cents = None;
 
     Ok(GrokBillingSnapshot {
@@ -946,6 +924,85 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
         window_minutes,
         prepaid_balance_cents,
     })
+}
+
+struct CreditsConfigFields {
+    used_percent: Option<f64>,
+    period_start: Option<DateTime<Utc>>,
+    period_end: Option<DateTime<Utc>>,
+}
+
+fn parse_credits_config_response(data: &[u8]) -> Result<CreditsConfigFields, ProviderError> {
+    let mut fields = CreditsConfigFields {
+        used_percent: None,
+        period_start: None,
+        period_end: None,
+    };
+    if data.is_empty() {
+        return Ok(fields);
+    }
+    for field in proto_fields(data)? {
+        if field.number == BILLING_CONFIG_FIELD && field.wire == 2 {
+            merge_credits_config(&mut fields, field.bytes)?;
+        }
+    }
+    Ok(fields)
+}
+
+fn merge_credits_config(
+    fields: &mut CreditsConfigFields,
+    data: &[u8],
+) -> Result<(), ProviderError> {
+    for field in proto_fields(data)? {
+        match (field.number, field.wire) {
+            (CREDIT_USAGE_PERCENT_FIELD, 5) => {
+                if let Some(value) = proto_float32(field.bytes) {
+                    fields.used_percent = Some(value as f64);
+                }
+            }
+            (PERIOD_START_FIELD, 2) => {
+                fields.period_start = proto_timestamp(field.bytes)?;
+            }
+            (PERIOD_END_FIELD, 2) => {
+                fields.period_end = proto_timestamp(field.bytes)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn weekly_window_minutes(
+    period_start: Option<DateTime<Utc>>,
+    period_end: Option<DateTime<Utc>>,
+) -> Option<u32> {
+    match (period_start, period_end) {
+        (Some(start), Some(end)) => {
+            let days = end.signed_duration_since(start).num_days().unsigned_abs();
+            (6..=8).contains(&days).then_some(WEEKLY_MINUTES)
+        }
+        // Current product often ships period-end alone; still label weekly.
+        (None, Some(_)) => Some(WEEKLY_MINUTES),
+        _ => None,
+    }
+}
+
+fn proto_float32(data: &[u8]) -> Option<f32> {
+    let bytes: [u8; 4] = data.try_into().ok()?;
+    let value = f32::from_le_bytes(bytes);
+    value.is_finite().then_some(value)
+}
+
+/// Decode a grok.com Money/Cent message (`val` = field 1, USD cents).
+/// Omitted or zero `val` is proto3 default 0 → `None`.
+#[allow(dead_code)] // wired once grok.com publishes prepaid_balance's field number
+fn proto_money_cents(data: &[u8]) -> Result<Option<u64>, ProviderError> {
+    for field in proto_fields(data)? {
+        if field.number == MONEY_VAL_FIELD && field.wire == 0 {
+            return Ok((field.varint > 0).then_some(field.varint));
+        }
+    }
+    Ok(None)
 }
 
 /// Count still-valid banked resets from `GetRemainingResets`.
@@ -1046,7 +1103,7 @@ fn reset_token_is_available(data: &[u8], now: DateTime<Utc>) -> Result<bool, Pro
 
 fn proto_timestamp(data: &[u8]) -> Result<Option<DateTime<Utc>>, ProviderError> {
     for field in proto_fields(data)? {
-        if field.number == 1 && field.wire == 0 {
+        if field.number == TIMESTAMP_SECONDS_FIELD && field.wire == 0 {
             return Ok(Utc.timestamp_opt(field.varint as i64, 0).single());
         }
     }
@@ -1193,105 +1250,6 @@ fn grpc_web_split(data: &[u8]) -> Result<GrpcWebBody, ProviderError> {
         ));
     }
     Ok(GrpcWebBody { frames, trailers })
-}
-
-#[derive(Default)]
-struct ProtoScan {
-    fixed32: Vec<Fixed32Field>,
-    varints: Vec<VarintField>,
-    order: usize,
-}
-
-struct Fixed32Field {
-    path: Vec<u64>,
-    value: f32,
-    order: usize,
-}
-
-struct VarintField {
-    value: u64,
-}
-
-impl ProtoScan {
-    fn scan_message(&mut self, data: &[u8], path: &mut Vec<u64>, depth: usize) {
-        if depth > 8 {
-            return;
-        }
-        let mut i = 0;
-        while i < data.len() {
-            let Some((field, wire, next)) = read_key(data, i) else {
-                break;
-            };
-            i = next;
-            path.push(field);
-            let Some(next) = self.scan_field(data, i, path, depth, wire) else {
-                path.pop();
-                break;
-            };
-            i = next;
-            path.pop();
-        }
-    }
-
-    fn scan_field(
-        &mut self,
-        data: &[u8],
-        i: usize,
-        path: &mut Vec<u64>,
-        depth: usize,
-        wire: u64,
-    ) -> Option<usize> {
-        match wire {
-            0 => self.scan_varint(data, i),
-            2 => self.scan_length_delimited(data, i, path, depth),
-            5 => self.scan_fixed32(data, i, path),
-            1 => Some(i.saturating_add(8)),
-            _ => None,
-        }
-    }
-
-    fn scan_varint(&mut self, data: &[u8], i: usize) -> Option<usize> {
-        let (value, next) = read_varint(data, i)?;
-        self.varints.push(VarintField { value });
-        Some(next)
-    }
-
-    fn scan_length_delimited(
-        &mut self,
-        data: &[u8],
-        i: usize,
-        path: &mut Vec<u64>,
-        depth: usize,
-    ) -> Option<usize> {
-        let (len, next) = read_varint(data, i)?;
-        let start = next;
-        let end = start.saturating_add(len as usize);
-        if end <= data.len() {
-            self.scan_message(&data[start..end], path, depth + 1);
-            Some(end)
-        } else {
-            None
-        }
-    }
-
-    fn scan_fixed32(&mut self, data: &[u8], i: usize, path: &[u64]) -> Option<usize> {
-        if i + 4 > data.len() {
-            return None;
-        }
-        let bytes = [data[i], data[i + 1], data[i + 2], data[i + 3]];
-        self.fixed32.push(Fixed32Field {
-            path: path.to_vec(),
-            value: f32::from_le_bytes(bytes),
-            order: self.order,
-        });
-        self.order += 1;
-        Some(i + 4)
-    }
-}
-
-fn read_key(data: &[u8], i: usize) -> Option<(u64, u64, usize)> {
-    let (key, next) = read_varint(data, i)?;
-    Some((key >> 3, key & 0x07, next))
 }
 
 fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {
@@ -1684,65 +1642,172 @@ mod tests {
     /// float; weekly window timestamps only). Must not hard-fail.
     #[test]
     fn parses_zero_usage_weekly_pool_without_percent_float() {
-        // grpc-web frame wrapping a config message with period start/end only.
-        // Timestamps are far in the future so the test is stable.
-        // Field path mirrors live GetGrokCreditsConfig responses.
-        let mut payload = Vec::new();
-        // outer field 1 length-delimited
-        // inner: field 4 Timestamp seconds=2000000000, field 5 Timestamp seconds=2000604800 (~7d)
         let start_secs: u64 = 2_000_000_000;
         let end_secs: u64 = 2_000_604_800;
-        let mut inner = Vec::new();
-        // field 4 = timestamp message with field 1 = start_secs
-        let mut ts_start = Vec::new();
-        write_key(&mut ts_start, 1, 0);
-        write_varint(&mut ts_start, start_secs);
-        write_key(&mut inner, 4, 2);
-        write_varint(&mut inner, ts_start.len() as u64);
-        inner.extend_from_slice(&ts_start);
-        let mut ts_end = Vec::new();
-        write_key(&mut ts_end, 1, 0);
-        write_varint(&mut ts_end, end_secs);
-        write_key(&mut inner, 5, 2);
-        write_varint(&mut inner, ts_end.len() as u64);
-        inner.extend_from_slice(&ts_end);
-
-        write_key(&mut payload, 1, 2);
-        write_varint(&mut payload, inner.len() as u64);
-        payload.extend_from_slice(&inner);
-
-        let mut frame = vec![0];
-        let len = payload.len() as u32;
-        frame.extend_from_slice(&len.to_be_bytes());
-        frame.extend_from_slice(&payload);
-
-        let snap = parse_grpc_web_response(&frame).unwrap();
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            None,
+            Some(start_secs),
+            Some(end_secs),
+            &[],
+        ))
+        .unwrap();
         assert_eq!(snap.used_percent, 0.0);
         assert_eq!(
             snap.resets_at,
             Some(Utc.timestamp_opt(end_secs as i64, 0).single().unwrap())
         );
         assert_eq!(snap.window_minutes, Some(WEEKLY_MINUTES));
+        assert_eq!(snap.prepaid_balance_cents, None);
     }
 
     #[test]
     fn parses_percent_float_when_present() {
-        // config { creditUsagePercent: 42.5f } as field 1 fixed32 at path [1,1]
-        // Minimal: field 1 { field 1 fixed32 42.5 }
-        let mut inner = Vec::new();
-        write_key(&mut inner, 1, 5);
-        inner.extend_from_slice(&42.5f32.to_le_bytes());
-        let mut payload = Vec::new();
-        write_key(&mut payload, 1, 2);
-        write_varint(&mut payload, inner.len() as u64);
-        payload.extend_from_slice(&inner);
-        let mut frame = vec![0];
-        let len = payload.len() as u32;
-        frame.extend_from_slice(&len.to_be_bytes());
-        frame.extend_from_slice(&payload);
-
-        let snap = parse_grpc_web_response(&frame).unwrap();
+        let snap =
+            parse_grpc_web_response(&encode_credits_frame(Some(42.5), None, None, &[])).unwrap();
         assert!((snap.used_percent - 42.5).abs() < 0.01);
+        assert_eq!(snap.prepaid_balance_cents, None);
+    }
+
+    #[test]
+    fn omitted_credit_usage_percent_is_zero() {
+        let snap =
+            parse_grpc_web_response(&encode_credits_frame(None, None, Some(2_000_604_800), &[]))
+                .unwrap();
+        assert_eq!(snap.used_percent, 0.0);
+        assert_eq!(
+            snap.resets_at,
+            Some(Utc.timestamp_opt(2_000_604_800, 0).single().unwrap())
+        );
+        assert_eq!(snap.window_minutes, Some(WEEKLY_MINUTES));
+    }
+
+    #[test]
+    fn explicit_zero_percent_float_is_zero() {
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(0.0),
+            None,
+            Some(2_000_604_800),
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(snap.used_percent, 0.0);
+    }
+
+    #[test]
+    fn explicit_hundred_percent_float_is_full() {
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(100.0),
+            None,
+            Some(2_000_604_800),
+            &[],
+        ))
+        .unwrap();
+        assert!((snap.used_percent - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn reset_comes_from_period_end_not_period_start() {
+        let start_secs: u64 = 2_000_000_000;
+        let end_secs: u64 = 2_000_604_800;
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(12.0),
+            Some(start_secs),
+            Some(end_secs),
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(
+            snap.resets_at,
+            Some(Utc.timestamp_opt(end_secs as i64, 0).single().unwrap())
+        );
+        assert_ne!(
+            snap.resets_at,
+            Some(Utc.timestamp_opt(start_secs as i64, 0).single().unwrap())
+        );
+        assert_eq!(snap.window_minutes, Some(WEEKLY_MINUTES));
+    }
+
+    #[test]
+    fn period_start_alone_is_not_the_reset_time() {
+        let start_secs: u64 = 2_000_000_000;
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(5.0),
+            Some(start_secs),
+            None,
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(snap.resets_at, None);
+        assert_eq!(snap.window_minutes, None);
+    }
+
+    #[test]
+    fn extra_later_timestamp_in_other_field_is_not_reset() {
+        let start_secs: u64 = 2_000_000_000;
+        let end_secs: u64 = 2_000_604_800;
+        let decoy_secs: u64 = 2_099_000_000;
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(8.0),
+            Some(start_secs),
+            Some(end_secs),
+            &[ProtoExtra::Timestamp {
+                field: 9,
+                seconds: decoy_secs,
+            }],
+        ))
+        .unwrap();
+        assert_eq!(
+            snap.resets_at,
+            Some(Utc.timestamp_opt(end_secs as i64, 0).single().unwrap())
+        );
+        assert_ne!(
+            snap.resets_at,
+            Some(Utc.timestamp_opt(decoy_secs as i64, 0).single().unwrap())
+        );
+    }
+
+    #[test]
+    fn prepaid_absent_is_none() {
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(42.5),
+            Some(2_000_000_000),
+            Some(2_000_604_800),
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(snap.prepaid_balance_cents, None);
+    }
+
+    #[test]
+    fn undocumented_nested_money_is_not_treated_as_prepaid() {
+        // Field 3 is not a published prepaid_balance number. A nested Money
+        // there must not become extra credits (no invented field scan).
+        let snap = parse_grpc_web_response(&encode_credits_frame(
+            Some(10.0),
+            None,
+            Some(2_000_604_800),
+            &[ProtoExtra::Money {
+                field: 3,
+                cents: 1_250,
+            }],
+        ))
+        .unwrap();
+        assert_eq!(snap.prepaid_balance_cents, None);
+    }
+
+    #[test]
+    fn documented_money_val_decodes_cents() {
+        assert_eq!(
+            proto_money_cents(&encode_money(1_250)).unwrap(),
+            Some(1_250)
+        );
+        assert_eq!(proto_money_cents(&encode_money(99)).unwrap(), Some(99));
+    }
+
+    #[test]
+    fn documented_money_omitted_or_zero_val_is_none() {
+        assert_eq!(proto_money_cents(&[]).unwrap(), None);
+        assert_eq!(proto_money_cents(&encode_money(0)).unwrap(), None);
     }
 
     #[test]
@@ -1794,6 +1859,28 @@ mod tests {
         assert!(result.usage.secondary.is_none());
         assert!(result.usage.reset_credits_available.is_none());
         assert!((result.usage.primary.used_percent - 12.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn billing_snapshot_surfaces_prepaid_as_secondary_meter() {
+        let result = result_from_billing(
+            GrokBillingSnapshot {
+                used_percent: 40.0,
+                resets_at: None,
+                window_minutes: Some(WEEKLY_MINUTES),
+                prepaid_balance_cents: Some(1_250),
+            },
+            "oidc",
+            None,
+            None,
+            None,
+        );
+        let secondary = result.usage.secondary.expect("prepaid secondary meter");
+        assert!((secondary.used_percent - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            secondary.reset_description.as_deref(),
+            Some("$12.50 extra credits")
+        );
     }
 
     #[test]
@@ -1854,6 +1941,63 @@ mod tests {
         let end = Utc::now() + chrono::Duration::days(30);
         let payload = encode_remaining_resets(&[("restok_example", end)]);
         assert_eq!(parse_remaining_resets(&payload).unwrap(), 1);
+    }
+
+    enum ProtoExtra {
+        Timestamp { field: u64, seconds: u64 },
+        Money { field: u64, cents: u64 },
+    }
+
+    fn encode_credits_frame(
+        percent: Option<f32>,
+        period_start: Option<u64>,
+        period_end: Option<u64>,
+        extras: &[ProtoExtra],
+    ) -> Vec<u8> {
+        let mut config = Vec::new();
+        if let Some(percent) = percent {
+            write_key(&mut config, CREDIT_USAGE_PERCENT_FIELD, 5);
+            config.extend_from_slice(&percent.to_le_bytes());
+        }
+        if let Some(seconds) = period_start {
+            write_len_field(&mut config, PERIOD_START_FIELD, &encode_timestamp(seconds));
+        }
+        if let Some(seconds) = period_end {
+            write_len_field(&mut config, PERIOD_END_FIELD, &encode_timestamp(seconds));
+        }
+        for extra in extras {
+            match extra {
+                ProtoExtra::Timestamp { field, seconds } => {
+                    write_len_field(&mut config, *field, &encode_timestamp(*seconds));
+                }
+                ProtoExtra::Money { field, cents } => {
+                    write_len_field(&mut config, *field, &encode_money(*cents));
+                }
+            }
+        }
+        let mut payload = Vec::new();
+        write_len_field(&mut payload, BILLING_CONFIG_FIELD, &config);
+        grpc_frame(&payload)
+    }
+
+    fn encode_timestamp(seconds: u64) -> Vec<u8> {
+        let mut ts = Vec::new();
+        write_key(&mut ts, TIMESTAMP_SECONDS_FIELD, 0);
+        write_varint(&mut ts, seconds);
+        ts
+    }
+
+    fn encode_money(cents: u64) -> Vec<u8> {
+        let mut money = Vec::new();
+        write_key(&mut money, MONEY_VAL_FIELD, 0);
+        write_varint(&mut money, cents);
+        money
+    }
+
+    fn write_len_field(buf: &mut Vec<u8>, field: u64, payload: &[u8]) {
+        write_key(buf, field, 2);
+        write_varint(buf, payload.len() as u64);
+        buf.extend_from_slice(payload);
     }
 
     fn encode_remaining_resets(tokens: &[(&str, DateTime<Utc>)]) -> Vec<u8> {

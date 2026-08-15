@@ -3,6 +3,7 @@
 ## [Ceiling] Unreleased
 
 ### Added
+- **Providers having a public outage get a badge on their card.** A "0 tokens left" reading and a provider outage looked identical, so the second was read as the first. The provider card now carries the status page's own wording, plus a control that opens that page. Off by default and opt-in under Notifications, because it is the only outbound request Ceiling makes that is not to a provider you already signed in to. Nothing about you is sent. Only enabled providers whose status page can actually be read are polled, at most once every fifteen minutes, and only while a surface is asking. An operational provider gets no badge, and neither does a page that could not be read.
 - **The floating bar can follow the app you are in.** Pinned providers stay the default. Active shows the provider for the focused supported app or terminal agent. Active plus critical also keeps providers at or above the warning threshold. An unrelated window keeps the last active provider. Detection is local, cached, and does not call provider APIs. You can turn watching off.
 
 ### Fixed

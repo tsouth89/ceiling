@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
+import { resetProviderIncidentsCache } from "../../../hooks/useProviderIncidents";
 import { playNotificationSound, sendTestNotification } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type { Language } from "../../../types/bridge";
@@ -25,6 +26,10 @@ export default function GeneralTab({
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
+  const spendAnomalyAlertsEnabled = settings.spendAnomalyAlertsEnabled ?? false;
+  const spendAnomalyMultiplier = settings.spendAnomalyMultiplier ?? 3;
+  const providerIncidentBadgesEnabled =
+    settings.providerIncidentBadgesEnabled ?? false;
   const selectedLanguage: Language =
     settings.uiLanguage === "chinese" ? "chinese" : "english";
   const [playingSound, setPlayingSound] = useState(false);
@@ -252,6 +257,26 @@ export default function GeneralTab({
               })}
             />
           </Field>
+          {/* Not gated on the budget above: an outage badge is useful to
+              anyone, including people who never set a cap. */}
+          <Field
+            label={t("ProviderIncidentBadges")}
+            description={t("ProviderIncidentBadgesHelper")}
+            leading
+          >
+            <Toggle
+              checked={providerIncidentBadgesEnabled}
+              ariaLabel={t("ProviderIncidentBadges")}
+              disabled={saving}
+              onChange={(v) => {
+                // The shared reading is held for fifteen minutes, so without
+                // this an off/on inside that window reapplies badges from
+                // before the toggle instead of asking the backend again.
+                resetProviderIncidentsCache();
+                set({ providerIncidentBadgesEnabled: v });
+              }}
+            />
+          </Field>
           <Field label={t("SpendBudgetCap")}>
             <NumberInput
               value={spendBudgetLimitUsd}
@@ -262,6 +287,31 @@ export default function GeneralTab({
               onChange={(v) => set({
                 spendBudgetLimitUsd: Math.max(v, spendBudgetWarningUsd),
               })}
+            />
+          </Field>
+          {/* Independent of the budget above: this one needs no cap, so it stays
+              usable for people who never set one. */}
+          <Field
+            label={t("SpendAnomalyAlerts")}
+            description={t("SpendAnomalyAlertsHelper")}
+            leading
+          >
+            <Toggle
+              checked={spendAnomalyAlertsEnabled}
+              ariaLabel={t("SpendAnomalyAlerts")}
+              disabled={saving || !settings.showNotifications}
+              onChange={(v) => set({ spendAnomalyAlertsEnabled: v })}
+            />
+          </Field>
+          <Field label={t("SpendAnomalyMultiplier")}>
+            <NumberInput
+              value={spendAnomalyMultiplier}
+              min={1.5}
+              max={20}
+              step={0.5}
+              ariaLabel={t("SpendAnomalyMultiplier")}
+              disabled={saving || !settings.showNotifications || !spendAnomalyAlertsEnabled}
+              onChange={(v) => set({ spendAnomalyMultiplier: v })}
             />
           </Field>
         </div>

@@ -16,6 +16,13 @@ const { sendTestNotificationMock } = vi.hoisted(() => ({
 vi.mock("../../../lib/tauri", () => ({
   playNotificationSound: vi.fn(() => Promise.resolve()),
   sendTestNotification: sendTestNotificationMock,
+  getProviderIncidents: vi.fn(() => Promise.resolve({})),
+}));
+
+const { resetIncidentsMock } = vi.hoisted(() => ({ resetIncidentsMock: vi.fn() }));
+
+vi.mock("../../../hooks/useProviderIncidents", () => ({
+  resetProviderIncidentsCache: resetIncidentsMock,
 }));
 
 import GeneralTab from "./GeneralTab";
@@ -213,7 +220,8 @@ describe("GeneralTab", () => {
       <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
     );
 
-    expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
+    // One usage threshold, plus the budget warning, cap, and spike factor.
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(4);
     expect(screen.queryByText("CriticalUsageAlert")).not.toBeInTheDocument();
     expect(screen.queryByText("Codex · ProviderSession")).not.toBeInTheDocument();
 
@@ -259,5 +267,91 @@ describe("GeneralTab", () => {
     expect(screen.getByRole("button", { name: "SpendBudgetPeriod" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetWarning" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetCap" })).toBeDisabled();
+  });
+
+  it("offers unusual-spend alerts without requiring a budget", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
+    );
+
+    const toggle = screen.getByRole("checkbox", { name: "SpendAnomalyAlerts" });
+    expect(toggle).not.toBeChecked();
+    // The budget toggle is off, and this one must still be reachable.
+    expect(toggle).not.toBeDisabled();
+
+    fireEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith({ spendAnomalyAlertsEnabled: true });
+    // The factor stays locked until the alert itself is on.
+    expect(screen.getByRole("spinbutton", { name: "SpendAnomalyMultiplier" })).toBeDisabled();
+  });
+
+  it("edits the spike factor once unusual-spend alerts are on", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, spendAnomalyAlertsEnabled: true }}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    const factor = screen.getByRole("spinbutton", { name: "SpendAnomalyMultiplier" });
+    expect(factor).not.toBeDisabled();
+    fireEvent.change(factor, { target: { value: "5" } });
+    expect(set).toHaveBeenCalledWith({ spendAnomalyMultiplier: 5 });
+  });
+
+  it("disables unusual-spend alerts when notifications are off", () => {
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, showNotifications: false }}
+        set={vi.fn()}
+        saving={false}
+      />,
+    );
+
+    expect(screen.getByRole("checkbox", { name: "SpendAnomalyAlerts" })).toBeDisabled();
+  });
+
+  it("offers incident badges independently of notifications and budgets", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, showNotifications: false }}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    // A badge is drawn in the UI, not raised as a toast, so switching
+    // notifications off must not lock it.
+    const toggle = screen.getByRole("checkbox", { name: "ProviderIncidentBadges" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).not.toBeDisabled();
+
+    fireEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith({ providerIncidentBadgesEnabled: true });
+  });
+
+  /// The shared reading is held for fifteen minutes. Without dropping it, an
+  /// off/on inside that window reapplied badges from before the toggle and
+  /// never asked the backend.
+  it("drops the shared incident reading when the toggle moves", () => {
+    resetIncidentsMock.mockClear();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, providerIncidentBadgesEnabled: true }}
+        set={vi.fn()}
+        saving={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "ProviderIncidentBadges" }));
+    expect(resetIncidentsMock).toHaveBeenCalled();
   });
 });

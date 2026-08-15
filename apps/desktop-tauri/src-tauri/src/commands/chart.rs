@@ -8,8 +8,8 @@
 use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
-    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report_hourly,
-    get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
+    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report,
+    get_cost_usage_report_hourly, get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
 };
 use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
@@ -835,6 +835,78 @@ pub(crate) async fn load_spend_budget_total(
     .flatten()
 }
 
+/// Preceding local days the spike detector compares today against. A week is
+/// long enough to cover a normal work rhythm without reaching so far back that
+/// a changed workload still counts as "normal".
+const SPEND_ANOMALY_BASELINE_DAYS: u32 = 7;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SpendAnomalyReading {
+    /// Local calendar day the reading is for, `YYYY-MM-DD`.
+    pub day_id: String,
+    pub today_usd: f64,
+    /// Median of the preceding days, excluding today.
+    pub baseline_usd: f64,
+}
+
+/// Today's estimated API value against the preceding week's median (SBS-279).
+///
+/// Scanned separately from the budget total because the two need different
+/// windows: a daily budget only needs today, while the spike detector needs
+/// today plus a week of history to have anything to compare against.
+pub(crate) async fn load_spend_anomaly_reading(
+    provider_ids: Vec<String>,
+) -> Option<SpendAnomalyReading> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let today = Local::now().date_naive();
+        let daily = daily_spend_by_local_day(&provider_ids, SPEND_ANOMALY_BASELINE_DAYS + 1);
+        spend_anomaly_reading(today, &daily)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Estimated API value per local calendar day, summed across providers.
+fn daily_spend_by_local_day(provider_ids: &[String], days: u32) -> HashMap<String, f64> {
+    let mut totals: HashMap<String, f64> = HashMap::new();
+    for provider_id in provider_ids {
+        let Some(report) = get_cost_usage_report(provider_id, days) else {
+            continue;
+        };
+        for (day, cost) in &report.daily_costs {
+            *totals.entry(day.clone()).or_default() += *cost;
+        }
+    }
+    totals
+}
+
+/// Split a daily series into today and the preceding days' median.
+///
+/// Today is excluded from the baseline: including it would let a spike raise
+/// the very bar it is measured against, which is how a naive "today vs the
+/// last N days" check silently stops firing as the spike grows.
+fn spend_anomaly_reading(
+    today: NaiveDate,
+    daily: &HashMap<String, f64>,
+) -> Option<SpendAnomalyReading> {
+    let day_id = today.format("%Y-%m-%d").to_string();
+    let today_usd = daily.get(&day_id).copied().unwrap_or(0.0);
+    let baseline_days: Vec<f64> = (1..=SPEND_ANOMALY_BASELINE_DAYS as i64)
+        .map(|offset| {
+            let date = (today - chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            daily.get(&date).copied().unwrap_or(0.0)
+        })
+        .collect();
+    Some(SpendAnomalyReading {
+        day_id,
+        today_usd,
+        baseline_usd: codexbar::notifications::spend_baseline_usd(baseline_days),
+    })
+}
+
 /// Inclusive local-calendar custom range for Estimated API value (YYYY-MM-DD).
 const API_VALUE_CUSTOM_MAX_DAYS: i64 = 366;
 /// Default scan horizon so custom ranges and daily series cover a full month+.
@@ -1304,6 +1376,22 @@ pub struct CursorModelActivityRow {
 pub struct CursorActivitySnapshotBridge {
     pub status: String,
     pub rows: Vec<CursorModelActivityRow>,
+}
+
+/// Providers currently reporting an incident on their public status page
+/// (SBS-280). Empty while the feature is off, and empty for every provider
+/// that is operational or has no readable status page.
+#[tauri::command]
+pub async fn get_provider_incidents()
+-> std::collections::HashMap<String, crate::provider_incidents::ProviderIncident> {
+    // Settings::load reads from disk, so it goes to a blocking thread rather
+    // than stalling the runtime every other command shares.
+    let Ok(settings) =
+        tauri::async_runtime::spawn_blocking(codexbar::settings::Settings::load).await
+    else {
+        return std::collections::HashMap::new();
+    };
+    crate::provider_incidents::current_incidents(&settings).await
 }
 
 #[tauri::command]
@@ -2146,8 +2234,8 @@ mod tests {
         effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
         parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
-        project_breakdown, resolve_chart_account_scope, spend_budget_period_details,
-        token_breakdown, token_cost_cache_is_fresh,
+        project_breakdown, resolve_chart_account_scope, spend_anomaly_reading,
+        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2156,6 +2244,7 @@ mod tests {
         CostSummary, CostUsageReport, HourlyActivityPoint, ModelTokenCounts,
     };
     use codexbar::settings::Language;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -3092,6 +3181,68 @@ mod tests {
         );
         assert!(period.has_data);
         assert!((period.api_value_usd - 16.0).abs() < f64::EPSILON);
+    }
+
+    /// SBS-279: today must stay out of its own baseline. Including it lets a
+    /// spike raise the bar it is measured against, so the bigger the runaway
+    /// the less likely the alert is to fire.
+    #[test]
+    fn spend_anomaly_reading_excludes_today_from_the_baseline() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+        let mut daily = HashMap::new();
+        daily.insert("2026-08-15".to_string(), 90.0);
+        for offset in 1..=7 {
+            let date = (today - chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            daily.insert(date, 2.0);
+        }
+        // Outside the window: must not move the median.
+        daily.insert("2026-08-01".to_string(), 500.0);
+
+        let reading = spend_anomaly_reading(today, &daily).expect("a reading");
+
+        assert_eq!(reading.day_id, "2026-08-15");
+        assert_eq!(reading.today_usd, 90.0);
+        assert_eq!(reading.baseline_usd, 2.0);
+    }
+
+    /// Days the scan never saw are quiet days, not missing data: a machine that
+    /// was off all week has a zero baseline, which the detector treats as "no
+    /// comparison" rather than an infinite spike.
+    #[test]
+    fn spend_anomaly_reading_treats_absent_days_as_zero() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+        let reading = spend_anomaly_reading(today, &HashMap::new()).expect("a reading");
+
+        assert_eq!(reading.today_usd, 0.0);
+        assert_eq!(reading.baseline_usd, 0.0);
+    }
+
+    /// A three-day working week is four quiet days and three real ones. Those
+    /// quiet days must not drag the median to zero, because a zero baseline
+    /// switches the detector off — the most ordinary schedule there is would
+    /// otherwise have disabled the alert entirely.
+    #[test]
+    fn spend_anomaly_reading_ignores_quiet_days_in_the_baseline() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+        let mut daily = HashMap::new();
+        daily.insert("2026-08-15".to_string(), 80.0);
+        // Three working days last week, the rest absent from the scan.
+        for offset in 1..=3 {
+            let date = (today - chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            daily.insert(date, 20.0);
+        }
+
+        let reading = spend_anomaly_reading(today, &daily).expect("a reading");
+
+        assert_eq!(reading.today_usd, 80.0);
+        assert_eq!(
+            reading.baseline_usd, 20.0,
+            "the four quiet days must not count as $0 workdays"
+        );
     }
 
     #[test]

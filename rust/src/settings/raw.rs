@@ -35,6 +35,12 @@ pub(super) struct RawSettings {
     #[serde(default = "default_spend_budget_limit_usd")]
     spend_budget_limit_usd: f64,
     #[serde(default)]
+    spend_anomaly_alerts_enabled: bool,
+    #[serde(default = "default_spend_anomaly_multiplier")]
+    spend_anomaly_multiplier: f64,
+    #[serde(default)]
+    provider_incident_badges_enabled: bool,
+    #[serde(default)]
     notification_policy_version: Option<u8>,
     provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
     #[serde(default = "default_true")]
@@ -211,6 +217,9 @@ impl Default for RawSettings {
             spend_budget_period: s.spend_budget_period,
             spend_budget_warning_usd: s.spend_budget_warning_usd,
             spend_budget_limit_usd: s.spend_budget_limit_usd,
+            spend_anomaly_alerts_enabled: s.spend_anomaly_alerts_enabled,
+            spend_anomaly_multiplier: s.spend_anomaly_multiplier,
+            provider_incident_badges_enabled: s.provider_incident_badges_enabled,
             notification_policy_version: Some(s.notification_policy_version),
             provider_usage_thresholds: HashMap::new(),
             switcher_shows_icons: s.switcher_shows_icons,
@@ -610,6 +619,11 @@ impl From<RawSettings> for Settings {
             spend_budget_period: normalize_spend_budget_period(&raw.spend_budget_period),
             spend_budget_warning_usd,
             spend_budget_limit_usd,
+            spend_anomaly_alerts_enabled: raw.spend_anomaly_alerts_enabled,
+            spend_anomaly_multiplier: normalize_spend_anomaly_multiplier(
+                raw.spend_anomaly_multiplier,
+            ),
+            provider_incident_badges_enabled: raw.provider_incident_badges_enabled,
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: normalize_usage_threshold_overrides(
                 raw.provider_usage_thresholds,
