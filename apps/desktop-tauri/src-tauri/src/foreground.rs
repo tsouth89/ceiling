@@ -77,10 +77,10 @@ fn snapshot_now() -> ForegroundProviderSnapshot {
     let matched = observed
         .as_ref()
         .and_then(|(exe, title)| match_foreground_provider(exe, title).map(str::to_string));
-    if let Some(provider_id) = matched.as_ref() {
-        if let Ok(mut guard) = LAST_ACTIVE.lock() {
-            *guard = Some(provider_id.clone());
-        }
+    if let Some(provider_id) = matched.as_ref()
+        && let Ok(mut guard) = LAST_ACTIVE.lock()
+    {
+        *guard = Some(provider_id.clone());
     }
     let last_active = last_active_provider();
     ForegroundProviderSnapshot {
@@ -156,20 +156,26 @@ mod tests {
 
     #[test]
     fn should_watch_only_when_floatbar_uses_an_active_mode() {
-        let mut settings = codexbar::settings::Settings::default();
-        settings.float_bar_enabled = true;
-        settings.float_bar_foreground_detection = true;
-        settings.float_bar_selection_mode = "pinned".into();
-        assert!(!should_watch_foreground(&settings));
+        let pinned = codexbar::settings::Settings {
+            float_bar_enabled: true,
+            float_bar_foreground_detection: true,
+            float_bar_selection_mode: "pinned".into(),
+            ..codexbar::settings::Settings::default()
+        };
+        assert!(!should_watch_foreground(&pinned));
 
-        settings.float_bar_selection_mode = "active".into();
-        assert!(should_watch_foreground(&settings));
-
-        settings.float_bar_foreground_detection = false;
-        assert!(!should_watch_foreground(&settings));
-
-        settings.float_bar_foreground_detection = true;
-        settings.float_bar_enabled = false;
-        assert!(!should_watch_foreground(&settings));
+        let active = codexbar::settings::Settings {
+            float_bar_selection_mode: "active".into(),
+            ..pinned.clone()
+        };
+        assert!(should_watch_foreground(&active));
+        assert!(!should_watch_foreground(&codexbar::settings::Settings {
+            float_bar_foreground_detection: false,
+            ..active.clone()
+        }));
+        assert!(!should_watch_foreground(&codexbar::settings::Settings {
+            float_bar_enabled: false,
+            ..active
+        }));
     }
 }

@@ -64,7 +64,7 @@ pub fn match_foreground_provider(exe: &str, title: &str) -> Option<&'static str>
     if exe_name.is_empty() {
         return None;
     }
-    if SELF_EXES.iter().any(|name| exe_name == *name) {
+    if SELF_EXES.contains(&exe_name.as_str()) {
         return None;
     }
     if let Some(provider) = match_desktop_app(&exe_name) {
@@ -93,21 +93,55 @@ fn match_desktop_app(exe_name: &str) -> Option<&'static str> {
 }
 
 fn is_terminal(exe_name: &str) -> bool {
-    TERMINAL_EXES.iter().any(|name| exe_name == *name)
+    TERMINAL_EXES.contains(&exe_name)
 }
 
+/// Match a terminal tab title to an agent.
+///
+/// Only the command side of the title is considered (text before ` — `,
+/// ` | `, or ` - `). Path-only titles and later path tokens such as a
+/// folder named `cursor` do not count. If several agent names appear in
+/// that prefix, the leftmost one wins.
 fn match_title_hint(title: &str) -> Option<&'static str> {
-    let lowered = title.to_ascii_lowercase();
-    TITLE_HINTS
-        .iter()
-        .find(|(hint, _)| title_contains_word(&lowered, hint))
-        .map(|(_, provider)| *provider)
+    let prefix = command_prefix(title);
+    if looks_like_path(prefix) {
+        return None;
+    }
+    title_tokens(prefix).find_map(provider_for_title_token)
 }
 
-fn title_contains_word(title: &str, word: &str) -> bool {
+fn command_prefix(title: &str) -> &str {
+    for sep in [" — ", " – ", " | ", " - "] {
+        if let Some((left, _)) = title.split_once(sep) {
+            return left.trim();
+        }
+    }
+    title.trim()
+}
+
+fn looks_like_path(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with('~')
+        || text.starts_with('/')
+        || text.starts_with('\\')
+        || text
+            .as_bytes()
+            .get(..2)
+            .is_some_and(|bytes| bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
+fn title_tokens(title: &str) -> impl Iterator<Item = &str> {
     title
         .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
-        .any(|token| token == word)
+        .filter(|token| !token.is_empty())
+}
+
+fn provider_for_title_token(token: &str) -> Option<&'static str> {
+    let lowered = token.to_ascii_lowercase();
+    TITLE_HINTS
+        .iter()
+        .find(|(hint, _)| *hint == lowered)
+        .map(|(_, provider)| *provider)
 }
 
 #[cfg(test)]
@@ -188,6 +222,26 @@ mod tests {
         assert_eq!(
             match_foreground_provider("WindowsTerminal.exe", "my-codex-notes"),
             None
+        );
+    }
+
+    #[test]
+    fn terminal_titles_ignore_path_tokens_and_prefer_the_command() {
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "claude — ~/src/cursor"),
+            Some("claude")
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", r"C:\Users\a\projects\cursor"),
+            None
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "~/src/codex"),
+            None
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "claude cursor"),
+            Some("claude")
         );
     }
 }
