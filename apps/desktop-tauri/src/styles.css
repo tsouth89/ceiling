@@ -6203,7 +6203,11 @@ textarea {
    cyan. Naming them costs nothing and removes the doubt. */
 input::selection,
 textarea::selection {
-  background: var(--accent);
+  /* `background-color`, not the `background` shorthand: only the colour is
+     honoured on a highlight pseudo, and an opaque fill is what keeps the
+     contrast the same on every surface the rule reaches. No `color-mix` here,
+     so there is nothing for an older WebView2 to drop. */
+  background-color: var(--accent);
   color: var(--selection-ink);
   /* Blink paints form-control glyphs through `-webkit-text-fill-color`, which
      wins over `color`. Without this the digits in a number field can keep the
@@ -6218,7 +6222,7 @@ textarea::selection {
   ::selection,
   input::selection,
   textarea::selection {
-    background: Highlight;
+    background-color: Highlight;
     color: HighlightText;
     -webkit-text-fill-color: HighlightText;
   }

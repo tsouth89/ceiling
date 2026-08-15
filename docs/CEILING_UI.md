@@ -139,22 +139,34 @@ number-input spinner arrows, the text caret, and the selection highlight.
   and `textarea`, not only on the root element. `color-scheme` is what the
   engine draws the arrows from, and the app theme can differ from the Windows
   theme, so inheriting it risks a light spinner on a dark field.
-- **Selection** is a document-wide `::selection` rule, so a selected run looks
-  the same in a form field, in About copy, and in the setup command block. It
-  also names `input`/`textarea` explicitly, because their text lives in a
-  form-control shadow tree a document rule may not reach, and it sets
+- **Selection** is one `::selection` rule with no scope, on purpose, so a
+  selected run looks the same in a form field, in About copy, in a log, in
+  provider detail, and in the click-to-select setup command block. It is not
+  split per control and not split per `[data-theme]`; only the `--accent` and
+  `--selection-ink` tokens it reads are per theme. The same rule also names
+  `input`/`textarea` explicitly, because their text lives in a form-control
+  shadow tree a document rule may not reach, and it sets
   `-webkit-text-fill-color` as well as `color`, because Blink paints
   form-control glyphs through the former.
 - Under `forced-colors: active` (Windows Contrast Themes) both selection and
   caret hand back to `Highlight`/`HighlightText` and `CanvasText`. Highlight
   pseudos are not reliably force-adjusted, so an app painting its own selection
   can otherwise stay cyan on a yellow-on-black page.
-- Selection is a **solid** accent fill with its own ink (`--selection-ink`),
-  never a translucent wash. The number that matters is the selection against
-  the *unselected* field, not the text against the selection: an accent at 38%
-  over a white field is about 1.7:1 and reads as no change at all. The shipped
-  pair measures 5.98:1 dark and 4.56:1 light against the field, with the glyph
-  colour changing in both.
+- Selection is a **solid** `background-color`, never a translucent wash and
+  never a `color-mix()`. Opaque is what makes one unscoped rule safe: the ink
+  sits on the fill, not on whatever surface is underneath, so the reading is the
+  same everywhere. It also leaves nothing for an older WebView2 to drop —
+  a `color-mix()` it cannot parse would take the whole declaration with it.
+  Two numbers have to hold, the fill against the *unselected* field and the ink
+  against the fill:
+  - Dark — fill `#26b5ce` on the field (`rgba(255, 255, 255, 0.04)` over
+    `#1c2026`, so `#25292f`) is 5.98:1; ink `#0f172a` on the fill is 7.30:1.
+  - Light — fill `#0b8197` on the `#ffffff` field is 4.56:1; ink `#ffffff` on
+    the fill is the same 4.56:1.
+
+  An earlier draft washed the accent to 38% and reused `--text-primary` as the
+  ink: about 1.7:1 over a white field with no glyph change at all, which is
+  invisible in a 52px number field. The glyph colour now changes in both themes.
 - Dropdowns, checkboxes, sliders, and scrollbars already carry per-theme styling.
 
 Once `color-scheme` is pinned, the engine-drawn parts follow the **app** theme.
