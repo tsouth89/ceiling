@@ -25,15 +25,21 @@ const parseCsp = (csp: string): Directives =>
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
- * Host of a CSP source, or the source unchanged when it has no host.
+ * Host of a CSP source, lowercased, or the source unchanged when it has no
+ * host.
  *
- * Anything after the host is dropped, not just a port. Trimming only a
+ * Everything after the host is dropped, not just a port: trimming only a
  * trailing `:port` left `http://localhost:1420/` reading as the host
- * `localhost:1420/`, which is in no set and would have let a permissive
- * shipped CSP through the checks below.
+ * `localhost:1420/`, which is in no set.
+ *
+ * Schemes and hosts are case-insensitive in CSP, and a scheme may contain
+ * `+`, `-`, and `.` (RFC 3986), so `HTTP://LOCALHOST:1420` and
+ * `custom+scheme://127.0.0.1` are loopback too. Every miss here quietly
+ * disarms the checks below, so the parsing is deliberately permissive about
+ * how a source is spelled.
  */
 const sourceHost = (source: string): string => {
-  const withoutScheme = source.replace(/^[a-z]+:\/\//, "");
+  const withoutScheme = source.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
   // A bracketed IPv6 literal is full of colons, so take the bracket group whole.
   const bracketed = /^\[[^\]]*\]/.exec(withoutScheme);
   return bracketed ? bracketed[0] : withoutScheme.replace(/[:/?#].*$/, "");
@@ -55,6 +61,12 @@ describe("loopback detection", () => {
       "ws://localhost",
       "http://[::1]:8080",
       "127.0.0.1",
+      // Schemes and hosts are case-insensitive in CSP.
+      "HTTP://localhost:1420",
+      "http://LOCALHOST:1420",
+      // A scheme may carry +, -, and . (RFC 3986).
+      "custom+scheme://127.0.0.1",
+      "my-app.v2://localhost",
     ]) {
       expect({ [source]: isLoopbackSource(source) }).toEqual({ [source]: true });
     }
@@ -95,6 +107,18 @@ describe("dev CSP overlay", () => {
       "ws://localhost:*",
       "ws://127.0.0.1:*",
     ]);
+  });
+
+  // Dev has to be a superset. If the shipped CSP later needs a real origin,
+  // adding it there alone leaves dev unable to reach it, and the two checks
+  // above would both still pass: one only inspects loopback, the other only
+  // compares the directives that are not connect-src.
+  it("offers everything the shipped CSP allows", () => {
+    const devSources = new Set(devCsp.get("connect-src") ?? []);
+    const missing = (shippedCsp.get("connect-src") ?? []).filter(
+      (source) => !devSources.has(source),
+    );
+    expect(missing).toEqual([]);
   });
 
   it("differs from the shipped CSP only in connect-src", () => {
