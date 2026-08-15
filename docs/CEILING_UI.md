@@ -129,6 +129,20 @@ SOU-125. Do not infer resets independently in React from a single percentage dro
 Legacy threshold and session-transition alerts likewise require two consecutive
 provider readings before notifying.
 
+## Native controls
+
+Three parts of a form field are painted by the engine, not by our CSS: the
+number-input spinner arrows, the text caret, and the selection highlight. All
+three are pinned per theme in `styles.css` rather than left to inherit, because
+the app theme can differ from the Windows theme and an inherited `color-scheme`
+would then paint a light spinner on a dark field.
+
+- `color-scheme` is set on `.select`, `.number-input`, `.text-input`, and
+  `textarea`, not only on the root element. That is what the spinner arrows are
+  drawn from.
+- `caret-color` follows `--accent`; `::selection` is the accent at 38%.
+- Dropdowns, checkboxes, sliders, and scrollbars already carry per-theme styling.
+
 ## Screenshot checklist
 
 Light and dark, with at least one live Codex/Cursor account:
@@ -137,3 +151,8 @@ Light and dark, with at least one live Codex/Cursor account:
 2. Tray provider detail with token history/limits if available.
 3. Capacity strip with a live pill and a stale/error pill.
 4. Settings / About showing Ceiling branding.
+5. Settings form controls — dropdown, checkbox, number input with its spinner,
+   slider, scrollbar, focus ring, and selected text. Capture these on a
+   light-themed **and** a dark-themed Windows for each app theme: the app theme
+   and the OS theme are independent, and the engine-drawn parts follow whichever
+   one `color-scheme` resolves to.

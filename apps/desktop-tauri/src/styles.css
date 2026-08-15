@@ -6160,6 +6160,33 @@ html:has(.menu-surface--tray) {
   border-color: var(--accent);
 }
 
+/* ── Native control theming (SBS-225) ───────────────────────────────────
+   Three things in a form field are drawn by the engine, not by us: the
+   number-input spinner arrows, the text caret, and the selection highlight.
+   They are pinned here rather than left to inherit, so a control keeps
+   following the app theme even when it differs from the Windows theme, and
+   so a future refactor of the root element cannot silently un-theme them. */
+.select,
+.number-input,
+.text-input,
+textarea {
+  /* What the engine paints the spinner arrows from. */
+  color-scheme: dark;
+  caret-color: var(--accent);
+}
+[data-theme="light"] .select,
+[data-theme="light"] .number-input,
+[data-theme="light"] .text-input,
+[data-theme="light"] textarea {
+  color-scheme: light;
+}
+/* Default selection is the engine's blue, which reads as a foreign accent in
+   a cyan UI and drops contrast on the dark surface. */
+::selection {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  color: var(--text-primary);
+}
+
 /* ── Provider sidebar (Preferences › Providers) ───────────────────── */
 /* provider-split consolidated above (line ~1765) */
 /* providers-sidebar overrides consolidated above (line ~1981) */
