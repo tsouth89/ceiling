@@ -4,7 +4,8 @@
 //! `~/.cursor/ai-tracking/ai-code-tracking.db` (table `ai_code_hashes`). This is
 //! *activity*, not tokens or dollars — Cursor does not log token usage locally —
 //! so callers must present it as "code contributions by model", never as spend.
-//! A missing or unreadable database is unavailable data, not zero activity.
+//! A missing database is unavailable data. An unreadable or locked database is
+//! unreadable. Neither is zero activity.
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -85,8 +86,9 @@ fn cursor_tracking_db_path() -> Option<PathBuf> {
 /// Cursor Composer activity by model over the last `window_days` (relative to
 /// `now_ms`), most-active model first.
 ///
-/// Missing, locked, or unreadable databases return [`CursorActivityStatus::Unavailable`]
-/// rather than an empty list, so callers cannot treat "no file" as "no usage".
+/// A missing file returns [`CursorActivityStatus::Unavailable`]. An open or
+/// query failure returns [`CursorActivityStatus::Unreadable`]. Callers must
+/// not treat either as zero usage.
 pub fn cursor_model_activity(now_ms: i64, window_days: i64) -> CursorActivitySnapshot {
     let Some(db) = cursor_tracking_db_path() else {
         return CursorActivitySnapshot::unavailable();
