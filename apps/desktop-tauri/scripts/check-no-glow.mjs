@@ -18,15 +18,24 @@
 //   1 — at least one glow found
 //   2 — a stylesheet was missing or contained no box-shadow at all
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const sheets = [
-  resolve(here, "..", "src", "styles.css"),
-  resolve(here, "..", "src", "floatbar", "FloatBar.css"),
-];
+const srcDir = resolve(here, "..", "src");
+
+// Discovered rather than listed, so a stylesheet added later is covered
+// without anyone remembering to add it here.
+const sheets = readdirSync(srcDir, { recursive: true, withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".css"))
+  .map((entry) => resolve(entry.parentPath ?? entry.path, entry.name))
+  .sort();
+
+if (sheets.length === 0) {
+  console.error(`[check-css] no stylesheets found under ${srcDir}`);
+  process.exit(2);
+}
 
 /** Split a box-shadow value into layers, ignoring commas inside `color-mix(…)`. */
 function shadowLayers(value) {
@@ -82,6 +91,9 @@ function assertDetectorWorks() {
 assertDetectorWorks();
 
 let failed = false;
+// Counted across every sheet, not per sheet: a small stylesheet added later
+// is normal, a total of zero means the scan read nothing.
+let scanned = 0;
 for (const path of sheets) {
   let css;
   try {
@@ -92,12 +104,7 @@ for (const path of sheets) {
   }
 
   const declarations = [...css.matchAll(/box-shadow\s*:\s*([^;]+);/g)];
-  if (declarations.length < 5) {
-    console.error(
-      `[check-css] only ${declarations.length} box-shadow rules in ${path} — the scan is not reading the real stylesheet`,
-    );
-    process.exit(2);
-  }
+  scanned += declarations.length;
 
   for (const declaration of declarations) {
     const line = css.slice(0, declaration.index).split("\n").length;
@@ -111,6 +118,13 @@ for (const path of sheets) {
   }
 }
 
+if (scanned < 5) {
+  console.error(
+    `[check-css] only ${scanned} box-shadow rules across ${sheets.length} stylesheets — the scan is not reading the real files`,
+  );
+  process.exit(2);
+}
+
 if (failed) {
   console.error(
     "[check-css] CEILING_UI.md rules out glow. Use a zero-blur ring (0 0 0 Npx) or an offset drop shadow.",
@@ -118,4 +132,6 @@ if (failed) {
   process.exit(1);
 }
 
-console.log(`[check-css] OK — no glow in ${sheets.length} stylesheets`);
+console.log(
+  `[check-css] OK — no glow in ${scanned} box-shadow rules across ${sheets.length} stylesheets`,
+);
