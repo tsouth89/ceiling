@@ -64,8 +64,9 @@ pub(crate) fn with_file_write_lock<T>(
 struct StateWriteLock {
     #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,
+    /// Open lock file whose exclusive flock is released when this is dropped.
     #[cfg(not(windows))]
-    path: PathBuf,
+    _file: std::fs::File,
 }
 
 impl StateWriteLock {
@@ -122,13 +123,24 @@ impl StateWriteLock {
 
     #[cfg(not(windows))]
     fn try_acquire(path: &Path) -> io::Result<Self> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map(|_| Self {
-                path: path.to_path_buf(),
-            })
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "state store is locked",
+            )),
+            Err(std::fs::TryLockError::Error(error)) => Err(io::Error::other(format!(
+                "could not acquire state lock: {error}"
+            ))),
+        }
     }
 }
 
@@ -138,10 +150,10 @@ impl Drop for StateWriteLock {
         unsafe {
             let _ = windows::Win32::Foundation::CloseHandle(self.handle);
         }
-        #[cfg(not(windows))]
-        {
-            let _ = std::fs::remove_file(&self.path);
-        }
+        // Non-Windows: closing `_file` releases the flock. Leave the lock file
+        // so a leftover after crash is not treated as a live holder, and so
+        // unlinking cannot create a second lock inode while another holder
+        // still has the original file open.
     }
 }
 
@@ -1030,14 +1042,17 @@ mod tests {
             Some(WIN32_ERROR_UNABLE_TO_MOVE_REPLACEMENT as i32)
         );
 
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("credentials.json");
-        std::fs::write(&dest, b"reappeared").unwrap();
-        let result: io::Result<()> = Err(error);
-        assert!(
-            keep_replacement_temp(&result, &dest),
-            "0x498 must keep the temp even if the dest name was recreated"
-        );
+        #[cfg(windows)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("credentials.json");
+            std::fs::write(&dest, b"reappeared").unwrap();
+            let result: io::Result<()> = Err(error);
+            assert!(
+                keep_replacement_temp(&result, &dest),
+                "0x498 must keep the temp even if the dest name was recreated"
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -1418,5 +1433,77 @@ mod tests {
             !raw.contains("secret") && !raw.contains("value"),
             "protected Windows file must not contain plaintext JSON"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_write_lock_try_acquire_returns_would_block_while_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+
+        let held = StateWriteLock::try_acquire(&path).unwrap();
+        let err = match StateWriteLock::try_acquire(&path) {
+            Ok(_) => panic!("second acquire must fail while the first holder is alive"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert!(path.exists(), "lock file stays while a holder is alive");
+
+        drop(held);
+        let _released = StateWriteLock::try_acquire(&path)
+            .expect("a dropped holder must release the flock for the next acquirer");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_write_lock_recovers_stale_lock_file_after_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        std::fs::write(&path, b"leftover after SIGKILL").unwrap();
+
+        let started = std::time::Instant::now();
+        let mut ran = false;
+        with_state_write_lock_at(&path, || {
+            ran = true;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(ran);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "a leftover lock file with no live holder must not wait out the acquire timeout"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_write_lock_retries_until_the_live_holder_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let held = StateWriteLock::try_acquire(&path).unwrap();
+        let waiter_path = path.clone();
+        std::thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let result = with_state_write_lock_at(&waiter_path, || Ok(42));
+            let _ = done_tx.send(result);
+        });
+        ready_rx.recv().unwrap();
+
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(80))
+                .is_err(),
+            "a live holder must not have its lock stolen"
+        );
+
+        drop(held);
+        let result = done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("waiter should acquire after the holder drops");
+        assert_eq!(result.unwrap(), 42);
     }
 }
