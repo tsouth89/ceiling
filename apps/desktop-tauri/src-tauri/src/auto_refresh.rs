@@ -193,6 +193,23 @@ pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Set
     });
 }
 
+/// Settings as they are *now*, read off the async runtime.
+///
+/// The enrichment task carries a clone taken before it was spawned, and a
+/// transcript scan can run for a while. Emitting against that clone lets a
+/// toast arrive after the user has already switched the alert off. Re-reading
+/// at the point of emit is what makes "off" take effect immediately; doing it
+/// in a blocking thread keeps the file read off the runtime.
+async fn settings_now() -> Option<Settings> {
+    match tauri::async_runtime::spawn_blocking(Settings::load).await {
+        Ok(settings) => Some(settings),
+        Err(error) => {
+            tracing::warn!("failed to re-read settings for spend alerts: {error}");
+            None
+        }
+    }
+}
+
 async fn check_spend_budget_alert(
     app: &tauri::AppHandle,
     settings: &Settings,
@@ -210,13 +227,19 @@ async fn check_spend_budget_alert(
         tracing::warn!("Unable to calculate local estimated API-value budget");
         return;
     };
+    let Some(settings) = settings_now().await else {
+        return;
+    };
+    if !(settings.show_notifications && settings.spend_budget_alerts_enabled) {
+        return;
+    }
     let state = app.state::<Mutex<AppState>>();
     match state.lock() {
         Ok(mut guard) => guard.notification_manager.check_spend_budget(
             &total.cycle_id,
             total.period_label,
             total.estimated_usd,
-            settings,
+            &settings,
         ),
         Err(error) => {
             tracing::warn!("failed to lock app state for spend budget notification: {error}")
@@ -236,13 +259,19 @@ async fn check_spend_anomaly_alert(
         tracing::warn!("Unable to calculate the local estimated API-value baseline");
         return;
     };
+    let Some(settings) = settings_now().await else {
+        return;
+    };
+    if !(settings.show_notifications && settings.spend_anomaly_alerts_enabled) {
+        return;
+    }
     let state = app.state::<Mutex<AppState>>();
     match state.lock() {
         Ok(mut guard) => guard.notification_manager.check_spend_anomaly(
             &reading.day_id,
             reading.today_usd,
             reading.baseline_usd,
-            settings,
+            &settings,
         ),
         Err(error) => {
             tracing::warn!("failed to lock app state for spend anomaly notification: {error}")

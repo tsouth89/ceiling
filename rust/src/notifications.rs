@@ -181,9 +181,16 @@ fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
 /// The median rather than the mean: one heavy day last week would pull a mean
 /// high enough to mask a real spike today, which is precisely the case the
 /// alert exists for.
+///
+/// Days with no spend are left out entirely rather than counted as zero. A
+/// normal three-day working week is `[0, 0, 0, 0, 20, 20, 20]`, whose median
+/// including the zeros is 0 — and a zero baseline switches the detector off, so
+/// the most ordinary schedule there is would have silently disabled it. An
+/// all-quiet week still has no positive days and still yields 0, which is the
+/// genuine "nothing to compare against" case.
 pub fn spend_baseline_usd(mut daily_usd: Vec<f64>) -> f64 {
     let usable: Vec<f64> = {
-        daily_usd.retain(|value| value.is_finite() && *value >= 0.0);
+        daily_usd.retain(|value| value.is_finite() && *value > 0.0);
         daily_usd.sort_by(|left, right| left.total_cmp(right));
         daily_usd
     };
@@ -764,12 +771,18 @@ impl NotificationManager {
         }
 
         self.spend_anomaly_pending = false;
-        self.spend_anomaly_sent = true;
         let ratio = spend_spike_ratio(today_usd, baseline_usd).unwrap_or_default();
         let body = format!(
             "Today's estimated API value is ${today_usd:.2}, about {ratio:.1}x your recent daily median of ${baseline_usd:.2}. This is an estimate from local Codex and Claude logs, not a bill."
         );
+        // Marked sent only once a toast actually went out. `emit_toast` also
+        // returns false for the per-refresh cap, the burst limit, and the
+        // startup gate, and enrichment runs inside the same refresh that just
+        // raised a usage alert. Marking first would spend the day's one spike
+        // alert on a toast nobody saw — on exactly the day a runaway is also
+        // tripping the usage threshold, which is the case this exists for.
         if self.emit_toast("Spend running above normal", &body) {
+            self.spend_anomaly_sent = true;
             play_alert(AlertSound::Warning, settings);
         }
     }
@@ -2233,6 +2246,51 @@ mod tests {
         assert_eq!(spend_baseline_usd(Vec::new()), 0.0);
         // Junk readings are dropped rather than poisoning the baseline.
         assert_eq!(spend_baseline_usd(vec![f64::NAN, -3.0, 4.0]), 4.0);
+    }
+
+    /// A three-day working week is four zeros and three real days. Counting the
+    /// zeros puts the median at 0, and a zero baseline switches the detector
+    /// off — so the most ordinary schedule there is would have disabled it.
+    #[test]
+    fn quiet_days_do_not_drag_the_baseline_to_zero() {
+        let working_week = vec![0.0, 0.0, 0.0, 0.0, 20.0, 20.0, 20.0];
+        assert_eq!(spend_baseline_usd(working_week.clone()), 20.0);
+        assert!(is_spend_spike(80.0, spend_baseline_usd(working_week), 3.0));
+
+        // A genuinely idle week still has nothing to compare against.
+        assert_eq!(spend_baseline_usd(vec![0.0; 7]), 0.0);
+    }
+
+    /// `emit_toast` also returns false for the per-refresh cap and the burst
+    /// limit, and enrichment runs inside the refresh that just raised a usage
+    /// alert. Marking the day sent before emitting spent the one spike alert on
+    /// a toast nobody saw.
+    /// `emit_toast` returns false for the startup gate, the per-refresh cap,
+    /// and the burst limit alike. Marking the day sent before emitting spent
+    /// the one spike alert on a toast nobody saw — and enrichment runs inside
+    /// the same refresh that just raised a usage alert, so on a runaway day the
+    /// cap is exactly what would eat it.
+    #[test]
+    fn a_suppressed_spike_toast_is_retried_rather_than_consumed() {
+        let mut manager = NotificationManager::new();
+        let settings = anomaly_settings();
+
+        // Not armed yet, so every toast is swallowed.
+        manager.check_spend_anomaly("2026-08-15", 1.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 9.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 9.5, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(
+            !manager.spend_anomaly_sent,
+            "a swallowed toast must not count as delivered"
+        );
+
+        // Same day, same spike, now deliverable.
+        manager.arm_after_startup_baseline();
+        manager.check_spend_anomaly("2026-08-15", 10.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 10.5, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+        assert!(manager.spend_anomaly_sent);
     }
 
     #[test]
