@@ -383,6 +383,14 @@ pub(super) fn persist_refreshed_credentials(
         let mut root: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
+        if disk_credentials_are_newer(&root, credentials) {
+            // Another process won the race. Our tokens came from a refresh the
+            // server has since rotated away, so writing them would sign Claude
+            // Code out. The lock alone cannot prevent this: it orders the
+            // writes, it does not make the later one correct.
+            return Ok(());
+        }
+
         apply_refresh_to_credentials_json(&mut root, credentials)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
@@ -391,6 +399,30 @@ pub(super) fn persist_refreshed_credentials(
     })
     .map_err(|e| ProviderError::OAuth(format!("Failed to update Claude credentials: {e}")))?;
     Ok(())
+}
+
+/// Whether the file already holds a refresh newer than the one we are about to
+/// write.
+///
+/// A desktop and a CLI can refresh the same seat at once. Both then hold
+/// tokens derived from the same original refresh, but only the first write
+/// keeps working: Claude rotates the refresh token, so the loser's copy is
+/// already invalid. Writing it anyway signs Claude Code out. Compared on
+/// `expiresAt`, which is the only ordering the file carries.
+///
+/// Credentials with no expiry (an environment or keyring token) cannot be
+/// ordered against the file, so they keep the previous write-through behavior.
+fn disk_credentials_are_newer(
+    root: &serde_json::Value,
+    credentials: &ClaudeOAuthCredentials,
+) -> bool {
+    let Some(ours) = credentials.expires_at else {
+        return false;
+    };
+    root.get("claudeAiOauth")
+        .and_then(|oauth| oauth.get("expiresAt"))
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|on_disk| on_disk > ours.timestamp_millis())
 }
 
 /// Pure JSON merge used by [`persist_refreshed_credentials`]. Updates only
@@ -491,6 +523,63 @@ mod tests {
         // Fields Ceiling does not own survive the replace.
         assert_eq!(root["claudeAiOauth"]["subscriptionType"], "max");
         assert_eq!(root["mcpOAuth"]["some-server"]["accessToken"], "keepme");
+    }
+
+    /// SBS-883: the write lock orders two concurrent refreshes, it does not
+    /// make the later one correct. Claude rotates the refresh token, so the
+    /// loser is holding one the server already invalidated.
+    #[test]
+    fn persist_leaves_a_newer_refresh_already_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(
+            &path,
+            br#"{
+              "claudeAiOauth": {
+                "accessToken": "winner-access",
+                "refreshToken": "winner-refresh",
+                "expiresAt": 9000000
+              }
+            }"#,
+        )
+        .unwrap();
+
+        // Ours expires earlier, so the file already holds a later refresh.
+        let mut stale = refreshed_credentials("loser-access");
+        stale.expires_at = chrono::DateTime::from_timestamp(2_000, 0);
+        persist_refreshed_credentials(&stale, Some(dir.path())).expect("persist");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "winner-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "winner-refresh");
+        assert_eq!(root["claudeAiOauth"]["expiresAt"], 9_000_000i64);
+    }
+
+    #[test]
+    fn persist_still_writes_when_ours_is_the_newer_refresh() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(
+            &path,
+            br#"{
+              "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "expiresAt": 1000
+              }
+            }"#,
+        )
+        .unwrap();
+
+        // `refreshed_credentials` expires at 2_000_000 ms, well past the file.
+        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
+            .expect("persist");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "new-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "rotated-refresh");
     }
 
     #[test]
