@@ -7,13 +7,14 @@
   "scripts": {
     "dev": "vite",
     "check-locale": "node scripts/check-locale-drift.mjs",
+    "check-css": "node scripts/check-no-glow.mjs",
     "check-native-controls": "node scripts/check-native-controls.mjs",
-    "prebuild": "pnpm run check-locale && pnpm run check-native-controls",
+    "prebuild": "pnpm run check-locale && pnpm run check-css && pnpm run check-native-controls",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build --no-bundle",
     "tauri:build:windows-cross": "../../scripts/macos-windows-cross-build.sh",
     "tauri:build:debug": "tauri build --debug --no-bundle"

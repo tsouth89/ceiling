@@ -19,6 +19,7 @@ import { useUpdateState } from "../hooks/useUpdateState";
 import { useLocale } from "../hooks/useLocale";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
+import { useProviderIncidents } from "../hooks/useProviderIncidents";
 import MenuCard from "../components/MenuCard";
 import {
   hasMultipleAccounts,
@@ -102,6 +103,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   const { t } = useLocale();
   const surfaceTarget = useSurfaceTarget("trayPanel");
+  const incidents = useProviderIncidents(
+    settings.providerIncidentBadgesEnabled ?? false,
+  );
 
   // Zoom slider: LOCAL draft state drives both the thumb and the live CSS
   // zoom preview while dragging; persistence trails behind a ~250ms debounce
@@ -471,6 +475,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
             resetTimeRelative={settings.resetTimeRelative}
             showResetWhenExhausted={settings.showResetWhenExhausted}
             showAsUsed={settings.showAsUsed}
+            incident={incidents[p.providerId] ?? null}
             showActivitySection
             onLayoutChange={requestLayout}
           />

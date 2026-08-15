@@ -145,6 +145,12 @@ pub struct Settings {
     #[serde(default = "default_spend_budget_limit_usd")]
     pub spend_budget_limit_usd: f64,
 
+    /// Whether to poll public provider status pages and badge providers that
+    /// are having an incident. Off by default: it is the only outbound request
+    /// Ceiling makes that is not to a provider the user already signed in to.
+    #[serde(default)]
+    pub provider_incident_badges_enabled: bool,
+
     /// Internal migration marker for notification defaults. This is not a UI
     /// preference; it prevents old default values from surviving policy fixes.
     #[serde(default)]
@@ -621,6 +627,7 @@ impl Default for Settings {
             spend_budget_period: default_spend_budget_period(),
             spend_budget_warning_usd: default_spend_budget_warning_usd(),
             spend_budget_limit_usd: default_spend_budget_limit_usd(),
+            provider_incident_badges_enabled: false,
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: HashMap::new(),
             switcher_shows_icons: true,

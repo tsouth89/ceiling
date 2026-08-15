@@ -16,7 +16,9 @@ import type {
   ProviderDetail,
   ProviderLocalUsageSummary,
   LocalApiValueProvider,
+  ActivityHeatmap,
   CursorActivitySnapshot,
+  ProviderIncident,
   ProviderSummary,
   ProviderUsageSnapshot,
   AccountProbeBridge,
@@ -289,6 +291,16 @@ export function getLocalApiValueTotals(options?: {
     });
   }
   return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
+}
+
+/** Providers currently reporting a status-page incident, keyed by provider id. */
+export function getProviderIncidents(): Promise<Record<string, ProviderIncident>> {
+  return invoke<Record<string, ProviderIncident>>("get_provider_incidents");
+}
+
+/** Local activity by calendar day and clock hour, for the heatmap card. */
+export function getLocalActivityHeatmap(): Promise<ActivityHeatmap> {
+  return invoke<ActivityHeatmap>("get_local_activity_heatmap");
 }
 
 export function getCursorModelActivity(): Promise<CursorActivitySnapshot> {
