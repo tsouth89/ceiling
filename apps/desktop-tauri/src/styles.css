@@ -4843,12 +4843,11 @@ html:has(.menu-surface--tray) {
   background: var(--incident-color);
   transform: translateY(-1px);
 }
-/* The description gets the leftover width. The tray is only 328px, so the
-   status-page control must not push the words the badge exists to show. */
-/* Wraps rather than ellipsising. On a 328px tray a nowrap description is cut
-   at roughly 30 characters, which throws away the provider's own wording --
-   the one thing the banner exists to carry. Bounded at two lines so a verbose
-   status page cannot push the card's own numbers off screen. */
+/* Takes the full row and wraps rather than ellipsising. The tray is only
+   328px, so a nowrap description was cut at roughly 30 characters and threw
+   away the provider's own wording -- the one thing the banner exists to
+   carry. Bounded at two lines so a verbose status page cannot push the card's
+   own numbers off screen. */
 .menu-card__incident-text {
   color: var(--text-primary);
   font-weight: 600;

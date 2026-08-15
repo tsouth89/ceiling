@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
+import { resetProviderIncidentsCache } from "../../../hooks/useProviderIncidents";
 import { playNotificationSound, sendTestNotification } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type { Language } from "../../../types/bridge";
@@ -264,7 +265,13 @@ export default function GeneralTab({
               checked={providerIncidentBadgesEnabled}
               ariaLabel={t("ProviderIncidentBadges")}
               disabled={saving}
-              onChange={(v) => set({ providerIncidentBadgesEnabled: v })}
+              onChange={(v) => {
+                // The shared reading is held for fifteen minutes, so without
+                // this an off/on inside that window reapplies badges from
+                // before the toggle instead of asking the backend again.
+                resetProviderIncidentsCache();
+                set({ providerIncidentBadgesEnabled: v });
+              }}
             />
           </Field>
           <Field label={t("SpendBudgetCap")}>
