@@ -782,6 +782,33 @@ export interface LocalApiValueDay {
   tokens: number;
 }
 
+/** One provider's activity in a single local clock-hour. */
+export interface ActivityHourPoint {
+  providerId: string;
+  /** Local calendar date as `YYYY-MM-DD`. */
+  date: string;
+  /** Local hour of day, 0-23. */
+  hour: number;
+  /** Estimated API value in USD from priced models in this hour. */
+  apiValueUsd: number;
+  /** Provider-normalized processed tokens. */
+  tokens: number;
+  /** Usage records in this hour. */
+  calls: number;
+}
+
+/** Local activity by calendar day and clock hour, for the heatmap card. */
+export interface ActivityHeatmap {
+  /** Every local calendar day in range, oldest first, empty days included. */
+  days: string[];
+  /** Providers that contributed at least one hour. */
+  providerIds: string[];
+  /** Non-empty hour buckets, oldest first. */
+  hours: ActivityHourPoint[];
+  /** UTC offset of the clock these buckets use, for example `UTC-07:00`. */
+  timezoneLabel: string;
+}
+
 export interface CursorModelActivity {
   /** Model id from Cursor's tracking (e.g. "grok-4.5", "default" for Auto). */
   model: string;
