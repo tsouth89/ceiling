@@ -27,6 +27,15 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 // Version 9: account scope is part of every chart cache key. Older entries can
 // conflate an unresolved account with the machine-wide scan.
 const CHART_CACHE_VERSION: u8 = 9;
+// Cache keys embed the live reset window, so every provider reset mints a new
+// key and strands the old one. `CHART_CACHE_TTL` only schedules a rebuild of
+// the *same* key, so without a bound the file grows for the life of the install
+// (SBS-887). A rolled window is never read again; keep entries only long enough
+// to survive a reset the user did not open Charts for.
+const CHART_CACHE_MAX_ENTRY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+// Backstop for the case age alone does not cover: many providers/accounts/
+// sources churning inside one week.
+const CHART_CACHE_MAX_ENTRIES: usize = 64;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -574,13 +583,53 @@ fn store_chart_data(key: String, data: ProviderChartData) {
     };
     guard.version = CHART_CACHE_VERSION;
     guard.entries.insert(
-        key,
+        key.clone(),
         CachedProviderChartData {
             refreshed_at_ms: current_unix_ms(),
             data,
         },
     );
+    prune_chart_cache(&mut guard, &key);
     persist_chart_cache(&guard);
+}
+
+/// Drops the entries a rolled reset window left behind: first anything past
+/// [`CHART_CACHE_MAX_ENTRY_AGE`], then the least recently refreshed until the
+/// map fits [`CHART_CACHE_MAX_ENTRIES`].
+///
+/// `keep` is never evicted. It is the key the caller just stored, which would
+/// otherwise be a candidate on a machine whose clock moved backwards. Pass `""`
+/// when there is no such key; no real key is empty.
+fn prune_chart_cache(cache: &mut PersistedChartCache, keep: &str) {
+    let now_ms = current_unix_ms();
+    let max_age_ms = CHART_CACHE_MAX_ENTRY_AGE.as_millis() as i64;
+    cache.entries.retain(|key, entry| {
+        key == keep || now_ms.saturating_sub(entry.refreshed_at_ms) <= max_age_ms
+    });
+
+    if cache.entries.len() <= CHART_CACHE_MAX_ENTRIES {
+        return;
+    }
+
+    let mut by_age: Vec<(&String, i64)> = cache
+        .entries
+        .iter()
+        .filter(|(key, _)| key.as_str() != keep)
+        .map(|(key, entry)| (key, entry.refreshed_at_ms))
+        .collect();
+    // Oldest first. The key breaks ties so eviction does not depend on
+    // HashMap iteration order.
+    by_age.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+
+    let excess = cache.entries.len() - CHART_CACHE_MAX_ENTRIES;
+    let evict: Vec<String> = by_age
+        .into_iter()
+        .take(excess)
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in evict {
+        cache.entries.remove(&key);
+    }
 }
 
 fn schedule_chart_cache_refresh(
@@ -672,11 +721,15 @@ fn load_persisted_chart_cache() -> PersistedChartCache {
     let Some(path) = chart_cache_path() else {
         return PersistedChartCache::default();
     };
-    fs::read(path)
+    let mut cache: PersistedChartCache = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .filter(|cache: &PersistedChartCache| cache.version == CHART_CACHE_VERSION)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // An install that predates the bound starts oversized. Shrink on read so it
+    // converges on first launch instead of waiting for the next chart fetch.
+    prune_chart_cache(&mut cache, "");
+    cache
 }
 
 fn persist_chart_cache(cache: &PersistedChartCache) {
@@ -2226,16 +2279,18 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, ChartAccountScope, CostFetchFailure,
-        LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost, LocalTokenBreakdown,
-        LocalUsageWindowRequest, ProviderLocalUsageSummary, activity_heatmap_days,
+        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, CHART_CACHE_MAX_ENTRIES, CachedProviderChartData,
+        ChartAccountScope, CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage,
+        LocalProjectCost, LocalTokenBreakdown, LocalUsageWindowRequest, PersistedChartCache,
+        ProviderChartData, ProviderLocalUsageSummary, activity_heatmap_days,
         activity_hours_for_provider, api_value_period, assemble_activity_heatmap, chart_cache_key,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry, daily_series_from_report,
-        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
-        local_yesterday_window_utc, localized_estimate_note, model_breakdown,
-        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
-        project_breakdown, resolve_chart_account_scope, spend_anomaly_reading,
-        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry, current_unix_ms,
+        daily_series_from_report, effort_breakdown, format_cost_csv, local_midnight_in_tz,
+        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
+        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
+        pricing_coverage_tokens, project_breakdown, prune_chart_cache, resolve_chart_account_scope,
+        spend_anomaly_reading, spend_budget_period_details, token_breakdown,
+        token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2247,6 +2302,98 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    fn cache_entry(refreshed_at_ms: i64) -> CachedProviderChartData {
+        CachedProviderChartData {
+            refreshed_at_ms,
+            data: ProviderChartData {
+                provider_id: "claude".to_string(),
+                cost_history: Vec::new(),
+                credits_history: Vec::new(),
+                usage_breakdown: Vec::new(),
+                local_usage: None,
+                local_usage_scope: Default::default(),
+                quota_history: Vec::new(),
+            },
+        }
+    }
+
+    fn cache_with(entries: impl IntoIterator<Item = (String, i64)>) -> PersistedChartCache {
+        let mut cache = PersistedChartCache::default();
+        for (key, refreshed_at_ms) in entries {
+            cache.entries.insert(key, cache_entry(refreshed_at_ms));
+        }
+        cache
+    }
+
+    /// SBS-887: a rolled reset window mints a new key and strands the old one.
+    #[test]
+    fn prune_drops_entries_past_the_max_age() {
+        let now = current_unix_ms();
+        let day_ms = 24 * 60 * 60 * 1_000;
+        let mut cache = cache_with([
+            ("fresh".to_string(), now - day_ms),
+            ("stale".to_string(), now - 8 * day_ms),
+        ]);
+
+        prune_chart_cache(&mut cache, "");
+
+        assert!(cache.entries.contains_key("fresh"));
+        assert!(
+            !cache.entries.contains_key("stale"),
+            "an entry older than a week is a dead reset window"
+        );
+    }
+
+    #[test]
+    fn prune_caps_the_entry_count_and_evicts_the_oldest_first() {
+        let now = current_unix_ms();
+        // Every entry is inside the age window, so only the count bound applies.
+        let entries = (0..CHART_CACHE_MAX_ENTRIES + 10)
+            .map(|index| (format!("key-{index:03}"), now - index as i64 * 1_000));
+        let mut cache = cache_with(entries);
+
+        prune_chart_cache(&mut cache, "");
+
+        assert_eq!(cache.entries.len(), CHART_CACHE_MAX_ENTRIES);
+        // index 0 is the most recently refreshed, so the low indexes survive.
+        assert!(cache.entries.contains_key("key-000"));
+        assert!(
+            !cache
+                .entries
+                .contains_key(&format!("key-{:03}", CHART_CACHE_MAX_ENTRIES + 9)),
+            "the least recently refreshed entry must be evicted first"
+        );
+    }
+
+    #[test]
+    fn prune_never_evicts_the_key_just_stored() {
+        let now = current_unix_ms();
+        let day_ms = 24 * 60 * 60 * 1_000;
+        // Older than the age bound, and the oldest of an over-cap map.
+        let mut entries: Vec<(String, i64)> = (0..CHART_CACHE_MAX_ENTRIES + 10)
+            .map(|index| (format!("key-{index:03}"), now - index as i64 * 1_000))
+            .collect();
+        entries.push(("just-stored".to_string(), now - 30 * day_ms));
+        let mut cache = cache_with(entries);
+
+        prune_chart_cache(&mut cache, "just-stored");
+
+        assert!(
+            cache.entries.contains_key("just-stored"),
+            "the entry the caller just wrote must survive its own prune"
+        );
+    }
+
+    #[test]
+    fn prune_leaves_a_small_cache_alone() {
+        let now = current_unix_ms();
+        let mut cache = cache_with([("a".to_string(), now), ("b".to_string(), now - 1_000)]);
+
+        prune_chart_cache(&mut cache, "");
+
+        assert_eq!(cache.entries.len(), 2);
+    }
 
     #[test]
     fn chart_cache_separates_managed_accounts_that_share_an_email() {
