@@ -117,17 +117,54 @@ pub(super) fn disk_session_cookie_from_path(db_path: &Path) -> Result<String, Pr
 }
 
 fn default_state_db_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("CURSOR_STATE_DB")
+    let env_override = std::env::var("CURSOR_STATE_DB").ok();
+    default_state_db_path_from(
+        env_override.as_deref(),
+        dirs::config_dir(),
+        dirs::data_dir(),
+        Path::is_file,
+    )
+}
+
+/// Probe `CURSOR_STATE_DB`, then `config_dir`, then `data_dir`.
+///
+/// Cursor/VS Code on Linux keep `state.vscdb` under `~/.config/Cursor/...`.
+/// `dirs::data_dir()` is `~/.local/share` there, which is the wrong default.
+/// On Windows both bases are `%APPDATA%`, so the resolved path is unchanged.
+fn default_state_db_path_from(
+    env_override: Option<&str>,
+    config_dir: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
+    is_file: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if let Some(path) = env_override
         && !path.trim().is_empty()
     {
         return Some(PathBuf::from(path));
     }
-    dirs::data_dir().map(|base| {
-        base.join("Cursor")
-            .join("User")
-            .join("globalStorage")
-            .join("state.vscdb")
-    })
+
+    let config_candidate = config_dir.as_deref().map(state_vscdb_under);
+    let data_candidate = data_dir.as_deref().map(state_vscdb_under);
+
+    if let Some(path) = config_candidate.as_ref()
+        && is_file(path)
+    {
+        return config_candidate;
+    }
+    if let Some(path) = data_candidate.as_ref()
+        && is_file(path)
+    {
+        return data_candidate;
+    }
+
+    config_candidate.or(data_candidate)
+}
+
+fn state_vscdb_under(base: &Path) -> PathBuf {
+    base.join("Cursor")
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb")
 }
 
 fn cookie_from_access_token(token: &str) -> Option<String> {
@@ -315,5 +352,93 @@ mod tests {
             cookie,
             format!("WorkosCursorSessionToken=google-oauth2|123%3A%3A{jwt}")
         );
+    }
+
+    fn linux_config_dir() -> PathBuf {
+        PathBuf::from("/home/alice/.config")
+    }
+
+    fn linux_data_dir() -> PathBuf {
+        PathBuf::from("/home/alice/.local/share")
+    }
+
+    #[test]
+    fn windows_appdata_layout_is_unchanged() {
+        let appdata = PathBuf::from(r"C:\Users\alice\AppData\Roaming");
+        let expected = state_vscdb_under(&appdata);
+        let path =
+            default_state_db_path_from(None, Some(appdata.clone()), Some(appdata), |_| false);
+        assert_eq!(path, Some(expected));
+    }
+
+    #[test]
+    fn linux_prefers_existing_config_dir_layout() {
+        let config = linux_config_dir();
+        let data = linux_data_dir();
+        let config_db = state_vscdb_under(&config);
+        let path = default_state_db_path_from(None, Some(config), Some(data), |p| p == config_db);
+        assert_eq!(path, Some(config_db));
+    }
+
+    #[test]
+    fn linux_falls_back_to_existing_data_dir_layout() {
+        let config = linux_config_dir();
+        let data = linux_data_dir();
+        let data_db = state_vscdb_under(&data);
+        let path = default_state_db_path_from(None, Some(config), Some(data), |p| p == data_db);
+        assert_eq!(path, Some(data_db));
+    }
+
+    #[test]
+    fn linux_defaults_to_config_dir_when_neither_exists() {
+        let config = linux_config_dir();
+        let data = linux_data_dir();
+        let expected = state_vscdb_under(&config);
+        let path = default_state_db_path_from(None, Some(config), Some(data), |_| false);
+        assert_eq!(path, Some(expected));
+    }
+
+    #[test]
+    fn cursor_state_db_override_wins_over_both_layouts() {
+        let override_path = "/tmp/custom/state.vscdb";
+        let path = default_state_db_path_from(
+            Some(override_path),
+            Some(linux_config_dir()),
+            Some(linux_data_dir()),
+            |_| true,
+        );
+        assert_eq!(path, Some(PathBuf::from(override_path)));
+    }
+
+    #[test]
+    fn empty_cursor_state_db_override_is_ignored() {
+        let config = linux_config_dir();
+        let expected = state_vscdb_under(&config);
+        let path =
+            default_state_db_path_from(Some("   "), Some(config), Some(linux_data_dir()), |_| {
+                false
+            });
+        assert_eq!(path, Some(expected));
+    }
+
+    #[test]
+    fn config_dir_directory_named_state_vscdb_is_skipped_for_data_dir_file() {
+        let config_root = tempfile::tempdir().unwrap();
+        let data_root = tempfile::tempdir().unwrap();
+
+        let config_db = state_vscdb_under(config_root.path());
+        std::fs::create_dir_all(&config_db).unwrap();
+
+        let data_db = state_vscdb_under(data_root.path());
+        std::fs::create_dir_all(data_db.parent().unwrap()).unwrap();
+        std::fs::write(&data_db, b"").unwrap();
+
+        let path = default_state_db_path_from(
+            None,
+            Some(config_root.path().to_path_buf()),
+            Some(data_root.path().to_path_buf()),
+            Path::is_file,
+        );
+        assert_eq!(path, Some(data_db));
     }
 }
