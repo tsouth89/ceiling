@@ -182,8 +182,6 @@ describe("FloatBar", () => {
     tauriMocks.getForegroundProvider.mockResolvedValue({
       providerId: null,
       lastActiveProviderId: null,
-      exe: null,
-      title: null,
     });
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue(null);
     tauriMocks.getLocaleStrings.mockResolvedValue(
@@ -508,8 +506,6 @@ describe("FloatBar", () => {
     tauriMocks.getForegroundProvider.mockResolvedValue({
       providerId: "claude",
       lastActiveProviderId: "claude",
-      exe: "Claude.exe",
-      title: "Claude",
     });
     tauriMocks.getSettingsSnapshot.mockResolvedValue(
       settings({ floatBarSelectionMode: "active" }),

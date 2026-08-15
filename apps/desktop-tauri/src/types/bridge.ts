@@ -378,8 +378,6 @@ export interface SettingsUpdate {
 export interface ForegroundProviderSnapshot {
   providerId: string | null;
   lastActiveProviderId: string | null;
-  exe: string | null;
-  title: string | null;
 }
 
 export interface UsageThresholdOverride {

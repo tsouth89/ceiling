@@ -27,16 +27,15 @@ export function selectVisibleFloatBarProviders<T extends { providerId: string }>
     ? byId.get(lastActiveProviderId)
     : undefined;
 
+  if (!active) {
+    return pinned;
+  }
   if (mode === "active") {
-    return active ? [active] : pinned;
+    return [active];
   }
 
-  const next: T[] = [];
-  const seen = new Set<string>();
-  if (active) {
-    next.push(active);
-    seen.add(active.providerId);
-  }
+  const next: T[] = [active];
+  const seen = new Set<string>([active.providerId]);
   for (const row of pinned) {
     if (seen.has(row.providerId)) continue;
     if (usedPercent(row) + 1e-9 >= highUsageThreshold) {

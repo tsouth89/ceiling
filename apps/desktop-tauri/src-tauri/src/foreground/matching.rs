@@ -9,7 +9,7 @@ const SELF_EXES: &[&str] = &[
 
 const TERMINAL_EXES: &[&str] = &[
     "windowsterminal",
-    "windows terminal",
+    "windowsterminalpreview",
     "cmd",
     "powershell",
     "pwsh",
@@ -20,7 +20,7 @@ const TERMINAL_EXES: &[&str] = &[
     "mintty",
     "tabby",
     "fluent-terminal",
-    "windowsterminal.exe",
+    "warp",
 ];
 
 const DESKTOP_APPS: &[(&str, &str)] = &[
@@ -41,7 +41,8 @@ const DESKTOP_APPS: &[(&str, &str)] = &[
     ("kiro", "kiro"),
     ("augment", "augment"),
     ("opencode", "opencode"),
-    ("opencode-go", "opencode-go"),
+    ("opencode-go", "opencodego"),
+    ("opencodego", "opencodego"),
 ];
 
 const TITLE_HINTS: &[(&str, &str)] = &[
@@ -53,6 +54,15 @@ const TITLE_HINTS: &[(&str, &str)] = &[
     ("copilot", "copilot"),
     ("windsurf", "windsurf"),
     ("opencode", "opencode"),
+    ("opencode-go", "opencodego"),
+    ("opencodego", "opencodego"),
+    ("warp", "warp"),
+    ("zed", "zed"),
+    ("factory", "factory"),
+    ("droid", "factory"),
+    ("kiro", "kiro"),
+    ("augment", "augment"),
+    ("antigravity", "antigravity"),
 ];
 
 /// Map a foreground process to a Ceiling provider id.
@@ -67,22 +77,21 @@ pub fn match_foreground_provider(exe: &str, title: &str) -> Option<&'static str>
     if SELF_EXES.contains(&exe_name.as_str()) {
         return None;
     }
-    if let Some(provider) = match_desktop_app(&exe_name) {
+    if is_terminal(&exe_name)
+        && let Some(provider) = match_title_hint(title)
+    {
         return Some(provider);
     }
-    if is_terminal(&exe_name) {
-        return match_title_hint(title);
-    }
-    None
+    match_desktop_app(&exe_name)
 }
 
 fn exe_stem(path: &str) -> String {
     let file = path.rsplit(['/', '\\']).next().unwrap_or(path).trim();
-    let without_ext = file
+    let lowered = file.to_ascii_lowercase();
+    lowered
         .strip_suffix(".exe")
-        .or_else(|| file.strip_suffix(".EXE"))
-        .unwrap_or(file);
-    without_ext.to_ascii_lowercase()
+        .unwrap_or(lowered.as_str())
+        .to_string()
 }
 
 fn match_desktop_app(exe_name: &str) -> Option<&'static str> {
@@ -242,6 +251,60 @@ mod tests {
         assert_eq!(
             match_foreground_provider("WindowsTerminal.exe", "claude cursor"),
             Some("claude")
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", r"claude — C:\Users\a\cursor\app"),
+            Some("claude")
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", r"C:\Users\a\cursor\app"),
+            None
+        );
+    }
+
+    #[test]
+    fn warp_prefers_the_agent_in_the_title() {
+        assert_eq!(
+            match_foreground_provider("Warp.exe", "claude — ~/src"),
+            Some("claude")
+        );
+        assert_eq!(match_foreground_provider("Warp.exe", ""), Some("warp"));
+    }
+
+    #[test]
+    fn windows_terminal_preview_is_a_terminal() {
+        assert_eq!(
+            match_foreground_provider("WindowsTerminalPreview.exe", "codex"),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn opencode_go_uses_the_catalog_id() {
+        assert_eq!(
+            match_foreground_provider("opencode-go.exe", ""),
+            Some("opencodego")
+        );
+    }
+
+    #[test]
+    fn exe_stem_strips_mixed_case_extensions() {
+        assert_eq!(
+            match_foreground_provider(r"C:\Tools\Claude.Exe", ""),
+            Some("claude")
+        );
+        assert_eq!(match_foreground_provider("Codex.EXE", ""), Some("codex"));
+    }
+
+    #[test]
+    fn terminal_titles_cover_other_desktop_providers() {
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "warp — ~/src"),
+            Some("warp")
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "factory — ~/proj"),
+            Some("factory")
         );
     }
 }

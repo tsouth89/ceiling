@@ -27,8 +27,6 @@ static LAST_ACTIVE: Mutex<Option<String>> = Mutex::new(None);
 pub struct ForegroundProviderSnapshot {
     pub provider_id: Option<String>,
     pub last_active_provider_id: Option<String>,
-    pub exe: Option<String>,
-    pub title: Option<String>,
 }
 
 pub fn last_active_provider() -> Option<String> {
@@ -57,19 +55,23 @@ pub fn apply_watch(app: &AppHandle, settings: &codexbar::settings::Settings) {
             if WATCH_GENERATION.load(Ordering::SeqCst) != generation {
                 break;
             }
-            tick(&app);
+            let snapshot = tokio::task::spawn_blocking(snapshot_now)
+                .await
+                .unwrap_or_else(|_| snapshot_now());
+            emit_provider_changed(&app, &snapshot);
         }
     });
 }
 
 #[tauri::command]
-pub fn get_foreground_provider() -> ForegroundProviderSnapshot {
-    snapshot_now()
+pub async fn get_foreground_provider() -> ForegroundProviderSnapshot {
+    tokio::task::spawn_blocking(snapshot_now)
+        .await
+        .unwrap_or_else(|_| snapshot_now())
 }
 
-fn tick(app: &AppHandle) {
-    let snapshot = snapshot_now();
-    let _ = app.emit(FOREGROUND_PROVIDER_CHANGED_EVENT, &snapshot);
+fn emit_provider_changed(app: &AppHandle, snapshot: &ForegroundProviderSnapshot) {
+    let _ = app.emit(FOREGROUND_PROVIDER_CHANGED_EVENT, snapshot);
 }
 
 fn snapshot_now() -> ForegroundProviderSnapshot {
@@ -86,8 +88,6 @@ fn snapshot_now() -> ForegroundProviderSnapshot {
     ForegroundProviderSnapshot {
         provider_id: matched,
         last_active_provider_id: last_active,
-        exe: observed.as_ref().map(|(exe, _)| exe.clone()),
-        title: observed.as_ref().map(|(_, title)| title.clone()),
     }
 }
 

@@ -68,6 +68,18 @@ describe("selectVisibleFloatBarProviders", () => {
     ).toEqual([row("codex", 20)]);
   });
 
+  it("keeps the full pinned list in active-plus-critical until a match exists", () => {
+    expect(
+      selectVisibleFloatBarProviders(pinned, pinned, {
+        mode: "activePlusCritical",
+        detectionEnabled: true,
+        lastActiveProviderId: null,
+        usedPercent: (item) => item.used,
+        highUsageThreshold: 85,
+      }),
+    ).toEqual(pinned);
+  });
+
   it("adds warning-threshold providers in active-plus-critical mode", () => {
     expect(
       selectVisibleFloatBarProviders(pinned, pinned, {
