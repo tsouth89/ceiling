@@ -19,6 +19,26 @@ export type IncidentMap = Record<string, ProviderIncident>;
 /** Matches the backend's own reading TTL, so the UI never re-asks sooner. */
 const REFRESH_MS = 15 * 60 * 1000;
 
+/**
+ * Matches the backend's error backoff.
+ *
+ * An empty map is ambiguous: it means "nothing is wrong" most of the time, but
+ * it is also what comes back when every status page failed its first read and
+ * there was no earlier answer to carry forward. Holding that for the full
+ * quarter hour would sit on a first-open timeout long past the point the
+ * backend itself is willing to retry, so an empty answer ages out on the short
+ * window instead.
+ */
+const EMPTY_REFRESH_MS = 5 * 60 * 1000;
+
+function refreshWindowMs(): number {
+  return Object.keys(cached).length === 0 ? EMPTY_REFRESH_MS : REFRESH_MS;
+}
+
+function isStale(): boolean {
+  return Date.now() - loadedAt >= refreshWindowMs();
+}
+
 let cached: IncidentMap = {};
 let loadedAt = 0;
 let inFlight: Promise<IncidentMap> | null = null;
@@ -68,12 +88,16 @@ export function useProviderIncidents(enabled: boolean): IncidentMap {
       if (live) setIncidents(map);
     };
     listeners.add(listener);
-    if (Date.now() - loadedAt >= REFRESH_MS) {
+    if (isStale()) {
       void load();
     } else {
       setIncidents(cached);
     }
-    const timer = window.setInterval(() => void load(), REFRESH_MS);
+    // Ticks on the short window and lets `isStale` decide, so a held incident
+    // still waits the full TTL while an empty answer re-asks sooner.
+    const timer = window.setInterval(() => {
+      if (isStale()) void load();
+    }, EMPTY_REFRESH_MS);
     return () => {
       live = false;
       listeners.delete(listener);
