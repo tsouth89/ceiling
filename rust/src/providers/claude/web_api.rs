@@ -22,13 +22,17 @@ pub enum ClaudeDesktopSessionStatus {
 /// Locate Claude Desktop's Chromium profile without reading any credential
 /// values. Windows Store builds keep Electron data under the package's
 /// redirected Roaming directory; older standalone builds use `%APPDATA%`.
+/// Linux Electron builds keep `Network/Cookies` and `Local State` under
+/// `~/.config/Claude`.
 fn claude_desktop_data_dirs() -> Vec<PathBuf> {
     let mut candidates = std::env::var_os("CLAUDE_DESKTOP_DATA_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .into_iter()
         .collect::<Vec<_>>();
-    for candidate in claude_desktop_data_dirs_from(dirs::data_local_dir(), dirs::data_dir()) {
+    for candidate in
+        claude_desktop_data_dirs_from(dirs::data_local_dir(), dirs::data_dir(), dirs::config_dir())
+    {
         if !candidates.contains(&candidate) {
             candidates.push(candidate);
         }
@@ -37,11 +41,12 @@ fn claude_desktop_data_dirs() -> Vec<PathBuf> {
 }
 
 fn claude_desktop_data_dirs_from(
-    local_app_data: Option<PathBuf>,
-    roaming_app_data: Option<PathBuf>,
+    data_local_dir: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(local) = local_app_data {
+    if let Some(local) = data_local_dir {
         candidates.push(
             local
                 .join("Packages")
@@ -51,8 +56,11 @@ fn claude_desktop_data_dirs_from(
                 .join("Claude"),
         );
     }
-    if let Some(roaming) = roaming_app_data {
-        candidates.push(roaming.join("Claude"));
+    if let Some(data) = data_dir {
+        candidates.push(data.join("Claude"));
+    }
+    if let Some(config) = config_dir {
+        candidates.push(config.join("Claude"));
     }
     candidates.dedup();
     candidates
@@ -627,18 +635,71 @@ mod tests {
 
     #[test]
     fn discovers_packaged_and_legacy_claude_desktop_profiles() {
+        let local = PathBuf::from(r"C:\Users\person\AppData\Local");
+        let roaming = PathBuf::from(r"C:\Users\person\AppData\Roaming");
         let paths = claude_desktop_data_dirs_from(
-            Some(PathBuf::from(r"C:\Users\person\AppData\Local")),
-            Some(PathBuf::from(r"C:\Users\person\AppData\Roaming")),
+            Some(local.clone()),
+            Some(roaming.clone()),
+            Some(roaming.clone()),
         );
 
         assert_eq!(
             paths,
             vec![
-                PathBuf::from(
-                    r"C:\Users\person\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude"
-                ),
-                PathBuf::from(r"C:\Users\person\AppData\Roaming\Claude"),
+                local
+                    .join("Packages")
+                    .join("Claude_pzs8sxrjxfjjc")
+                    .join("LocalCache")
+                    .join("Roaming")
+                    .join("Claude"),
+                roaming.join("Claude"),
+            ]
+        );
+    }
+
+    #[test]
+    fn discovers_linux_config_dir_claude_desktop_profile() {
+        let share = PathBuf::from("/home/person/.local/share");
+        let config = PathBuf::from("/home/person/.config");
+        let paths = claude_desktop_data_dirs_from(
+            Some(share.clone()),
+            Some(share.clone()),
+            Some(config.clone()),
+        );
+
+        assert_eq!(
+            paths,
+            vec![
+                share
+                    .join("Packages")
+                    .join("Claude_pzs8sxrjxfjjc")
+                    .join("LocalCache")
+                    .join("Roaming")
+                    .join("Claude"),
+                share.join("Claude"),
+                config.join("Claude"),
+            ]
+        );
+    }
+
+    #[test]
+    fn dedups_identical_local_data_and_config_claude_desktop_profiles() {
+        let same = PathBuf::from(r"C:\Users\person\AppData\Roaming");
+        let paths = claude_desktop_data_dirs_from(
+            Some(same.clone()),
+            Some(same.clone()),
+            Some(same.clone()),
+        );
+
+        assert_eq!(
+            paths,
+            vec![
+                same.join("Packages")
+                    .join("Claude_pzs8sxrjxfjjc")
+                    .join("LocalCache")
+                    .join("Roaming")
+                    .join("Claude"),
+                same.join("Claude"),
             ]
         );
     }
