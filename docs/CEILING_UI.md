@@ -132,16 +132,27 @@ provider readings before notifying.
 ## Native controls
 
 Three parts of a form field are painted by the engine, not by our CSS: the
-number-input spinner arrows, the text caret, and the selection highlight. All
-three are pinned per theme in `styles.css` rather than left to inherit, because
-the app theme can differ from the Windows theme and an inherited `color-scheme`
-would then paint a light spinner on a dark field.
+number-input spinner arrows, the text caret, and the selection highlight.
 
-- `color-scheme` is set on `.select`, `.number-input`, `.text-input`, and
-  `textarea`, not only on the root element. That is what the spinner arrows are
-  drawn from.
-- `caret-color` follows `--accent`; `::selection` is the accent at 38%.
+- **Spinner arrows and caret** are pinned on the controls themselves —
+  `color-scheme` and `caret-color` on `.select`, `.number-input`, `.text-input`,
+  and `textarea`, not only on the root element. `color-scheme` is what the
+  engine draws the arrows from, and the app theme can differ from the Windows
+  theme, so inheriting it risks a light spinner on a dark field.
+- **Selection** is one document-wide `::selection` rule, not a per-control pin.
+  That is deliberate: a selected run should look the same in a form field, in
+  About copy, and in the setup command block.
+- Selection is a **solid** accent fill with its own ink (`--selection-ink`),
+  never a translucent wash. The number that matters is the selection against
+  the *unselected* field, not the text against the selection: an accent at 38%
+  over a white field is about 1.7:1 and reads as no change at all. The shipped
+  pair measures 5.98:1 dark and 4.56:1 light against the field, with the glyph
+  colour changing in both.
 - Dropdowns, checkboxes, sliders, and scrollbars already carry per-theme styling.
+
+Once `color-scheme` is pinned, the engine-drawn parts follow the **app** theme.
+The Windows theme still needs checking because it drives surrounding chrome and
+because a regression here shows up as the two disagreeing.
 
 ## Screenshot checklist
 
@@ -152,7 +163,7 @@ Light and dark, with at least one live Codex/Cursor account:
 3. Capacity strip with a live pill and a stale/error pill.
 4. Settings / About showing Ceiling branding.
 5. Settings form controls — dropdown, checkbox, number input with its spinner,
-   slider, scrollbar, focus ring, and selected text. Capture these on a
-   light-themed **and** a dark-themed Windows for each app theme: the app theme
-   and the OS theme are independent, and the engine-drawn parts follow whichever
-   one `color-scheme` resolves to.
+   slider, scrollbar, focus ring, and selected text inside a `.text-input` and a
+   `.number-input`. Capture these on a light-themed **and** a dark-themed
+   Windows for each app theme. The two are independent settings, and this pass
+   is what catches the engine-drawn parts following the wrong one.

@@ -97,6 +97,9 @@
   --ceiling-cyan: var(--ceiling-accent);
   --accent-muted: rgba(38, 181, 206, 0.28);
   --focus-ring: rgba(38, 181, 206, 0.5);
+  /* Ink on a selected run. The dark theme's accent is bright, so the ink is
+     dark; the light theme flips it below. */
+  --selection-ink: #0f172a;
   --status-warning-text: #fbbf24;
   --status-success-text: #5eead4;
 
@@ -302,6 +305,8 @@
   --accent: var(--ceiling-accent);
   --ceiling-cyan: var(--ceiling-accent);
   --accent-muted: rgba(26, 155, 181, 0.22);
+  /* The light theme's accent is deep enough to carry white ink. */
+  --selection-ink: #ffffff;
   --focus-ring: rgba(26, 155, 181, 0.45);
   --status-warning-text: #92400e;
   --status-success-text: #0f766e;
@@ -6180,11 +6185,19 @@ textarea {
 [data-theme="light"] textarea {
   color-scheme: light;
 }
-/* Default selection is the engine's blue, which reads as a foreign accent in
-   a cyan UI and drops contrast on the dark surface. */
+/* Default selection is the engine's blue, which reads as a foreign accent in a
+   cyan UI. Document-wide on purpose: selection should look the same in a form
+   field, in About copy, and in the setup command block.
+
+   A solid accent fill with its own ink, not a translucent wash. A 38% accent
+   over a white field is about 1.7:1 against that field, and reusing
+   --text-primary as the selected colour meant the glyphs did not change at all
+   — selecting `15` in a 52px number field was invisible. What matters here is
+   the contrast of the selection against the *unselected* field, not just of
+   the text against the selection. */
 ::selection {
-  background: color-mix(in srgb, var(--accent) 38%, transparent);
-  color: var(--text-primary);
+  background: var(--accent);
+  color: var(--selection-ink);
 }
 
 /* ── Provider sidebar (Preferences › Providers) ───────────────────── */
