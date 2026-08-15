@@ -357,6 +357,12 @@ fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError>
 /// updating only the `claudeAiOauth` token fields and leaving everything else
 /// (e.g. `mcpOAuth`) untouched. Written atomically beside the live file.
 ///
+/// Claude Code owns this file, so the replace preserves its permissions and
+/// follows a symlinked path (dotfile managers, WSL shared targets) instead of
+/// dropping a fresh private file over the link. The read-modify-write runs
+/// under a per-file lock so a desktop and a CLI refresh cannot lose one
+/// another's tokens.
+///
 /// `config_dir` must be the same account the credentials were loaded from, or a
 /// refresh would be written over a different seat's tokens.
 pub(super) fn persist_refreshed_credentials(
@@ -369,18 +375,21 @@ pub(super) fn persist_refreshed_credentials(
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| ProviderError::OAuth(format!("Failed to read credentials file: {e}")))?;
-    let mut root: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| ProviderError::OAuth(format!("Failed to parse credentials file: {e}")))?;
+    crate::secure_file::with_file_write_lock(&path, || {
+        // Re-read inside the lock: another process may have rotated the tokens
+        // between our refresh and this write.
+        let content = std::fs::read_to_string(&path)?;
+        // A torn or hand-edited file is not ours to rebuild; leave it alone.
+        let mut root: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    apply_refresh_to_credentials_json(&mut root, credentials)?;
+        apply_refresh_to_credentials_json(&mut root, credentials)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    let serialized = serde_json::to_string_pretty(&root)
-        .map_err(|e| ProviderError::OAuth(format!("Failed to serialize credentials: {e}")))?;
-
-    crate::secure_file::atomic_write(&path, serialized.as_bytes())
-        .map_err(|e| ProviderError::OAuth(format!("Failed to replace credentials file: {e}")))?;
+        let serialized = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
+        crate::secure_file::atomic_write_preserving_permissions(&path, &serialized)
+    })
+    .map_err(|e| ProviderError::OAuth(format!("Failed to update Claude credentials: {e}")))?;
     Ok(())
 }
 
@@ -433,10 +442,124 @@ mod tests {
     use super::{
         CredentialSource, ENV_TOKEN_KEY, apply_refresh_to_credentials_json,
         cached_refreshed_if_fresher, credentials_path, load_credentials, parse_credentials_json,
-        store_refreshed,
+        persist_refreshed_credentials, store_refreshed,
     };
     use crate::providers::claude::oauth::ClaudeOAuthCredentials;
     use std::path::Path;
+
+    fn refreshed_credentials(access_token: &str) -> ClaudeOAuthCredentials {
+        ClaudeOAuthCredentials {
+            access_token: access_token.to_string(),
+            refresh_token: Some("rotated-refresh".to_string()),
+            expires_at: chrono::DateTime::from_timestamp(2_000, 0),
+            scopes: vec!["user:inference".to_string()],
+            rate_limit_tier: None,
+            subscription_type: None,
+        }
+    }
+
+    /// Writes a minimal but realistic `.credentials.json` into `dir`.
+    fn seed_credentials_file(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join(".credentials.json");
+        std::fs::write(
+            &path,
+            br#"{
+              "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "subscriptionType": "max"
+              },
+              "mcpOAuth": { "some-server": { "accessToken": "keepme" } }
+            }"#,
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn persist_updates_tokens_and_keeps_unrelated_blocks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+
+        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
+            .expect("persist");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "new-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "rotated-refresh");
+        // Fields Ceiling does not own survive the replace.
+        assert_eq!(root["claudeAiOauth"]["subscriptionType"], "max");
+        assert_eq!(root["mcpOAuth"]["some-server"]["accessToken"], "keepme");
+    }
+
+    #[test]
+    fn persist_leaves_an_unparseable_file_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+
+        let error =
+            persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
+                .expect_err("parse failure must not write");
+
+        assert!(matches!(error, crate::core::ProviderError::OAuth(_)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    /// SBS-883: Claude Code owns this file. A dotfile manager or a WSL shared
+    /// target puts a symlink at the credential path; replacing the link with a
+    /// fresh private file splits Ceiling's tokens from the real target.
+    #[cfg(unix)]
+    #[test]
+    fn persist_writes_through_a_symlinked_credential_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = tempfile::tempdir().expect("tempdir");
+
+        let target = store.path().join("real-credentials.json");
+        std::fs::write(
+            &target,
+            br#"{"claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh"}}"#,
+        )
+        .unwrap();
+        let link = dir.path().join(".credentials.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
+            .expect("persist");
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the credential path must still be a symlink"
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(
+            root["claudeAiOauth"]["accessToken"], "new-access",
+            "the refresh must land on the symlink target"
+        );
+    }
+
+    /// The file's own permissions are Claude Code's to choose; a refresh must
+    /// not silently tighten or loosen them.
+    #[cfg(unix)]
+    #[test]
+    fn persist_preserves_the_existing_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
+            .expect("persist");
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "persist must not rewrite the permission bits");
+    }
 
     /// `CLAUDE_CONFIG_DIR` and the env token are process-global, so the tests
     /// that manipulate them run one at a time.
