@@ -8,7 +8,21 @@ Visual system for the tray flyout and taskbar-adjacent capacity strip (SOU-127).
 - **Material:** CSS mica/glass (`backdrop-filter` + translucent tint). Native DWM mica is out of scope.
 - **Type:** Windows-first — `Segoe UI Variable`, `Segoe UI`, system-ui.
 - **Accent:** Ceiling cyan (`#26b5ce` family) on slate neutrals. No purple dashboard, no cream/terracotta, no glow effects.
+- **Focus:** a solid outline or a zero-blur ring. A blurred `box-shadow` around
+  a focused control is a glow and is not allowed; `0 0 0 Npx` rings are.
 - **Brand:** user-visible chrome says **Ceiling**. Internal `codexbar` crate IDs stay unchanged.
+
+## Webview security posture
+
+The webview should have no network reach of its own. Every provider call runs in
+Rust, so the target release `connect-src` is `'self' ipc: http://ipc.localhost`
+and nothing else.
+
+Not yet true. `apps/desktop-tauri/src-tauri/tauri.conf.json` is the single CSP
+for every build, and it still allows `http://localhost:*`, `http://127.0.0.1:*`,
+`ws://localhost:*` and `ws://127.0.0.1:*` so the Vite dev server and its HMR
+socket can connect. Confining those loopback origins to dev builds is SBS-819;
+read the config, not this section, for what ships today.
 
 ## Tokens
 
@@ -55,7 +69,17 @@ Usage bars keep calm slate→cyan progression; warn/crit stay amber/red without 
 ```
 
 - Overview cards lead with **primary plan pool** (not Auto alone).
-- Optional **companion** lane only when hot (≥ ~70% used, or hotter than the pool).
+- Most providers show at most one **companion** lane, and only when hot
+  (≥ ~70% used, or hotter than the pool).
+- Three providers pin their companion lanes and show them at any percentage,
+  because a hidden lane there would misstate what actually caps the plan
+  (`PINNED_COMPANION_IDS` in `lib/capacityPresentation.ts`):
+  - **Cursor** — Auto and API are both account-wide and always meaningful; the
+    On-demand lane joins them only while it is actually active.
+  - **Claude** — Weekly sits beside the 5-hour session and both cap the
+    subscription.
+  - **OpenCode Go** — bills against rolling, weekly, and monthly ceilings at
+    once, so hiding weekly leaves a gap between the two that do show.
 - Clicking a card opens detail — it does not toggle which meter is shown.
 - Provider switcher uses brand-tinted icons + status dots; bar = constraining %.
 
@@ -94,10 +118,19 @@ Detail lists **every** measured window plus inactive rows. Do not truncate to tw
 
 Temporary provider-reported promotions use `promoSignals`:
 
-| Kind | Strip | Overview |
-|---|---|---|
-| `boost` | Soft cyan edge + chip | Hidden; detail surfaces only |
-| `inclusion` | Hidden | Hidden; detail surfaces only |
+| Kind | Strip | Overview | Detail |
+|---|---|---|---|
+| `boost` | Hidden (named in the pill tooltip only) | Hidden | Accent chip |
+| `inclusion` | Hidden | Hidden | Neutral chip |
+
+The strip draws no promo chrome at all — `FloatBar.tsx` puts the boost title in
+the pill's `title` text and nothing else. "keeps promo signals out of the strip
+chrome" in `FloatBar.test.tsx` pins both halves: the absent chip and pill
+classes, and the title that must still carry it. The strip is persistent desktop
+furniture; a temporary promotion is not worth a permanent mark on it.
+
+The detail chip's accent treatment is a border plus a 1px ring, never a halo:
+the no-glow rule above has no exceptions, promos included.
 
 Account identity is also hidden from overview cards. Provider settings and the
 Accounts section remain the intentional places for email/source details.

@@ -26,6 +26,7 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `spend_budget_period` | string | `"daily"` | `"daily"` or `"monthly"`. Safe to edit. |
 | `spend_budget_warning_usd` | number | `5` | Soft alert threshold in USD. Safe to edit. |
 | `spend_budget_limit_usd` | number | `15` | Near-cap alert threshold in USD. Safe to edit. |
+| `provider_incident_badges_enabled` | boolean | `false` | Poll public provider status pages and badge providers having an incident. Sends no account data. Safe to edit. |
 | `notification_policy_version` | number | `1` | Internal migration marker. Not a UI preference. |
 | `provider_usage_thresholds` | object | `{}` | Per-provider overrides; keys are CLI names, optionally suffixed with `:session` or `:weekly`; values are `{ "high": number, "critical": number }`. Safe to edit. |
 | `switcher_shows_icons` | boolean | `true` | Show provider icons in merged switcher UI. Safe to edit. |
