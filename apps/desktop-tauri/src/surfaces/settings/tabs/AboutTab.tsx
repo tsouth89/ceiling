@@ -190,7 +190,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
           onClick={() => openAboutLink("https://github.com/steipete/CodexBar")}
         >
           CodexBar
-        </button>{" "}
+        </button>
         {t("AboutCopyrightSuffix")}
       </p>
     </section>

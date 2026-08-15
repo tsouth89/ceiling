@@ -169,6 +169,8 @@ describe("AboutTab", () => {
     expect(container.textContent).not.toContain("by Peter Steinberger");
     expect(container.textContent).toContain("派生自");
     expect(container.textContent).toContain("基于");
+    expect(container.textContent).toContain("CodexBar，");
+    expect(container.textContent).not.toContain("CodexBar ，");
   });
 
   it("shows a link error if the OS browser launch fails", async () => {
