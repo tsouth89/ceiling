@@ -25,6 +25,8 @@ export default function GeneralTab({
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
+  const spendAnomalyAlertsEnabled = settings.spendAnomalyAlertsEnabled ?? false;
+  const spendAnomalyMultiplier = settings.spendAnomalyMultiplier ?? 3;
   const selectedLanguage: Language =
     settings.uiLanguage === "chinese" ? "chinese" : "english";
   const [playingSound, setPlayingSound] = useState(false);
@@ -262,6 +264,31 @@ export default function GeneralTab({
               onChange={(v) => set({
                 spendBudgetLimitUsd: Math.max(v, spendBudgetWarningUsd),
               })}
+            />
+          </Field>
+          {/* Independent of the budget above: this one needs no cap, so it stays
+              usable for people who never set one. */}
+          <Field
+            label={t("SpendAnomalyAlerts")}
+            description={t("SpendAnomalyAlertsHelper")}
+            leading
+          >
+            <Toggle
+              checked={spendAnomalyAlertsEnabled}
+              ariaLabel={t("SpendAnomalyAlerts")}
+              disabled={saving || !settings.showNotifications}
+              onChange={(v) => set({ spendAnomalyAlertsEnabled: v })}
+            />
+          </Field>
+          <Field label={t("SpendAnomalyMultiplier")}>
+            <NumberInput
+              value={spendAnomalyMultiplier}
+              min={1.5}
+              max={20}
+              step={0.5}
+              ariaLabel={t("SpendAnomalyMultiplier")}
+              disabled={saving || !settings.showNotifications || !spendAnomalyAlertsEnabled}
+              onChange={(v) => set({ spendAnomalyMultiplier: v })}
             />
           </Field>
         </div>

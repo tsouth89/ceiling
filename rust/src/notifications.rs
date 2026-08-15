@@ -7,7 +7,7 @@
 use crate::core::ProviderId;
 use crate::core::{RateWindow, UsagePace};
 use crate::locale::{self, LocaleKey};
-use crate::settings::Settings;
+use crate::settings::{Settings, normalize_spend_anomaly_multiplier};
 use crate::sound::{AlertSound, play_alert};
 use chrono::{DateTime, Utc};
 
@@ -157,6 +157,47 @@ enum SpendBudgetAlertLevel {
     NearCap,
 }
 
+/// Below this, a day is too small to call a spike whatever the ratio. Cents
+/// times a large multiplier are still cents, and an alert about them is noise.
+const SPEND_ANOMALY_FLOOR_USD: f64 = 1.00;
+
+/// How far today runs above the recent daily median.
+///
+/// `None` when the baseline is zero. A multiple of nothing is not a multiple:
+/// a fresh install and a genuinely idle week look identical from the dollars
+/// alone, so neither raises a spike. A runaway loop on such a machine is the
+/// budget alert's job, which does not need history to fire.
+fn spend_spike_ratio(today_usd: f64, baseline_usd: f64) -> Option<f64> {
+    (baseline_usd > 0.0).then(|| today_usd / baseline_usd)
+}
+
+fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
+    today_usd >= SPEND_ANOMALY_FLOOR_USD
+        && spend_spike_ratio(today_usd, baseline_usd).is_some_and(|ratio| ratio >= multiplier)
+}
+
+/// Median of the baseline days, which is what the spike is measured against.
+///
+/// The median rather than the mean: one heavy day last week would pull a mean
+/// high enough to mask a real spike today, which is precisely the case the
+/// alert exists for.
+pub fn spend_baseline_usd(mut daily_usd: Vec<f64>) -> f64 {
+    let usable: Vec<f64> = {
+        daily_usd.retain(|value| value.is_finite() && *value >= 0.0);
+        daily_usd.sort_by(|left, right| left.total_cmp(right));
+        daily_usd
+    };
+    if usable.is_empty() {
+        return 0.0;
+    }
+    let middle = usable.len() / 2;
+    if usable.len().is_multiple_of(2) {
+        (usable[middle - 1] + usable[middle]) / 2.0
+    } else {
+        usable[middle]
+    }
+}
+
 /// Notification manager
 pub struct NotificationManager {
     /// Track which threshold notifications have been sent to avoid spam.
@@ -181,6 +222,12 @@ pub struct NotificationManager {
     spend_budget_observed: bool,
     spend_budget_sent: std::collections::HashSet<SpendBudgetAlertLevel>,
     spend_budget_pending: Option<SpendBudgetAlertLevel>,
+    /// Local calendar day the spike detector is currently watching, so it
+    /// re-arms once at midnight rather than repeating all day.
+    spend_anomaly_day: Option<String>,
+    spend_anomaly_observed: bool,
+    spend_anomaly_sent: bool,
+    spend_anomaly_pending: bool,
     /// Remains false until the initial provider refresh has established a
     /// trustworthy in-process baseline for every enabled provider.
     notifications_armed: bool,
@@ -212,6 +259,10 @@ impl NotificationManager {
             spend_budget_observed: false,
             spend_budget_sent: std::collections::HashSet::new(),
             spend_budget_pending: None,
+            spend_anomaly_day: None,
+            spend_anomaly_observed: false,
+            spend_anomaly_sent: false,
+            spend_anomaly_pending: false,
             notifications_armed: false,
             refresh_cycle_active: false,
             toast_emitted_this_refresh: false,
@@ -645,6 +696,81 @@ impl NotificationManager {
                 },
                 settings,
             );
+        }
+    }
+
+    /// Warn when today's estimated API value runs far above the recent daily
+    /// norm (SBS-279).
+    ///
+    /// This is deliberately not a budget: it needs no configured cap and asks
+    /// only "is today unlike my recent days", which is what a runaway agent
+    /// loop looks like before the bill arrives. The baseline is the **median**
+    /// of the preceding days rather than the mean, so a single heavy day last
+    /// week cannot raise the bar high enough to hide a real spike today.
+    ///
+    /// `baseline_usd` must exclude today, or today's own spike would drag the
+    /// bar it is measured against upward.
+    pub fn check_spend_anomaly(
+        &mut self,
+        day_id: &str,
+        today_usd: f64,
+        baseline_usd: f64,
+        settings: &Settings,
+    ) {
+        let enabled = settings.show_notifications && settings.spend_anomaly_alerts_enabled;
+        if !enabled
+            || !today_usd.is_finite()
+            || today_usd < 0.0
+            || !baseline_usd.is_finite()
+            || baseline_usd < 0.0
+        {
+            self.spend_anomaly_day = None;
+            self.spend_anomaly_observed = false;
+            self.spend_anomaly_sent = false;
+            self.spend_anomaly_pending = false;
+            return;
+        }
+
+        if self.spend_anomaly_day.as_deref() != Some(day_id) {
+            self.spend_anomaly_day = Some(day_id.to_string());
+            self.spend_anomaly_observed = false;
+            self.spend_anomaly_sent = false;
+            self.spend_anomaly_pending = false;
+        }
+
+        let multiplier = normalize_spend_anomaly_multiplier(settings.spend_anomaly_multiplier);
+        let spiking = is_spend_spike(today_usd, baseline_usd, multiplier);
+
+        // A machine that was already mid-spike when Ceiling started (or when
+        // the setting was switched on) has not crossed anything yet.
+        if !self.spend_anomaly_observed {
+            self.spend_anomaly_observed = true;
+            self.spend_anomaly_sent = spiking;
+            return;
+        }
+
+        if !spiking {
+            self.spend_anomaly_pending = false;
+            return;
+        }
+        if self.spend_anomaly_sent {
+            return;
+        }
+        // Two consecutive scans, like every other alert here: one scan can read
+        // a partially written transcript.
+        if !self.spend_anomaly_pending {
+            self.spend_anomaly_pending = true;
+            return;
+        }
+
+        self.spend_anomaly_pending = false;
+        self.spend_anomaly_sent = true;
+        let ratio = spend_spike_ratio(today_usd, baseline_usd).unwrap_or_default();
+        let body = format!(
+            "Today's estimated API value is ${today_usd:.2}, about {ratio:.1}x your recent daily median of ${baseline_usd:.2}. This is an estimate from local Codex and Claude logs, not a bill."
+        );
+        if self.emit_toast("Spend running above normal", &body) {
+            play_alert(AlertSound::Warning, settings);
         }
     }
 
@@ -2084,6 +2210,140 @@ mod tests {
             manager.toasts_shown, 2,
             "a high first reading of the next day is a quiet baseline"
         );
+    }
+
+    fn anomaly_settings() -> Settings {
+        Settings {
+            spend_anomaly_alerts_enabled: true,
+            spend_anomaly_multiplier: 3.0,
+            ..Settings::default()
+        }
+    }
+
+    /// The median, not the mean: one heavy day must not raise the bar enough to
+    /// hide a real spike. Mean of [1,1,1,1,1,1,50] is 8.0; median is 1.0.
+    #[test]
+    fn spend_baseline_uses_the_median_of_the_recent_days() {
+        assert_eq!(
+            spend_baseline_usd(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 50.0]),
+            1.0
+        );
+        // Even counts average the two middle values.
+        assert_eq!(spend_baseline_usd(vec![2.0, 4.0, 6.0, 8.0]), 5.0);
+        assert_eq!(spend_baseline_usd(Vec::new()), 0.0);
+        // Junk readings are dropped rather than poisoning the baseline.
+        assert_eq!(spend_baseline_usd(vec![f64::NAN, -3.0, 4.0]), 4.0);
+    }
+
+    #[test]
+    fn a_spike_needs_both_the_ratio_and_a_meaningful_total() {
+        // Cents times a big multiplier are still cents.
+        assert!(!is_spend_spike(0.30, 0.01, 3.0));
+        assert!(is_spend_spike(30.0, 2.0, 3.0));
+        assert!(!is_spend_spike(5.0, 2.0, 3.0));
+        // Exactly at the factor counts.
+        assert!(is_spend_spike(6.0, 2.0, 3.0));
+        // A zero baseline is no comparison, so it never fires on its own.
+        assert!(!is_spend_spike(500.0, 0.0, 3.0));
+        assert_eq!(spend_spike_ratio(10.0, 0.0), None);
+    }
+
+    #[test]
+    fn spend_anomaly_needs_a_confirmed_crossing_and_fires_once_a_day() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings();
+
+        // First reading of the day is only a baseline.
+        manager.check_spend_anomaly("2026-08-15", 1.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+
+        // One high scan is not enough; the second confirms it.
+        manager.check_spend_anomaly("2026-08-15", 9.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        manager.check_spend_anomaly("2026-08-15", 9.5, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        // Spend keeps climbing, but the day has already been reported.
+        manager.check_spend_anomaly("2026-08-15", 40.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 80.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+    }
+
+    /// Rolling into a new day must not replay yesterday's spike, and an
+    /// already-high first reading of the new day is a baseline, not a crossing.
+    #[test]
+    fn spend_anomaly_rearms_quietly_at_the_day_boundary() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings();
+
+        manager.check_spend_anomaly("2026-08-15", 1.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 9.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 9.5, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+
+        manager.check_spend_anomaly("2026-08-16", 30.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-16", 31.0, 2.0, &settings);
+        assert_eq!(
+            manager.toasts_shown, 1,
+            "a high first reading of the next day is a quiet baseline"
+        );
+    }
+
+    /// Dropping back under the factor must re-arm the alert, or a spike that
+    /// resolves and returns would go unreported.
+    #[test]
+    fn spend_anomaly_clears_a_pending_crossing_that_falls_back() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings();
+
+        manager.check_spend_anomaly("2026-08-15", 1.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 9.0, 2.0, &settings);
+        // Baseline rose (the week caught up), so this is no longer a spike.
+        manager.check_spend_anomaly("2026-08-15", 9.0, 8.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+        assert!(!manager.spend_anomaly_pending);
+
+        manager.check_spend_anomaly("2026-08-15", 30.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 0, "the streak restarts");
+        manager.check_spend_anomaly("2026-08-15", 31.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+    }
+
+    #[test]
+    fn disabling_spend_anomaly_alerts_clears_its_in_memory_state() {
+        let mut manager = NotificationManager::new_armed();
+
+        manager.check_spend_anomaly("2026-08-15", 1.0, 2.0, &anomaly_settings());
+        assert!(manager.spend_anomaly_observed);
+        assert!(manager.spend_anomaly_day.is_some());
+
+        manager.check_spend_anomaly("", 0.0, 0.0, &Settings::default());
+
+        assert!(!manager.spend_anomaly_observed);
+        assert!(manager.spend_anomaly_day.is_none());
+        assert!(!manager.spend_anomaly_sent);
+        assert!(!manager.spend_anomaly_pending);
+    }
+
+    /// An out-of-band multiplier from a hand-edited settings.json must not
+    /// disable the alert (1x) or make it unreachable.
+    #[test]
+    fn spend_anomaly_clamps_an_absurd_multiplier() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = Settings {
+            spend_anomaly_multiplier: 1.0,
+            ..anomaly_settings()
+        };
+
+        manager.check_spend_anomaly("2026-08-15", 2.0, 2.0, &settings);
+        // 2.0 is exactly 1x the baseline: under the 1.5 floor, so no spike.
+        manager.check_spend_anomaly("2026-08-15", 2.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 2.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 0);
+
+        manager.check_spend_anomaly("2026-08-15", 4.0, 2.0, &settings);
+        manager.check_spend_anomaly("2026-08-15", 4.0, 2.0, &settings);
+        assert_eq!(manager.toasts_shown, 1, "2x clears the clamped 1.5 floor");
     }
 
     #[test]

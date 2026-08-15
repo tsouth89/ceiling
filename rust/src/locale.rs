@@ -199,6 +199,9 @@ locale_keys! {
     SpendBudgetWarning,
     SpendBudgetCap,
     SpendBudgetThresholdsHelper,
+    SpendAnomalyAlerts,
+    SpendAnomalyAlertsHelper,
+    SpendAnomalyMultiplier,
 
     // Display settings (Preferences)
     UsageDisplay,

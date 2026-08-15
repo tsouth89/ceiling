@@ -145,6 +145,17 @@ pub struct Settings {
     #[serde(default = "default_spend_budget_limit_usd")]
     pub spend_budget_limit_usd: f64,
 
+    /// Whether to warn when today's estimated API value runs far above the
+    /// recent daily norm. This is a spike detector, not a cap: it catches a
+    /// runaway loop on a machine whose owner never set a budget.
+    #[serde(default)]
+    pub spend_anomaly_alerts_enabled: bool,
+
+    /// How many times the recent daily median today must reach before it counts
+    /// as a spike.
+    #[serde(default = "default_spend_anomaly_multiplier")]
+    pub spend_anomaly_multiplier: f64,
+
     /// Internal migration marker for notification defaults. This is not a UI
     /// preference; it prevents old default values from surviving policy fixes.
     #[serde(default)]
@@ -581,6 +592,24 @@ pub const fn default_spend_budget_limit_usd() -> f64 {
     15.0
 }
 
+/// 3x the recent median. Day-to-day spend on an active machine swings by well
+/// over 2x on its own, so a lower factor would fire on an ordinary busy day and
+/// train the user to ignore it.
+pub const fn default_spend_anomaly_multiplier() -> f64 {
+    3.0
+}
+
+/// Clamp the spike factor to a band where the alert still means something: at
+/// 1x every day above the median fires, and past 20x a real runaway loop could
+/// finish before the threshold is reached.
+pub fn normalize_spend_anomaly_multiplier(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(1.5, 20.0)
+    } else {
+        default_spend_anomaly_multiplier()
+    }
+}
+
 pub fn normalize_spend_budget_period(value: &str) -> String {
     match value {
         "monthly" => "monthly".to_string(),
@@ -621,6 +650,8 @@ impl Default for Settings {
             spend_budget_period: default_spend_budget_period(),
             spend_budget_warning_usd: default_spend_budget_warning_usd(),
             spend_budget_limit_usd: default_spend_budget_limit_usd(),
+            spend_anomaly_alerts_enabled: false,
+            spend_anomaly_multiplier: default_spend_anomaly_multiplier(),
             notification_policy_version: NOTIFICATION_POLICY_VERSION,
             provider_usage_thresholds: HashMap::new(),
             switcher_shows_icons: true,
