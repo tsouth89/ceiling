@@ -621,6 +621,13 @@ pub struct CostScanner {
     /// resolve the wrong home. Injecting the value keeps it thread-local to the
     /// scanner. Production leaves this `None` and reads the real environment.
     ambient_home_override: Option<PathBuf>,
+    /// Whether to bucket records by local clock-hour as well as by day.
+    ///
+    /// Off by default. Filling the hourly buckets means running each record's
+    /// full accounting a second time, and only the activity heatmap reads them
+    /// — the charts, the reset windows, and the API-value card do not, and
+    /// those run on every refresh over transcript trees that reach gigabytes.
+    collect_hourly: bool,
 }
 
 impl CostScanner {
@@ -638,6 +645,7 @@ impl CostScanner {
             codex_speed: CodexCostSpeed::resolve(None),
             account_homes_override: None,
             ambient_home_override: None,
+            collect_hourly: false,
         }
     }
 
@@ -649,6 +657,7 @@ impl CostScanner {
             codex_speed: CodexCostSpeed::resolve(speed_override),
             account_homes_override: None,
             ambient_home_override: None,
+            collect_hourly: false,
         }
     }
 
@@ -660,7 +669,14 @@ impl CostScanner {
             codex_speed: CodexCostSpeed::resolve(None),
             account_homes_override: None,
             ambient_home_override: None,
+            collect_hourly: false,
         }
+    }
+
+    /// Also bucket records by local clock-hour (the activity heatmap).
+    pub fn with_hourly_activity(mut self) -> Self {
+        self.collect_hourly = true;
+        self
     }
 
     /// Stand in for the ambient config home on an already-built scanner.
@@ -681,6 +697,7 @@ impl CostScanner {
             codex_speed: CodexCostSpeed::resolve(None),
             account_homes_override: Some(homes),
             ambient_home_override: Some(ambient),
+            collect_hourly: false,
         }
     }
 
@@ -1339,6 +1356,23 @@ pub fn get_cost_usage_report(provider: &str, days: u32) -> Option<CostUsageRepor
     get_cost_usage_report_with_windows(provider, days, &[])
 }
 
+/// As [`get_cost_usage_report`], but also fills [`CostUsageReport::hourly_activity`].
+///
+/// Separate entry point because bucketing every record by clock-hour runs its
+/// accounting a second time. Only the activity heatmap needs it; the charts,
+/// reset windows, and API-value card all scan the same trees on every refresh
+/// and would pay for buckets they never read.
+pub fn get_cost_usage_report_hourly(provider: &str, days: u32) -> Option<CostUsageReport> {
+    let days = days.max(1);
+    let scanner = CostScanner::new(days).with_hourly_activity();
+    match provider {
+        "codex" => Some(scan_codex_report(&scanner, days, &[])),
+        "claude" => Some(scan_claude_report(&scanner, days, &[])),
+        "grok" => Some(scan_grok_report(&scanner, days, &[])),
+        _ => None,
+    }
+}
+
 pub fn get_cost_usage_report_with_windows(
     provider: &str,
     days: u32,
@@ -1406,10 +1440,17 @@ type HourlySummaries = HashMap<(NaiveDate, u32), CostSummary>;
 /// idle machine keeps an empty map instead of 720 zeroed summaries. Callers
 /// must only reach this once they know the record's day is in range, so the
 /// hourly series never drifts from `daily_costs`.
-fn add_to_hourly<F>(hourly: &mut HourlySummaries, timestamp: Option<DateTime<Utc>>, mut add: F)
-where
+fn add_to_hourly<F>(
+    enabled: bool,
+    hourly: &mut HourlySummaries,
+    timestamp: Option<DateTime<Utc>>,
+    mut add: F,
+) where
     F: FnMut(&mut CostSummary),
 {
+    if !enabled {
+        return;
+    }
     let Some(local) = timestamp.map(|value| value.with_timezone(&Local)) else {
         return;
     };
@@ -1567,6 +1608,7 @@ struct CodexReportRollups<'a> {
     seven_day_start: NaiveDate,
     daily: HashMap<String, CostSummary>,
     hourly: HourlySummaries,
+    collect_hourly: bool,
     current_windows: HashMap<String, CostSummary>,
     latest: Option<(std::time::SystemTime, CostSummary)>,
     today_sessions: u32,
@@ -1583,6 +1625,7 @@ impl<'a> CodexReportRollups<'a> {
         range: &'a CostUsageDayRange,
         windows: &'a [CurrentUsageWindow],
         today: NaiveDate,
+        collect_hourly: bool,
     ) -> Self {
         Self {
             range,
@@ -1591,6 +1634,7 @@ impl<'a> CodexReportRollups<'a> {
             seven_day_start: today - Duration::days(6),
             daily: empty_daily_summaries(days),
             hourly: HourlySummaries::new(),
+            collect_hourly,
             current_windows: empty_current_window_summaries(windows),
             latest: None,
             today_sessions: 0,
@@ -1649,11 +1693,16 @@ impl<'a> CodexReportRollups<'a> {
             if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
                 day_summary.total_cost_usd += cost;
             }
-            add_to_hourly(&mut self.hourly, record.timestamp, |summary| {
-                if let Some(cost) = add_codex_record_to_summary(summary, record) {
-                    summary.total_cost_usd += cost;
-                }
-            });
+            add_to_hourly(
+                self.collect_hourly,
+                &mut self.hourly,
+                record.timestamp,
+                |summary| {
+                    if let Some(cost) = add_codex_record_to_summary(summary, record) {
+                        summary.total_cost_usd += cost;
+                    }
+                },
+            );
             if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
                 contributed_today |= date == self.today;
                 contributed_seven_days |= date >= self.seven_day_start;
@@ -1703,7 +1752,7 @@ fn scan_codex_report(
     let today = Local::now().date_naive();
     let start = codex_period_start(today, days);
     let range = CostUsageDayRange::new(start, today);
-    let mut rollups = CodexReportRollups::new(days, &range, windows, today);
+    let mut rollups = CodexReportRollups::new(days, &range, windows, today, scanner.collect_hourly);
 
     for sessions_dir in scanner.get_codex_sessions_dirs() {
         if !sessions_dir.exists() {
@@ -1900,9 +1949,12 @@ fn scan_grok_report(
                 let day = date.format("%Y-%m-%d").to_string();
                 if let Some(day_summary) = daily.get_mut(&day) {
                     add_grok_record_to_summary(day_summary, record);
-                    add_to_hourly(&mut hourly, record.timestamp, |summary| {
-                        add_grok_record_to_summary(summary, record)
-                    });
+                    add_to_hourly(
+                        scanner.collect_hourly,
+                        &mut hourly,
+                        record.timestamp,
+                        |summary| add_grok_record_to_summary(summary, record),
+                    );
                 }
                 contributed_today |= date == today;
                 contributed_seven_days |= date >= seven_day_start;
@@ -2001,9 +2053,12 @@ fn scan_claude_report(
                 let day = date.format("%Y-%m-%d").to_string();
                 if let Some(day_summary) = daily.get_mut(&day) {
                     add_claude_record_to_summary(day_summary, &record);
-                    add_to_hourly(&mut hourly, record.timestamp, |summary| {
-                        add_claude_record_to_summary(summary, &record)
-                    });
+                    add_to_hourly(
+                        scanner.collect_hourly,
+                        &mut hourly,
+                        record.timestamp,
+                        |summary| add_claude_record_to_summary(summary, &record),
+                    );
                 }
                 contributed_today |= date == today;
                 contributed_seven_days |= date >= seven_day_start;
@@ -3075,10 +3130,22 @@ mod tests {
             (local.date_naive(), local.hour())
         };
 
-        add_to_hourly(&mut hourly, at(2), |summary| summary.input_tokens += 10);
-        add_to_hourly(&mut hourly, at(2), |summary| summary.input_tokens += 5);
-        add_to_hourly(&mut hourly, at(5), |summary| summary.input_tokens += 7);
-        add_to_hourly(&mut hourly, None, |summary| summary.input_tokens += 999);
+        add_to_hourly(true, &mut hourly, at(2), |summary| {
+            summary.input_tokens += 10
+        });
+        add_to_hourly(true, &mut hourly, at(2), |summary| {
+            summary.input_tokens += 5
+        });
+        add_to_hourly(true, &mut hourly, at(5), |summary| {
+            summary.input_tokens += 7
+        });
+        add_to_hourly(true, &mut hourly, None, |summary| {
+            summary.input_tokens += 999
+        });
+        // Gated off, so the scans that never read these buckets pay nothing.
+        add_to_hourly(false, &mut hourly, at(9), |summary| {
+            summary.input_tokens += 1
+        });
 
         assert_eq!(hourly.len(), 2);
         assert_eq!(hourly[&local_key(at(2))].input_tokens, 15);
@@ -3122,8 +3189,25 @@ mod tests {
         )
         .unwrap();
 
-        let report = scan_codex_report(
+        // The charts, reset windows, and API-value card all scan the same
+        // trees on every refresh. They must not pay for buckets they never
+        // read, so hourly work only happens when a caller asks for it.
+        let without_hourly = scan_codex_report(
             &CostScanner::scoped_to(2, home.path().to_path_buf()),
+            2,
+            &[],
+        );
+        assert!(
+            without_hourly.hourly_activity.is_empty(),
+            "hourly bucketing is opt-in"
+        );
+        assert_eq!(
+            without_hourly.thirty_days.input_tokens, 1_500,
+            "and opting out changes nothing else"
+        );
+
+        let report = scan_codex_report(
+            &CostScanner::scoped_to(2, home.path().to_path_buf()).with_hourly_activity(),
             2,
             &[],
         );

@@ -8,7 +8,7 @@
 use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
-    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report,
+    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report_hourly,
     get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
 };
 use codexbar::locale::{self, LocaleKey};
@@ -1275,7 +1275,7 @@ where
     let per_provider = API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
-            let report = get_cost_usage_report(provider_id, ACTIVITY_HEATMAP_DAYS)?;
+            let report = get_cost_usage_report_hourly(provider_id, ACTIVITY_HEATMAP_DAYS)?;
             Some(activity_hours_for_provider(provider_id, &report))
         })
         .collect();
