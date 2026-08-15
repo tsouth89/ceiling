@@ -83,6 +83,20 @@ fn severity_label(level: StatusLevel) -> Option<&'static str> {
     }
 }
 
+/// Providers whose status page actually serves the Statuspage v2 API.
+///
+/// Deliberately not derived from [`get_status_page_url`]: that answers "where
+/// can a human look", which is a useful link even for a page no parser can
+/// read. Google Cloud is the case in point — `status.cloud.google.com` is a
+/// real status page but returns HTML for `/api/v2/status.json`, so polling it
+/// can only ever fail, and every failure would be retried on the backoff
+/// forever. A provider joins this list once its page is confirmed to answer
+/// the API, not merely to exist.
+///
+/// Confirmed 2026-08-15: OpenAI, Cursor, and GitHub answer directly; Anthropic
+/// redirects `status.anthropic.com` to `status.claude.com` and answers there.
+const STATUSPAGE_PROVIDER_IDS: [&str; 4] = ["codex", "claude", "cursor", "copilot"];
+
 /// Providers whose status pages we can read, among those the user enabled.
 pub fn pollable_provider_ids(settings: &Settings) -> Vec<String> {
     if !settings.provider_incident_badges_enabled {
@@ -92,6 +106,7 @@ pub fn pollable_provider_ids(settings: &Settings) -> Vec<String> {
         .get_enabled_provider_ids()
         .into_iter()
         .map(|provider| provider.cli_name().to_string())
+        .filter(|provider_id| STATUSPAGE_PROVIDER_IDS.contains(&provider_id.as_str()))
         .filter(|provider_id| get_status_page_url(provider_id).is_some())
         .collect();
     // Several enabled accounts of one provider share a status page.
@@ -220,6 +235,36 @@ mod tests {
             pollable_provider_ids(&settings),
             vec!["claude".to_string(), "codex".to_string()],
         );
+    }
+
+    /// Google Cloud has a real status page, but it answers `/api/v2/status.json`
+    /// with HTML. Polling it can only ever fail, and each failure would be
+    /// retried on the backoff for as long as the app runs.
+    #[test]
+    fn a_status_page_that_cannot_be_parsed_is_never_polled() {
+        let settings = Settings {
+            provider_incident_badges_enabled: true,
+            enabled_providers: ["gemini".to_string(), "codex".to_string()]
+                .into_iter()
+                .collect(),
+            ..Settings::default()
+        };
+
+        // The human-facing link still exists; only the poller skips it.
+        assert!(get_status_page_url("gemini").is_some());
+        assert_eq!(pollable_provider_ids(&settings), vec!["codex".to_string()]);
+    }
+
+    /// Every id in the allowlist has to be a provider the app can actually
+    /// resolve a status page for, or the two lists have silently drifted.
+    #[test]
+    fn every_allowlisted_provider_still_has_a_status_page_url() {
+        for provider_id in STATUSPAGE_PROVIDER_IDS {
+            assert!(
+                get_status_page_url(provider_id).is_some(),
+                "{provider_id} is allowlisted but has no status page URL"
+            );
+        }
     }
 
     #[test]
