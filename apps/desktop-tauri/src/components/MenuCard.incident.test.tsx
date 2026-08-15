@@ -2,10 +2,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderIncident, ProviderUsageSnapshot } from "../types/bridge";
 
-const openProviderStatusPage = vi.fn(() => Promise.resolve());
+const openExternalUrl = vi.fn((_url: string) => Promise.resolve());
 vi.mock("../lib/tauri", () => ({
   getProviderChartData: vi.fn(() => Promise.resolve(null)),
-  openProviderStatusPage: (id: string) => openProviderStatusPage(id),
+  openExternalUrl: (url: string) => openExternalUrl(url),
 }));
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
@@ -44,15 +44,17 @@ const renderCard = (over: Partial<ProviderUsageSnapshot> = {}) =>
 
 describe("MenuCard incident banner", () => {
   it("shows the provider's own wording and opens its status page", () => {
-    openProviderStatusPage.mockClear();
+    openExternalUrl.mockClear();
     renderCard();
 
     expect(screen.getByText("Major Outage")).toBeInTheDocument();
 
     // The URL used to be plain text, so the badge told you an outage was on
-    // and gave you no way to go and check it.
+    // and gave you no way to go and check it. It then routed through the
+    // provider registry, where Cursor has no status_page_url and the button
+    // was silently dead. It opens the incident's own URL now.
     fireEvent.click(screen.getByRole("button", { name: "IncidentStatusPage" }));
-    expect(openProviderStatusPage).toHaveBeenCalledWith("codex");
+    expect(openExternalUrl).toHaveBeenCalledWith("https://status.openai.com");
   });
 
   /// A provider mid-outage often fails its fetch too, and the error block

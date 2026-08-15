@@ -8,7 +8,7 @@ import type {
   RateWindowSnapshot,
   WindowAmountBridge,
 } from "../types/bridge";
-import { getProviderChartData, openProviderStatusPage } from "../lib/tauri";
+import { getProviderChartData, openExternalUrl } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { formatRelativeUpdated } from "../lib/relativeTime";
@@ -606,13 +606,20 @@ export default function MenuCard({
             <span className="menu-card__incident-text">{incident.description}</span>
             {/* A button, not the raw URL as text. The tray is 328px wide and a
                 nowrap URL took most of it from the description, which is the
-                part worth reading — and it could not be clicked anyway. */}
+                part worth reading — and it could not be clicked anyway.
+
+                Opens the URL the incident itself carries, not the provider
+                registry's. The two disagree: Cursor is polled through
+                `get_status_page_url` but its ProviderMetadata sets
+                `status_page_url: None`, so routing through the registry left
+                this button silently dead for Cursor. The incident's URL is the
+                page the badge is actually reporting on. */}
             <button
               type="button"
               className="menu-card__incident-link"
               title={incident.statusPageUrl}
               onClick={() => {
-                void openProviderStatusPage(incident.providerId);
+                void openExternalUrl(incident.statusPageUrl);
               }}
             >
               {t("IncidentStatusPage")}

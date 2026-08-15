@@ -28,7 +28,11 @@ impl StatusLevel {
     pub fn from_indicator(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "operational" | "none" | "green" | "ok" => StatusLevel::Operational,
-            "degraded" | "degraded_performance" | "yellow" => StatusLevel::Degraded,
+            // Statuspage v2 `status.indicator` is none|minor|major|critical.
+            // `minor` is the most common non-ok value and had no arm, so every
+            // small incident on OpenAI, Claude, Cursor, and GitHub resolved to
+            // Unknown and produced no badge at all.
+            "degraded" | "degraded_performance" | "minor" | "yellow" => StatusLevel::Degraded,
             "partial" | "partial_outage" | "orange" => StatusLevel::Partial,
             "major" | "major_outage" | "critical" | "red" => StatusLevel::Major,
             _ => StatusLevel::Unknown,
@@ -217,4 +221,60 @@ pub async fn fetch_all_statuses(providers: &[&str]) -> HashMap<String, ProviderS
         .into_iter()
         .filter_map(|(provider, status)| status.map(|s| (provider, s)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Statuspage v2 `status.indicator` is `none|minor|major|critical`, and
+    /// `minor` is what a small incident actually reports. It had no arm, so it
+    /// fell through to `Unknown` — which the badge treats as an unreadable
+    /// page, meaning the most common incident state produced nothing at all.
+    #[test]
+    fn every_statuspage_indicator_maps_to_a_real_level() {
+        assert_eq!(
+            StatusLevel::from_indicator("none"),
+            StatusLevel::Operational
+        );
+        assert_eq!(StatusLevel::from_indicator("minor"), StatusLevel::Degraded);
+        assert_eq!(StatusLevel::from_indicator("major"), StatusLevel::Major);
+        assert_eq!(StatusLevel::from_indicator("critical"), StatusLevel::Major);
+        for indicator in ["none", "minor", "major", "critical"] {
+            assert_ne!(
+                StatusLevel::from_indicator(indicator),
+                StatusLevel::Unknown,
+                "{indicator} is a documented Statuspage indicator"
+            );
+        }
+    }
+
+    /// Component status values are a different vocabulary from the top-level
+    /// indicator, and `fetch_statuspage_io_components` runs them through the
+    /// same mapper.
+    #[test]
+    fn component_status_values_map_too() {
+        assert_eq!(
+            StatusLevel::from_indicator("operational"),
+            StatusLevel::Operational
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("degraded_performance"),
+            StatusLevel::Degraded
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("partial_outage"),
+            StatusLevel::Partial
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("major_outage"),
+            StatusLevel::Major
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_value_is_still_unknown() {
+        assert_eq!(StatusLevel::from_indicator("wat"), StatusLevel::Unknown);
+        assert_eq!(StatusLevel::from_indicator(""), StatusLevel::Unknown);
+    }
 }
