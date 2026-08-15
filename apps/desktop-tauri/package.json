@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build --no-bundle",
     "tauri:build:windows-cross": "../../scripts/macos-windows-cross-build.sh",
     "tauri:build:debug": "tauri build --debug --no-bundle"
