@@ -236,6 +236,10 @@ export interface SettingsSnapshot {
   spendBudgetPeriod?: "daily" | "monthly";
   spendBudgetWarningUsd?: number;
   spendBudgetLimitUsd?: number;
+  /** Warn when today's estimated API value runs far above the recent norm. */
+  spendAnomalyAlertsEnabled?: boolean;
+  /** Times the recent daily median that counts as a spike. */
+  spendAnomalyMultiplier?: number;
   /** Poll public provider status pages and badge providers having an incident. */
   providerIncidentBadgesEnabled?: boolean;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
@@ -325,6 +329,8 @@ export interface SettingsUpdate {
   spendBudgetPeriod?: "daily" | "monthly";
   spendBudgetWarningUsd?: number;
   spendBudgetLimitUsd?: number;
+  spendAnomalyAlertsEnabled?: boolean;
+  spendAnomalyMultiplier?: number;
   providerIncidentBadgesEnabled?: boolean;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
