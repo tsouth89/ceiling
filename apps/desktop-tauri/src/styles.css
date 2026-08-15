@@ -6462,7 +6462,9 @@ html:has(.menu-surface--tray) {
   color: #5eead4;
   background: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 22%, transparent);
   border-color: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 45%, transparent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--ceiling-accent, #26b5ce) 24%, transparent);
+  /* A crisp accent ring, not an 8px halo. CEILING_UI.md rules out glow, and
+     this chip was the last place in the app still drawing one. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ceiling-accent, #26b5ce) 30%, transparent);
 }
 
 .menu-card__promo-chip--inclusion {
