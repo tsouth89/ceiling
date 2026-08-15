@@ -166,6 +166,8 @@ function settings(): SettingsSnapshot {
     taskbarWidgetOpenOnHover: true,
     floatBarDensity: "standard",
     floatBarInformationMode: "exact",
+    floatBarSelectionMode: "pinned",
+    floatBarForegroundDetection: true,
     floatBarContrast: "auto",
     floatBarClickThrough: false,
     floatBarProviderIds: [],

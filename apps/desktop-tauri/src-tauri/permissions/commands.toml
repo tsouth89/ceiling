@@ -5,6 +5,7 @@ commands.allow = [
   "get_bootstrap_state",
   "get_provider_catalog",
   "get_settings_snapshot",
+  "get_foreground_provider",
   "list_agent_sessions",
   "focus_agent_session",
   "update_settings",
@@ -111,6 +112,7 @@ description = "Usage reads, surface navigation, and narrow native float-bar cont
 commands.allow = [
   "get_bootstrap_state",
   "get_settings_snapshot",
+  "get_foreground_provider",
   "get_current_surface_state",
   "get_cached_providers",
   "refresh_providers",

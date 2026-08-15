@@ -8,6 +8,7 @@ mod commands;
 mod enforcement;
 mod events;
 mod floatbar;
+mod foreground;
 mod geometry_store;
 mod powertoys;
 mod proof_harness;
@@ -230,6 +231,7 @@ fn main() {
             commands::get_locale_strings,
             commands::set_ui_language,
             commands::open_path,
+            foreground::get_foreground_provider,
             floatbar::show_float_bar,
             floatbar::hide_float_bar,
             floatbar::set_float_bar_opacity,

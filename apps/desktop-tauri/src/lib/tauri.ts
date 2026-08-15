@@ -33,6 +33,7 @@ import type {
   SafeDiagnostics,
   CredentialStorageStatus,
   TaskbarWidgetStatus,
+  ForegroundProviderSnapshot,
   WorkAreaRect,
   AgentSession,
   AgentSessionDiscoveryResult,
@@ -57,6 +58,10 @@ export function reorderProviders(ids: string[]): Promise<ProviderSummary[]> {
 
 export function getSettingsSnapshot(): Promise<SettingsSnapshot> {
   return invoke<SettingsSnapshot>("get_settings_snapshot");
+}
+
+export function getForegroundProvider(): Promise<ForegroundProviderSnapshot> {
+  return invoke<ForegroundProviderSnapshot>("get_foreground_provider");
 }
 
 export function updateSettings(

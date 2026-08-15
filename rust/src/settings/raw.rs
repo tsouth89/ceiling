@@ -168,6 +168,10 @@ pub(super) struct RawSettings {
     float_bar_density: String,
     #[serde(default = "default_float_bar_information_mode")]
     float_bar_information_mode: String,
+    #[serde(default = "default_float_bar_selection_mode")]
+    float_bar_selection_mode: String,
+    #[serde(default = "default_true")]
+    float_bar_foreground_detection: bool,
     #[serde(default)]
     float_bar_contrast: Option<String>,
     #[serde(default)]
@@ -280,6 +284,8 @@ impl Default for RawSettings {
             taskbar_widget_open_on_hover: s.taskbar_widget_open_on_hover,
             float_bar_density: s.float_bar_density,
             float_bar_information_mode: s.float_bar_information_mode,
+            float_bar_selection_mode: s.float_bar_selection_mode,
+            float_bar_foreground_detection: s.float_bar_foreground_detection,
             float_bar_contrast: s.float_bar_contrast,
             float_bar_click_through: s.float_bar_click_through,
             float_bar_provider_ids: s.float_bar_provider_ids,
@@ -653,6 +659,10 @@ impl From<RawSettings> for Settings {
             float_bar_information_mode: normalize_float_bar_information_mode(
                 &raw.float_bar_information_mode,
             ),
+            float_bar_selection_mode: normalize_float_bar_selection_mode(
+                &raw.float_bar_selection_mode,
+            ),
+            float_bar_foreground_detection: raw.float_bar_foreground_detection,
             float_bar_contrast: raw
                 .float_bar_contrast
                 .map(|value| normalize_float_bar_contrast(&value)),

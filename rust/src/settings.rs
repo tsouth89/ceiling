@@ -324,6 +324,17 @@ pub struct Settings {
     #[serde(default = "default_float_bar_information_mode")]
     pub float_bar_information_mode: String,
 
+    /// Which providers the floating bar shows: "pinned" (the configured list),
+    /// "active" (the focused supported app), or "activePlusCritical" (active
+    /// plus any pinned provider at or above the warning threshold).
+    #[serde(default = "default_float_bar_selection_mode")]
+    pub float_bar_selection_mode: String,
+
+    /// When false, active / active-plus-critical modes keep the pinned list
+    /// and do not read the focused window.
+    #[serde(default = "default_true")]
+    pub float_bar_foreground_detection: bool,
+
     /// Floating-bar contrast mode. `None` means a pre-density settings file;
     /// resolve it through the legacy `float_bar_dark_text` preference so
     /// upgrades preserve their appearance. New installs default to auto.
@@ -400,6 +411,21 @@ fn default_float_bar_density() -> String {
 
 fn default_float_bar_information_mode() -> String {
     "exact".to_string()
+}
+
+fn default_float_bar_selection_mode() -> String {
+    "pinned".to_string()
+}
+
+/// Normalize a floating-bar provider-selection mode. Unknown values fall
+/// back to pinned so an upgrade never silently starts watching the
+/// focused window.
+pub fn normalize_float_bar_selection_mode(value: &str) -> String {
+    match value {
+        "active" => "active".to_string(),
+        "activePlusCritical" => "activePlusCritical".to_string(),
+        _ => "pinned".to_string(),
+    }
 }
 
 /// Clamp the floating-bar opacity to the supported range.
@@ -636,6 +662,8 @@ impl Default for Settings {
             taskbar_widget_open_on_hover: true,
             float_bar_density: default_float_bar_density(),
             float_bar_information_mode: default_float_bar_information_mode(),
+            float_bar_selection_mode: default_float_bar_selection_mode(),
+            float_bar_foreground_detection: true,
             float_bar_contrast: Some("auto".to_string()),
             float_bar_click_through: false,
             float_bar_provider_ids: Vec::new(),

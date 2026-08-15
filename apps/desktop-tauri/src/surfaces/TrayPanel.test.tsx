@@ -148,6 +148,8 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     taskbarWidgetOpenOnHover: true,
     floatBarDensity: "standard",
     floatBarInformationMode: "exact",
+    floatBarSelectionMode: "pinned",
+    floatBarForegroundDetection: true,
     floatBarContrast: "auto",
     floatBarClickThrough: false,
     floatBarProviderIds: [],

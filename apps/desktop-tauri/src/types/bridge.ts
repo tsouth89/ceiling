@@ -48,6 +48,7 @@ export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
 export type FloatBarDensity = "compact" | "standard" | "detailed";
 export type FloatBarInformationMode = "exact" | "calm";
+export type FloatBarSelectionMode = "pinned" | "active" | "activePlusCritical";
 export type FloatBarContrast = "auto" | "light-text" | "dark-text";
 export type ProofProviderId =
   | "codex"
@@ -283,6 +284,10 @@ export interface SettingsSnapshot {
   floatBarDensity: FloatBarDensity;
   /** "exact" (icon + %) or "calm" (pace state + next reset). Separate from density. */
   floatBarInformationMode: FloatBarInformationMode;
+  /** Pinned list, focused app, or focused app plus warning-threshold providers. */
+  floatBarSelectionMode: FloatBarSelectionMode;
+  /** When false, active modes keep the pinned list and do not watch the focused window. */
+  floatBarForegroundDetection: boolean;
   floatBarContrast: FloatBarContrast;
   floatBarClickThrough: boolean;
   /** Empty array = show all enabled providers. */
@@ -358,6 +363,8 @@ export interface SettingsUpdate {
   taskbarWidgetOpenOnHover?: boolean;
   floatBarDensity?: FloatBarDensity;
   floatBarInformationMode?: FloatBarInformationMode;
+  floatBarSelectionMode?: FloatBarSelectionMode;
+  floatBarForegroundDetection?: boolean;
   floatBarContrast?: FloatBarContrast;
   floatBarClickThrough?: boolean;
   floatBarProviderIds?: string[];
@@ -366,6 +373,13 @@ export interface SettingsUpdate {
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
   floatBarShowCost?: boolean;
+}
+
+export interface ForegroundProviderSnapshot {
+  providerId: string | null;
+  lastActiveProviderId: string | null;
+  exe: string | null;
+  title: string | null;
 }
 
 export interface UsageThresholdOverride {
