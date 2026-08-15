@@ -7,6 +7,7 @@ import { providerSupportsChartData } from "../lib/providerCharts";
 import { ChartsSection } from "./settings/providers/sections/charts/ChartsSection";
 import ProviderComparison from "./ProviderComparison";
 import { TotalApiValueCard } from "../components/TotalApiValueCard";
+import { ActivityHeatmapCard } from "../components/ActivityHeatmapCard";
 import {
   accountIdentityLabel,
   hasMultipleAccounts,
@@ -108,6 +109,7 @@ export default function ChartsPanel({
     return (
       <div className="charts-panel">
         <TotalApiValueCard />
+        <ActivityHeatmapCard />
         <div className="charts-empty">
           <strong>{t("ChartsNoChartsTitle")}</strong>
           {t("ChartsNoChartsBody")}
@@ -123,6 +125,7 @@ export default function ChartsPanel({
   return (
     <div className="charts-panel">
       <TotalApiValueCard />
+      <ActivityHeatmapCard />
       {tabCount > 1 && (
         <div className="charts-provider-tabs" {...tabListProps} aria-label={t("ChartsProviderTabs")}>
           {comparisonProviders && (
