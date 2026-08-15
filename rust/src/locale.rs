@@ -199,6 +199,8 @@ locale_keys! {
     SpendBudgetWarning,
     SpendBudgetCap,
     SpendBudgetThresholdsHelper,
+    ProviderIncidentBadges,
+    ProviderIncidentBadgesHelper,
 
     // Display settings (Preferences)
     UsageDisplay,

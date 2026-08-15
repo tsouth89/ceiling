@@ -12,6 +12,7 @@ mod foreground;
 mod geometry_store;
 mod powertoys;
 mod proof_harness;
+mod provider_incidents;
 mod quota_run_history;
 mod shell;
 mod shortcut_bridge;
@@ -198,6 +199,7 @@ fn main() {
             commands::get_provider_local_usage_summary,
             commands::get_local_api_value_totals,
             commands::get_cursor_model_activity,
+            commands::get_provider_incidents,
             commands::export_cost_csv,
             commands::reorder_providers,
             commands::set_provider_region,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   PaceSnapshot,
   ProviderChartData,
+  ProviderIncident,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
@@ -66,6 +67,8 @@ interface MenuCardProps {
   /** True when this provider has more than one account. */
   showAccount?: boolean;
   isRefreshing?: boolean;
+  /** Live status-page incident for this provider, when one is being reported. */
+  incident?: ProviderIncident | null;
   onLayoutChange?: () => void;
 }
 
@@ -419,6 +422,7 @@ export default function MenuCard({
   showActivitySection = true,
   showAccount = false,
   isRefreshing = false,
+  incident = null,
   onLayoutChange,
 }: MenuCardProps) {
   const { t } = useLocale();
@@ -588,6 +592,21 @@ export default function MenuCard({
             {!provider.error && email && <span className="menu-card__email">{email}</span>}
           </div>
         </div>
+        {/* Above the error/subtitle branch on purpose. A provider that is
+            mid-outage often fails its fetch too, and the error block replaces
+            the whole meta row — which is precisely when knowing it is an
+            outage rather than a spent cap matters most. */}
+        {incident && (
+          <div
+            className="menu-card__incident"
+            data-severity={incident.severity}
+            role="status"
+          >
+            <span className="menu-card__incident-dot" aria-hidden />
+            <span className="menu-card__incident-text">{incident.description}</span>
+            <span className="menu-card__incident-source">{incident.statusPageUrl}</span>
+          </div>
+        )}
         {provider.error ? (
           <div className="menu-card__error-block">
             <div className="menu-card__error-text">{provider.error}</div>

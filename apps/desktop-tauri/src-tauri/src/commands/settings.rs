@@ -22,6 +22,7 @@ pub struct SettingsUpdate {
     pub spend_budget_period: Option<String>,
     pub spend_budget_warning_usd: Option<f64>,
     pub spend_budget_limit_usd: Option<f64>,
+    pub provider_incident_badges_enabled: Option<bool>,
     pub provider_usage_thresholds:
         Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
     pub predictive_pace_warning_enabled: Option<bool>,
@@ -248,6 +249,9 @@ impl SettingsUpdate {
             settings.spend_budget_warning_usd = settings
                 .spend_budget_warning_usd
                 .min(settings.spend_budget_limit_usd);
+        }
+        if let Some(v) = self.provider_incident_badges_enabled {
+            settings.provider_incident_badges_enabled = v;
         }
         if let Some(values) = self.provider_usage_thresholds.clone() {
             settings.provider_usage_thresholds =

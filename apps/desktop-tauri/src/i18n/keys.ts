@@ -47,6 +47,8 @@ export const ALL_LOCALE_KEYS = [
   "SpendBudgetWarning",
   "SpendBudgetCap",
   "SpendBudgetThresholdsHelper",
+  "ProviderIncidentBadges",
+  "ProviderIncidentBadgesHelper",
   "UsageDisplay",
   "ShowUsageAsUsed",
   "ShowUsageAsUsedHelper",

@@ -260,4 +260,25 @@ describe("GeneralTab", () => {
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetWarning" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetCap" })).toBeDisabled();
   });
+
+  it("offers incident badges independently of notifications and budgets", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, showNotifications: false }}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    // A badge is drawn in the UI, not raised as a toast, so switching
+    // notifications off must not lock it.
+    const toggle = screen.getByRole("checkbox", { name: "ProviderIncidentBadges" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).not.toBeDisabled();
+
+    fireEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith({ providerIncidentBadgesEnabled: true });
+  });
 });

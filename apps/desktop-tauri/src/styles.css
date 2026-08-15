@@ -4808,6 +4808,55 @@ html:has(.menu-surface--tray) {
 
 /* Error block — simple block layout that respects parent width for text wrapping.
    Avoids the flex sizing issues that cause text to overflow the panel. */
+/* ── Provider incident banner (SBS-280) ─────────────────────────────────
+   Status severity, not a chart series, so it wears the reserved status
+   colors and always ships a dot plus the status page's own words. Color
+   alone never carries the meaning. */
+.menu-card__incident {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 4px 0 2px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--incident-color) 14%, transparent);
+  border-color: color-mix(in srgb, var(--incident-color) 40%, transparent);
+}
+.menu-card__incident[data-severity="degraded"] {
+  --incident-color: var(--status-warning-text, #fbbf24);
+}
+.menu-card__incident[data-severity="partial"] {
+  --incident-color: var(--provider-status-stale, #f59e0b);
+}
+.menu-card__incident[data-severity="major"] {
+  --incident-color: var(--state-error, #f87171);
+}
+.menu-card__incident-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--incident-color);
+  transform: translateY(-1px);
+}
+.menu-card__incident-text {
+  color: var(--text-primary);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-card__incident-source {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
 .menu-card__error-block {
   display: block;
   position: relative;

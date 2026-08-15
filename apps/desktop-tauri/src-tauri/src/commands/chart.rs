@@ -1118,6 +1118,15 @@ pub struct CursorActivitySnapshotBridge {
     pub rows: Vec<CursorModelActivityRow>,
 }
 
+/// Providers currently reporting an incident on their public status page
+/// (SBS-280). Empty while the feature is off, and empty for every provider
+/// that is operational or has no readable status page.
+#[tauri::command]
+pub async fn get_provider_incidents()
+-> std::collections::HashMap<String, crate::provider_incidents::ProviderIncident> {
+    crate::provider_incidents::current_incidents(&codexbar::settings::Settings::load()).await
+}
+
 #[tauri::command]
 pub async fn get_cursor_model_activity() -> CursorActivitySnapshotBridge {
     tauri::async_runtime::spawn_blocking(|| {

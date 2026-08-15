@@ -17,6 +17,7 @@ import type {
   ProviderLocalUsageSummary,
   LocalApiValueProvider,
   CursorActivitySnapshot,
+  ProviderIncident,
   ProviderSummary,
   ProviderUsageSnapshot,
   AccountProbeBridge,
@@ -289,6 +290,11 @@ export function getLocalApiValueTotals(options?: {
     });
   }
   return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
+}
+
+/** Providers currently reporting a status-page incident, keyed by provider id. */
+export function getProviderIncidents(): Promise<Record<string, ProviderIncident>> {
+  return invoke<Record<string, ProviderIncident>>("get_provider_incidents");
 }
 
 export function getCursorModelActivity(): Promise<CursorActivitySnapshot> {

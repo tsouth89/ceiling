@@ -25,6 +25,7 @@ export default function GeneralTab({
   const spendBudgetPeriod = settings.spendBudgetPeriod ?? "daily";
   const spendBudgetWarningUsd = settings.spendBudgetWarningUsd ?? 5;
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
+  const providerIncidentBadgesEnabled = settings.providerIncidentBadgesEnabled ?? false;
   const selectedLanguage: Language =
     settings.uiLanguage === "chinese" ? "chinese" : "english";
   const [playingSound, setPlayingSound] = useState(false);
@@ -250,6 +251,20 @@ export default function GeneralTab({
               onChange={(v) => set({
                 spendBudgetWarningUsd: Math.min(v, spendBudgetLimitUsd),
               })}
+            />
+          </Field>
+          {/* Not gated on the budget above: an outage badge is useful to
+              anyone, including people who never set a cap. */}
+          <Field
+            label={t("ProviderIncidentBadges")}
+            description={t("ProviderIncidentBadgesHelper")}
+            leading
+          >
+            <Toggle
+              checked={providerIncidentBadgesEnabled}
+              ariaLabel={t("ProviderIncidentBadges")}
+              disabled={saving}
+              onChange={(v) => set({ providerIncidentBadgesEnabled: v })}
             />
           </Field>
           <Field label={t("SpendBudgetCap")}>
