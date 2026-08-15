@@ -14,6 +14,7 @@ import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { useLocale } from "../hooks/useLocale";
 import { useProviders } from "../hooks/useProviders";
 import {
+  getForegroundProvider,
   getSettingsSnapshot,
   openSettingsWindow,
   refreshProvidersIfStale,
@@ -23,6 +24,8 @@ import { getProviderIcon } from "../components/providers/providerIcons";
 import type {
   BootstrapState,
   CapacityEventPayload,
+  ForegroundProviderSnapshot,
+  FloatBarSelectionMode,
   ProviderUsageSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
@@ -33,6 +36,7 @@ import {
   setFloatBarClickThrough,
 } from "./api";
 import FloatBarMenu from "./FloatBarMenu";
+import { selectVisibleFloatBarProviders } from "./selection";
 import {
   capacityFreshness,
   constrainingWindow,
@@ -461,6 +465,9 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   // with the Settings tab. Listen for the Rust-side config-changed event
   // and re-pull the snapshot when fired.
   const [settings, setSettings] = useState<SettingsSnapshot>(state.settings);
+  const [lastActiveProviderId, setLastActiveProviderId] = useState<
+    string | null
+  >(null);
   const [capacityEvents, setCapacityEvents] = useState<
     Record<string, CapacityEventPayload["kind"]>
   >({});
@@ -487,6 +494,24 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       void unlisten.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    const mode = settings.floatBarSelectionMode ?? "pinned";
+    if (mode === "pinned" || !settings.floatBarForegroundDetection) {
+      return;
+    }
+    const apply = (snapshot: ForegroundProviderSnapshot) => {
+      setLastActiveProviderId(snapshot.lastActiveProviderId);
+    };
+    void getForegroundProvider().then(apply).catch(() => {});
+    const unlisten = listen<ForegroundProviderSnapshot>(
+      "foreground-provider-changed",
+      ({ payload }) => apply(payload),
+    );
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [settings.floatBarSelectionMode, settings.floatBarForegroundDetection]);
 
   useEffect(() => {
     const unlisten = listen<CapacityEventPayload>("capacity-event", ({ payload }) => {
@@ -531,6 +556,11 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const darkText =
     contrast === "dark-text" || (contrast === "auto" && systemPrefersLight);
   const filterIds = settings.floatBarProviderIds;
+  const selectionMode: FloatBarSelectionMode =
+    settings.floatBarSelectionMode === "active" ||
+    settings.floatBarSelectionMode === "activePlusCritical"
+      ? settings.floatBarSelectionMode
+      : "pinned";
   const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
   const showResetInline = settings.floatBarShowResetInline || density === "detailed";
   const pinnedAccounts = settings.taskbarAccountByProvider ?? {};
@@ -567,20 +597,39 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
         return compareAccountIds(a.accountId, b.accountId);
       })[0];
     };
-    if (filterIds && filterIds.length > 0) {
-      return filterIds
-        .map((id) => pick(id))
-        .filter((p): p is (typeof eligible)[number] => p !== undefined);
-    }
-    return [...byProvider.keys()]
+    const pinned =
+      filterIds && filterIds.length > 0
+        ? filterIds
+            .map((id) => pick(id))
+            .filter((p): p is (typeof eligible)[number] => p !== undefined)
+        : [...byProvider.keys()]
+            .map((id) => pick(id))
+            .filter((p): p is (typeof eligible)[number] => p !== undefined)
+            .sort(
+              (a, b) =>
+                floatBarWindow(b).window.usedPercent -
+                floatBarWindow(a).window.usedPercent,
+            );
+    const allEligible = [...byProvider.keys()]
       .map((id) => pick(id))
-      .filter((p): p is (typeof eligible)[number] => p !== undefined)
-      .sort(
-        (a, b) =>
-          floatBarWindow(b).window.usedPercent -
-          floatBarWindow(a).window.usedPercent,
-      );
-  }, [providers, settings.enabledProviders, filterIds, pinnedAccounts]);
+      .filter((p): p is (typeof eligible)[number] => p !== undefined);
+    return selectVisibleFloatBarProviders(pinned, allEligible, {
+      mode: selectionMode,
+      detectionEnabled: settings.floatBarForegroundDetection,
+      lastActiveProviderId,
+      usedPercent: (row) => floatBarWindow(row).window.usedPercent,
+      highUsageThreshold: settings.highUsageThreshold,
+    });
+  }, [
+    providers,
+    settings.enabledProviders,
+    filterIds,
+    pinnedAccounts,
+    selectionMode,
+    settings.floatBarForegroundDetection,
+    lastActiveProviderId,
+    settings.highUsageThreshold,
+  ]);
 
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);

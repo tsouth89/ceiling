@@ -49,6 +49,8 @@ const settings = {
   taskbarWidgetOpenOnHover: true,
   floatBarDensity: "standard",
   floatBarInformationMode: "exact",
+  floatBarSelectionMode: "pinned",
+  floatBarForegroundDetection: true,
   floatBarContrast: "auto",
   floatBarShowCost: false,
   floatBarShowResetInline: false,
@@ -154,6 +156,34 @@ describe("FloatBar settings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "StripUseAutomaticOrder" }));
     expect(set).toHaveBeenCalledWith({ floatBarProviderIds: [] });
+  });
+
+  it("persists floating-bar provider selection mode", () => {
+    const set = vi.fn();
+    render(
+      <FloatBarSettingsSection settings={settings} saving={false} set={set} />,
+    );
+
+    fireEvent.click(screen.getByText("SelectionModePinned"));
+    fireEvent.click(screen.getByRole("option", { name: "SelectionModeActive" }));
+    expect(set).toHaveBeenCalledWith({ floatBarSelectionMode: "active" });
+    expect(
+      screen.getByRole("checkbox", { name: "WatchFocusedApp" }),
+    ).toBeDisabled();
+  });
+
+  it("lets the user turn off foreground detection in an active mode", () => {
+    const set = vi.fn();
+    render(
+      <FloatBarSettingsSection
+        settings={{ ...settings, floatBarSelectionMode: "active" }}
+        saving={false}
+        set={set}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "WatchFocusedApp" }));
+    expect(set).toHaveBeenCalledWith({ floatBarForegroundDetection: false });
   });
 
   it("persists the all-monitors preference independently", () => {

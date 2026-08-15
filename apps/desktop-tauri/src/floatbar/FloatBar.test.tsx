@@ -8,6 +8,7 @@ const tauriMocks = vi.hoisted(() => ({
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
   getSettingsSnapshot: vi.fn(),
+  getForegroundProvider: vi.fn(),
   updateSettings: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
@@ -137,6 +138,8 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     taskbarWidgetOpenOnHover: true,
     floatBarDensity: "standard",
     floatBarInformationMode: "exact",
+    floatBarSelectionMode: "pinned",
+    floatBarForegroundDetection: true,
     floatBarContrast: "light-text",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
@@ -176,6 +179,10 @@ describe("FloatBar", () => {
     eventMocks.listeners.clear();
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
+    tauriMocks.getForegroundProvider.mockResolvedValue({
+      providerId: null,
+      lastActiveProviderId: null,
+    });
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue(null);
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
@@ -488,6 +495,29 @@ describe("FloatBar", () => {
     const { container } = renderFloatBar(bootstrap());
     await waitFor(() => {
       expect(container.querySelector(".floatbar__pill--crit")).not.toBeNull();
+    });
+  });
+
+  it("active mode shows only the last focused provider", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 30),
+      snapshot("codex", "Codex", 50),
+    ]);
+    tauriMocks.getForegroundProvider.mockResolvedValue({
+      providerId: "claude",
+      lastActiveProviderId: "claude",
+    });
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarSelectionMode: "active" }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarSelectionMode: "active" }),
+    );
+    await waitFor(() => {
+      const pills = container.querySelectorAll(".floatbar__pill");
+      expect(pills.length).toBe(1);
+      expect(pills[0].getAttribute("title")).toMatch(/Claude/);
     });
   });
 

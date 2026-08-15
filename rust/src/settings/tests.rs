@@ -9,6 +9,8 @@ fn test_settings_default() {
     assert!(settings.show_notifications);
     assert!(settings.capacity_event_notifications_enabled);
     assert_eq!(settings.high_usage_threshold, 85.0);
+    assert_eq!(settings.float_bar_selection_mode, "pinned");
+    assert!(settings.float_bar_foreground_detection);
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert_eq!(
         settings.notification_policy_version,
@@ -284,6 +286,15 @@ fn float_bar_density_and_contrast_normalization_reject_unknown_values() {
     assert_eq!(normalize_float_bar_information_mode("Calm"), "exact");
     assert_eq!(normalize_float_bar_information_mode("minimal"), "exact");
 
+    assert_eq!(normalize_float_bar_selection_mode("pinned"), "pinned");
+    assert_eq!(normalize_float_bar_selection_mode("active"), "active");
+    assert_eq!(
+        normalize_float_bar_selection_mode("activePlusCritical"),
+        "activePlusCritical"
+    );
+    assert_eq!(normalize_float_bar_selection_mode(""), "pinned");
+    assert_eq!(normalize_float_bar_selection_mode("Active"), "pinned");
+
     assert_eq!(normalize_float_bar_contrast("auto"), "auto");
     assert_eq!(normalize_float_bar_contrast("light-text"), "light-text");
     assert_eq!(normalize_float_bar_contrast("dark-text"), "dark-text");
@@ -319,6 +330,8 @@ fn float_bar_settings_round_trip_through_raw() {
         taskbar_widget_open_on_hover: false,
         float_bar_density: "compact".to_string(),
         float_bar_information_mode: "calm".to_string(),
+        float_bar_selection_mode: "active".to_string(),
+        float_bar_foreground_detection: false,
         float_bar_contrast: Some("dark-text".to_string()),
         float_bar_click_through: true,
         float_bar_provider_ids: vec!["claude".into(), "codex".into()],
@@ -341,6 +354,8 @@ fn float_bar_settings_round_trip_through_raw() {
     assert!(!back.taskbar_widget_open_on_hover);
     assert_eq!(back.float_bar_density, "compact");
     assert_eq!(back.float_bar_information_mode, "calm");
+    assert_eq!(back.float_bar_selection_mode, "active");
+    assert!(!back.float_bar_foreground_detection);
     assert_eq!(resolved_float_bar_contrast(&back), "dark-text");
     assert!(back.float_bar_click_through);
     assert_eq!(back.float_bar_provider_ids, vec!["claude", "codex"]);

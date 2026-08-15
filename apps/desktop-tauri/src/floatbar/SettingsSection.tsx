@@ -11,6 +11,7 @@ import type {
   FloatBarContrast,
   FloatBarDensity,
   FloatBarInformationMode,
+  FloatBarSelectionMode,
   ProviderAccountsBridge,
   SettingsSnapshot,
   SettingsUpdate,
@@ -497,6 +498,42 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
               onChange={(v) =>
                 set({ floatBarInformationMode: v as FloatBarInformationMode })
               }
+            />
+          </Field>
+          <Field
+            label={t("FloatBarProvidersMode")}
+            description={t("FloatBarProvidersModeHelp")}
+          >
+            <Select
+              value={settings.floatBarSelectionMode ?? "pinned"}
+              disabled={saving || !settings.floatBarEnabled}
+              options={[
+                { value: "pinned", label: t("SelectionModePinned") },
+                { value: "active", label: t("SelectionModeActive") },
+                {
+                  value: "activePlusCritical",
+                  label: t("SelectionModeActivePlusCritical"),
+                },
+              ]}
+              onChange={(v) =>
+                set({ floatBarSelectionMode: v as FloatBarSelectionMode })
+              }
+            />
+          </Field>
+          <Field
+            label={t("WatchFocusedApp")}
+            description={t("WatchFocusedAppHelp")}
+            leading
+          >
+            <Toggle
+              checked={settings.floatBarForegroundDetection}
+              ariaLabel={t("WatchFocusedApp")}
+              disabled={
+                saving ||
+                !settings.floatBarEnabled ||
+                (settings.floatBarSelectionMode ?? "pinned") === "pinned"
+              }
+              onChange={(v) => set({ floatBarForegroundDetection: v })}
             />
           </Field>
           <>

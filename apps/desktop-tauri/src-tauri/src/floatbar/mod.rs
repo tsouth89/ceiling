@@ -32,6 +32,7 @@ pub fn install(app: &tauri::AppHandle) {
         );
     }
     window::install_z_order_guard(app.clone());
+    crate::foreground::apply_watch(app, &persisted);
 }
 
 /// Handle a `WindowEvent` targeting the floatbar window. Returns `true`
@@ -111,6 +112,8 @@ pub struct SettingsPatch {
     pub open_on_hover: Option<bool>,
     pub density: Option<String>,
     pub information_mode: Option<String>,
+    pub selection_mode: Option<String>,
+    pub foreground_detection: Option<bool>,
     pub contrast: Option<String>,
     pub click_through: Option<bool>,
     pub provider_ids: Option<Vec<String>>,
@@ -132,6 +135,8 @@ impl SettingsPatch {
             && self.open_on_hover.is_none()
             && self.density.is_none()
             && self.information_mode.is_none()
+            && self.selection_mode.is_none()
+            && self.foreground_detection.is_none()
             && self.contrast.is_none()
             && self.click_through.is_none()
             && self.provider_ids.is_none()
@@ -174,6 +179,13 @@ impl SettingsPatch {
         if let Some(v) = &self.information_mode {
             settings.float_bar_information_mode =
                 codexbar::settings::normalize_float_bar_information_mode(v);
+        }
+        if let Some(v) = &self.selection_mode {
+            settings.float_bar_selection_mode =
+                codexbar::settings::normalize_float_bar_selection_mode(v);
+        }
+        if let Some(v) = self.foreground_detection {
+            settings.float_bar_foreground_detection = v;
         }
         if let Some(v) = &self.contrast {
             settings.float_bar_contrast = Some(codexbar::settings::normalize_float_bar_contrast(v));
@@ -228,6 +240,7 @@ pub fn after_settings_saved(
         if let Err(error) = apply_state(app, settings) {
             tracing::warn!(%error, "Could not apply floating bar state");
         }
+        crate::foreground::apply_watch(app, settings);
         crate::taskbar_widget::apply_state(app, settings);
     }
 }
