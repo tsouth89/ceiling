@@ -143,12 +143,16 @@ describe("buildWeekHourGrid", () => {
 describe("selectProviders", () => {
   const hours = [point({ providerId: "codex" }), point({ providerId: "claude" })];
 
-  it("returns everything when nothing is selected", () => {
-    expect(selectProviders(hours, [])).toHaveLength(2);
+  it("filters to the visible providers", () => {
+    expect(selectProviders(hours, ["claude"]).map((row) => row.providerId)).toEqual(["claude"]);
+    expect(selectProviders(hours, ["codex", "claude"])).toHaveLength(2);
   });
 
-  it("filters to the selected providers", () => {
-    expect(selectProviders(hours, ["claude"]).map((row) => row.providerId)).toEqual(["claude"]);
+  // Turning every chip off must empty the grid. Treating an empty list as
+  // "no filter" showed every provider instead, which reads as the filter
+  // being broken.
+  it("shows nothing when no provider is visible", () => {
+    expect(selectProviders(hours, [])).toEqual([]);
   });
 });
 

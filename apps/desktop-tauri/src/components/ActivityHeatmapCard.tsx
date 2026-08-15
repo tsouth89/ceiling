@@ -145,6 +145,9 @@ export function ActivityHeatmapCard() {
   }
 
   const hasActivity = rows.length > 0;
+  // An empty grid because every chip is off is a different thing from an empty
+  // grid because the machine was idle, and saying the wrong one reads as a bug.
+  const allProvidersHidden = providerIds.length > 0 && visibleProviders.length === 0;
 
   return (
     <section className="activity-card" aria-label="Activity heatmap">
@@ -203,7 +206,9 @@ export function ActivityHeatmapCard() {
       <div className="activity-card__plots" ref={hostRef}>
         {!hasActivity && (
           <p className="activity-card__status" role="status">
-            No local activity in this window yet.
+            {allProvidersHidden
+              ? "Every provider is hidden. Turn one back on above."
+              : "No local activity in this window yet."}
           </p>
         )}
 

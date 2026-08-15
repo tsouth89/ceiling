@@ -93,12 +93,17 @@ function addTotals(target: Map<string, CellTotals>, key: string, value: number, 
   target.set(key, { value: current.value + value, calls: current.calls + calls });
 }
 
-/** Rows for the selected providers; an empty selection means every provider. */
+/**
+ * Rows for the visible providers.
+ *
+ * An empty list means nothing is visible, not everything. The caller passes the
+ * true visible set, so treating empty as "no filter" would make turning every
+ * provider chip off show every provider instead of an empty grid.
+ */
 export function selectProviders(
   hours: ActivityHourPoint[],
   providerIds: string[],
 ): ActivityHourPoint[] {
-  if (providerIds.length === 0) return hours;
   const wanted = new Set(providerIds);
   return hours.filter((point) => wanted.has(point.providerId));
 }
