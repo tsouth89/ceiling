@@ -175,6 +175,18 @@
   --chart-tooltip-border: rgba(255, 255, 255, 0.12);
   --chart-tooltip-text: #f5f5f7;
 
+  /* Activity heatmap ramp (SBS-277). Sequential = one hue (the Ceiling cyan),
+     stepped by lightness, never a rainbow. Each mode gets its own steps rather
+     than a flipped copy: on a dark surface "more" is brighter, on a light one
+     "more" is darker. Both ramps clear monotone-lightness, adjacent-step, and
+     2:1 light-end contrast against their own card surface — re-validate before
+     changing any step. */
+  --heatmap-0: rgba(255, 255, 255, 0.055);
+  --heatmap-1: #1d6a7c;
+  --heatmap-2: #2691a8;
+  --heatmap-3: #35b8d1;
+  --heatmap-4: #6fdcef;
+
   /* Tray popover — Windows mica/glass approximation (CSS backdrop-filter). */
   --menu-popover-bg: var(--ceiling-glass-bg);
   --menu-popover-divider: rgba(255, 255, 255, 0.10);
@@ -332,6 +344,13 @@
   --chart-tooltip-bg: rgba(255, 255, 255, 0.96);
   --chart-tooltip-border: rgba(15, 23, 42, 0.10);
   --chart-tooltip-text: #0f172a;
+
+  /* Light-mode heatmap steps: same hue, darkening with intensity. */
+  --heatmap-0: rgba(15, 23, 42, 0.055);
+  --heatmap-1: #57aec2;
+  --heatmap-2: #2b8ba3;
+  --heatmap-3: #16697e;
+  --heatmap-4: #0a4a5a;
 
   --menu-popover-bg: var(--ceiling-glass-bg);
   --menu-popover-divider: rgba(15, 23, 42, 0.08);
@@ -8773,6 +8792,232 @@ body:has(.dashboard-shell) #root {
     justify-content: center;
   }
 }
+
+/* ── Activity heatmap (SBS-277) ─────────────────────────────────────────── */
+.activity-card {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 75%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 2.5%, transparent);
+}
+.activity-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.activity-card__header > :first-child {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.activity-card__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.activity-card__subtitle {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.activity-card__switch {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 8px;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.activity-card__switch-btn {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.activity-card__switch-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  color: var(--text-primary);
+}
+.activity-card__providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.activity-card__provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--ceiling-glass-border) 70%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.activity-card__provider-chip[data-active="true"] {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--text-primary);
+}
+/* A chip that is off must not read as "this provider has no data", so drop the
+   dot's saturation rather than hiding the chip. */
+.activity-card__provider-chip[data-active="false"] .activity-card__provider-dot {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+.activity-card__provider-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.activity-card__plots {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.activity-card__section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.activity-card__section-title {
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.activity-card__section-note {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.activity-card__cell {
+  border-radius: 2px;
+  background: var(--heatmap-0);
+}
+/* The 2px grid gap between cells is the separator: without it, neighbouring
+   steps merge into one blob at the top of the ramp, where they are closest. */
+.activity-card__cell[data-level="1"] {
+  background: var(--heatmap-1);
+}
+.activity-card__cell[data-level="2"] {
+  background: var(--heatmap-2);
+}
+.activity-card__cell[data-level="3"] {
+  background: var(--heatmap-3);
+}
+.activity-card__cell[data-level="4"] {
+  background: var(--heatmap-4);
+}
+.activity-card__days {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+}
+.activity-card__cell--day {
+  height: 26px;
+}
+.activity-card__days-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+.activity-card__grid-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* Hour ticks sit above the 24 hour columns, offset by the weekday gutter plus
+   the one grid gap after it, so a tick lands on the column it names. */
+.activity-card__hour-axis {
+  display: grid;
+  /* Same column gap as the data rows, or the ticks drift off their columns as
+     the card widens. */
+  grid-template-columns: repeat(24, 1fr);
+  gap: 2px;
+  margin-left: calc(26px + 2px);
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+.activity-card__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.activity-card__grid-row {
+  display: grid;
+  grid-template-columns: 26px repeat(24, 1fr);
+  gap: 2px;
+  align-items: center;
+}
+.activity-card__weekday {
+  color: var(--text-muted);
+  font-size: 9.5px;
+  line-height: 1;
+}
+.activity-card__cell--hour {
+  height: 13px;
+}
+.activity-card__cell:hover {
+  outline: 1px solid var(--text-primary);
+  outline-offset: 0;
+  cursor: crosshair;
+}
+.activity-card__tooltip {
+  /* The grid rows are short, so anchor the tooltip to the pointer rather than
+     letting the default -100% offset push it off the top of the card. */
+  transform: translate(-50%, -130%);
+}
+.activity-card__tooltip[data-align="start"] {
+  transform: translate(-8%, -130%);
+}
+.activity-card__tooltip[data-align="end"] {
+  transform: translate(-92%, -130%);
+}
+.activity-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+}
+.activity-card__legend-swatches {
+  display: inline-flex;
+  gap: 2px;
+}
+.activity-card__legend-swatches .activity-card__cell {
+  width: 11px;
+  height: 11px;
+}
+.activity-card__footer-note {
+  margin-left: auto;
+  color: var(--text-muted);
+  text-align: right;
+}
+.activity-card__status {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .quota-history {
   display: grid;
   gap: 12px;
