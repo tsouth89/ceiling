@@ -112,7 +112,7 @@ describe("AccountsPanel", () => {
       <AccountsPanel providers={[provider()]} hideEmail={false} onManage={onManage} />,
     );
     fireEvent.click(container.querySelector(".account-card") as HTMLElement);
-    fireEvent.click(getByText("Add or manage providers"));
+    fireEvent.click(getByText("AccountsGlanceAddOrManage"));
     expect(onManage).toHaveBeenCalledTimes(2);
   });
 
@@ -121,8 +121,8 @@ describe("AccountsPanel", () => {
     const { getByText } = render(
       <AccountsPanel providers={[]} hideEmail={false} onManage={onManage} />,
     );
-    expect(getByText("No accounts yet")).toBeTruthy();
-    fireEvent.click(getByText("Manage providers"));
+    expect(getByText("AccountsGlanceEmptyTitle")).toBeTruthy();
+    fireEvent.click(getByText("AccountsGlanceManage"));
     expect(onManage).toHaveBeenCalledTimes(1);
   });
 });

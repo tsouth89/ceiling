@@ -1,4 +1,5 @@
 import type { MouseEvent, ReactNode } from "react";
+import { useLocale } from "../hooks/useLocale";
 
 /**
  * Right-click action row for the floating bar. The floatbar window auto-sizes
@@ -41,6 +42,7 @@ export default function FloatBarMenu({
   onOpenSettings: () => void;
   onHide: () => void;
 }) {
+  const { t } = useLocale();
   // Stop mousedown from reaching the bar's drag handler / native drag region so
   // clicking an action doesn't start a window drag instead.
   const stop = (event: MouseEvent) => event.stopPropagation();
@@ -49,7 +51,7 @@ export default function FloatBarMenu({
     <div
       className="floatbar__menu"
       role="menu"
-      aria-label="Floating bar actions"
+      aria-label={t("FloatBarActions")}
       onMouseDown={stop}
     >
       <button
@@ -57,7 +59,7 @@ export default function FloatBarMenu({
         role="menuitemcheckbox"
         aria-checked={locked}
         className={`floatbar__menu-item${locked ? " floatbar__menu-item--active" : ""}`}
-        title={locked ? "Unlock — allow dragging" : "Lock in place"}
+        title={locked ? t("FloatBarUnlockTitle") : t("FloatBarLockTitle")}
         onMouseDown={stop}
         onClick={onToggleLock}
       >
@@ -69,7 +71,7 @@ export default function FloatBarMenu({
             <path d="M8 11V7a4 4 0 0 1 7.8-1.2" />
           )}
         </MenuIcon>
-        <span>{locked ? "Unlock" : "Lock"}</span>
+        <span>{locked ? t("FloatBarUnlock") : t("FloatBarLock")}</span>
       </button>
 
       <button
@@ -77,21 +79,21 @@ export default function FloatBarMenu({
         role="menuitemcheckbox"
         aria-checked={clickThrough}
         className={`floatbar__menu-item${clickThrough ? " floatbar__menu-item--active" : ""}`}
-        title="Click-through — let clicks pass to the desktop (turn off in Settings)"
+        title={t("FloatBarClickThroughTitle")}
         onMouseDown={stop}
         onClick={onToggleClickThrough}
       >
         <MenuIcon>
           <path d="M5 3l5.5 15 2.2-5.8L18 10z" />
         </MenuIcon>
-        <span>Click-through</span>
+        <span>{t("FloatBarClickThroughMenu")}</span>
       </button>
 
       <button
         type="button"
         role="menuitem"
         className="floatbar__menu-item"
-        title="Open Ceiling settings"
+        title={t("FloatBarOpenSettingsTitle")}
         onMouseDown={stop}
         onClick={onOpenSettings}
       >
@@ -99,14 +101,14 @@ export default function FloatBarMenu({
           <circle cx="12" cy="12" r="3" />
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M16.9 16.9l2.1 2.1M19.1 4.9l-2.1 2.1M7 16.9l-2.1 2.1" />
         </MenuIcon>
-        <span>Settings</span>
+        <span>{t("FloatBarOpenSettings")}</span>
       </button>
 
       <button
         type="button"
         role="menuitem"
         className="floatbar__menu-item"
-        title="Hide the floating bar (re-enable it in Settings)"
+        title={t("FloatBarHideTitle")}
         onMouseDown={stop}
         onClick={onHide}
       >
@@ -114,7 +116,7 @@ export default function FloatBarMenu({
           <path d="M6 9l6 6 6-6" />
           <path d="M4 20h16" />
         </MenuIcon>
-        <span>Hide</span>
+        <span>{t("FloatBarHide")}</span>
       </button>
     </div>
   );

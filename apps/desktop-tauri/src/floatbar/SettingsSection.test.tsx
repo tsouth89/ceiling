@@ -4,7 +4,23 @@ import type { SettingsSnapshot, TaskbarWidgetStatus } from "../types/bridge";
 import FloatBarSettingsSection from "./SettingsSection";
 
 vi.mock("../hooks/useLocale", () => ({
-  useLocale: () => ({ t: (key: string) => key }),
+  useLocale: () => ({
+    t: (key: string) =>
+      (
+        {
+          TaskbarWidgetShownOnOne: "Shown on 1 taskbar.",
+          TaskbarWidgetShownOnMany: "Shown on {} taskbars.",
+          TaskbarWidgetNoFit: "Hidden: no free space on the taskbar.",
+          TaskbarWidgetWaitingLandmarks:
+            "Waiting for taskbar landmarks (Start button not found). A taskbar mod may be interfering.",
+          TaskbarWidgetNoProviders: "No enabled providers to show.",
+          StripShowProvider: "Show {} on taskbar strip",
+          StripMoveUp: "Move {} up",
+          StripMoveDown: "Move {} down",
+          StripTaskbarAccount: "Taskbar account for {}",
+        } as Record<string, string>
+      )[key] ?? key,
+  }),
 }));
 
 const getDirectoryAccounts = vi.fn();
@@ -68,14 +84,14 @@ describe("FloatBar settings", () => {
       />,
     );
 
-    expect(screen.getByText("Taskbar Usage")).toBeInTheDocument();
-    expect(screen.getByText("Show Taskbar Usage")).toBeInTheDocument();
-    expect(screen.getByText("Floating Bar")).toBeInTheDocument();
-    expect(screen.getByText("Show Floating Bar")).toBeInTheDocument();
-    expect(screen.getByText("Open on Hover")).toBeInTheDocument();
-    expect(screen.getByText("Show on All Monitors")).toBeInTheDocument();
-    expect(screen.getByText("Orientation")).toBeInTheDocument();
-    expect(screen.getByText("Density")).toBeInTheDocument();
+    expect(screen.getByText("TaskbarUsageTitle")).toBeInTheDocument();
+    expect(screen.getByText("ShowTaskbarUsage")).toBeInTheDocument();
+    expect(screen.getByText("FloatingBarTitle")).toBeInTheDocument();
+    expect(screen.getByText("ShowFloatingBar")).toBeInTheDocument();
+    expect(screen.getByText("OpenOnHover")).toBeInTheDocument();
+    expect(screen.getByText("ShowOnAllMonitors")).toBeInTheDocument();
+    expect(screen.getByText("FloatBarOrientation")).toBeInTheDocument();
+    expect(screen.getByText("FloatBarDensity")).toBeInTheDocument();
     expect(screen.queryByText("Placement")).not.toBeInTheDocument();
   });
 
@@ -89,7 +105,7 @@ describe("FloatBar settings", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Open on Hover" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "OpenOnHover" }));
     expect(set).toHaveBeenCalledWith({ taskbarWidgetOpenOnHover: false });
   });
 
@@ -99,7 +115,7 @@ describe("FloatBar settings", () => {
       <FloatBarSettingsSection settings={settings} saving={false} set={set} />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Show Taskbar Usage" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "ShowTaskbarUsage" }));
     expect(set).toHaveBeenCalledWith({ taskbarWidgetEnabled: false });
     expect(set).not.toHaveBeenCalledWith(expect.objectContaining({ floatBarEnabled: false }));
   });
@@ -110,7 +126,7 @@ describe("FloatBar settings", () => {
       <FloatBarSettingsSection settings={settings} saving={false} set={set} />,
     );
 
-    expect(screen.getByText("Providers on the strip")).toBeInTheDocument();
+    expect(screen.getByText("StripProvidersTitle")).toBeInTheDocument();
     expect(
       screen.getByRole("checkbox", { name: "Show Grok on taskbar strip" }),
     ).toBeChecked();
@@ -136,7 +152,7 @@ describe("FloatBar settings", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Use automatic order" }));
+    fireEvent.click(screen.getByRole("button", { name: "StripUseAutomaticOrder" }));
     expect(set).toHaveBeenCalledWith({ floatBarProviderIds: [] });
   });
 
@@ -146,7 +162,7 @@ describe("FloatBar settings", () => {
       <FloatBarSettingsSection settings={settings} saving={false} set={set} />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Show on All Monitors" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "ShowOnAllMonitors" }));
     expect(set).toHaveBeenCalledWith({ taskbarWidgetAllMonitors: true });
   });
 

@@ -9,7 +9,15 @@ const tauriMocks = vi.hoisted(() => ({
 
 vi.mock("../lib/tauri", () => tauriMocks);
 vi.mock("../hooks/useLocale", () => ({
-  useLocale: () => ({ t: (key: string) => key }),
+  useLocale: () => ({
+    t: (key: string) =>
+      ({
+        ResetCreditsAvailableOne: "{} reset available",
+        ResetCreditsAvailableMany: "{} resets available",
+        NotCurrentlyEnforced: "Not currently enforced",
+        WindowUnavailable: "Unavailable",
+      }[key] ?? key),
+  }),
 }));
 
 function rate(usedPercent: number): RateWindowSnapshot {

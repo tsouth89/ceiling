@@ -9,6 +9,11 @@ vi.mock("../hooks/useLocale", () => ({
       if (key === "PanelLeftSuffix") return "left";
       if (key === "PanelUsedSuffix") return "used";
       if (key === "PanelAmountOf") return "of";
+      if (key === "ResetCreditsAvailableOne") return "{} reset available";
+      if (key === "ResetCreditsAvailableMany") return "{} resets available";
+      if (key === "FreshnessStale") return "Stale";
+      if (key === "NotCurrentlyEnforced") return "not currently enforced";
+      if (key === "WindowUnavailable") return "unavailable";
       return key;
     },
   }),

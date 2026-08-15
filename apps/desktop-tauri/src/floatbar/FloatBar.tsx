@@ -186,9 +186,10 @@ function ProviderPill({
     resetRelative,
   );
   const inlineReset = resetText ? inlineResetTime(resetText) : null;
+  const { t } = useLocale();
   const iconSize = Math.round(14 * scale);
   const resetIconSize = Math.round(10 * scale);
-  const stateChip = freshnessChipLabel(freshness);
+  const stateChip = freshnessChipLabel(freshness, t);
   const boostTitle = boosts[0]?.title ?? null;
   // Strip always shows reset when depleted; otherwise honor the setting.
   const showReset = !!inlineReset && (showResetInline || exhausted);
@@ -196,7 +197,7 @@ function ProviderPill({
     `${provider.displayName}: ${label} ${displaySuffix}`,
     hero.label,
     boostTitle ? `promo ${boostTitle}` : null,
-    stateChip ? `state ${stateChip}` : null,
+    stateChip,
     resetText,
   ]
     .filter(Boolean)
@@ -238,7 +239,7 @@ function ProviderPill({
         ? `${hero.label}${resetText ? ` ${resetText}` : ""}`
         : null,
       showExact ? `${label} ${displaySuffix}` : null,
-      stateChip ? `state ${stateChip}` : null,
+      stateChip,
     ]
       .filter(Boolean)
       .join(" ");
@@ -329,12 +330,15 @@ function ProviderPill({
   );
 }
 
-function freshnessChipLabel(freshness: CapacityFreshness): string | null {
+function freshnessChipLabel(
+  freshness: CapacityFreshness,
+  t: (key: "FreshnessStale" | "FreshnessError") => string,
+): string | null {
   switch (freshness) {
     case "stale":
-      return "stale";
+      return t("FreshnessStale");
     case "error":
-      return "error";
+      return t("FreshnessError");
     case "live":
       return null;
   }
