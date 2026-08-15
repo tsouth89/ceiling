@@ -97,6 +97,9 @@
   --ceiling-cyan: var(--ceiling-accent);
   --accent-muted: rgba(38, 181, 206, 0.28);
   --focus-ring: rgba(38, 181, 206, 0.5);
+  /* Ink on a selected run. The dark theme's accent is bright, so the ink is
+     dark; the light theme flips it below. */
+  --selection-ink: #0f172a;
   --status-warning-text: #fbbf24;
   --status-success-text: #5eead4;
 
@@ -314,6 +317,8 @@
   --accent: var(--ceiling-accent);
   --ceiling-cyan: var(--ceiling-accent);
   --accent-muted: rgba(26, 155, 181, 0.22);
+  /* The light theme's accent is deep enough to carry white ink. */
+  --selection-ink: #ffffff;
   --focus-ring: rgba(26, 155, 181, 0.45);
   --status-warning-text: #92400e;
   --status-success-text: #0f766e;
@@ -6251,6 +6256,76 @@ html:has(.menu-surface--tray) {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
+}
+
+/* ── Native control theming (SBS-225) ───────────────────────────────────
+   Three things in a form field are drawn by the engine, not by us: the
+   number-input spinner arrows, the text caret, and the selection highlight.
+   They are pinned here rather than left to inherit, so a control keeps
+   following the app theme even when it differs from the Windows theme, and
+   so a future refactor of the root element cannot silently un-theme them. */
+.select,
+.number-input,
+.text-input,
+textarea {
+  /* What the engine paints the spinner arrows from. */
+  color-scheme: dark;
+  caret-color: var(--accent);
+}
+[data-theme="light"] .select,
+[data-theme="light"] .number-input,
+[data-theme="light"] .text-input,
+[data-theme="light"] textarea {
+  color-scheme: light;
+}
+/* Default selection is the engine's blue, which reads as a foreign accent in a
+   cyan UI. Document-wide on purpose: selection should look the same in a form
+   field, in About copy, and in the setup command block.
+
+   A solid accent fill with its own ink, not a translucent wash. A 38% accent
+   over a white field is about 1.7:1 against that field, and reusing
+   --text-primary as the selected colour meant the glyphs did not change at all
+   — selecting `15` in a 52px number field was invisible. What matters here is
+   the contrast of the selection against the *unselected* field, not just of
+   the text against the selection. */
+::selection,
+/* The controls are listed as well as the document rule. Text inside an
+   `<input>` or `<textarea>` lives in a form-control shadow tree, and a bare
+   document `::selection` is not guaranteed to reach it — which would leave the
+   engine blue in the very fields this change is about while About copy went
+   cyan. Naming them costs nothing and removes the doubt. */
+input::selection,
+textarea::selection {
+  /* `background-color`, not the `background` shorthand: only the colour is
+     honoured on a highlight pseudo, and an opaque fill is what keeps the
+     contrast the same on every surface the rule reaches. No `color-mix` here,
+     so there is nothing for an older WebView2 to drop. */
+  background-color: var(--accent);
+  color: var(--selection-ink);
+  /* Blink paints form-control glyphs through `-webkit-text-fill-color`, which
+     wins over `color`. Without this the digits in a number field can keep the
+     unselected fill and sit at ~2.2:1 on the accent. */
+  -webkit-text-fill-color: var(--selection-ink);
+}
+
+/* Windows Contrast Themes. Highlight pseudos are not reliably force-adjusted,
+   so an app that paints its own selection can keep showing cyan-on-slate on a
+   yellow-on-black page. Hand both selection and the caret back to the system. */
+@media (forced-colors: active) {
+  ::selection,
+  input::selection,
+  textarea::selection {
+    background-color: Highlight;
+    color: HighlightText;
+    -webkit-text-fill-color: HighlightText;
+  }
+
+  .select,
+  .number-input,
+  .text-input,
+  textarea {
+    caret-color: CanvasText;
+  }
 }
 
 /* ── Provider sidebar (Preferences › Providers) ───────────────────── */
