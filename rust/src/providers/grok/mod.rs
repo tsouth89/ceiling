@@ -536,30 +536,7 @@ impl GrokCredentials {
         let map = root
             .as_object()
             .ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
-        let mut selected: Option<(String, &Value)> = None;
-        for (scope, entry) in map {
-            let has_key = entry
-                .get("key")
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty());
-            let has_refresh = entry
-                .get("refresh_token")
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty());
-            if !(has_key || has_refresh) {
-                continue;
-            }
-            let prefer = scope.starts_with("https://auth.x.ai::")
-                || selected.is_none()
-                || scope.contains("/sign-in");
-            if prefer {
-                selected = Some((scope.clone(), entry));
-                if scope.starts_with("https://auth.x.ai::") {
-                    break;
-                }
-            }
-        }
-        let (scope, entry) = selected.ok_or(ProviderError::AuthRequired)?;
+        let (scope, entry) = select_auth_scope(map).ok_or(ProviderError::AuthRequired)?;
         let access_token = entry
             .get("key")
             .and_then(Value::as_str)
@@ -633,6 +610,95 @@ impl GrokCredentials {
             None => None,
         }
     }
+}
+
+/// Usable `auth.json` seats. Top-level non-objects (`active`, `future_root`, …)
+/// are not credentials. Object key order is not account identity.
+///
+/// Priority: explicit active marker, then newest parseable `expires_at`, then
+/// lexicographically smaller scope. When nothing is marked active, prefer
+/// `https://auth.x.ai::` seats over leftover `/sign-in` sessions.
+fn select_auth_scope(map: &serde_json::Map<String, Value>) -> Option<(String, &Value)> {
+    let usable: Vec<UsableAuthScope<'_>> = map
+        .iter()
+        .filter_map(|(scope, entry)| usable_auth_scope(scope, entry))
+        .collect();
+    if usable.is_empty() {
+        return None;
+    }
+
+    let named_active: Vec<&str> = ["active", "active_account", "active_scope", "current"]
+        .into_iter()
+        .filter_map(|key| {
+            map.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .collect();
+
+    let active: Vec<&UsableAuthScope<'_>> = usable
+        .iter()
+        .filter(|candidate| {
+            candidate.marked_active || named_active.iter().any(|name| *name == candidate.scope)
+        })
+        .collect();
+
+    let xai: Vec<&UsableAuthScope<'_>> = usable
+        .iter()
+        .filter(|candidate| candidate.scope.starts_with("https://auth.x.ai::"))
+        .collect();
+
+    let pool = if !active.is_empty() {
+        active
+    } else if !xai.is_empty() {
+        xai
+    } else {
+        usable.iter().collect()
+    };
+
+    pool.into_iter()
+        .max_by(|a, b| better_auth_scope(a, b))
+        .map(|best| (best.scope.to_string(), best.entry))
+}
+
+struct UsableAuthScope<'a> {
+    scope: &'a str,
+    entry: &'a Value,
+    expires_at: Option<DateTime<Utc>>,
+    marked_active: bool,
+}
+
+fn usable_auth_scope<'a>(scope: &'a str, entry: &'a Value) -> Option<UsableAuthScope<'a>> {
+    if !entry.is_object() {
+        return None;
+    }
+    let has_key = entry
+        .get("key")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+    let has_refresh = entry
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+    if !(has_key || has_refresh) {
+        return None;
+    }
+    Some(UsableAuthScope {
+        scope,
+        entry,
+        expires_at: entry
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .and_then(parse_expires_at),
+        marked_active: entry.get("active").and_then(Value::as_bool) == Some(true),
+    })
+}
+
+fn better_auth_scope(a: &UsableAuthScope<'_>, b: &UsableAuthScope<'_>) -> std::cmp::Ordering {
+    a.expires_at
+        .cmp(&b.expires_at)
+        .then_with(|| b.scope.cmp(a.scope))
 }
 
 fn apply_refresh_to_auth_json(
@@ -1479,6 +1545,121 @@ mod tests {
         assert_eq!(parsed.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(parsed.login_method().as_deref(), Some("SuperGrok"));
         assert!(!parsed.needs_refresh());
+    }
+
+    #[test]
+    fn selects_xai_scope_with_newest_expires_at_regardless_of_object_order() {
+        let older = r#""https://auth.x.ai::older": {
+            "key": "older-seat",
+            "refresh_token": "older-refresh",
+            "expires_at": "2028-01-01T00:00:00.000Z"
+        }"#;
+        let newer = r#""https://auth.x.ai::newer": {
+            "key": "newer-seat",
+            "refresh_token": "newer-refresh",
+            "expires_at": "2030-06-15T12:00:00.000Z"
+        }"#;
+        for auth in [
+            format!("{{{older},{newer}}}"),
+            format!("{{{newer},{older}}}"),
+        ] {
+            let parsed = GrokCredentials::parse(&auth).unwrap();
+            assert_eq!(parsed.scope, "https://auth.x.ai::newer");
+            assert_eq!(parsed.access_token, "newer-seat");
+            assert_eq!(parsed.refresh_token.as_deref(), Some("newer-refresh"));
+        }
+    }
+
+    #[test]
+    fn selects_lexicographically_smaller_scope_when_expires_at_ties() {
+        let aaa =
+            r#""https://auth.x.ai::aaa": {"key": "aaa-seat", "refresh_token": "aaa-refresh"}"#;
+        let zzz =
+            r#""https://auth.x.ai::zzz": {"key": "zzz-seat", "refresh_token": "zzz-refresh"}"#;
+        let same_exp_aaa = r#""https://auth.x.ai::aaa": {
+            "key": "aaa-seat",
+            "expires_at": "2030-01-01T00:00:00.000Z"
+        }"#;
+        let same_exp_zzz = r#""https://auth.x.ai::zzz": {
+            "key": "zzz-seat",
+            "expires_at": "2030-01-01T00:00:00.000Z"
+        }"#;
+        let unparseable_aaa = r#""https://auth.x.ai::aaa": {
+            "key": "aaa-seat",
+            "expires_at": "not-a-timestamp"
+        }"#;
+        let unparseable_zzz = r#""https://auth.x.ai::zzz": {
+            "key": "zzz-seat",
+            "expires_at": "also-bad"
+        }"#;
+        for auth in [
+            format!("{{{aaa},{zzz}}}"),
+            format!("{{{zzz},{aaa}}}"),
+            format!("{{{same_exp_aaa},{same_exp_zzz}}}"),
+            format!("{{{same_exp_zzz},{same_exp_aaa}}}"),
+            format!("{{{unparseable_aaa},{unparseable_zzz}}}"),
+            format!("{{{unparseable_zzz},{unparseable_aaa}}}"),
+        ] {
+            let parsed = GrokCredentials::parse(&auth).unwrap();
+            assert_eq!(parsed.scope, "https://auth.x.ai::aaa");
+            assert_eq!(parsed.access_token, "aaa-seat");
+        }
+    }
+
+    #[test]
+    fn explicit_active_marker_wins_over_newer_expires_at() {
+        let older_scope = "https://auth.x.ai::older";
+        let newer_scope = "https://auth.x.ai::newer";
+        let seats = format!(
+            r#""{older_scope}": {{
+                "key": "older-seat",
+                "expires_at": "2028-01-01T00:00:00.000Z"
+            }},
+            "{newer_scope}": {{
+                "key": "newer-seat",
+                "expires_at": "2030-06-15T12:00:00.000Z"
+            }}"#
+        );
+        let fixtures = [
+            format!(r#"{{"active": "{older_scope}", {seats}}}"#),
+            format!(r#"{{"active_account": "{older_scope}", {seats}}}"#),
+            format!(r#"{{"active_scope": "{older_scope}", {seats}}}"#),
+            format!(r#"{{"current": "{older_scope}", {seats}}}"#),
+            format!(
+                r#"{{
+                    "{older_scope}": {{
+                        "key": "older-seat",
+                        "expires_at": "2028-01-01T00:00:00.000Z",
+                        "active": true
+                    }},
+                    "{newer_scope}": {{
+                        "key": "newer-seat",
+                        "expires_at": "2030-06-15T12:00:00.000Z"
+                    }}
+                }}"#
+            ),
+        ];
+        for auth in fixtures {
+            let parsed = GrokCredentials::parse(&auth).unwrap();
+            assert_eq!(parsed.scope, older_scope);
+            assert_eq!(parsed.access_token, "older-seat");
+        }
+    }
+
+    #[test]
+    fn parses_sign_in_session_when_no_oidc_scope() {
+        let auth = r#"{
+          "future_root": "keep",
+          "active": "not-a-usable-scope",
+          "https://accounts.x.ai/sign-in": {
+            "key": "session-token",
+            "auth_mode": "session"
+          }
+        }"#;
+        let parsed = GrokCredentials::parse(auth).unwrap();
+        assert_eq!(parsed.scope, "https://accounts.x.ai/sign-in");
+        assert_eq!(parsed.access_token, "session-token");
+        assert_eq!(parsed.login_method().as_deref(), Some("session"));
     }
 
     #[test]
