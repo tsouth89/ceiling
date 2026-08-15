@@ -188,9 +188,13 @@ fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
 /// the most ordinary schedule there is would have silently disabled it. An
 /// all-quiet week still has no positive days and still yields 0, which is the
 /// genuine "nothing to compare against" case.
+/// Baseline days must clear the same floor today does. A leftover five-cent day
+/// beside one real $20 day would otherwise put the median at $10.02, turning an
+/// ordinary $31 day into a 3x "spike" — and that false alarm also marks the day
+/// sent, so the real runaway a few hours later says nothing.
 pub fn spend_baseline_usd(mut daily_usd: Vec<f64>) -> f64 {
     let usable: Vec<f64> = {
-        daily_usd.retain(|value| value.is_finite() && *value > 0.0);
+        daily_usd.retain(|value| value.is_finite() && *value >= SPEND_ANOMALY_FLOOR_USD);
         daily_usd.sort_by(|left, right| left.total_cmp(right));
         daily_usd
     };
@@ -770,7 +774,6 @@ impl NotificationManager {
             return;
         }
 
-        self.spend_anomaly_pending = false;
         let ratio = spend_spike_ratio(today_usd, baseline_usd).unwrap_or_default();
         let body = format!(
             "Today's estimated API value is ${today_usd:.2}, about {ratio:.1}x your recent daily median of ${baseline_usd:.2}. This is an estimate from local Codex and Claude logs, not a bill."
@@ -782,9 +785,14 @@ impl NotificationManager {
         // alert on a toast nobody saw — on exactly the day a runaway is also
         // tripping the usage threshold, which is the case this exists for.
         if self.emit_toast("Spend running above normal", &body) {
+            self.spend_anomaly_pending = false;
             self.spend_anomaly_sent = true;
             play_alert(AlertSound::Warning, settings);
         }
+        // `pending` is deliberately left set when the toast was swallowed. It
+        // records that the crossing is already confirmed, so the next scan
+        // retries the moment a slot frees up instead of spending another two
+        // scans re-confirming what it already knows.
     }
 
     fn clear_window_alerts(&mut self, provider: ProviderId, account: Option<&str>, window: &str) {
@@ -2248,6 +2256,17 @@ mod tests {
         assert_eq!(spend_baseline_usd(vec![f64::NAN, -3.0, 4.0]), 4.0);
     }
 
+    /// A five-cent leftover day beside one real $20 day put the median at
+    /// $10.02, so an ordinary $31 day read as a 3x spike — and that false alarm
+    /// marks the day sent, silencing the real runaway hours later.
+    #[test]
+    fn sub_dollar_days_do_not_count_toward_the_baseline() {
+        assert_eq!(spend_baseline_usd(vec![0.05, 20.0]), 20.0);
+        assert!(!is_spend_spike(31.0, spend_baseline_usd(vec![0.05, 20.0]), 3.0));
+        // Nothing but noise is still nothing to compare against.
+        assert_eq!(spend_baseline_usd(vec![0.05, 0.20, 0.90]), 0.0);
+    }
+
     /// A three-day working week is four zeros and three real days. Counting the
     /// zeros puts the median at 0, and a zero baseline switches the detector
     /// off — so the most ordinary schedule there is would have disabled it.
@@ -2285,12 +2304,17 @@ mod tests {
             "a swallowed toast must not count as delivered"
         );
 
-        // Same day, same spike, now deliverable.
+        // The crossing stays confirmed while the toast is blocked, so the next
+        // scan retries straight away instead of re-confirming for two more.
+        assert!(manager.spend_anomaly_pending);
+
+        // Same day, same spike, now deliverable — and it lands on the very
+        // first scan after the slot frees up.
         manager.arm_after_startup_baseline();
         manager.check_spend_anomaly("2026-08-15", 10.0, 2.0, &settings);
-        manager.check_spend_anomaly("2026-08-15", 10.5, 2.0, &settings);
         assert_eq!(manager.toasts_shown, 1);
         assert!(manager.spend_anomaly_sent);
+        assert!(!manager.spend_anomaly_pending);
     }
 
     #[test]

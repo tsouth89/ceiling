@@ -403,6 +403,9 @@ pub async fn update_settings(
     let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
+    let spend_alerts_toggled = patch.spend_budget_alerts_enabled.is_some()
+        || patch.spend_anomaly_alerts_enabled.is_some()
+        || patch.show_notifications.is_some();
     let (settings, (float_bar_patch, language_changed)) = Settings::try_update(|settings| {
         let previous_language = settings.ui_language;
         patch.validate_shortcut_changes(
@@ -420,6 +423,13 @@ pub async fn update_settings(
     }
     if clear_local_usage_cache {
         crate::commands::clear_provider_local_usage_cache();
+    }
+    // Switching a spend alert off has to take effect now, not at the next
+    // five-minute refresh. Nothing else clears the detector state, so toggling
+    // off and back on inside that window kept the old baseline, pending
+    // crossing, and already-sent flag.
+    if spend_alerts_toggled {
+        crate::auto_refresh::clear_spend_alert_state(&app, &settings);
     }
 
     crate::floatbar::after_settings_saved(&app, &float_bar_patch, &settings, notify_float_bar);

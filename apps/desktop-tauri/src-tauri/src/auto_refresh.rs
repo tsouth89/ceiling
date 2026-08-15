@@ -137,7 +137,7 @@ fn local_usage_provider_ids(settings: &Settings) -> Vec<String> {
 
 /// Reset each spend alert's in-memory state while it is switched off, so
 /// re-enabling starts from a fresh baseline rather than a stale threshold.
-fn clear_spend_alert_state(app: &tauri::AppHandle, settings: &Settings) {
+pub(crate) fn clear_spend_alert_state(app: &tauri::AppHandle, settings: &Settings) {
     let clear_budget = !(settings.show_notifications && settings.spend_budget_alerts_enabled);
     let clear_anomaly = !(settings.show_notifications && settings.spend_anomaly_alerts_enabled);
     if !clear_budget && !clear_anomaly {
