@@ -202,6 +202,9 @@ locale_keys! {
     SpendAnomalyAlerts,
     SpendAnomalyAlertsHelper,
     SpendAnomalyMultiplier,
+    ProviderIncidentBadges,
+    ProviderIncidentBadgesHelper,
+    IncidentStatusPage,
 
     // Display settings (Preferences)
     UsageDisplay,

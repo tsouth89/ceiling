@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   PaceSnapshot,
   ProviderChartData,
+  ProviderIncident,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
   WindowAmountBridge,
 } from "../types/bridge";
-import { getProviderChartData } from "../lib/tauri";
+import { getProviderChartData, openExternalUrl } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { formatRelativeUpdated } from "../lib/relativeTime";
@@ -66,6 +67,8 @@ interface MenuCardProps {
   /** True when this provider has more than one account. */
   showAccount?: boolean;
   isRefreshing?: boolean;
+  /** Live status-page incident for this provider, when one is being reported. */
+  incident?: ProviderIncident | null;
   onLayoutChange?: () => void;
 }
 
@@ -419,6 +422,7 @@ export default function MenuCard({
   showActivitySection = true,
   showAccount = false,
   isRefreshing = false,
+  incident = null,
   onLayoutChange,
 }: MenuCardProps) {
   const { t } = useLocale();
@@ -588,6 +592,40 @@ export default function MenuCard({
             {!provider.error && email && <span className="menu-card__email">{email}</span>}
           </div>
         </div>
+        {/* Above the error/subtitle branch on purpose. A provider that is
+            mid-outage often fails its fetch too, and the error block replaces
+            the whole meta row — which is precisely when knowing it is an
+            outage rather than a spent cap matters most. */}
+        {incident && (
+          <div
+            className="menu-card__incident"
+            data-severity={incident.severity}
+            role="status"
+          >
+            <span className="menu-card__incident-dot" aria-hidden />
+            <span className="menu-card__incident-text">{incident.description}</span>
+            {/* A button, not the raw URL as text. The tray is 328px wide and a
+                nowrap URL took most of it from the description, which is the
+                part worth reading — and it could not be clicked anyway.
+
+                Opens the URL the incident itself carries, not the provider
+                registry's. The two disagree: Cursor is polled through
+                `get_status_page_url` but its ProviderMetadata sets
+                `status_page_url: None`, so routing through the registry left
+                this button silently dead for Cursor. The incident's URL is the
+                page the badge is actually reporting on. */}
+            <button
+              type="button"
+              className="menu-card__incident-link"
+              title={incident.statusPageUrl}
+              onClick={() => {
+                void openExternalUrl(incident.statusPageUrl);
+              }}
+            >
+              {t("IncidentStatusPage")}
+            </button>
+          </div>
+        )}
         {provider.error ? (
           <div className="menu-card__error-block">
             <div className="menu-card__error-text">{provider.error}</div>

@@ -4827,6 +4827,80 @@ html:has(.menu-surface--tray) {
 
 /* Error block — simple block layout that respects parent width for text wrapping.
    Avoids the flex sizing issues that cause text to overflow the panel. */
+/* ── Provider incident banner (SBS-280) ─────────────────────────────────
+   Status severity, not a chart series, so it wears the reserved status
+   colors and always ships a dot plus the status page's own words. Color
+   alone never carries the meaning. */
+.menu-card__incident {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  margin: 4px 0 2px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--incident-color) 14%, transparent);
+  border-color: color-mix(in srgb, var(--incident-color) 40%, transparent);
+}
+.menu-card__incident[data-severity="degraded"] {
+  --incident-color: var(--status-warning-text, #fbbf24);
+}
+.menu-card__incident[data-severity="partial"] {
+  --incident-color: var(--provider-status-stale, #f59e0b);
+}
+.menu-card__incident[data-severity="major"] {
+  --incident-color: var(--state-error, #f87171);
+}
+.menu-card__incident-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--incident-color);
+  transform: translateY(-1px);
+}
+/* Takes the full row and wraps rather than ellipsising. The tray is only
+   328px, so a nowrap description was cut at roughly 30 characters and threw
+   away the provider's own wording -- the one thing the banner exists to
+   carry. Bounded at two lines so a verbose status page cannot push the card's
+   own numbers off screen. */
+.menu-card__incident-text {
+  color: var(--text-primary);
+  font-weight: 600;
+  flex: 1 1 100%;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.menu-card__incident-link {
+  flex: 0 0 auto;
+  margin-left: auto;
+  margin-top: 1px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 9.5px;
+  white-space: nowrap;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.menu-card__incident-link:hover {
+  color: var(--text-primary);
+}
+.menu-card__incident-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 .menu-card__error-block {
   display: block;
   position: relative;
@@ -6481,7 +6555,9 @@ html:has(.menu-surface--tray) {
   color: #5eead4;
   background: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 22%, transparent);
   border-color: color-mix(in srgb, var(--ceiling-accent, #26b5ce) 45%, transparent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--ceiling-accent, #26b5ce) 24%, transparent);
+  /* A crisp accent ring, not an 8px halo. CEILING_UI.md rules out glow, and
+     this chip was the last place in the app still drawing one. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ceiling-accent, #26b5ce) 30%, transparent);
 }
 
 .menu-card__promo-chip--inclusion {

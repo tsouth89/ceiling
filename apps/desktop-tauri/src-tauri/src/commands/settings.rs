@@ -24,6 +24,7 @@ pub struct SettingsUpdate {
     pub spend_budget_limit_usd: Option<f64>,
     pub spend_anomaly_alerts_enabled: Option<bool>,
     pub spend_anomaly_multiplier: Option<f64>,
+    pub provider_incident_badges_enabled: Option<bool>,
     pub provider_usage_thresholds:
         Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
     pub predictive_pace_warning_enabled: Option<bool>,
@@ -257,6 +258,14 @@ impl SettingsUpdate {
         if let Some(v) = self.spend_anomaly_multiplier {
             settings.spend_anomaly_multiplier =
                 codexbar::settings::normalize_spend_anomaly_multiplier(v);
+        }
+        if let Some(v) = self.provider_incident_badges_enabled {
+            settings.provider_incident_badges_enabled = v;
+            // Switching the feature off drops every reading, so switching it
+            // back on shows current state instead of a badge from an hour ago.
+            if !v {
+                crate::provider_incidents::clear();
+            }
         }
         if let Some(values) = self.provider_usage_thresholds.clone() {
             settings.provider_usage_thresholds =

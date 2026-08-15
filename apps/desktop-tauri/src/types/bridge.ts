@@ -240,6 +240,8 @@ export interface SettingsSnapshot {
   spendAnomalyAlertsEnabled?: boolean;
   /** Times the recent daily median that counts as a spike. */
   spendAnomalyMultiplier?: number;
+  /** Poll public provider status pages and badge providers having an incident. */
+  providerIncidentBadgesEnabled?: boolean;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
   switcherShowsIcons: boolean;
@@ -329,6 +331,7 @@ export interface SettingsUpdate {
   spendBudgetLimitUsd?: number;
   spendAnomalyAlertsEnabled?: boolean;
   spendAnomalyMultiplier?: number;
+  providerIncidentBadgesEnabled?: boolean;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
   switcherShowsIcons?: boolean;
@@ -786,6 +789,16 @@ export interface LocalApiValueDay {
   date: string;
   apiValueUsd: number;
   tokens: number;
+}
+
+/** A provider's public status-page incident, for the badge (SBS-280). */
+export interface ProviderIncident {
+  providerId: string;
+  /** "degraded" | "partial" | "major". Operational providers are omitted. */
+  severity: "degraded" | "partial" | "major";
+  /** The status page's own wording. */
+  description: string;
+  statusPageUrl: string;
 }
 
 /** One provider's activity in a single local clock-hour. */

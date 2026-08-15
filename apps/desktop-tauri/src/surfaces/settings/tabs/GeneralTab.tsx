@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
+import { resetProviderIncidentsCache } from "../../../hooks/useProviderIncidents";
 import { playNotificationSound, sendTestNotification } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type { Language } from "../../../types/bridge";
@@ -27,6 +28,8 @@ export default function GeneralTab({
   const spendBudgetLimitUsd = settings.spendBudgetLimitUsd ?? 15;
   const spendAnomalyAlertsEnabled = settings.spendAnomalyAlertsEnabled ?? false;
   const spendAnomalyMultiplier = settings.spendAnomalyMultiplier ?? 3;
+  const providerIncidentBadgesEnabled =
+    settings.providerIncidentBadgesEnabled ?? false;
   const selectedLanguage: Language =
     settings.uiLanguage === "chinese" ? "chinese" : "english";
   const [playingSound, setPlayingSound] = useState(false);
@@ -252,6 +255,26 @@ export default function GeneralTab({
               onChange={(v) => set({
                 spendBudgetWarningUsd: Math.min(v, spendBudgetLimitUsd),
               })}
+            />
+          </Field>
+          {/* Not gated on the budget above: an outage badge is useful to
+              anyone, including people who never set a cap. */}
+          <Field
+            label={t("ProviderIncidentBadges")}
+            description={t("ProviderIncidentBadgesHelper")}
+            leading
+          >
+            <Toggle
+              checked={providerIncidentBadgesEnabled}
+              ariaLabel={t("ProviderIncidentBadges")}
+              disabled={saving}
+              onChange={(v) => {
+                // The shared reading is held for fifteen minutes, so without
+                // this an off/on inside that window reapplies badges from
+                // before the toggle instead of asking the backend again.
+                resetProviderIncidentsCache();
+                set({ providerIncidentBadgesEnabled: v });
+              }}
             />
           </Field>
           <Field label={t("SpendBudgetCap")}>
