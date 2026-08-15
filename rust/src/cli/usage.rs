@@ -7,6 +7,7 @@ use crate::core::{
     ConfiguredAccounts, CostSnapshot, FetchContext, ProviderFetchResult, ProviderId, RateWindow,
     SourceMode, UsagePace, UsageSnapshot, instantiate_provider,
 };
+use crate::settings::Settings;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel, fetch_provider_status};
 
 pub const PROVIDER_ARG_HELP: &str = "Provider to query (for example: codex, claude, gemini, antigravity/agy, nanogpt, deepseek, codebuff, windsurf, all, both)";
@@ -92,6 +93,8 @@ pub enum ProviderSelection {
     Single(ProviderId),
     Both,
     All,
+    /// Providers enabled in Settings (the documented default).
+    Enabled,
 }
 
 impl ProviderSelection {
@@ -109,15 +112,21 @@ impl ProviderSelection {
                     )
                 }
             }
-            None => Ok(ProviderSelection::Single(ProviderId::Claude)), // Default to Claude
+            None => Ok(ProviderSelection::Enabled),
         }
     }
 
     pub fn as_list(&self) -> Vec<ProviderId> {
+        self.as_list_from(&Settings::load())
+    }
+
+    /// Resolve providers against an explicit Settings snapshot.
+    pub fn as_list_from(&self, settings: &Settings) -> Vec<ProviderId> {
         match self {
             ProviderSelection::Single(id) => vec![*id],
             ProviderSelection::Both => vec![ProviderId::Codex, ProviderId::Claude],
             ProviderSelection::All => ProviderId::all().to_vec(),
+            ProviderSelection::Enabled => settings.get_enabled_provider_ids(),
         }
     }
 }
@@ -163,7 +172,9 @@ impl UsageCommand {
     fn from_args(args: UsageArgs) -> anyhow::Result<Self> {
         let format = effective_format(&args);
         let source_mode = SourceMode::parse(&args.source).unwrap_or(SourceMode::Auto);
-        let providers = ProviderSelection::from_arg(args.provider.as_deref())?.as_list();
+        let settings = Settings::load();
+        let providers =
+            ProviderSelection::from_arg(args.provider.as_deref())?.as_list_from(&settings);
 
         Ok(Self {
             format,
@@ -642,5 +653,73 @@ mod tests {
         let output = render_progress_bar(80.0, 10, false);
         assert!(!output.contains('\u{1b}'));
         assert_eq!(output, "[████████░░]");
+    }
+
+    fn settings_with_enabled(ids: &[&str]) -> Settings {
+        Settings {
+            enabled_providers: ids.iter().map(|id| (*id).to_string()).collect(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn default_selection_uses_enabled_providers_from_settings() {
+        let settings = settings_with_enabled(&["grok", "cursor"]);
+        let selected = ProviderSelection::from_arg(None)
+            .unwrap()
+            .as_list_from(&settings);
+
+        assert_eq!(selected, vec![ProviderId::Cursor, ProviderId::Grok]);
+        assert_ne!(selected, vec![ProviderId::Claude]);
+    }
+
+    #[test]
+    fn default_selection_on_default_settings_is_not_claude_only() {
+        let settings = Settings::default();
+        let selected = ProviderSelection::from_arg(None)
+            .unwrap()
+            .as_list_from(&settings);
+
+        assert_eq!(
+            selected,
+            vec![
+                ProviderId::Codex,
+                ProviderId::Claude,
+                ProviderId::Cursor,
+                ProviderId::Grok
+            ]
+        );
+        assert_ne!(selected, vec![ProviderId::Claude]);
+    }
+
+    #[test]
+    fn all_selection_includes_every_provider_regardless_of_settings() {
+        let settings = settings_with_enabled(&["grok"]);
+        let selected = ProviderSelection::from_arg(Some("all"))
+            .unwrap()
+            .as_list_from(&settings);
+
+        assert_eq!(selected, ProviderId::all().to_vec());
+        assert!(selected.len() > settings.get_enabled_provider_ids().len());
+    }
+
+    #[test]
+    fn single_selection_stays_single_regardless_of_settings() {
+        let settings = settings_with_enabled(&["grok", "cursor"]);
+        let selected = ProviderSelection::from_arg(Some("claude"))
+            .unwrap()
+            .as_list_from(&settings);
+
+        assert_eq!(selected, vec![ProviderId::Claude]);
+    }
+
+    #[test]
+    fn empty_enabled_providers_resolves_to_empty_list() {
+        let settings = settings_with_enabled(&[]);
+        let selected = ProviderSelection::from_arg(None)
+            .unwrap()
+            .as_list_from(&settings);
+
+        assert!(selected.is_empty());
     }
 }
