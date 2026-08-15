@@ -198,6 +198,7 @@ fn main() {
             commands::get_quota_run_efficiency,
             commands::get_provider_local_usage_summary,
             commands::get_local_api_value_totals,
+            commands::get_local_activity_heatmap,
             commands::get_cursor_model_activity,
             commands::get_provider_incidents,
             commands::export_cost_csv,
