@@ -42,6 +42,7 @@ SpendBudgetCap = Near-Cap Budget
 SpendBudgetThresholdsHelper = USD estimate. The near-cap budget must be at least the warning budget.
 ProviderIncidentBadges = Provider Incident Badges
 ProviderIncidentBadgesHelper = Read public provider status pages so an outage does not look like a spent cap. Sends no account data; checked at most every 15 minutes.
+IncidentStatusPage = Status page
 UsageDisplay = Usage Display
 ShowUsageAsUsed = Show Usage as Used
 ShowUsageAsUsedHelper = Display as used percentage instead of remaining

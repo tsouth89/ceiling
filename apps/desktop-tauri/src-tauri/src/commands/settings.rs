@@ -252,6 +252,11 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.provider_incident_badges_enabled {
             settings.provider_incident_badges_enabled = v;
+            // Switching the feature off drops every reading, so switching it
+            // back on shows current state instead of a badge from an hour ago.
+            if !v {
+                crate::provider_incidents::clear();
+            }
         }
         if let Some(values) = self.provider_usage_thresholds.clone() {
             settings.provider_usage_thresholds =

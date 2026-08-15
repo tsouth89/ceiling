@@ -201,6 +201,7 @@ locale_keys! {
     SpendBudgetThresholdsHelper,
     ProviderIncidentBadges,
     ProviderIncidentBadgesHelper,
+    IncidentStatusPage,
 
     // Display settings (Preferences)
     UsageDisplay,

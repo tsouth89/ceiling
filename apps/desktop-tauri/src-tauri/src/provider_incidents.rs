@@ -159,7 +159,13 @@ pub async fn current_incidents(settings: &Settings) -> HashMap<String, ProviderI
         }
         if let Ok(mut guard) = cache().lock() {
             for (provider_id, status) in fetched {
-                let ok = status.is_some();
+                // `Unknown` means the page did not parse, which is a failed
+                // read rather than an operational provider. Treating it as
+                // success would hold a stale answer for the full 15 minutes
+                // instead of retrying on the short backoff.
+                let readable = status
+                    .as_ref()
+                    .is_some_and(|status| status.level != StatusLevel::Unknown);
                 let incident = status.and_then(|status| {
                     let severity = severity_label(status.level)?;
                     Some(ProviderIncident {
@@ -171,12 +177,22 @@ pub async fn current_incidents(settings: &Settings) -> HashMap<String, ProviderI
                         provider_id: provider_id.clone(),
                     })
                 });
+                // A failed read is not evidence the incident ended. Dropping
+                // the last good answer on a timeout would blink a live outage
+                // badge off the card while the outage is still going.
+                let incident = if readable {
+                    incident
+                } else {
+                    guard
+                        .get(&provider_id)
+                        .and_then(|entry| entry.incident.clone())
+                };
                 guard.insert(
                     provider_id,
                     CachedIncident {
                         loaded_at: Instant::now(),
                         incident,
-                        ok,
+                        ok: readable,
                     },
                 );
             }
@@ -265,6 +281,49 @@ mod tests {
                 "{provider_id} is allowlisted but has no status page URL"
             );
         }
+    }
+
+    /// A timeout or an unparseable page is not evidence the outage ended.
+    /// Dropping the last good answer blinks a live badge off the card while the
+    /// incident is still going.
+    #[test]
+    fn a_failed_poll_keeps_the_last_known_incident() {
+        clear();
+        let live = ProviderIncident {
+            provider_id: "codex".to_string(),
+            severity: "major".to_string(),
+            description: "Major Outage".to_string(),
+            status_page_url: "https://status.openai.com".to_string(),
+        };
+        {
+            let mut guard = cache().lock().expect("cache");
+            guard.insert(
+                "codex".to_string(),
+                CachedIncident {
+                    loaded_at: Instant::now(),
+                    incident: Some(live.clone()),
+                    ok: true,
+                },
+            );
+        }
+
+        // What the refresh loop does when fetch_provider_status returns None.
+        {
+            let mut guard = cache().lock().expect("cache");
+            let carried = guard.get("codex").and_then(|entry| entry.incident.clone());
+            guard.insert(
+                "codex".to_string(),
+                CachedIncident {
+                    loaded_at: Instant::now(),
+                    incident: carried,
+                    ok: false,
+                },
+            );
+        }
+
+        let guard = cache().lock().expect("cache");
+        assert_eq!(guard["codex"].incident.as_ref(), Some(&live));
+        assert!(!guard["codex"].ok, "and it is retried on the short backoff");
     }
 
     #[test]

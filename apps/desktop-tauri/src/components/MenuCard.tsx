@@ -8,7 +8,7 @@ import type {
   RateWindowSnapshot,
   WindowAmountBridge,
 } from "../types/bridge";
-import { getProviderChartData } from "../lib/tauri";
+import { getProviderChartData, openProviderStatusPage } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { formatRelativeUpdated } from "../lib/relativeTime";
@@ -604,7 +604,19 @@ export default function MenuCard({
           >
             <span className="menu-card__incident-dot" aria-hidden />
             <span className="menu-card__incident-text">{incident.description}</span>
-            <span className="menu-card__incident-source">{incident.statusPageUrl}</span>
+            {/* A button, not the raw URL as text. The tray is 328px wide and a
+                nowrap URL took most of it from the description, which is the
+                part worth reading — and it could not be clicked anyway. */}
+            <button
+              type="button"
+              className="menu-card__incident-link"
+              title={incident.statusPageUrl}
+              onClick={() => {
+                void openProviderStatusPage(incident.providerId);
+              }}
+            >
+              {t("IncidentStatusPage")}
+            </button>
           </div>
         )}
         {provider.error ? (

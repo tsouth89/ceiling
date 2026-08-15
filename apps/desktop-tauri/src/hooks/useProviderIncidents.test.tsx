@@ -67,6 +67,21 @@ describe("useProviderIncidents", () => {
     await waitFor(() => expect(second.result.current.codex).toBeDefined());
   });
 
+  /// A first-open timeout used to stamp loadedAt, so the empty answer was
+  /// served for the full refresh window -- three times the backend's own
+  /// error backoff.
+  it("retries after a failed first poll instead of caching the miss", async () => {
+    getProviderIncidents.mockRejectedValueOnce(new Error("timeout"));
+    const first = renderHook(() => useProviderIncidents(true));
+    await waitFor(() => expect(getProviderIncidents).toHaveBeenCalledTimes(1));
+    expect(first.result.current).toEqual({});
+
+    getProviderIncidents.mockResolvedValueOnce({ codex: incident() });
+    const second = renderHook(() => useProviderIncidents(true));
+    await waitFor(() => expect(second.result.current.codex).toBeDefined());
+    expect(getProviderIncidents).toHaveBeenCalledTimes(2);
+  });
+
   it("reports nothing once the feature is switched back off", async () => {
     getProviderIncidents.mockResolvedValue({ codex: incident() });
     const { result, rerender } = renderHook(

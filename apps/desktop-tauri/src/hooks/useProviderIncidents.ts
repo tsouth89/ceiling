@@ -36,7 +36,10 @@ function load(): Promise<IncidentMap> {
     .catch(() => {
       // A failed poll leaves the previous answer in place. Clearing it would
       // make a badge flicker away while the incident is still live.
-      loadedAt = Date.now();
+      //
+      // loadedAt is deliberately not advanced: a first-open timeout would
+      // otherwise serve an empty map for the full refresh window, well past
+      // the backend's own five-minute error backoff.
       return cached;
     })
     .finally(() => {

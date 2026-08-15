@@ -4842,19 +4842,37 @@ html:has(.menu-surface--tray) {
   background: var(--incident-color);
   transform: translateY(-1px);
 }
+/* The description gets the leftover width. The tray is only 328px, so the
+   status-page control must not push the words the badge exists to show. */
 .menu-card__incident-text {
   color: var(--text-primary);
   font-weight: 600;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.menu-card__incident-source {
+.menu-card__incident-link {
+  flex: 0 0 auto;
   margin-left: auto;
-  color: var(--text-muted);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
   font-size: 9.5px;
   white-space: nowrap;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.menu-card__incident-link:hover {
+  color: var(--text-primary);
+}
+.menu-card__incident-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 .menu-card__error-block {

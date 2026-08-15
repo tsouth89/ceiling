@@ -1124,7 +1124,14 @@ pub struct CursorActivitySnapshotBridge {
 #[tauri::command]
 pub async fn get_provider_incidents()
 -> std::collections::HashMap<String, crate::provider_incidents::ProviderIncident> {
-    crate::provider_incidents::current_incidents(&codexbar::settings::Settings::load()).await
+    // Settings::load reads from disk, so it goes to a blocking thread rather
+    // than stalling the runtime every other command shares.
+    let Ok(settings) =
+        tauri::async_runtime::spawn_blocking(codexbar::settings::Settings::load).await
+    else {
+        return std::collections::HashMap::new();
+    };
+    crate::provider_incidents::current_incidents(&settings).await
 }
 
 #[tauri::command]
