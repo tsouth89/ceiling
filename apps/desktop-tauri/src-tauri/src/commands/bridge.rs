@@ -670,6 +670,7 @@ pub struct SettingsSnapshot {
     spend_budget_period: String,
     spend_budget_warning_usd: f64,
     spend_budget_limit_usd: f64,
+    provider_incident_badges_enabled: bool,
     provider_usage_thresholds:
         std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>,
     predictive_pace_warning_enabled: bool,
@@ -781,6 +782,7 @@ impl From<Settings> for SettingsSnapshot {
             spend_budget_period: settings.spend_budget_period,
             spend_budget_warning_usd: settings.spend_budget_warning_usd,
             spend_budget_limit_usd: settings.spend_budget_limit_usd,
+            provider_incident_badges_enabled: settings.provider_incident_badges_enabled,
             provider_usage_thresholds: settings.provider_usage_thresholds,
             predictive_pace_warning_enabled: settings.predictive_pace_warning_enabled,
             switcher_shows_icons: settings.switcher_shows_icons,

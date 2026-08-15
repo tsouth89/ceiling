@@ -28,10 +28,34 @@ impl StatusLevel {
     pub fn from_indicator(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "operational" | "none" | "green" | "ok" => StatusLevel::Operational,
-            "degraded" | "degraded_performance" | "yellow" => StatusLevel::Degraded,
+            // Statuspage v2 `status.indicator` is none|minor|major|critical.
+            // `minor` is the most common non-ok value and had no arm, so every
+            // small incident on OpenAI, Claude, Cursor, and GitHub resolved to
+            // Unknown and produced no badge at all.
+            "degraded" | "degraded_performance" | "minor" | "yellow" => StatusLevel::Degraded,
             "partial" | "partial_outage" | "orange" => StatusLevel::Partial,
             "major" | "major_outage" | "critical" | "red" => StatusLevel::Major,
+            // Planned work is not an outage, and the badge exists to tell an
+            // outage apart from a spent cap. Operational is the explicit
+            // decision: it neither badges nor poisons a component sweep into
+            // Unknown, which the badge reads as a page it could not parse.
+            "under_maintenance" | "maintenance" => StatusLevel::Operational,
             _ => StatusLevel::Unknown,
+        }
+    }
+
+    /// How bad this level is, for picking the worst of several components.
+    ///
+    /// Not the declaration order: `Unknown` is declared last so it can be the
+    /// `Default`, and comparing the discriminants let a single unreadable
+    /// component outrank a real major outage on the same page.
+    fn severity_rank(self) -> u8 {
+        match self {
+            StatusLevel::Operational => 0,
+            StatusLevel::Unknown => 1,
+            StatusLevel::Degraded => 2,
+            StatusLevel::Partial => 3,
+            StatusLevel::Major => 4,
         }
     }
 
@@ -168,7 +192,7 @@ pub async fn fetch_statuspage_io_components(url: &str) -> Result<ProviderStatus,
             let status = StatusLevel::from_indicator(status_str);
 
             // Update overall status to worst component
-            if (status as u8) > (overall_status as u8) {
+            if status.severity_rank() > overall_status.severity_rank() {
                 overall_status = status;
             }
 
@@ -217,4 +241,88 @@ pub async fn fetch_all_statuses(providers: &[&str]) -> HashMap<String, ProviderS
         .into_iter()
         .filter_map(|(provider, status)| status.map(|s| (provider, s)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Statuspage v2 `status.indicator` is `none|minor|major|critical`, and
+    /// `minor` is what a small incident actually reports. It had no arm, so it
+    /// fell through to `Unknown` — which the badge treats as an unreadable
+    /// page, meaning the most common incident state produced nothing at all.
+    #[test]
+    fn every_statuspage_indicator_maps_to_a_real_level() {
+        assert_eq!(
+            StatusLevel::from_indicator("none"),
+            StatusLevel::Operational
+        );
+        assert_eq!(StatusLevel::from_indicator("minor"), StatusLevel::Degraded);
+        assert_eq!(StatusLevel::from_indicator("major"), StatusLevel::Major);
+        assert_eq!(StatusLevel::from_indicator("critical"), StatusLevel::Major);
+        for indicator in ["none", "minor", "major", "critical"] {
+            assert_ne!(
+                StatusLevel::from_indicator(indicator),
+                StatusLevel::Unknown,
+                "{indicator} is a documented Statuspage indicator"
+            );
+        }
+    }
+
+    /// Component status values are a different vocabulary from the top-level
+    /// indicator, and `fetch_statuspage_io_components` runs them through the
+    /// same mapper.
+    #[test]
+    fn component_status_values_map_too() {
+        assert_eq!(
+            StatusLevel::from_indicator("operational"),
+            StatusLevel::Operational
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("degraded_performance"),
+            StatusLevel::Degraded
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("partial_outage"),
+            StatusLevel::Partial
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("major_outage"),
+            StatusLevel::Major
+        );
+    }
+
+    /// `under_maintenance` is the fifth documented component status. It fell
+    /// through to `Unknown`, which the badge reads as an unreadable page, so a
+    /// single component in planned maintenance made the whole provider look
+    /// unreadable and retried it every five minutes.
+    #[test]
+    fn planned_maintenance_is_not_an_incident() {
+        assert_eq!(
+            StatusLevel::from_indicator("under_maintenance"),
+            StatusLevel::Operational
+        );
+        assert_eq!(
+            StatusLevel::from_indicator("maintenance"),
+            StatusLevel::Operational
+        );
+    }
+
+    /// `Unknown` is declared last so it can be the `Default`, so comparing the
+    /// enum discriminants made one unreadable component outrank a real outage
+    /// on the same page and hid the incident behind a "could not read" answer.
+    #[test]
+    fn a_real_outage_outranks_an_unreadable_component() {
+        assert!(StatusLevel::Major.severity_rank() > StatusLevel::Unknown.severity_rank());
+        assert!(StatusLevel::Degraded.severity_rank() > StatusLevel::Unknown.severity_rank());
+        assert!(StatusLevel::Unknown.severity_rank() > StatusLevel::Operational.severity_rank());
+        assert!(StatusLevel::Major.severity_rank() > StatusLevel::Partial.severity_rank());
+        assert!(StatusLevel::Partial.severity_rank() > StatusLevel::Degraded.severity_rank());
+    }
+
+    #[test]
+    fn an_unrecognized_value_is_still_unknown() {
+        assert_eq!(StatusLevel::from_indicator("wat"), StatusLevel::Unknown);
+        assert_eq!(StatusLevel::from_indicator(""), StatusLevel::Unknown);
+    }
 }

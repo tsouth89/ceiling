@@ -16,6 +16,13 @@ const { sendTestNotificationMock } = vi.hoisted(() => ({
 vi.mock("../../../lib/tauri", () => ({
   playNotificationSound: vi.fn(() => Promise.resolve()),
   sendTestNotification: sendTestNotificationMock,
+  getProviderIncidents: vi.fn(() => Promise.resolve({})),
+}));
+
+const { resetIncidentsMock } = vi.hoisted(() => ({ resetIncidentsMock: vi.fn() }));
+
+vi.mock("../../../hooks/useProviderIncidents", () => ({
+  resetProviderIncidentsCache: resetIncidentsMock,
 }));
 
 import GeneralTab from "./GeneralTab";
@@ -259,5 +266,44 @@ describe("GeneralTab", () => {
     expect(screen.getByRole("button", { name: "SpendBudgetPeriod" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetWarning" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "SpendBudgetCap" })).toBeDisabled();
+  });
+
+  it("offers incident badges independently of notifications and budgets", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, showNotifications: false }}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    // A badge is drawn in the UI, not raised as a toast, so switching
+    // notifications off must not lock it.
+    const toggle = screen.getByRole("checkbox", { name: "ProviderIncidentBadges" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).not.toBeDisabled();
+
+    fireEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith({ providerIncidentBadgesEnabled: true });
+  });
+
+  /// The shared reading is held for fifteen minutes. Without dropping it, an
+  /// off/on inside that window reapplied badges from before the toggle and
+  /// never asked the backend.
+  it("drops the shared incident reading when the toggle moves", () => {
+    resetIncidentsMock.mockClear();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={{ ...settings, providerIncidentBadgesEnabled: true }}
+        set={vi.fn()}
+        saving={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "ProviderIncidentBadges" }));
+    expect(resetIncidentsMock).toHaveBeenCalled();
   });
 });
