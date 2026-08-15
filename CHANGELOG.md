@@ -9,6 +9,7 @@
 ### Fixed
 - **Cursor no longer treats missing usage as zero.** An empty `individualUsage` object used to paint a 0% monthly bar and hide a real team pool sitting next to it. Monthly is now marked unavailable when Cursor reports no reading, and an empty individual object falls through to team usage. On-demand stays billed spend; plan and included dollars are labeled **Included** so they are not read as an invoice. A missing Composer tracking database is shown as unavailable, not as no activity.
 - **Leftover English on glance surfaces now goes through locale keys.** Floatbar settings, freshness chips, account-status labels, Charts tab names, and About update copy used hardcoded English. They now use `en-US.ftl` (and zh-CN) so chips no longer show raw `stale` / `error` tokens.
+- **Refreshing model prices no longer blanks out the prices you already had.** The models.dev price cache was emptied before the new copy was written, so a second Ceiling process reading during that moment saw nothing, and a crash mid-write threw the cache away for good. Either way token costs quietly disappeared until a network refresh worked. The new copy is now written beside the old one and swapped in, so there is never a moment with no prices on disk.
 
 ### Internal
 - Cursor usage-summary and Composer-activity paths now have deterministic fixtures for normal, partial, duplicate, and malformed data.
