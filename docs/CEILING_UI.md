@@ -14,14 +14,15 @@ Visual system for the tray flyout and taskbar-adjacent capacity strip (SOU-127).
 
 ## Webview security posture
 
-The webview must have no network reach of its own. Every provider call runs in
-Rust, so the release `connect-src` is required to be `'self' ipc:
-http://ipc.localhost` and nothing else — in particular, no `localhost` or
-`127.0.0.1` origins, which exist only for the Vite dev server and its HMR
-socket and belong in a dev-only config overlay.
+The webview should have no network reach of its own. Every provider call runs in
+Rust, so the target release `connect-src` is `'self' ipc: http://ipc.localhost`
+and nothing else.
 
-Tracked in SBS-819; check `apps/desktop-tauri/src-tauri/tauri.conf.json` for
-what the current release build actually ships.
+Not yet true. `apps/desktop-tauri/src-tauri/tauri.conf.json` is the single CSP
+for every build, and it still allows `http://localhost:*`, `http://127.0.0.1:*`,
+`ws://localhost:*` and `ws://127.0.0.1:*` so the Vite dev server and its HMR
+socket can connect. Confining those loopback origins to dev builds is SBS-819;
+read the config, not this section, for what ships today.
 
 ## Tokens
 
