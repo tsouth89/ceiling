@@ -24,15 +24,48 @@ const parseCsp = (csp: string): Directives =>
 // match the host exactly instead of substring-searching for "localhost".
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-const isLoopbackSource = (source: string) =>
-  LOOPBACK_HOSTS.has(
-    source
-      .replace(/^[a-z]+:\/\//, "")
-      .replace(/:[*\d]+$/, ""),
-  );
+/**
+ * Host of a CSP source, or the source unchanged when it has no host.
+ *
+ * Anything after the host is dropped, not just a port. Trimming only a
+ * trailing `:port` left `http://localhost:1420/` reading as the host
+ * `localhost:1420/`, which is in no set and would have let a permissive
+ * shipped CSP through the checks below.
+ */
+const sourceHost = (source: string): string => {
+  const withoutScheme = source.replace(/^[a-z]+:\/\//, "");
+  // A bracketed IPv6 literal is full of colons, so take the bracket group whole.
+  const bracketed = /^\[[^\]]*\]/.exec(withoutScheme);
+  return bracketed ? bracketed[0] : withoutScheme.replace(/[:/?#].*$/, "");
+};
+
+const isLoopbackSource = (source: string) => LOOPBACK_HOSTS.has(sourceHost(source));
 
 const shippedCsp = parseCsp(shipped.app.security.csp);
 const devCsp = parseCsp(devOverlay.app.security.csp);
+
+describe("loopback detection", () => {
+  // The detector is the whole gate, so a hole in it silently disarms every
+  // check below. A trailing path used to defeat it.
+  it("sees loopback however the source is written", () => {
+    for (const source of [
+      "http://localhost:*",
+      "http://localhost:1420/",
+      "http://127.0.0.1:3000/api",
+      "ws://localhost",
+      "http://[::1]:8080",
+      "127.0.0.1",
+    ]) {
+      expect({ [source]: isLoopbackSource(source) }).toEqual({ [source]: true });
+    }
+  });
+
+  it("leaves the IPC origin and keywords alone", () => {
+    for (const source of ["'self'", "ipc:", "http://ipc.localhost", "https://api.openai.com"]) {
+      expect({ [source]: isLoopbackSource(source) }).toEqual({ [source]: false });
+    }
+  });
+});
 
 describe("shipped Tauri CSP", () => {
   it("grants the webview no access to loopback ports", () => {
