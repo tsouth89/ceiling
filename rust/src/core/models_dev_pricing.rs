@@ -71,8 +71,10 @@ mod tests {
             Some(dir.path())
         ));
         let before_ino = std::fs::metadata(&path).expect("metadata").ino();
-        // Hold the old contents open the way a concurrent reader would.
-        let previous = std::fs::read(&path).expect("previous cache");
+        // Hold the file open the way a concurrent reader mid-`load` would.
+        // A rename-based replace leaves this handle on the old, still complete
+        // inode; a truncating write empties the very bytes it is reading.
+        let mut reader = std::fs::File::open(&path).expect("open the live cache");
 
         assert!(ModelsDevCache::save(
             catalog_priced_at(9.0),
@@ -85,10 +87,19 @@ mod tests {
             before_ino, after_ino,
             "save must rename a new file over the cache, not truncate it in place"
         );
-        assert!(
-            !previous.is_empty()
-                && serde_json::from_slice::<ModelsDevCacheArtifact>(&previous).is_ok(),
-            "the previous catalog must stay whole and parseable across a save"
+
+        let mut previous = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut previous).expect("read the held handle");
+        let held = serde_json::from_slice::<ModelsDevCacheArtifact>(&previous)
+            .expect("the held handle must still see a complete catalog");
+        assert_eq!(
+            held.catalog
+                .lookup("openai", "gpt-fresh")
+                .expect("pricing")
+                .input_cost_per_token,
+            2.5e-6,
+            "the concurrent reader must still get the pre-save catalog, not a \
+             truncated or half-rewritten one"
         );
     }
 
