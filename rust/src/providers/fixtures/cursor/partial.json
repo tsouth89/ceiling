@@ -1,0 +1,11 @@
+{
+  "billingCycleEnd": "2026-04-01T00:00:00Z",
+  "membershipType": "pro",
+  "individualUsage": {
+    "onDemand": {
+      "enabled": true,
+      "used": 350,
+      "limit": 1000
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "membershipType": "team",
+  "individualUsage": {
+    "plan": {}
+  },
+  "teamUsage": {
+    "pooled": {
+      "used": 5000,
+      "limit": 10000
+    }
+  }
+}

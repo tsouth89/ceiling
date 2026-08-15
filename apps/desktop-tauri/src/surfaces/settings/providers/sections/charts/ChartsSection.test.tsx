@@ -105,7 +105,7 @@ describe("ChartsSection local usage summary", () => {
     vi.clearAllMocks();
     tauriMocks.getSettingsSnapshot.mockResolvedValue({ enableAnimations: false });
     tauriMocks.getProviderChartData.mockResolvedValue(enrichedData);
-    tauriMocks.getCursorModelActivity.mockResolvedValue([]);
+    tauriMocks.getCursorModelActivity.mockResolvedValue({ status: "empty", rows: [] });
     tauriMocks.getQuotaRunEfficiency.mockResolvedValue([
       {
         run: {
@@ -323,11 +323,14 @@ describe("ChartsSection local usage summary", () => {
       providerId: "cursor",
       localUsage: null,
     });
-    tauriMocks.getCursorModelActivity.mockResolvedValue([
-      { model: "grok-4.5", contributions: 750, requests: 30 },
-      { model: "claude-sonnet-5", contributions: 250, requests: 10 },
-      { model: "default", contributions: 0, requests: 1 },
-    ]);
+    tauriMocks.getCursorModelActivity.mockResolvedValue({
+      status: "available",
+      rows: [
+        { model: "grok-4.5", contributions: 750, requests: 30 },
+        { model: "claude-sonnet-5", contributions: 250, requests: 10 },
+        { model: "default", contributions: 0, requests: 1 },
+      ],
+    });
 
     const { getByLabelText } = render(
       <ChartsSection providerId="cursor" accountEmail={null} t={(key) => key} />,
@@ -346,9 +349,10 @@ describe("ChartsSection local usage summary", () => {
 
   it("shows Cursor activity even when chart history fails to load", async () => {
     tauriMocks.getProviderChartData.mockRejectedValue(new Error("no history"));
-    tauriMocks.getCursorModelActivity.mockResolvedValue([
-      { model: "grok-4.5", contributions: 100, requests: 5 },
-    ]);
+    tauriMocks.getCursorModelActivity.mockResolvedValue({
+      status: "available",
+      rows: [{ model: "grok-4.5", contributions: 100, requests: 5 }],
+    });
 
     const { getByLabelText, queryByText } = render(
       <ChartsSection providerId="cursor" accountEmail={null} t={(key) => key} />,
@@ -358,6 +362,48 @@ describe("ChartsSection local usage summary", () => {
     expect(card.textContent).toContain("grok-4.5");
     // The bare "History unavailable" error must not replace the card.
     expect(queryByText("History unavailable")).toBeNull();
+  });
+
+  it("shows missing Cursor tracking as unavailable, not zero usage", async () => {
+    tauriMocks.getProviderChartData.mockRejectedValue(new Error("no history"));
+    tauriMocks.getCursorModelActivity.mockResolvedValue({
+      status: "unavailable",
+      rows: [],
+    });
+
+    const { getByLabelText, queryByText } = render(
+      <ChartsSection
+        providerId="cursor"
+        accountEmail="missing-tracking@test"
+        t={(key) => key}
+      />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
+    expect(card.textContent).toMatch(/missing data, not zero usage/i);
+    expect(card.textContent).toContain("Unavailable");
+    expect(queryByText("History unavailable")).toBeTruthy();
+    expect(card.textContent).toMatch(/not tracking local Composer activity/i);
+  });
+
+  it("does not call a locked tracking database a missing install", async () => {
+    tauriMocks.getProviderChartData.mockRejectedValue(new Error("no history"));
+    tauriMocks.getCursorModelActivity.mockResolvedValue({
+      status: "unreadable",
+      rows: [],
+    });
+
+    const { getByLabelText } = render(
+      <ChartsSection
+        providerId="cursor"
+        accountEmail="locked-tracking@test"
+        t={(key) => key}
+      />,
+    );
+
+    const card = await waitFor(() => getByLabelText("Cursor activity by model over 30 days"));
+    expect(card.textContent).toMatch(/could not read local Composer tracking/i);
+    expect(card.textContent).not.toMatch(/not tracking local Composer activity/i);
   });
 
   it("collapses a long project list behind a show-more toggle", async () => {

@@ -790,6 +790,7 @@ fn inactive_windows(snapshot: &ProviderUsageSnapshot) -> HashMap<String, String>
     snapshot
         .inactive_rate_windows
         .iter()
+        .filter(|window| window.state != "unavailable")
         .filter(|window| !ignored_capacity_window(snapshot, &window.id, &window.title))
         .map(|window| {
             (
@@ -1634,6 +1635,42 @@ mod tests {
             reset + Duration::minutes(2),
         ));
         assert_eq!(allowance[0].kind, CapacityEventKind::AllowanceGranted);
+    }
+
+    #[test]
+    fn cursor_plan_unavailable_is_not_a_lifted_window() {
+        let start = Utc::now();
+        let reset = start + Duration::hours(4);
+        let mut observer = CapacityEventObserver::default();
+        let mut baseline = snapshot(start, 30.0, reset);
+        baseline.provider_id = "cursor".into();
+        baseline.display_name = "Cursor".into();
+        baseline.primary_label = Some("Plan".into());
+        observer.observe(&baseline);
+
+        let mut missing = snapshot(start + Duration::minutes(5), 0.0, reset);
+        missing.provider_id = "cursor".into();
+        missing.display_name = "Cursor".into();
+        missing.primary_label = Some("Plan".into());
+        missing
+            .inactive_rate_windows
+            .push(InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+        assert!(observer.observe(&missing).is_empty());
+
+        let mut later = missing.clone();
+        later.updated_at = (start + Duration::minutes(10)).to_rfc3339();
+        let events = observer.observe(&later);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.kind != CapacityEventKind::WindowLifted),
+            "a missing Plan reading must not confirm as a lifted limit"
+        );
     }
 
     #[test]

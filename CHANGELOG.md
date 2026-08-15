@@ -2,6 +2,12 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **Cursor no longer treats missing usage as zero.** An empty `individualUsage` object used to paint a 0% monthly bar and hide a real team pool sitting next to it. Monthly is now marked unavailable when Cursor reports no reading, and an empty individual object falls through to team usage. On-demand stays billed spend; plan and included dollars are labeled **Included** so they are not read as an invoice. A missing Composer tracking database is shown as unavailable, not as no activity.
+
+### Internal
+- Cursor usage-summary and Composer-activity paths now have deterministic fixtures for normal, partial, duplicate, and malformed data.
+
 ## [Ceiling] 1.5.31 - 2026-08-14
 
 Hardens updates, credentials, and the local serve API, and ships the unpublished 1.5.30 work: a second tray click hides the dashboard, Grok banked resets show, and the taskbar strip finds a second lane when the usual gap is gone.

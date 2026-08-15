@@ -117,8 +117,9 @@ Do not add ambient shimmer, breathing, glow loops, or continuously moving gradie
 - Windows toast and bar animation come from the same confirmed capacity event.
 - Confirmed events cover scheduled and surprise resets, significant reset-time
   moves, lifted/restored windows, and newly reported extra allowance.
-- Cursor Promotional and On-demand pools are display-only bonus buckets. They
-  never emit capacity events or OS alerts.
+- Cursor On-demand is billed spend. It never emits capacity events or OS
+  alerts. Do not invent a Promotional meter — Cursor does not report a grant
+  to meter bonus consumption against.
 - The dedicated **Reset and Capacity Alerts** preference controls OS alerts;
   turning it off does not disable the in-bar event treatment.
 - Respect the global animation preference and `prefers-reduced-motion`.

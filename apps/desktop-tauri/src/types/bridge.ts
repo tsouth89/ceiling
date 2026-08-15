@@ -779,6 +779,14 @@ export interface CursorModelActivity {
   requests: number;
 }
 
+/** Local Composer activity. `unavailable` is missing data, not zero usage. */
+export type CursorActivityStatus = "available" | "empty" | "unavailable" | "unreadable";
+
+export interface CursorActivitySnapshot {
+  status: CursorActivityStatus;
+  rows: CursorModelActivity[];
+}
+
 export interface LocalUsageWindowRequest {
   id: string;
   label: string;

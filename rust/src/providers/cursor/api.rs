@@ -2,6 +2,8 @@
 //!
 //! Uses browser cookies to authenticate with cursor.com API
 
+#[cfg(test)]
+use crate::core::EnforcementState;
 use crate::core::{
     CostSnapshot, InactiveRateWindow, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot,
     WindowAmount,
@@ -16,7 +18,9 @@ const NOT_ENFORCED: &str = "Not currently enforced by Cursor";
 const ON_DEMAND_ID: &str = "cursor-on-demand";
 const ON_DEMAND_TITLE: &str = "On-demand";
 const ON_DEMAND_PERIOD: &str = "On-demand";
-const MONTHLY_PERIOD: &str = "Monthly";
+/// Plan / overall / pooled cents are Cursor internal units, not an invoice.
+const INCLUDED_PERIOD: &str = "Included";
+const NO_USAGE_REPORTED: &str = "No usage reported";
 
 pub(super) type CursorUsageResult = (UsageSnapshot, Option<CostSnapshot>);
 
@@ -141,7 +145,13 @@ impl CursorApi {
         let mut cost_snapshot = None;
         let mut monthly_percent = None;
 
-        if let Some(individual) = &summary.individual_usage {
+        // An empty `individualUsage: {}` object is not a reading. Fall through
+        // to teamUsage instead of fabricating a 0% monthly meter.
+        if let Some(individual) = summary
+            .individual_usage
+            .as_ref()
+            .filter(|usage| individual_has_usage(usage))
+        {
             if let Some(plan) = &individual.plan {
                 monthly_percent = plan_monthly_percent(plan);
 
@@ -179,9 +189,9 @@ impl CursorApi {
             } else if let Some(overall) = &individual.overall {
                 // Overall is a single reported pool — keep it as monthly + cost only.
                 monthly_percent = Self::usage_percent(overall);
-                // Overall fills the cost slot as a monthly pool. On-demand still
+                // Overall fills the cost slot as included units. On-demand still
                 // surfaces as its own meter below; it must not replace this total.
-                cost_snapshot = Self::on_demand_cost(Some(overall), billing_end, MONTHLY_PERIOD);
+                cost_snapshot = Self::on_demand_cost(Some(overall), billing_end, INCLUDED_PERIOD);
             }
 
             // On-demand is a sibling of plan/overall on IndividualUsage. Read it
@@ -226,18 +236,32 @@ impl CursorApi {
                 Self::on_demand_cost(team.on_demand.as_ref(), billing_end, ON_DEMAND_PERIOD);
             if cost_snapshot.is_none() {
                 cost_snapshot = team.pooled.as_ref().and_then(|pooled| {
-                    Self::on_demand_cost(Some(pooled), billing_end, MONTHLY_PERIOD)
+                    Self::on_demand_cost(Some(pooled), billing_end, INCLUDED_PERIOD)
                 });
             }
         }
 
         let has_monthly_meter = monthly_percent.is_some();
-        if summary.is_unlimited == Some(true) && !has_monthly_meter {
-            inactives.push(InactiveRateWindow::new(
-                "cursor-monthly",
-                "Monthly",
-                NOT_ENFORCED,
-            ));
+        if !has_monthly_meter {
+            // UsageSnapshot always needs a primary window, but 0% is not a
+            // reading. Mark Monthly unavailable (or not enforced when Cursor
+            // says the plan is unlimited) so glance surfaces can tell.
+            if summary.is_unlimited == Some(true) {
+                inactives.push(InactiveRateWindow::new(
+                    "cursor-monthly",
+                    "Monthly",
+                    NOT_ENFORCED,
+                ));
+            } else {
+                // Title must stay Plan so EnforcementTracker shares the
+                // primary identity. "Monthly" would stick as a false
+                // unavailable row after a later plan reading appears.
+                inactives.push(InactiveRateWindow::unavailable(
+                    "cursor-plan",
+                    "Plan",
+                    NO_USAGE_REPORTED,
+                ));
+            }
         }
 
         let primary = RateWindow::with_details(
@@ -419,6 +443,18 @@ fn uses_percent_lanes(plan: &PlanUsage) -> bool {
         || plan.api_percent_used.is_some()
 }
 
+fn individual_has_usage(individual: &IndividualUsage) -> bool {
+    if individual.overall.is_some() || individual.on_demand.is_some() {
+        return true;
+    }
+    individual.plan.as_ref().is_some_and(|plan| {
+        plan_monthly_percent(plan).is_some()
+            || plan.auto_percent_used.is_some()
+            || plan.api_percent_used.is_some()
+            || plan_cost_snapshot(plan, None).is_some()
+    })
+}
+
 /// Cursor reports on-demand two ways: as a capped pool that can be metered, or
 /// as uncapped spend with no limit at all. Uncapped overdraft is still real
 /// money, so surface it as an explicit non-metering window instead of dropping
@@ -483,7 +519,7 @@ fn plan_cost_snapshot(
         return None;
     }
 
-    let mut cost = CostSnapshot::new(used_cents / 100.0, "USD", "Monthly");
+    let mut cost = CostSnapshot::new(used_cents / 100.0, "USD", INCLUDED_PERIOD);
     if limit_cents > 0.0 {
         cost = cost.with_limit(limit_cents / 100.0);
     }
@@ -712,7 +748,10 @@ mod tests {
         assert!((usage.primary.used_percent).abs() < 0.01);
         assert!(usage.secondary.is_none());
         assert!(usage.extra_rate_windows.is_empty());
-        assert!(usage.inactive_rate_windows.is_empty());
+        let monthly = inactive(&usage, "cursor-plan");
+        assert_eq!(monthly.title, "Plan");
+        assert_eq!(monthly.description, NO_USAGE_REPORTED);
+        assert_eq!(monthly.state, EnforcementState::Unavailable);
         assert!(cost.is_none());
     }
 
@@ -743,6 +782,10 @@ mod tests {
         assert!((cost.used - 3.5).abs() < 0.01);
         assert_eq!(cost.limit, Some(10.0));
         assert_eq!(cost.period, "On-demand");
+        // No plan/overall reading: Monthly is missing, not 0%.
+        let monthly = inactive(&usage, "cursor-plan");
+        assert_eq!(monthly.title, "Plan");
+        assert_eq!(monthly.state, EnforcementState::Unavailable);
     }
 
     #[test]
@@ -903,10 +946,11 @@ mod tests {
         let on_demand = extra(&usage, "cursor-on-demand");
         assert!((on_demand.window.used_percent - 18.0).abs() < 0.01);
 
-        // `overall` remains the reported total pool cost.
+        // `overall` remains the reported total pool, labeled as included
+        // units rather than billed on-demand spend.
         let cost = cost.expect("overall cost");
         assert!((cost.used - 25.0).abs() < 0.01);
-        assert_eq!(cost.period, "Monthly");
+        assert_eq!(cost.period, INCLUDED_PERIOD);
     }
 
     #[test]
@@ -1025,7 +1069,137 @@ mod tests {
         let summary = parse_summary(r#"{"teamUsage":{"pooled":{"used":5000,"limit":10000}}}"#);
         let (usage, cost) = api().build_result(summary, None).unwrap();
         assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
-        assert_eq!(cost.unwrap().used, 50.0);
+        let cost = cost.expect("pooled included units");
+        assert_eq!(cost.used, 50.0);
+        assert_eq!(cost.period, INCLUDED_PERIOD);
         assert!(usage.extra_rate_windows.is_empty());
+    }
+
+    #[test]
+    fn cursor_usage_fixtures_cover_normal_partial_duplicate_and_malformed() {
+        let (normal, normal_cost) = api()
+            .build_result(
+                parse_summary(include_str!("../fixtures/cursor/normal.json")),
+                None,
+            )
+            .expect("normal fixture");
+        assert!((normal.primary.used_percent - 16.0).abs() < 0.01);
+        assert!((normal.secondary.as_ref().unwrap().used_percent - 20.0).abs() < 0.01);
+        assert!((extra(&normal, "cursor-api").window.used_percent - 10.0).abs() < 0.01);
+        let billed = extra(&normal, ON_DEMAND_ID);
+        assert_eq!(billed.title, ON_DEMAND_TITLE);
+        assert!((billed.window.used_percent - 35.0).abs() < 0.01);
+        let cost = normal_cost.expect("on-demand owns the cost slot");
+        assert_eq!(cost.period, ON_DEMAND_PERIOD);
+        assert!((cost.used - 3.5).abs() < 0.01);
+        assert!(
+            !normal
+                .inactive_rate_windows
+                .iter()
+                .any(|window| window.id == "cursor-monthly")
+        );
+
+        let (partial, partial_cost) = api()
+            .build_result(
+                parse_summary(include_str!("../fixtures/cursor/partial.json")),
+                None,
+            )
+            .expect("partial fixture");
+        assert!(partial.secondary.is_none());
+        assert!((extra(&partial, ON_DEMAND_ID).window.used_percent - 35.0).abs() < 0.01);
+        assert_eq!(
+            partial_cost.expect("partial still bills on-demand").period,
+            ON_DEMAND_PERIOD
+        );
+        let monthly = inactive(&partial, "cursor-plan");
+        assert_eq!(monthly.title, "Plan");
+        assert_eq!(monthly.state, EnforcementState::Unavailable);
+        assert_eq!(monthly.description, NO_USAGE_REPORTED);
+
+        let (duplicate, duplicate_cost) = api()
+            .build_result(
+                parse_summary(include_str!("../fixtures/cursor/duplicate.json")),
+                None,
+            )
+            .expect("duplicate fixture");
+        // Individual wins when both individual and team payloads are present.
+        assert!((duplicate.primary.used_percent - 16.0).abs() < 0.01);
+        assert!((extra(&duplicate, ON_DEMAND_ID).window.used_percent - 35.0).abs() < 0.01);
+        let duplicate_cost = duplicate_cost.expect("individual on-demand");
+        assert_eq!(duplicate_cost.period, ON_DEMAND_PERIOD);
+        assert!(
+            (duplicate_cost.used - 3.5).abs() < 0.01,
+            "team on-demand $7.50 must not replace or add to individual $3.50"
+        );
+
+        let (malformed, malformed_cost) = api()
+            .build_result(
+                parse_summary(include_str!("../fixtures/cursor/malformed.json")),
+                None,
+            )
+            .expect("malformed-but-parseable fixture");
+        assert!(malformed.primary.resets_at.is_none());
+        assert!(malformed.primary.window_minutes.is_none());
+        assert!((malformed.primary.used_percent - 12.5).abs() < 0.01);
+        let amount = extra(&malformed, ON_DEMAND_ID)
+            .amount
+            .as_ref()
+            .expect("a reported cap is still an amount");
+        assert_eq!(amount.used, 0.0);
+        assert_eq!(amount.limit, Some(20.0));
+        assert_eq!(
+            malformed_cost.expect("cap-only on-demand").period,
+            ON_DEMAND_PERIOD
+        );
+    }
+
+    #[test]
+    fn empty_individual_usage_falls_through_to_team_instead_of_zero() {
+        let (usage, cost) = api()
+            .build_result(
+                parse_summary(include_str!(
+                    "../fixtures/cursor/empty-individual-with-team.json"
+                )),
+                None,
+            )
+            .expect("empty individual + team");
+        assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
+        let cost = cost.expect("team pooled included units");
+        assert_eq!(cost.period, INCLUDED_PERIOD);
+        assert!((cost.used - 50.0).abs() < 0.01);
+        assert!(
+            !usage
+                .inactive_rate_windows
+                .iter()
+                .any(|window| window.id == "cursor-monthly" || window.id == "cursor-plan")
+        );
+    }
+
+    #[test]
+    fn empty_plan_object_falls_through_to_team() {
+        let (usage, cost) = api()
+            .build_result(
+                parse_summary(include_str!("../fixtures/cursor/empty-plan-with-team.json")),
+                None,
+            )
+            .expect("empty plan + team");
+        assert!((usage.primary.used_percent - 50.0).abs() < 0.01);
+        let cost = cost.expect("team pooled included units");
+        assert_eq!(cost.period, INCLUDED_PERIOD);
+        assert!(
+            !usage
+                .inactive_rate_windows
+                .iter()
+                .any(|window| window.id == "cursor-plan")
+        );
+    }
+
+    #[test]
+    fn unparseable_cursor_summary_fails_closed() {
+        let err = serde_json::from_str::<UsageSummary>(include_str!(
+            "../fixtures/cursor/unparseable.json"
+        ))
+        .expect_err("wrong-typed percent must not become 0%");
+        assert!(err.to_string().contains("invalid type"));
     }
 }
