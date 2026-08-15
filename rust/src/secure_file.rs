@@ -21,6 +21,11 @@ const STATE_LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(2
 ///
 /// Every settings and credential store shares one lock so operations spanning
 /// multiple files cannot interleave with a writer for any one of those files.
+///
+/// Where the lock cannot be enforced at all - a filesystem without `flock`, a
+/// lock file this user can never open - the operation still runs, unserialized,
+/// and a warning names the lock path. Blocking every write would be worse than
+/// the interleaving risk, and the old lock protocol worked on those mounts.
 pub fn with_state_write_lock<T>(operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     let lock_path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
