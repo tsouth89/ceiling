@@ -10,6 +10,8 @@
 - **Cursor no longer treats missing usage as zero.** An empty `individualUsage` object used to paint a 0% monthly bar and hide a real team pool sitting next to it. Monthly is now marked unavailable when Cursor reports no reading, and an empty individual object falls through to team usage. On-demand stays billed spend; plan and included dollars are labeled **Included** so they are not read as an invoice. A missing Composer tracking database is shown as unavailable, not as no activity.
 - **Leftover English on glance surfaces now goes through locale keys.** Floatbar settings, freshness chips, account-status labels, Charts tab names, and About update copy used hardcoded English. They now use `en-US.ftl` (and zh-CN) so chips no longer show raw `stale` / `error` tokens.
 
+- **The command line stops filling your temp folder with log files.** Every `codexbar` run wrote a small log named after its process id and never removed it. The statusline command runs once per editor redraw, so an active day could leave thousands of files behind, and Windows does not reliably clear temp. A run that works now removes its own log, statusline writes none at all, and leftovers from older runs or from a crash are cleared after a day. A run that fails still keeps its log so there is something to read.
+
 ### Internal
 - Cursor usage-summary and Composer-activity paths now have deterministic fixtures for normal, partial, duplicate, and malformed data.
 

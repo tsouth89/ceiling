@@ -5,10 +5,52 @@ use codexbar::{
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 use tokio::runtime::Runtime;
 
+const LAUNCH_LOG_PREFIX: &str = "codexbar_launch_";
+const LAUNCH_LOG_SUFFIX: &str = ".log";
+/// Leftover launch logs older than this are swept on the next run. Long enough
+/// that someone who hit a failure can still find the log.
+const LAUNCH_LOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// Bound on removals per run, so a temp dir full of leftovers cannot stall a
+/// startup. Repeated runs converge.
+const LAUNCH_LOG_SWEEP_LIMIT: usize = 512;
+
 fn launch_log_path() -> PathBuf {
-    std::env::temp_dir().join(format!("codexbar_launch_{}.log", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "{LAUNCH_LOG_PREFIX}{}{LAUNCH_LOG_SUFFIX}",
+        std::process::id()
+    ))
+}
+
+/// `statusline` is invoked once per editor render, so it must not touch the
+/// disk on the way in. It reads cached state only and reports failures through
+/// its host, so there is no launch problem a temp log would explain.
+fn skips_launch_log(first_arg: Option<&str>) -> bool {
+    first_arg == Some("statusline")
+}
+
+fn is_launch_log(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.starts_with(LAUNCH_LOG_PREFIX) && name.ends_with(LAUNCH_LOG_SUFFIX)
+        })
+}
+
+/// Truncating open. The OS reuses PIDs, so an append would let one file grow
+/// across unrelated runs.
+fn start_launch_log(log_path: &Path, message: &str) {
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(message.as_bytes())
+        });
 }
 
 fn append_launch_log(log_path: &Path, message: &str) {
@@ -22,33 +64,88 @@ fn append_launch_log(log_path: &Path, message: &str) {
         });
 }
 
+/// Deletes launch logs left behind by runs that failed or were killed. The
+/// name check is a cheap string compare, so `metadata` is only paid for actual
+/// launch logs rather than for every file in the temp dir.
+fn sweep_stale_launch_logs_in(dir: &Path, keep: &Path, now: SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if removed >= LAUNCH_LOG_SWEEP_LIMIT {
+            break;
+        }
+        let path = entry.path();
+        if path == keep || !is_launch_log(&path) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > LAUNCH_LOG_MAX_AGE);
+        if stale && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 fn launch_arg_summary() -> String {
     let arg_count = std::env::args().count().saturating_sub(1);
     format!("{} CLI argument value(s) omitted", arg_count)
 }
 
 fn main() {
-    let log_path = launch_log_path();
-    append_launch_log(
-        &log_path,
-        &format!(
-            "main() started at {:?}\nArgs: {:?}\n",
-            std::time::SystemTime::now(),
-            launch_arg_summary()
-        ),
-    );
+    let first_arg = std::env::args().nth(1);
+    let log_path = (!skips_launch_log(first_arg.as_deref())).then(launch_log_path);
 
-    let exit_code = run(&log_path);
+    if let Some(path) = log_path.as_deref() {
+        start_launch_log(
+            path,
+            &format!(
+                "main() started at {:?}\nArgs: {:?}\n",
+                SystemTime::now(),
+                launch_arg_summary()
+            ),
+        );
+        sweep_stale_launch_logs_in(&std::env::temp_dir(), path, SystemTime::now());
+    }
 
-    append_launch_log(&log_path, &format!("Exiting with code: {}\n", exit_code));
+    let exit_code = run(log_path.as_deref());
+
+    if let Some(path) = log_path.as_deref() {
+        if exit_code == exit_codes::SUCCESS {
+            // A clean run has nothing to post-mortem, so it leaves no file
+            // behind. Without this every invocation seeds the temp dir forever.
+            let _ = std::fs::remove_file(path);
+        } else {
+            append_launch_log(path, &format!("Exiting with code: {}\n", exit_code));
+        }
+    }
 
     std::process::exit(exit_code);
 }
 
-fn run(log_path: &Path) -> i32 {
-    append_launch_log(log_path, &startup_log());
+fn run(log_path: Option<&Path>) -> i32 {
+    if let Some(path) = log_path {
+        append_launch_log(path, &startup_log());
+    }
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            // `Cli::parse()` exits the process itself for `--help`, `--version`,
+            // and usage errors, which would skip main()'s cleanup and strand
+            // the launch log. None of those are launch failures worth a file.
+            if let Some(path) = log_path {
+                let _ = std::fs::remove_file(path);
+            }
+            error.exit();
+        }
+    };
 
     if let Err(e) = logging::init(cli.verbose, cli.json_output) {
         eprintln!("Failed to initialize logging: {}", e);
@@ -172,5 +269,87 @@ mod tests {
         assert!(file_name.starts_with("codexbar_launch_"));
         assert!(file_name.ends_with(".log"));
         assert!(file_name.contains(&std::process::id().to_string()));
+    }
+
+    /// SBS-888: `statusline` runs once per editor render, so it must not write
+    /// a temp file on the way in.
+    #[test]
+    fn only_statusline_skips_the_launch_log() {
+        assert!(skips_launch_log(Some("statusline")));
+        assert!(!skips_launch_log(Some("usage")));
+        assert!(!skips_launch_log(Some("cost")));
+        assert!(!skips_launch_log(None));
+    }
+
+    #[test]
+    fn launch_log_names_are_recognized_without_matching_neighbours() {
+        assert!(is_launch_log(Path::new("/tmp/codexbar_launch_42.log")));
+        assert!(!is_launch_log(Path::new("/tmp/codexbar_launch_42.txt")));
+        assert!(!is_launch_log(Path::new("/tmp/other_launch_42.log")));
+        assert!(!is_launch_log(Path::new("/tmp/codexbar.log")));
+    }
+
+    /// A reused PID must not append onto a previous run's file.
+    #[test]
+    fn starting_a_launch_log_truncates_a_reused_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codexbar_launch_1.log");
+        std::fs::write(&path, b"stale content from a previous process\n").unwrap();
+
+        start_launch_log(&path, "fresh\n");
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh\n");
+    }
+
+    #[test]
+    fn sweep_removes_stale_launch_logs_but_spares_mine_and_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let abandoned_a = dir.path().join("codexbar_launch_1.log");
+        let abandoned_b = dir.path().join("codexbar_launch_2.log");
+        let mine = dir.path().join("codexbar_launch_3.log");
+        let unrelated = dir.path().join("something_else.log");
+        for path in [&abandoned_a, &abandoned_b, &mine, &unrelated] {
+            std::fs::write(path, b"x").unwrap();
+        }
+
+        // Age every file past the bound by moving `now` forward, rather than
+        // rewriting mtimes through a platform-specific API.
+        let later = SystemTime::now() + LAUNCH_LOG_MAX_AGE + Duration::from_secs(60);
+        let removed = sweep_stale_launch_logs_in(dir.path(), &mine, later);
+
+        assert_eq!(removed, 2);
+        assert!(!abandoned_a.exists());
+        assert!(!abandoned_b.exists());
+        assert!(mine.exists(), "the current process's log must survive");
+        assert!(unrelated.exists(), "unrelated temp files must survive");
+    }
+
+    #[test]
+    fn sweep_keeps_launch_logs_inside_the_age_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let recent = dir.path().join("codexbar_launch_9.log");
+        std::fs::write(&recent, b"x").unwrap();
+
+        // Just written, so well inside the 24-hour bound.
+        let removed = sweep_stale_launch_logs_in(
+            dir.path(),
+            &dir.path().join("codexbar_launch_1.log"),
+            SystemTime::now(),
+        );
+
+        assert_eq!(removed, 0);
+        assert!(recent.exists());
+    }
+
+    #[test]
+    fn sweep_tolerates_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone");
+
+        assert_eq!(
+            sweep_stale_launch_logs_in(&missing, &missing.join("x.log"), SystemTime::now()),
+            0
+        );
     }
 }
