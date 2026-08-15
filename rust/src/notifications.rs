@@ -2262,7 +2262,11 @@ mod tests {
     #[test]
     fn sub_dollar_days_do_not_count_toward_the_baseline() {
         assert_eq!(spend_baseline_usd(vec![0.05, 20.0]), 20.0);
-        assert!(!is_spend_spike(31.0, spend_baseline_usd(vec![0.05, 20.0]), 3.0));
+        assert!(!is_spend_spike(
+            31.0,
+            spend_baseline_usd(vec![0.05, 20.0]),
+            3.0
+        ));
         // Nothing but noise is still nothing to compare against.
         assert_eq!(spend_baseline_usd(vec![0.05, 0.20, 0.90]), 0.0);
     }
@@ -2280,10 +2284,6 @@ mod tests {
         assert_eq!(spend_baseline_usd(vec![0.0; 7]), 0.0);
     }
 
-    /// `emit_toast` also returns false for the per-refresh cap and the burst
-    /// limit, and enrichment runs inside the refresh that just raised a usage
-    /// alert. Marking the day sent before emitting spent the one spike alert on
-    /// a toast nobody saw.
     /// `emit_toast` returns false for the startup gate, the per-refresh cap,
     /// and the burst limit alike. Marking the day sent before emitting spent
     /// the one spike alert on a toast nobody saw — and enrichment runs inside

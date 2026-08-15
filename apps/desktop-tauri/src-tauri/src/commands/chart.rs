@@ -3011,6 +3011,32 @@ mod tests {
         assert_eq!(reading.baseline_usd, 0.0);
     }
 
+    /// A three-day working week is four quiet days and three real ones. Those
+    /// quiet days must not drag the median to zero, because a zero baseline
+    /// switches the detector off — the most ordinary schedule there is would
+    /// otherwise have disabled the alert entirely.
+    #[test]
+    fn spend_anomaly_reading_ignores_quiet_days_in_the_baseline() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+        let mut daily = HashMap::new();
+        daily.insert("2026-08-15".to_string(), 80.0);
+        // Three working days last week, the rest absent from the scan.
+        for offset in 1..=3 {
+            let date = (today - chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            daily.insert(date, 20.0);
+        }
+
+        let reading = spend_anomaly_reading(today, &daily).expect("a reading");
+
+        assert_eq!(reading.today_usd, 80.0);
+        assert_eq!(
+            reading.baseline_usd, 20.0,
+            "the four quiet days must not count as $0 workdays"
+        );
+    }
+
     #[test]
     fn period_from_daily_series_empty_when_range_misses() {
         let series = daily_series_from_report(&[("2026-06-01".into(), 10.0)]);
