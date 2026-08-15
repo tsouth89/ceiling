@@ -139,9 +139,16 @@ number-input spinner arrows, the text caret, and the selection highlight.
   and `textarea`, not only on the root element. `color-scheme` is what the
   engine draws the arrows from, and the app theme can differ from the Windows
   theme, so inheriting it risks a light spinner on a dark field.
-- **Selection** is one document-wide `::selection` rule, not a per-control pin.
-  That is deliberate: a selected run should look the same in a form field, in
-  About copy, and in the setup command block.
+- **Selection** is a document-wide `::selection` rule, so a selected run looks
+  the same in a form field, in About copy, and in the setup command block. It
+  also names `input`/`textarea` explicitly, because their text lives in a
+  form-control shadow tree a document rule may not reach, and it sets
+  `-webkit-text-fill-color` as well as `color`, because Blink paints
+  form-control glyphs through the former.
+- Under `forced-colors: active` (Windows Contrast Themes) both selection and
+  caret hand back to `Highlight`/`HighlightText` and `CanvasText`. Highlight
+  pseudos are not reliably force-adjusted, so an app painting its own selection
+  can otherwise stay cyan on a yellow-on-black page.
 - Selection is a **solid** accent fill with its own ink (`--selection-ink`),
   never a translucent wash. The number that matters is the selection against
   the *unselected* field, not the text against the selection: an accent at 38%

@@ -6195,9 +6195,40 @@ textarea {
    — selecting `15` in a 52px number field was invisible. What matters here is
    the contrast of the selection against the *unselected* field, not just of
    the text against the selection. */
-::selection {
+::selection,
+/* The controls are listed as well as the document rule. Text inside an
+   `<input>` or `<textarea>` lives in a form-control shadow tree, and a bare
+   document `::selection` is not guaranteed to reach it — which would leave the
+   engine blue in the very fields this change is about while About copy went
+   cyan. Naming them costs nothing and removes the doubt. */
+input::selection,
+textarea::selection {
   background: var(--accent);
   color: var(--selection-ink);
+  /* Blink paints form-control glyphs through `-webkit-text-fill-color`, which
+     wins over `color`. Without this the digits in a number field can keep the
+     unselected fill and sit at ~2.2:1 on the accent. */
+  -webkit-text-fill-color: var(--selection-ink);
+}
+
+/* Windows Contrast Themes. Highlight pseudos are not reliably force-adjusted,
+   so an app that paints its own selection can keep showing cyan-on-slate on a
+   yellow-on-black page. Hand both selection and the caret back to the system. */
+@media (forced-colors: active) {
+  ::selection,
+  input::selection,
+  textarea::selection {
+    background: Highlight;
+    color: HighlightText;
+    -webkit-text-fill-color: HighlightText;
+  }
+
+  .select,
+  .number-input,
+  .text-input,
+  textarea {
+    caret-color: CanvasText;
+  }
 }
 
 /* ── Provider sidebar (Preferences › Providers) ───────────────────── */
