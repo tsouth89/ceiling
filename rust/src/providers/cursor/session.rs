@@ -122,7 +122,7 @@ fn default_state_db_path() -> Option<PathBuf> {
         env_override.as_deref(),
         dirs::config_dir(),
         dirs::data_dir(),
-        Path::exists,
+        Path::is_file,
     )
 }
 
@@ -135,7 +135,7 @@ fn default_state_db_path_from(
     env_override: Option<&str>,
     config_dir: Option<PathBuf>,
     data_dir: Option<PathBuf>,
-    exists: impl Fn(&Path) -> bool,
+    is_file: impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     if let Some(path) = env_override
         && !path.trim().is_empty()
@@ -147,12 +147,12 @@ fn default_state_db_path_from(
     let data_candidate = data_dir.as_deref().map(state_vscdb_under);
 
     if let Some(path) = config_candidate.as_ref()
-        && exists(path)
+        && is_file(path)
     {
         return config_candidate;
     }
     if let Some(path) = data_candidate.as_ref()
-        && exists(path)
+        && is_file(path)
     {
         return data_candidate;
     }
@@ -419,5 +419,26 @@ mod tests {
                 false
             });
         assert_eq!(path, Some(expected));
+    }
+
+    #[test]
+    fn config_dir_directory_named_state_vscdb_is_skipped_for_data_dir_file() {
+        let config_root = tempfile::tempdir().unwrap();
+        let data_root = tempfile::tempdir().unwrap();
+
+        let config_db = state_vscdb_under(config_root.path());
+        std::fs::create_dir_all(&config_db).unwrap();
+
+        let data_db = state_vscdb_under(data_root.path());
+        std::fs::create_dir_all(data_db.parent().unwrap()).unwrap();
+        std::fs::write(&data_db, b"").unwrap();
+
+        let path = default_state_db_path_from(
+            None,
+            Some(config_root.path().to_path_buf()),
+            Some(data_root.path().to_path_buf()),
+            Path::is_file,
+        );
+        assert_eq!(path, Some(data_db));
     }
 }
