@@ -112,6 +112,14 @@ fn test_fluent_preserves_literal_placeholders_and_status_spacing() {
         " (Error)"
     );
     assert_eq!(
+        get_text(Language::English, LocaleKey::AboutCopyrightSuffix),
+        " by Peter Steinberger."
+    );
+    assert_eq!(
+        get_text(Language::Chinese, LocaleKey::AboutCopyrightSuffix),
+        "，作者 Peter Steinberger。"
+    );
+    assert_eq!(
         get_text(Language::English, LocaleKey::TrayCreditsRemaining),
         "Credits remaining {}%"
     );
