@@ -16,6 +16,7 @@ import type {
   ProviderDetail,
   ProviderLocalUsageSummary,
   LocalApiValueProvider,
+  ActivityHeatmap,
   CursorActivitySnapshot,
   ProviderSummary,
   ProviderUsageSnapshot,
@@ -289,6 +290,11 @@ export function getLocalApiValueTotals(options?: {
     });
   }
   return invoke<LocalApiValueProvider[]>("get_local_api_value_totals");
+}
+
+/** Local activity by calendar day and clock hour, for the heatmap card. */
+export function getLocalActivityHeatmap(): Promise<ActivityHeatmap> {
+  return invoke<ActivityHeatmap>("get_local_activity_heatmap");
 }
 
 export function getCursorModelActivity(): Promise<CursorActivitySnapshot> {
