@@ -33,9 +33,12 @@ const CHART_CACHE_VERSION: u8 = 9;
 // (SBS-887). A rolled window is never read again; keep entries only long enough
 // to survive a reset the user did not open Charts for.
 const CHART_CACHE_MAX_ENTRY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-// Backstop for the case age alone does not cover: many providers/accounts/
-// sources churning inside one week.
-const CHART_CACHE_MAX_ENTRIES: usize = 64;
+// Pure backstop, not the primary mechanism: age is what actually retires a
+// rolled window. Sized well above a normal week so count eviction does not
+// reach still-current keys. Charts/Compare mint a key per 5-hour roll (~5 a day
+// per provider) while MenuCard and provider detail hold separate stable keys,
+// so a few providers across a week is already past a hundred entries.
+const CHART_CACHE_MAX_ENTRIES: usize = 256;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -721,15 +724,33 @@ fn load_persisted_chart_cache() -> PersistedChartCache {
     let Some(path) = chart_cache_path() else {
         return PersistedChartCache::default();
     };
-    let mut cache: PersistedChartCache = fs::read(path)
+    let cache: PersistedChartCache = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .filter(|cache: &PersistedChartCache| cache.version == CHART_CACHE_VERSION)
         .unwrap_or_default();
-    // An install that predates the bound starts oversized. Shrink on read so it
-    // converges on first launch instead of waiting for the next chart fetch.
-    prune_chart_cache(&mut cache, "");
+
+    let (cache, shrank) = prune_loaded_chart_cache(cache);
+    if shrank {
+        // Write it back. Without this the file stays oversized until some later
+        // `store_chart_data` happens to run, so a user who never opens Charts
+        // pays the full read on every launch forever.
+        persist_chart_cache(&cache);
+    }
     cache
+}
+
+/// Prunes a cache just read from disk, reporting whether it shrank so the
+/// caller knows to write it back. Split out from [`load_persisted_chart_cache`]
+/// because the load path resolves a real user config directory.
+fn prune_loaded_chart_cache(mut cache: PersistedChartCache) -> (PersistedChartCache, bool) {
+    let before = cache.entries.len();
+    prune_chart_cache(&mut cache, "");
+    let shrank = cache.entries.len() != before;
+    if shrank {
+        cache.version = CHART_CACHE_VERSION;
+    }
+    (cache, shrank)
 }
 
 fn persist_chart_cache(cache: &PersistedChartCache) {
@@ -2279,18 +2300,19 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, CHART_CACHE_MAX_ENTRIES, CachedProviderChartData,
-        ChartAccountScope, CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage,
-        LocalProjectCost, LocalTokenBreakdown, LocalUsageWindowRequest, PersistedChartCache,
-        ProviderChartData, ProviderLocalUsageSummary, activity_heatmap_days,
-        activity_hours_for_provider, api_value_period, assemble_activity_heatmap, chart_cache_key,
-        comparison_period_specs, cost_fetch_failure_allows_early_retry, current_unix_ms,
-        daily_series_from_report, effort_breakdown, format_cost_csv, local_midnight_in_tz,
-        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
-        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
-        pricing_coverage_tokens, project_breakdown, prune_chart_cache, resolve_chart_account_scope,
-        spend_anomaly_reading, spend_budget_period_details, token_breakdown,
-        token_cost_cache_is_fresh,
+        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, CHART_CACHE_MAX_ENTRIES, CHART_CACHE_VERSION,
+        CachedProviderChartData, ChartAccountScope, CostFetchFailure, LocalEffortCost,
+        LocalModelCost, LocalPlanUsage, LocalProjectCost, LocalTokenBreakdown,
+        LocalUsageWindowRequest, PersistedChartCache, ProviderChartData, ProviderLocalUsageSummary,
+        activity_heatmap_days, activity_hours_for_provider, api_value_period,
+        assemble_activity_heatmap, chart_cache_key, comparison_period_specs,
+        cost_fetch_failure_allows_early_retry, current_unix_ms, daily_series_from_report,
+        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        local_yesterday_window_utc, localized_estimate_note, model_breakdown,
+        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
+        project_breakdown, prune_chart_cache, prune_loaded_chart_cache,
+        resolve_chart_account_scope, spend_anomaly_reading, spend_budget_period_details,
+        token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2393,6 +2415,39 @@ mod tests {
         prune_chart_cache(&mut cache, "");
 
         assert_eq!(cache.entries.len(), 2);
+    }
+
+    /// A cache that predates the bound has to be written back, or the file stays
+    /// oversized until some later store happens to run and every launch pays the
+    /// full read.
+    #[test]
+    fn a_shrunk_cache_reports_that_it_needs_writing_back() {
+        let now = current_unix_ms();
+        let day_ms = 24 * 60 * 60 * 1_000;
+        let oversized = cache_with([
+            ("fresh".to_string(), now),
+            ("dead-window".to_string(), now - 30 * day_ms),
+        ]);
+
+        let (pruned, shrank) = prune_loaded_chart_cache(oversized);
+
+        assert!(shrank, "dropping an entry must ask for a write-back");
+        assert_eq!(pruned.entries.len(), 1);
+        assert_eq!(
+            pruned.version, CHART_CACHE_VERSION,
+            "the written-back file must carry the current version"
+        );
+    }
+
+    #[test]
+    fn an_already_bounded_cache_is_not_rewritten() {
+        let now = current_unix_ms();
+        let cache = cache_with([("a".to_string(), now), ("b".to_string(), now - 1_000)]);
+
+        let (pruned, shrank) = prune_loaded_chart_cache(cache);
+
+        assert!(!shrank, "no change means no pointless disk write");
+        assert_eq!(pruned.entries.len(), 2);
     }
 
     #[test]
