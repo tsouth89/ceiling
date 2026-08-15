@@ -123,8 +123,9 @@ Temporary provider-reported promotions use `promoSignals`:
 | `inclusion` | Hidden | Hidden | Neutral chip |
 
 The strip draws no promo chrome at all — `FloatBar.tsx` puts the boost title in
-the pill's `title` text and nothing else, and `FloatBar.test.tsx` pins that with
-"keeps promo signals out of the strip chrome". The strip is persistent desktop
+the pill's `title` text and nothing else. "keeps promo signals out of the strip
+chrome" in `FloatBar.test.tsx` pins both halves: the absent chip and pill
+classes, and the title that must still carry it. The strip is persistent desktop
 furniture; a temporary promotion is not worth a permanent mark on it.
 
 The detail chip's accent treatment is a border plus a 1px ring, never a halo:

@@ -51,7 +51,9 @@ function stripComments(css) {
  * block is allowed to drop the semicolon, and `.x{box-shadow:0 0 8px red}` is
  * valid CSS that a `;`-only pattern never even inspects.
  */
-const BOX_SHADOW = /box-shadow\s*:\s*([^;{}]+)\s*(?:;|\})/g;
+// Case-insensitive: CSS property names are, so `BOX-SHADOW:` renders fine and
+// a case-sensitive scan would report a clean sheet without reading it.
+const BOX_SHADOW = /box-shadow\s*:\s*([^;{}]+)\s*(?:;|\})/gi;
 
 /** Split a box-shadow value into layers, ignoring commas inside `color-mix(…)`. */
 function shadowLayers(value) {
@@ -72,9 +74,24 @@ function shadowLayers(value) {
   return layers.map((layer) => layer.trim()).filter(Boolean);
 }
 
+// Blank out function calls so a colour argument cannot be read as a keyword.
+// `0 0 8px var(--chip-inset)` is an outward glow, but testing the whole layer
+// for the word sees the token name and waves it through — and this tree already
+// says "inset" on plenty of shadows, so hoisting one into a variable is a
+// realistic next edit.
+function withoutFunctions(layer) {
+  let out = layer;
+  let previous;
+  do {
+    previous = out;
+    out = out.replace(/\([^()]*\)/g, " ");
+  } while (out !== previous);
+  return out;
+}
+
 /** `0 0 8px <color>` is a glow; `0 0 0 1px <color>` and `0 1px 3px` are not. */
 function isGlow(layer) {
-  if (/\binset\b/.test(layer)) return false;
+  if (/\binset\b/i.test(withoutFunctions(layer))) return false;
   // Read the leading run of lengths and stop at the colour. A bare `0` is a
   // valid CSS length, so the unit is optional.
   const lengths = [];
@@ -94,7 +111,12 @@ function assertDetectorWorks() {
     ["0 0 0 2px red", false],
     ["0 1px 3px rgba(0, 0, 0, 0.3)", false],
     ["inset 0 0 6px red", false],
+    ["INSET 0 0 6px red", false],
     ["0 0 9px color-mix(in srgb, red 20%, blue)", true],
+    // The keyword only counts outside a function call.
+    ["0 0 8px var(--chip-inset)", true],
+    ["0 0 8px var(--inset-color)", true],
+    ["0 0 0 1px var(--chip-inset)", false],
   ];
   for (const [layer, expected] of cases) {
     if (isGlow(layer) !== expected) {
@@ -115,6 +137,9 @@ function assertDetectorWorks() {
     [".a { box-shadow: 0 0 8px red }", 1, "brace-terminated"],
     ["/* box-shadow: 0 0 8px red; */", 0, "inside a comment"],
     [".a { box-shadow: 0 1px 3px red; }", 0, "drop shadow"],
+    // CSS property names are case-insensitive.
+    [".a { BOX-SHADOW: 0 0 8px red; }", 1, "uppercase property"],
+    [".a { Box-Shadow: 0 0 8px red; }", 1, "mixed-case property"],
   ];
   for (const [css, expected, label] of scanCases) {
     if (scan(css).length !== expected) {

@@ -749,6 +749,13 @@ describe("FloatBar", () => {
       expect(container.querySelector(".floatbar__chip--promo")).toBeNull();
       expect(container.querySelector(".floatbar__pill--promo-boost")).toBeNull();
     });
+
+    // Out of the chrome, but not lost: the tooltip is the whole of the strip's
+    // promo contract, and asserting only the absent classes left that half
+    // unpinned — dropping the title from `titleBits` would still have passed.
+    expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
+      "promo promotional",
+    );
   });
 
   it("polls refreshProvidersIfStale on the configured interval", async () => {
