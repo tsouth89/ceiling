@@ -639,9 +639,7 @@ fn select_auth_scope(map: &serde_json::Map<String, Value>) -> Option<(String, &V
 
     let active: Vec<&UsableAuthScope<'_>> = usable
         .iter()
-        .filter(|candidate| {
-            candidate.marked_active || named_active.iter().any(|name| *name == candidate.scope)
-        })
+        .filter(|candidate| candidate.marked_active || named_active.contains(&candidate.scope))
         .collect();
 
     let xai: Vec<&UsableAuthScope<'_>> = usable
