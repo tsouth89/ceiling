@@ -185,53 +185,69 @@ pub(crate) fn schedule_refresh_enrichment(app: &tauri::AppHandle, settings: &Set
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
         crate::commands::refresh_provider_local_usage_cache(provider_ids.clone()).await;
-        if settings.show_notifications && settings.spend_budget_alerts_enabled {
-            let Some(total) = crate::commands::load_spend_budget_total(
-                provider_ids.clone(),
-                settings.spend_budget_period.clone(),
-            )
-            .await
-            else {
-                tracing::warn!("Unable to calculate local estimated API-value budget");
-                return;
-            };
-            let state = app.state::<Mutex<AppState>>();
-            match state.lock() {
-                Ok(mut guard) => guard.notification_manager.check_spend_budget(
-                    &total.cycle_id,
-                    total.period_label,
-                    total.estimated_usd,
-                    &settings,
-                ),
-                Err(error) => {
-                    tracing::warn!(
-                        "failed to lock app state for spend budget notification: {error}"
-                    )
-                }
-            }
-        }
-        if settings.show_notifications && settings.spend_anomaly_alerts_enabled {
-            let Some(reading) = crate::commands::load_spend_anomaly_reading(provider_ids).await
-            else {
-                tracing::warn!("Unable to calculate the local estimated API-value baseline");
-                return;
-            };
-            let state = app.state::<Mutex<AppState>>();
-            match state.lock() {
-                Ok(mut guard) => guard.notification_manager.check_spend_anomaly(
-                    &reading.day_id,
-                    reading.today_usd,
-                    reading.baseline_usd,
-                    &settings,
-                ),
-                Err(error) => {
-                    tracing::warn!(
-                        "failed to lock app state for spend anomaly notification: {error}"
-                    )
-                }
-            }
-        }
+        // Independent alerts, so they run independently. Bailing out of the
+        // whole task when one scan fails would let a budget hiccup silence the
+        // spike detector, which is the alert you most want on a bad day.
+        check_spend_budget_alert(&app, &settings, provider_ids.clone()).await;
+        check_spend_anomaly_alert(&app, &settings, provider_ids).await;
     });
+}
+
+async fn check_spend_budget_alert(
+    app: &tauri::AppHandle,
+    settings: &Settings,
+    provider_ids: Vec<String>,
+) {
+    if !(settings.show_notifications && settings.spend_budget_alerts_enabled) {
+        return;
+    }
+    let Some(total) = crate::commands::load_spend_budget_total(
+        provider_ids,
+        settings.spend_budget_period.clone(),
+    )
+    .await
+    else {
+        tracing::warn!("Unable to calculate local estimated API-value budget");
+        return;
+    };
+    let state = app.state::<Mutex<AppState>>();
+    match state.lock() {
+        Ok(mut guard) => guard.notification_manager.check_spend_budget(
+            &total.cycle_id,
+            total.period_label,
+            total.estimated_usd,
+            settings,
+        ),
+        Err(error) => {
+            tracing::warn!("failed to lock app state for spend budget notification: {error}")
+        }
+    }
+}
+
+async fn check_spend_anomaly_alert(
+    app: &tauri::AppHandle,
+    settings: &Settings,
+    provider_ids: Vec<String>,
+) {
+    if !(settings.show_notifications && settings.spend_anomaly_alerts_enabled) {
+        return;
+    }
+    let Some(reading) = crate::commands::load_spend_anomaly_reading(provider_ids).await else {
+        tracing::warn!("Unable to calculate the local estimated API-value baseline");
+        return;
+    };
+    let state = app.state::<Mutex<AppState>>();
+    match state.lock() {
+        Ok(mut guard) => guard.notification_manager.check_spend_anomaly(
+            &reading.day_id,
+            reading.today_usd,
+            reading.baseline_usd,
+            settings,
+        ),
+        Err(error) => {
+            tracing::warn!("failed to lock app state for spend anomaly notification: {error}")
+        }
+    }
 }
 
 #[cfg(test)]
