@@ -14,11 +14,14 @@ Visual system for the tray flyout and taskbar-adjacent capacity strip (SOU-127).
 
 ## Webview security posture
 
-The shipped CSP grants the webview no network reach. Every provider call runs in
-Rust, so `connect-src` is `'self' ipc: http://ipc.localhost` and nothing else —
-in particular, no `localhost`/`127.0.0.1` origins. The Vite dev server and its
-HMR socket get those from a dev-only config overlay, never from the release
-build (SBS-819).
+The webview must have no network reach of its own. Every provider call runs in
+Rust, so the release `connect-src` is required to be `'self' ipc:
+http://ipc.localhost` and nothing else — in particular, no `localhost` or
+`127.0.0.1` origins, which exist only for the Vite dev server and its HMR
+socket and belong in a dev-only config overlay.
+
+Tracked in SBS-819; check `apps/desktop-tauri/src-tauri/tauri.conf.json` for
+what the current release build actually ships.
 
 ## Tokens
 
@@ -114,12 +117,17 @@ Detail lists **every** measured window plus inactive rows. Do not truncate to tw
 
 Temporary provider-reported promotions use `promoSignals`:
 
-| Kind | Strip | Overview |
-|---|---|---|
-| `boost` | Soft cyan edge + chip | Hidden; detail surfaces only |
-| `inclusion` | Hidden | Hidden; detail surfaces only |
+| Kind | Strip | Overview | Detail |
+|---|---|---|---|
+| `boost` | Hidden (named in the pill tooltip only) | Hidden | Accent chip |
+| `inclusion` | Hidden | Hidden | Neutral chip |
 
-"Soft cyan edge" means a crisp accent border and a 1px ring. It is not a halo:
+The strip draws no promo chrome at all — `FloatBar.tsx` puts the boost title in
+the pill's `title` text and nothing else, and `FloatBar.test.tsx` pins that with
+"keeps promo signals out of the strip chrome". The strip is persistent desktop
+furniture; a temporary promotion is not worth a permanent mark on it.
+
+The detail chip's accent treatment is a border plus a 1px ring, never a halo:
 the no-glow rule above has no exceptions, promos included.
 
 Account identity is also hidden from overview cards. Provider settings and the

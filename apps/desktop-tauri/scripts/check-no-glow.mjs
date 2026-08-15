@@ -37,6 +37,22 @@ if (sheets.length === 0) {
   process.exit(2);
 }
 
+// Blank out CSS block comments, keeping newlines so reported line numbers still
+// point at the real line. Without this, a reviewer noting the old halo value
+// next to a fixed rule turns prebuild red over a shadow nothing renders.
+function stripComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "));
+}
+
+/**
+ * Every `box-shadow` declaration and its value.
+ *
+ * A declaration may be terminated by `}` instead of `;` — the last one in a
+ * block is allowed to drop the semicolon, and `.x{box-shadow:0 0 8px red}` is
+ * valid CSS that a `;`-only pattern never even inspects.
+ */
+const BOX_SHADOW = /box-shadow\s*:\s*([^;{}]+)\s*(?:;|\})/g;
+
 /** Split a box-shadow value into layers, ignoring commas inside `color-mix(…)`. */
 function shadowLayers(value) {
   const layers = [];
@@ -86,6 +102,26 @@ function assertDetectorWorks() {
       process.exit(2);
     }
   }
+
+  // The scan is the other half of the gate: a value it never extracts is a
+  // value isGlow never sees.
+  const scan = (css) =>
+    [...stripComments(css).matchAll(BOX_SHADOW)].flatMap((match) =>
+      shadowLayers(match[1]).filter(isGlow),
+    );
+  const scanCases = [
+    [".a { box-shadow: 0 0 8px red; }", 1, "semicolon-terminated"],
+    // Valid CSS: the last declaration in a block may omit the semicolon.
+    [".a { box-shadow: 0 0 8px red }", 1, "brace-terminated"],
+    ["/* box-shadow: 0 0 8px red; */", 0, "inside a comment"],
+    [".a { box-shadow: 0 1px 3px red; }", 0, "drop shadow"],
+  ];
+  for (const [css, expected, label] of scanCases) {
+    if (scan(css).length !== expected) {
+      console.error(`[check-css] scan is broken on: ${label}`);
+      process.exit(2);
+    }
+  }
 }
 
 assertDetectorWorks();
@@ -103,7 +139,7 @@ for (const path of sheets) {
     process.exit(2);
   }
 
-  const declarations = [...css.matchAll(/box-shadow\s*:\s*([^;]+);/g)];
+  const declarations = [...stripComments(css).matchAll(BOX_SHADOW)];
   scanned += declarations.length;
 
   for (const declaration of declarations) {
