@@ -10,25 +10,54 @@ use tokio::runtime::Runtime;
 
 const LAUNCH_LOG_PREFIX: &str = "codexbar_launch_";
 const LAUNCH_LOG_SUFFIX: &str = ".log";
+/// Launch logs live in their own directory under temp. Sweeping the temp root
+/// would mean a name check on every entry, and Windows `%TEMP%` routinely holds
+/// tens of thousands of installer and browser files.
+const LAUNCH_LOG_DIR: &str = "codexbar-launch-logs";
 /// Leftover launch logs older than this are swept on the next run. Long enough
 /// that someone who hit a failure can still find the log.
 const LAUNCH_LOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-/// Bound on removals per run, so a temp dir full of leftovers cannot stall a
+/// Bound on removals per run, so a directory full of leftovers cannot stall a
 /// startup. Repeated runs converge.
 const LAUNCH_LOG_SWEEP_LIMIT: usize = 512;
 
-fn launch_log_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
+/// The launch-log directory, created if missing.
+///
+/// Returns `None` when the path is not a real directory. On a shared `/tmp`
+/// the name could be a symlink someone else planted to redirect our writes and
+/// our sweep, so anything but a true directory is refused.
+fn launch_log_dir_in(temp_dir: &Path) -> Option<PathBuf> {
+    let dir = temp_dir.join(LAUNCH_LOG_DIR);
+    std::fs::create_dir_all(&dir).ok()?;
+    // `symlink_metadata` does not follow, so a symlink reports `is_dir()` false.
+    std::fs::symlink_metadata(&dir)
+        .ok()
+        .filter(std::fs::Metadata::is_dir)
+        .map(|_| dir)
+}
+
+fn launch_log_path() -> Option<PathBuf> {
+    let dir = launch_log_dir_in(&std::env::temp_dir())?;
+    Some(dir.join(format!(
         "{LAUNCH_LOG_PREFIX}{}{LAUNCH_LOG_SUFFIX}",
         std::process::id()
-    ))
+    )))
 }
 
 /// `statusline` is invoked once per editor render, so it must not touch the
 /// disk on the way in. It reads cached state only and reports failures through
 /// its host, so there is no launch problem a temp log would explain.
-fn skips_launch_log(first_arg: Option<&str>) -> bool {
-    first_arg == Some("statusline")
+///
+/// Scans every argument rather than just the first: clap accepts the global
+/// flags before the subcommand, so `codexbar --verbose statusline` is the same
+/// per-render path. No global flag takes `statusline` as a value (`--log-level`
+/// is restricted to log levels), so a bare scan cannot misfire on one.
+fn skips_launch_log<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|arg| arg.as_ref() == "statusline")
 }
 
 fn is_launch_log(path: &Path) -> bool {
@@ -39,13 +68,21 @@ fn is_launch_log(path: &Path) -> bool {
         })
 }
 
-/// Truncating open. The OS reuses PIDs, so an append would let one file grow
-/// across unrelated runs.
+/// Starts a run's log, replacing whatever the last holder of this PID left.
+///
+/// Uses `create_new` rather than a truncating open. PIDs are predictable, so on
+/// a shared temp dir someone can pre-create this name as a symlink to a file
+/// they want destroyed; a truncating open would follow it and empty the target.
+/// `create_new` is `O_CREAT | O_EXCL`, which refuses any existing entry
+/// including a symlink, so the worst a planted link can do is cost us the log.
 fn start_launch_log(log_path: &Path, message: &str) {
+    if std::fs::symlink_metadata(log_path).is_ok() {
+        // Removing a symlink unlinks the link, never the target.
+        let _ = std::fs::remove_file(log_path);
+    }
     let _ = std::fs::OpenOptions::new()
-        .create(true)
+        .create_new(true)
         .write(true)
-        .truncate(true)
         .open(log_path)
         .and_then(|mut f| {
             use std::io::Write;
@@ -53,9 +90,10 @@ fn start_launch_log(log_path: &Path, message: &str) {
         });
 }
 
+/// Appends to a log [`start_launch_log`] already created. Deliberately does not
+/// create: if the start failed, the entry at this path is not ours to write to.
 fn append_launch_log(log_path: &Path, message: &str) {
     let _ = std::fs::OpenOptions::new()
-        .create(true)
         .append(true)
         .open(log_path)
         .and_then(|mut f| {
@@ -64,9 +102,8 @@ fn append_launch_log(log_path: &Path, message: &str) {
         });
 }
 
-/// Deletes launch logs left behind by runs that failed or were killed. The
-/// name check is a cheap string compare, so `metadata` is only paid for actual
-/// launch logs rather than for every file in the temp dir.
+/// Deletes launch logs left behind by runs that failed or were killed. Scoped
+/// to the launch-log directory, so this never walks the temp root.
 fn sweep_stale_launch_logs_in(dir: &Path, keep: &Path, now: SystemTime) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
@@ -99,8 +136,9 @@ fn launch_arg_summary() -> String {
 }
 
 fn main() {
-    let first_arg = std::env::args().nth(1);
-    let log_path = (!skips_launch_log(first_arg.as_deref())).then(launch_log_path);
+    let log_path = (!skips_launch_log(std::env::args().skip(1)))
+        .then(launch_log_path)
+        .flatten();
 
     if let Some(path) = log_path.as_deref() {
         start_launch_log(
@@ -111,7 +149,9 @@ fn main() {
                 launch_arg_summary()
             ),
         );
-        sweep_stale_launch_logs_in(&std::env::temp_dir(), path, SystemTime::now());
+        if let Some(dir) = path.parent() {
+            sweep_stale_launch_logs_in(dir, path, SystemTime::now());
+        }
     }
 
     let exit_code = run(log_path.as_deref());
@@ -262,23 +302,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn launch_log_path_is_process_scoped() {
-        let path = launch_log_path();
+    fn launch_log_path_is_process_scoped_and_inside_its_own_directory() {
+        let path = launch_log_path().expect("launch log path");
         let file_name = path.file_name().and_then(|name| name.to_str()).unwrap();
 
         assert!(file_name.starts_with("codexbar_launch_"));
         assert!(file_name.ends_with(".log"));
         assert!(file_name.contains(&std::process::id().to_string()));
+        assert_eq!(
+            path.parent().and_then(|dir| dir.file_name()),
+            Some(std::ffi::OsStr::new(LAUNCH_LOG_DIR)),
+            "logs must live in their own directory so the sweep is scoped"
+        );
     }
 
     /// SBS-888: `statusline` runs once per editor render, so it must not write
-    /// a temp file on the way in.
+    /// a temp file on the way in. Clap takes the global flags before the
+    /// subcommand, so those spellings are the same per-render path.
     #[test]
-    fn only_statusline_skips_the_launch_log() {
-        assert!(skips_launch_log(Some("statusline")));
-        assert!(!skips_launch_log(Some("usage")));
-        assert!(!skips_launch_log(Some("cost")));
-        assert!(!skips_launch_log(None));
+    fn statusline_skips_the_launch_log_behind_global_flags() {
+        assert!(skips_launch_log(["statusline"]));
+        assert!(skips_launch_log(["--verbose", "statusline"]));
+        assert!(skips_launch_log(["--no-color", "statusline"]));
+        assert!(skips_launch_log(["--log-level", "info", "statusline"]));
+        assert!(skips_launch_log(["--json-output", "statusline"]));
+
+        assert!(!skips_launch_log(["usage"]));
+        assert!(!skips_launch_log(["cost", "--days", "7"]));
+        assert!(!skips_launch_log(["--verbose", "diagnose"]));
+        assert!(!skips_launch_log(Vec::<&str>::new()));
     }
 
     #[test]
@@ -291,7 +343,7 @@ mod tests {
 
     /// A reused PID must not append onto a previous run's file.
     #[test]
-    fn starting_a_launch_log_truncates_a_reused_path() {
+    fn starting_a_launch_log_replaces_a_reused_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("codexbar_launch_1.log");
         std::fs::write(&path, b"stale content from a previous process\n").unwrap();
@@ -299,6 +351,69 @@ mod tests {
         start_launch_log(&path, "fresh\n");
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh\n");
+    }
+
+    /// PIDs are predictable, so on a shared `/tmp` someone can pre-create the
+    /// next run's log name as a symlink to a file they want destroyed. Starting
+    /// a log must never write through it.
+    #[cfg(unix)]
+    #[test]
+    fn starting_a_launch_log_does_not_write_through_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("precious.txt");
+        std::fs::write(&victim, b"do not lose me").unwrap();
+        let path = dir.path().join("codexbar_launch_1.log");
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+        start_launch_log(&path, "fresh\n");
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "do not lose me",
+            "the symlink target must be untouched"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the planted link should have been unlinked, not followed"
+        );
+    }
+
+    /// Appending is for a log this run created. It must not resurrect a path
+    /// that `start_launch_log` refused.
+    #[test]
+    fn appending_does_not_create_a_missing_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codexbar_launch_1.log");
+
+        append_launch_log(&path, "should not appear\n");
+
+        assert!(!path.exists());
+    }
+
+    /// A symlink where the log directory should be means someone is trying to
+    /// redirect our writes and our sweep.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_log_directory_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(LAUNCH_LOG_DIR)).unwrap();
+
+        assert!(launch_log_dir_in(dir.path()).is_none());
+    }
+
+    #[test]
+    fn the_log_directory_is_created_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let created = launch_log_dir_in(dir.path()).expect("log dir");
+
+        assert!(created.is_dir());
+        assert_eq!(created, dir.path().join(LAUNCH_LOG_DIR));
     }
 
     #[test]
