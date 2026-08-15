@@ -9,7 +9,7 @@ use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timeli
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report,
-    get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
+    get_cost_usage_report_hourly, get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
 };
 use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
@@ -1170,6 +1170,194 @@ fn period_from_daily_series(
     }
 }
 
+/// One provider's activity in a single local clock-hour.
+///
+/// Hours with no activity are omitted rather than sent as zeros: a 30-day grid
+/// is 720 cells per provider, and the UI fills the gaps itself.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityHourPoint {
+    pub provider_id: String,
+    /// Local calendar date, `YYYY-MM-DD`.
+    pub date: String,
+    /// Local hour of day, 0-23.
+    pub hour: u32,
+    /// Estimated API value in USD from priced models in this hour. Unpriced
+    /// models contribute tokens but no dollars, exactly as elsewhere.
+    pub api_value_usd: f64,
+    /// Provider-normalized processed tokens.
+    pub tokens: u64,
+    /// Usage records in this hour. Dollars can be dominated by one big call,
+    /// so this is the honest answer to "when am I actually working".
+    pub calls: u64,
+}
+
+/// Local activity by calendar day and clock hour, for the heatmap card.
+///
+/// Everything here is derived from transcript timestamps already on disk. No
+/// new data is collected and nothing leaves the machine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityHeatmap {
+    /// Every local calendar day in range, oldest first, including empty days,
+    /// so the calendar renders a continuous strip.
+    pub days: Vec<String>,
+    /// Providers that contributed at least one hour, for the filter chips.
+    pub provider_ids: Vec<String>,
+    /// Non-empty hour buckets, oldest first.
+    pub hours: Vec<ActivityHourPoint>,
+    /// UTC offset of the clock these buckets use, for example `UTC-07:00`.
+    /// Shown so a heatmap read on a different machine is not misread.
+    pub timezone_label: String,
+}
+
+/// Days of history the heatmap covers. Matches the cost scanner's own 30-day
+/// retention, so the card never claims a range the underlying scan cannot fill.
+const ACTIVITY_HEATMAP_DAYS: u32 = 30;
+const ACTIVITY_HEATMAP_TTL: Duration = Duration::from_secs(5 * 60);
+
+struct CachedActivityHeatmap {
+    loaded_at: Instant,
+    heatmap: ActivityHeatmap,
+}
+
+fn activity_heatmap_cache() -> &'static Mutex<Option<CachedActivityHeatmap>> {
+    static CACHE: OnceLock<Mutex<Option<CachedActivityHeatmap>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Local activity by day and hour across every provider with local logs.
+///
+/// This is a second pass over the same transcripts the API-value card reads, so
+/// results are cached for the same five minutes the chart caches use. Callers
+/// that need fresh numbers after a scan should let the TTL lapse rather than
+/// forcing a rescan on every tab switch.
+#[tauri::command]
+pub async fn get_local_activity_heatmap() -> Result<ActivityHeatmap, String> {
+    if let Ok(guard) = activity_heatmap_cache().lock()
+        && let Some(cached) = guard.as_ref()
+        && cached.loaded_at.elapsed() < ACTIVITY_HEATMAP_TTL
+    {
+        return Ok(cached.heatmap.clone());
+    }
+
+    // A worker panic must surface as an error: "unavailable" and "no activity"
+    // look identical on a heatmap otherwise.
+    let heatmap = tauri::async_runtime::spawn_blocking(|| load_activity_heatmap(Local::now()))
+        .await
+        .map_err(|err| {
+            tracing::warn!("Activity heatmap worker failed: {}", err);
+            "Unable to read local activity.".to_string()
+        })?;
+
+    if let Ok(mut guard) = activity_heatmap_cache().lock() {
+        *guard = Some(CachedActivityHeatmap {
+            loaded_at: Instant::now(),
+            heatmap: heatmap.clone(),
+        });
+    }
+    Ok(heatmap)
+}
+
+/// The day axis: `ACTIVITY_HEATMAP_DAYS` local calendar days ending on `today`,
+/// oldest first. Built from the calendar rather than from the scan, so an idle
+/// machine still renders a full grid instead of collapsing to nothing.
+fn activity_heatmap_days(today: NaiveDate) -> Vec<String> {
+    (0..ACTIVITY_HEATMAP_DAYS as i64)
+        .rev()
+        .map(|offset| {
+            (today - chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .collect()
+}
+
+/// Hour rows for one provider's report.
+fn activity_hours_for_provider(
+    provider_id: &str,
+    report: &CostUsageReport,
+) -> Vec<ActivityHourPoint> {
+    report
+        .hourly_activity
+        .iter()
+        .filter_map(|point| {
+            let tokens = point.summary.normalized_tokens(provider_id).processed();
+            let calls: u64 = point
+                .summary
+                .by_model_tokens
+                .values()
+                .map(|counts| counts.calls)
+                .sum();
+            // An hour that produced no tokens, dollars, or calls is not
+            // activity; keeping it would darken the grid for nothing.
+            (tokens > 0 || calls > 0 || point.summary.total_cost_usd > 0.0).then(|| {
+                ActivityHourPoint {
+                    provider_id: provider_id.to_string(),
+                    date: point.date.format("%Y-%m-%d").to_string(),
+                    hour: point.hour,
+                    api_value_usd: point.summary.total_cost_usd,
+                    tokens,
+                    calls,
+                }
+            })
+        })
+        .collect()
+}
+
+/// Merge each provider's rows into one timeline.
+///
+/// Providers are scanned one after another, so the concatenation is only
+/// sorted within a provider; the card reads it as a single series. A provider
+/// that contributed no hours is left out of `provider_ids` so the filter chips
+/// never offer a control that can only ever blank the grid.
+fn assemble_activity_heatmap(
+    days: Vec<String>,
+    per_provider: Vec<Vec<ActivityHourPoint>>,
+    timezone_label: String,
+) -> ActivityHeatmap {
+    let mut provider_ids = Vec::new();
+    let mut hours = Vec::new();
+    for rows in per_provider {
+        if let Some(first) = rows.first() {
+            provider_ids.push(first.provider_id.clone());
+        }
+        hours.extend(rows);
+    }
+    hours.sort_by(|left, right| {
+        (&left.date, left.hour, &left.provider_id).cmp(&(
+            &right.date,
+            right.hour,
+            &right.provider_id,
+        ))
+    });
+
+    ActivityHeatmap {
+        days,
+        provider_ids,
+        hours,
+        timezone_label,
+    }
+}
+
+fn load_activity_heatmap<Tz: TimeZone>(now: DateTime<Tz>) -> ActivityHeatmap
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let per_provider = API_VALUE_PROVIDERS
+        .iter()
+        .filter_map(|provider_id| {
+            let report = get_cost_usage_report_hourly(provider_id, ACTIVITY_HEATMAP_DAYS)?;
+            Some(activity_hours_for_provider(provider_id, &report))
+        })
+        .collect();
+    assemble_activity_heatmap(
+        activity_heatmap_days(now.date_naive()),
+        per_provider,
+        format!("UTC{}", now.offset()),
+    )
+}
+
 /// One model's local Cursor activity. This is code-contribution activity from
 /// Cursor's on-disk tracking, NOT tokens or dollars (Cursor logs neither).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2022,11 +2210,12 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        ChartAccountScope, CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage,
-        LocalProjectCost, LocalTokenBreakdown, LocalUsageWindowRequest, ProviderLocalUsageSummary,
-        api_value_period, chart_cache_key, comparison_period_specs,
-        cost_fetch_failure_allows_early_retry, daily_series_from_report, effort_breakdown,
-        format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
+        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, ChartAccountScope, CostFetchFailure,
+        LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost, LocalTokenBreakdown,
+        LocalUsageWindowRequest, ProviderLocalUsageSummary, activity_heatmap_days,
+        activity_hours_for_provider, api_value_period, assemble_activity_heatmap, chart_cache_key,
+        comparison_period_specs, cost_fetch_failure_allows_early_retry, daily_series_from_report,
+        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
         parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
         project_breakdown, resolve_chart_account_scope, spend_anomaly_reading,
@@ -2035,7 +2224,9 @@ mod tests {
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
     use codexbar::core::{CodexIdentity, ConfiguredAccounts, DirectoryAccount};
-    use codexbar::cost_scanner::{CostSummary, CostUsageReport, ModelTokenCounts};
+    use codexbar::cost_scanner::{
+        CostSummary, CostUsageReport, HourlyActivityPoint, ModelTokenCounts,
+    };
     use codexbar::settings::Language;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -2569,6 +2760,7 @@ mod tests {
             today: CostSummary::default(),
             latest_session: None,
             current_windows: Default::default(),
+            hourly_activity: Vec::new(),
         };
         report
             .current_windows
@@ -3047,5 +3239,110 @@ mod tests {
         );
         assert!(!period.has_data);
         assert_eq!(period.api_value_usd, 0.0);
+    }
+
+    /// SBS-277: the day axis comes from the calendar, not from the scan, so an
+    /// idle machine still renders a full grid instead of collapsing to nothing.
+    #[test]
+    fn activity_heatmap_days_span_a_full_window_oldest_first() {
+        let days = activity_heatmap_days(NaiveDate::from_ymd_opt(2026, 8, 15).unwrap());
+
+        assert_eq!(days.len(), ACTIVITY_HEATMAP_DAYS as usize);
+        assert_eq!(days.first().unwrap(), "2026-07-17");
+        assert_eq!(days.last().unwrap(), "2026-08-15");
+        let mut sorted = days.clone();
+        sorted.sort();
+        assert_eq!(sorted, days, "days read oldest first");
+    }
+
+    fn hourly_point(hour: u32, summary: CostSummary) -> HourlyActivityPoint {
+        HourlyActivityPoint {
+            date: NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(),
+            hour,
+            summary,
+        }
+    }
+
+    /// An hour with no tokens, dollars, or calls is not activity. Emitting it
+    /// would darken a cell that should read as idle.
+    #[test]
+    fn activity_hours_drop_empty_buckets_and_normalize_tokens() {
+        let mut busy = CostSummary {
+            total_cost_usd: 1.25,
+            input_tokens: 1_000,
+            output_tokens: 200,
+            // Codex folds cache reads into its input count, so processed tokens
+            // must not add these twice.
+            cached_tokens: 800,
+            ..Default::default()
+        };
+        busy.by_model_tokens.insert(
+            "gpt-5.1-codex".to_string(),
+            ModelTokenCounts {
+                input_tokens: 1_000,
+                output_tokens: 200,
+                calls: 3,
+                ..Default::default()
+            },
+        );
+        let report = CostUsageReport {
+            hourly_activity: vec![
+                hourly_point(9, busy),
+                hourly_point(10, CostSummary::default()),
+            ],
+            ..Default::default()
+        };
+
+        let hours = activity_hours_for_provider("codex", &report);
+
+        assert_eq!(hours.len(), 1, "the empty 10:00 bucket is dropped");
+        let point = &hours[0];
+        assert_eq!(point.hour, 9);
+        assert_eq!(point.provider_id, "codex");
+        assert_eq!(point.date, "2026-08-15");
+        assert_eq!(point.calls, 3);
+        assert!((point.api_value_usd - 1.25).abs() < f64::EPSILON);
+        // 200 fresh input + 200 output + 800 cache read, each counted once.
+        assert_eq!(point.tokens, 1_200);
+    }
+
+    #[test]
+    fn activity_heatmap_merges_providers_into_one_sorted_timeline() {
+        let row = |provider_id: &str, date: &str, hour: u32| ActivityHourPoint {
+            provider_id: provider_id.to_string(),
+            date: date.to_string(),
+            hour,
+            api_value_usd: 1.0,
+            tokens: 10,
+            calls: 1,
+        };
+
+        let heatmap = assemble_activity_heatmap(
+            vec!["2026-08-14".to_string(), "2026-08-15".to_string()],
+            vec![
+                vec![
+                    row("codex", "2026-08-15", 9),
+                    row("codex", "2026-08-14", 22),
+                ],
+                // A provider with nothing to show must not appear as a chip.
+                Vec::new(),
+                vec![row("grok", "2026-08-14", 22)],
+            ],
+            "UTC+00:00".to_string(),
+        );
+
+        assert_eq!(heatmap.provider_ids, vec!["codex", "grok"]);
+        assert_eq!(
+            heatmap
+                .hours
+                .iter()
+                .map(|point| (point.date.as_str(), point.hour, point.provider_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("2026-08-14", 22, "codex"),
+                ("2026-08-14", 22, "grok"),
+                ("2026-08-15", 9, "codex"),
+            ],
+        );
     }
 }
