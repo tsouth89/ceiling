@@ -38,6 +38,16 @@ vi.mock("../hooks/useSettings", () => ({
   useSettings: (settings: unknown) => ({ settings }),
 }));
 
+vi.mock("../hooks/useLocale", () => ({
+  useLocale: () => ({
+    t: (key: string) => {
+      if (key === "NotCurrentlyEnforced") return "Not currently enforced";
+      if (key === "WindowUnavailable") return "Unavailable";
+      return key;
+    },
+  }),
+}));
+
 import TaskbarFlyout from "./TaskbarFlyout";
 
 function provider(
@@ -373,6 +383,46 @@ describe("TaskbarFlyout", () => {
     expect(screen.getByText("38%")).toBeInTheDocument();
     // ...while the money keeps stating both figures.
     expect(screen.getByText("$1112.92 of $1800.00")).toBeInTheDocument();
+  });
+
+  /**
+   * SBS-876: a missing Cursor plan used to render a lone Plan 0% bar because
+   * flyoutWindows preferred primary and ignored inactiveRateWindows.
+   */
+  it("does not render a 0% Plan bar when Cursor monthly is unavailable", () => {
+    const cursor = provider("cursor", "Cursor", 0, 22 * 24 * 60, "Plan");
+    cursor.inactiveRateWindows = [
+      {
+        id: "cursor-plan",
+        title: "Plan",
+        description: "No usage reported",
+        state: "unavailable",
+      },
+    ];
+    providerState.providers = [cursor];
+
+    render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "cursor", displayName: "Cursor" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["cursor"],
+              providerOrder: ["cursor"],
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Plan")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("progressbar", { name: /Cursor Plan 0%/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
   });
 
   it("opens the full dashboard and dismisses the glance flyout", async () => {

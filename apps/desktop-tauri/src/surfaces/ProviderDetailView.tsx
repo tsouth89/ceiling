@@ -20,6 +20,8 @@ import {
   allMeasuredWindows,
   bankedResetCredits,
   formatShortDuration,
+  isPrimaryPlaceholderId,
+  primaryNamedState,
 } from "../lib/capacityPresentation";
 
 type DetailWindow = {
@@ -299,11 +301,16 @@ export default function ProviderDetailView({
   );
   const metrics = useMemo(
     () =>
-      // On-demand is the only Cursor lane that bills real money, and it now
-      // carries that money beside its bar, so it is the most actionable row
-      // here rather than noise. (Promotional no longer exists at all.)
-      allMeasuredWindows(provider).slice(1),
+      // Other limits = every measured window except the hero primary.
+      // Filter by id, not `.slice(1)`: when the primary is a named
+      // placeholder it is already omitted, and slicing would drop Auto
+      // (SBS-876).
+      allMeasuredWindows(provider).filter((window) => window.id !== "primary"),
     [provider],
+  );
+  const namedPrimary = primaryNamedState(provider);
+  const otherInactiveWindows = (provider.inactiveRateWindows ?? []).filter(
+    (metric) => !namedPrimary || !isPrimaryPlaceholderId(metric.id),
   );
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
   const primaryLabel = provider.primaryLabel?.trim() || "Primary";
@@ -366,13 +373,27 @@ export default function ProviderDetailView({
           <section className="provider-focus__primary">
             <div className="provider-focus__section-head">
               <h3>{primaryLabel} usage</h3>
-              {primaryReset && <span>{primaryReset}</span>}
+              {primaryReset && !namedPrimary && <span>{primaryReset}</span>}
             </div>
-            <div className="provider-focus__primary-value">
-              <strong>{primaryPercent}%</strong>
-              <span>{showAsUsed ? "used" : "left"}</span>
-            </div>
-            <DetailProgress window={provider.primary} showAsUsed={showAsUsed} />
+            {namedPrimary ? (
+              <div
+                className={`provider-focus__primary-value provider-focus__primary-value--named${namedPrimary === "unavailable" ? " provider-focus__primary-value--unavailable" : ""}`}
+              >
+                <strong>
+                  {namedPrimary === "unavailable"
+                    ? t("WindowUnavailable")
+                    : t("NotCurrentlyEnforced")}
+                </strong>
+              </div>
+            ) : (
+              <>
+                <div className="provider-focus__primary-value">
+                  <strong>{primaryPercent}%</strong>
+                  <span>{showAsUsed ? "used" : "left"}</span>
+                </div>
+                <DetailProgress window={provider.primary} showAsUsed={showAsUsed} />
+              </>
+            )}
             {provider.pace && (
               <div className="provider-focus__pace-glance" data-tone={paceTone(provider.pace)}>
                 <i />
@@ -386,7 +407,7 @@ export default function ProviderDetailView({
             )}
           </section>
 
-          {(metrics.length > 0 || (provider.inactiveRateWindows?.length ?? 0) > 0) && (
+          {(metrics.length > 0 || otherInactiveWindows.length > 0) && (
             <section className="provider-focus__section provider-focus__limits">
               <h3>Other limits</h3>
               {metrics.map((metric) => (
@@ -397,7 +418,7 @@ export default function ProviderDetailView({
                   showAsUsed={showAsUsed}
                 />
               ))}
-              {(provider.inactiveRateWindows ?? []).map((metric) => {
+              {otherInactiveWindows.map((metric) => {
                 const unavailable = metric.state === "unavailable";
                 return (
                   <div

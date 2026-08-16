@@ -97,6 +97,9 @@ struct ConstrainingReadout<'a> {
     /// percentage is the wrong readout for a spend lane: "62%" of an $1800 cap
     /// does not tell you that you owe $1112.92 (SBS-191).
     amount: Option<&'a crate::commands::WindowAmountBridge>,
+    /// Set when the percent on this window is a placeholder, not a reading
+    /// (SBS-876). The tile must not round that placeholder to 0 or 100.
+    named_state: Option<&'a str>,
 }
 
 impl<'a> ConstrainingReadout<'a> {
@@ -105,8 +108,45 @@ impl<'a> ConstrainingReadout<'a> {
             label,
             window,
             amount: None,
+            named_state: None,
         }
     }
+}
+
+/// Inactive-row ids that mark `primary` as a placeholder, not a reading.
+///
+/// Match by id only. Sweep: only Cursor writes 0% primary plus an inactive
+/// row for that same window (`cursor-plan` / `cursor-monthly`).
+fn primary_named_state(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<&str> {
+    let row = snapshot
+        .inactive_rate_windows
+        .iter()
+        .find(|row| row.id == "cursor-plan" || row.id == "cursor-monthly")?;
+    Some(if row.state == "unavailable" {
+        "unavailable"
+    } else {
+        "notEnforced"
+    })
+}
+
+fn strip_readout_percent(readout: &ConstrainingReadout<'_>, show_as_used: bool) -> Option<u8> {
+    if readout.named_state.is_some() {
+        return None;
+    }
+    let value = if show_as_used {
+        readout.window.used_percent
+    } else {
+        readout.window.remaining_percent
+    };
+    Some(value.clamp(0.0, 100.0).round() as u8)
+}
+
+fn strip_heat(snapshot: &crate::commands::ProviderUsageSnapshot) -> f64 {
+    let readout = constraining_readout(snapshot);
+    if readout.named_state.is_some() {
+        return -1.0;
+    }
+    readout.window.used_percent
 }
 
 /// Tile text for a currency-billed lane.
@@ -203,6 +243,7 @@ fn cursor_actionable_windows(
             label: Some(label),
             window: &extra.window,
             amount: extra.amount.as_ref(),
+            named_state: None,
         });
     }
     out
@@ -222,6 +263,7 @@ fn cursor_on_demand_readout(
             }),
             window: &extra.window,
             amount: extra.amount.as_ref(),
+            named_state: None,
         })
 }
 
@@ -293,7 +335,12 @@ fn cursor_strip_readout(
     {
         return readout;
     }
-    ConstrainingReadout::new(snapshot.primary_label.as_deref(), &snapshot.primary)
+    ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+        amount: None,
+        named_state: primary_named_state(snapshot),
+    }
 }
 
 fn constraining_readout(
@@ -303,7 +350,12 @@ fn constraining_readout(
         return cursor_strip_readout(snapshot);
     }
 
-    let mut best = ConstrainingReadout::new(snapshot.primary_label.as_deref(), &snapshot.primary);
+    let mut best = ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+        amount: None,
+        named_state: primary_named_state(snapshot),
+    };
 
     // Claude's per-model weekly caps are parallel sub-pools, not blockers: at
     // 100% you switch model rather than stop. The tile shows one lane, so
@@ -343,6 +395,7 @@ fn constraining_readout(
                 label: Some(extra.title.as_str()),
                 window: &extra.window,
                 amount: extra.amount.as_ref(),
+                named_state: None,
             });
         }
         out
@@ -387,10 +440,8 @@ where
         return Some(*hit);
     }
     candidates.into_iter().max_by(|a, b| {
-        constraining_readout(a)
-            .window
-            .used_percent
-            .total_cmp(&constraining_readout(b).window.used_percent)
+        strip_heat(a)
+            .total_cmp(&strip_heat(b))
             .then_with(|| b.account_id.cmp(&a.account_id))
     })
 }
@@ -1133,14 +1184,8 @@ mod windows_host {
                 let constraining = snapshot
                     .filter(|snapshot| snapshot.error.is_none())
                     .map(super::constraining_readout);
-                let percent = constraining.map(|readout| {
-                    let value = if settings.show_as_used {
-                        readout.window.used_percent
-                    } else {
-                        readout.window.remaining_percent
-                    };
-                    value.clamp(0.0, 100.0).round() as u8
-                });
+                let percent = constraining
+                    .and_then(|readout| strip_readout_percent(&readout, settings.show_as_used));
                 // A spend lane's headline is the money, not the fraction.
                 let spend = constraining.and_then(|readout| readout.amount);
                 let amount_label =
@@ -3271,6 +3316,36 @@ mod tests {
             strip_amount_label(amount, false).as_deref(),
             Some("$687.08")
         );
+    }
+
+    /// SBS-876: Cursor still writes 0% primary when monthly is missing, plus
+    /// `cursor-plan` unavailable. The native tile must not round that
+    /// placeholder to Some(0) or Some(100).
+    #[test]
+    fn cursor_strip_omits_percent_when_plan_is_unavailable() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.named_state, Some("unavailable"));
+        assert_eq!(strip_readout_percent(&readout, true), None);
+        assert_eq!(strip_readout_percent(&readout, false), None);
+
+        // Auto still wins the strip when present; the placeholder does not.
+        snapshot.secondary = Some(rate_window(42.0, Some(43_200)));
+        snapshot.secondary_label = Some("Auto".into());
+        let with_auto = constraining_readout(&snapshot);
+        assert_eq!(with_auto.label, Some("Auto"));
+        assert!(with_auto.named_state.is_none());
+        assert_eq!(strip_readout_percent(&with_auto, true), Some(42));
     }
 
     #[test]

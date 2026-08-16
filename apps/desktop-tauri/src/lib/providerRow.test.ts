@@ -133,6 +133,27 @@ describe("selectStripAccount", () => {
     expect(selectStripAccount(rows, "gone")?.accountId).toBe("work");
   });
 
+  /**
+   * SBS-876: a placeholder 0% Plan is not heat. Ranking it as 0 would pick
+   * that seat as the coolest / least constrained.
+   */
+  it("does not rank a named-state Cursor plan as 0% heat", () => {
+    const missing = {
+      ...snap("cursor", "hobby", 0),
+      primaryLabel: "Plan",
+      inactiveRateWindows: [
+        {
+          id: "cursor-plan",
+          title: "Plan",
+          description: "No usage reported",
+          state: "unavailable",
+        },
+      ],
+    } as ProviderUsageSnapshot;
+    const real = snap("cursor", "pro", 5);
+    expect(selectStripAccount([missing, real])?.accountId).toBe("pro");
+  });
+
   it("ranks on the constraining window, not the primary one", () => {
     // The strip tile shows the constraining window, so ranking seats by their
     // primary made the flyout badge "On strip" the account the tile was not

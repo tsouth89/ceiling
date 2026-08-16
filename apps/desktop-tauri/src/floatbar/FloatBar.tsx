@@ -121,6 +121,12 @@ function floatBarWindow(provider: ProviderUsageSnapshot): ConstrainingWindow {
   return constrainingWindow(provider);
 }
 
+/** Named-state placeholders are not heat (SBS-876). */
+function floatBarHeat(provider: ProviderUsageSnapshot): number {
+  const hero = floatBarWindow(provider);
+  return hero.namedState ? -1 : hero.window.usedPercent;
+}
+
 /**
  * The capacity pill shown for a single provider.
  *
@@ -172,18 +178,22 @@ function ProviderPill({
     Math.min(100, hero.window.remainingPercent),
   );
   const exhausted =
-    hero.window.isExhausted || !!provider.error;
+    !hero.namedState && (hero.window.isExhausted || !!provider.error);
   let tone: "ok" | "warn" | "crit" = "ok";
-  if (exhausted || pressureRemaining <= critRemaining) tone = "crit";
-  else if (pressureRemaining <= highRemaining) tone = "warn";
+  if (hero.namedState === "unavailable") {
+    // Caution/amber: the window was tracked but dropped out (CEILING_UI.md).
+    // Do not treat remainingPercent 100 as healthy (SBS-876).
+    tone = "warn";
+  } else if (exhausted || pressureRemaining <= critRemaining) {
+    tone = "crit";
+  } else if (pressureRemaining <= highRemaining) {
+    tone = "warn";
+  }
 
   const brand = getProviderIcon(provider.providerId).brandColor;
   // A lane billed in currency leads with the money. "62%" of a spend cap is not
   // the number you act on — the amount owed is (SBS-191).
   const spend = hero.amount ? stripAmountLabel(hero.amount, showAsUsed) : null;
-  const label = provider.error
-    ? "—"
-    : (spend ?? `${Math.round(displayPercent)}%`);
   const resetText = useFormattedResetTime(
     hero.window.resetsAt,
     hero.window.resetDescription,
@@ -191,18 +201,32 @@ function ProviderPill({
   );
   const inlineReset = resetText ? inlineResetTime(resetText) : null;
   const { t } = useLocale();
+  const namedLabel =
+    hero.namedState === "unavailable"
+      ? t("WindowUnavailable")
+      : hero.namedState === "notEnforced"
+        ? t("NotCurrentlyEnforced")
+        : null;
+  const label = provider.error
+    ? "—"
+    : (namedLabel ?? spend ?? `${Math.round(displayPercent)}%`);
   const iconSize = Math.round(14 * scale);
   const resetIconSize = Math.round(10 * scale);
   const stateChip = freshnessChipLabel(freshness, t);
   const boostTitle = boosts[0]?.title ?? null;
   // Strip always shows reset when depleted; otherwise honor the setting.
-  const showReset = !!inlineReset && (showResetInline || exhausted);
+  // Named-state windows are not a quota, so do not promote a billing-cycle
+  // reset as if the placeholder 0% had just run out (SBS-876).
+  const showReset =
+    !hero.namedState && !!inlineReset && (showResetInline || exhausted);
   const titleBits = [
-    `${provider.displayName}: ${label} ${displaySuffix}`,
+    hero.namedState
+      ? `${provider.displayName}: ${label}`
+      : `${provider.displayName}: ${label} ${displaySuffix}`,
     hero.label,
     boostTitle ? `promo ${boostTitle}` : null,
     stateChip,
-    resetText,
+    hero.namedState ? null : resetText,
   ]
     .filter(Boolean)
     .join("\n");
@@ -242,7 +266,11 @@ function ProviderPill({
       showResetRow
         ? `${hero.label}${resetText ? ` ${resetText}` : ""}`
         : null,
-      showExact ? `${label} ${displaySuffix}` : null,
+      showExact
+        ? hero.namedState
+          ? label
+          : `${label} ${displaySuffix}`
+        : null,
       stateChip,
     ]
       .filter(Boolean)
@@ -589,8 +617,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       }
       return [...group].sort((a, b) => {
         const delta =
-          floatBarWindow(b).window.usedPercent -
-          floatBarWindow(a).window.usedPercent;
+          floatBarHeat(b) - floatBarHeat(a);
         if (delta !== 0) return delta;
         // Lowest account id, matching the native strip and the flyout so all
         // three name the same seat when two accounts read the same pressure.
@@ -605,11 +632,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
         : [...byProvider.keys()]
             .map((id) => pick(id))
             .filter((p): p is (typeof eligible)[number] => p !== undefined)
-            .sort(
-              (a, b) =>
-                floatBarWindow(b).window.usedPercent -
-                floatBarWindow(a).window.usedPercent,
-            );
+            .sort((a, b) => floatBarHeat(b) - floatBarHeat(a));
     const allEligible = [...byProvider.keys()]
       .map((id) => pick(id))
       .filter((p): p is (typeof eligible)[number] => p !== undefined);
@@ -617,7 +640,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       mode: selectionMode,
       detectionEnabled: settings.floatBarForegroundDetection,
       lastActiveProviderId,
-      usedPercent: (row) => floatBarWindow(row).window.usedPercent,
+      usedPercent: (row) => floatBarHeat(row),
       highUsageThreshold: settings.highUsageThreshold,
     });
   }, [

@@ -161,4 +161,42 @@ describe("ProviderDetailView", () => {
     expect(screen.getByText("96.0%")).toBeInTheDocument();
     expect(screen.getByText(/Most used model: gpt-5.6-sol/)).toBeInTheDocument();
   });
+
+  /**
+   * SBS-876: Cursor missing-plan still writes 0% primary. Detail must
+   * headline the named state, not "0% used".
+   */
+  it("does not headline 0% when Cursor plan is unavailable", async () => {
+    const cursor: ProviderUsageSnapshot = {
+      ...codex(),
+      providerId: "cursor",
+      displayName: "Cursor",
+      primary: rate(0),
+      primaryLabel: "Plan",
+      extraRateWindows: [],
+      inactiveRateWindows: [
+        {
+          id: "cursor-plan",
+          title: "Plan",
+          description: "No usage reported",
+          state: "unavailable",
+        },
+      ],
+      pace: null,
+      resetCreditsAvailable: null,
+    };
+
+    render(
+      <ProviderDetailView
+        provider={cursor}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("Plan usage")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
+  });
 });

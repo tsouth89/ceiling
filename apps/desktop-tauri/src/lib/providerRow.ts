@@ -111,7 +111,10 @@ export function representativeForProvider<
  */
 function stripHeat(provider: Pick<ProviderUsageSnapshot, "primary">): number {
   if (!provider.primary) return -1;
-  return constrainingWindow(provider as ProviderUsageSnapshot).window.usedPercent;
+  const constraining = constrainingWindow(provider as ProviderUsageSnapshot);
+  // A placeholder 0% is not heat — same as a missing primary (SBS-876).
+  if (constraining.namedState) return -1;
+  return constraining.window.usedPercent;
 }
 
 /**
