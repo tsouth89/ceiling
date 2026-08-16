@@ -10,10 +10,16 @@ use tokio::runtime::Runtime;
 
 const LAUNCH_LOG_PREFIX: &str = "codexbar_launch_";
 const LAUNCH_LOG_SUFFIX: &str = ".log";
-/// Launch logs live in their own directory under temp. Sweeping the temp root
-/// would mean a name check on every entry, and Windows `%TEMP%` routinely holds
-/// tens of thousands of installer and browser files.
-const LAUNCH_LOG_DIR: &str = "codexbar-launch-logs";
+/// Launch logs live under the per-user cache directory, not the system temp
+/// dir.
+///
+/// `/tmp` is shared and world-writable, and the file name is a predictable PID.
+/// Anyone on the box could pre-create the next run's name (or squat the parent
+/// directory) and steer our writes at a file of their choosing. Owner and mode
+/// checks would be a patch on that; `dirs::cache_dir()` is inside the user's
+/// own home, which removes the exposure instead of guarding it. It also means
+/// the sweep never walks a directory holding thousands of unrelated files.
+const LAUNCH_LOG_DIR: &str = "launch-logs";
 /// Leftover launch logs older than this are swept on the next run. Long enough
 /// that someone who hit a failure can still find the log.
 const LAUNCH_LOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -21,13 +27,23 @@ const LAUNCH_LOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// startup. Repeated runs converge.
 const LAUNCH_LOG_SWEEP_LIMIT: usize = 512;
 
+/// Value-taking arguments that can appear before the subcommand. A bare scan
+/// for `statusline` would misread `codexbar --provider statusline` and skip the
+/// log for the run that most needs it.
+const VALUE_TAKING_ARGS: &[&str] = &[
+    "--log-level",
+    "--provider",
+    "-p",
+    "--format",
+    "-f",
+    "--focus",
+    "--ssh-host",
+    "--label",
+];
+
 /// The launch-log directory, created if missing.
-///
-/// Returns `None` when the path is not a real directory. On a shared `/tmp`
-/// the name could be a symlink someone else planted to redirect our writes and
-/// our sweep, so anything but a true directory is refused.
-fn launch_log_dir_in(temp_dir: &Path) -> Option<PathBuf> {
-    let dir = temp_dir.join(LAUNCH_LOG_DIR);
+fn launch_log_dir_in(cache_dir: &Path) -> Option<PathBuf> {
+    let dir = cache_dir.join("Ceiling").join(LAUNCH_LOG_DIR);
     std::fs::create_dir_all(&dir).ok()?;
     // `symlink_metadata` does not follow, so a symlink reports `is_dir()` false.
     std::fs::symlink_metadata(&dir)
@@ -37,7 +53,7 @@ fn launch_log_dir_in(temp_dir: &Path) -> Option<PathBuf> {
 }
 
 fn launch_log_path() -> Option<PathBuf> {
-    let dir = launch_log_dir_in(&std::env::temp_dir())?;
+    let dir = launch_log_dir_in(&dirs::cache_dir()?)?;
     Some(dir.join(format!(
         "{LAUNCH_LOG_PREFIX}{}{LAUNCH_LOG_SUFFIX}",
         std::process::id()
@@ -46,18 +62,34 @@ fn launch_log_path() -> Option<PathBuf> {
 
 /// `statusline` is invoked once per editor render, so it must not touch the
 /// disk on the way in. It reads cached state only and reports failures through
-/// its host, so there is no launch problem a temp log would explain.
+/// its host, so there is no launch problem a log would explain.
 ///
-/// Scans every argument rather than just the first: clap accepts the global
-/// flags before the subcommand, so `codexbar --verbose statusline` is the same
-/// per-render path. No global flag takes `statusline` as a value (`--log-level`
-/// is restricted to log levels), so a bare scan cannot misfire on one.
+/// Resolves the subcommand rather than scanning for the word: clap takes global
+/// flags before it, so `codexbar --verbose statusline` is the same per-render
+/// path, while `codexbar --provider statusline` is a failing usage run whose
+/// log must be kept. Unknown flags are treated as taking no value, which errs
+/// toward writing a log.
 fn skips_launch_log<I, S>(args: I) -> bool
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    args.into_iter().any(|arg| arg.as_ref() == "statusline")
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let arg = arg.as_ref();
+        if arg == "--" {
+            return false;
+        }
+        if !arg.starts_with('-') {
+            return arg == "statusline";
+        }
+        // `--flag=value` carries its own value; only the split form consumes
+        // the next token.
+        if !arg.contains('=') && VALUE_TAKING_ARGS.contains(&arg) {
+            args.next();
+        }
+    }
+    false
 }
 
 fn is_launch_log(path: &Path) -> bool {
@@ -90,9 +122,18 @@ fn start_launch_log(log_path: &Path, message: &str) {
         });
 }
 
-/// Appends to a log [`start_launch_log`] already created. Deliberately does not
-/// create: if the start failed, the entry at this path is not ours to write to.
+/// Appends to a log [`start_launch_log`] already created.
+///
+/// Refuses to create, and refuses to follow a link: if the start could not
+/// replace what was at this path, the entry is not ours and appending would
+/// write the launch header into whatever it points at.
 fn append_launch_log(log_path: &Path, message: &str) {
+    let is_regular_file = std::fs::symlink_metadata(log_path)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false);
+    if !is_regular_file {
+        return;
+    }
     let _ = std::fs::OpenOptions::new()
         .append(true)
         .open(log_path)
@@ -100,6 +141,46 @@ fn append_launch_log(log_path: &Path, message: &str) {
             use std::io::Write;
             f.write_all(message.as_bytes())
         });
+}
+
+/// Removes launch logs earlier versions wrote straight into the system temp
+/// dir, which is no longer where this one writes.
+///
+/// Those files are the population that motivated SBS-888, so leaving them would
+/// mean the accumulated mess is never cleaned. Age-bounded like the main sweep,
+/// and never follows a link.
+fn sweep_legacy_temp_launch_logs(now: SystemTime) -> usize {
+    let temp_dir = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&temp_dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if removed >= LAUNCH_LOG_SWEEP_LIMIT {
+            break;
+        }
+        let path = entry.path();
+        if !is_launch_log(&path) {
+            continue;
+        }
+        // `symlink_metadata` does not follow, so a planted link is neither
+        // aged through nor removed as if it were ours.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let stale = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > LAUNCH_LOG_MAX_AGE);
+        if stale && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Deletes launch logs left behind by runs that failed or were killed. Scoped
@@ -135,6 +216,16 @@ fn launch_arg_summary() -> String {
     format!("{} CLI argument value(s) omitted", arg_count)
 }
 
+/// Whether an exit code is worth keeping a launch log for.
+///
+/// Only a genuine failure is. A usage error is the user's typo, already
+/// explained on stderr, and `missing_subcommand` reaches here through the `Ok`
+/// path rather than clap's own exit, so bare `codexbar` would otherwise leave a
+/// file behind on every run.
+fn keeps_launch_log(exit_code: i32) -> bool {
+    exit_code != exit_codes::SUCCESS && exit_code != exit_codes::USAGE_ERROR
+}
+
 fn main() {
     let log_path = (!skips_launch_log(std::env::args().skip(1)))
         .then(launch_log_path)
@@ -152,17 +243,18 @@ fn main() {
         if let Some(dir) = path.parent() {
             sweep_stale_launch_logs_in(dir, path, SystemTime::now());
         }
+        sweep_legacy_temp_launch_logs(SystemTime::now());
     }
 
     let exit_code = run(log_path.as_deref());
 
     if let Some(path) = log_path.as_deref() {
-        if exit_code == exit_codes::SUCCESS {
-            // A clean run has nothing to post-mortem, so it leaves no file
-            // behind. Without this every invocation seeds the temp dir forever.
-            let _ = std::fs::remove_file(path);
-        } else {
+        if keeps_launch_log(exit_code) {
             append_launch_log(path, &format!("Exiting with code: {}\n", exit_code));
+        } else {
+            // Nothing to post-mortem, so leave no file behind. Without this
+            // every invocation seeds the log directory forever.
+            let _ = std::fs::remove_file(path);
         }
     }
 
@@ -302,7 +394,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn launch_log_path_is_process_scoped_and_inside_its_own_directory() {
+    fn launch_log_path_is_process_scoped_and_outside_the_shared_temp_dir() {
         let path = launch_log_path().expect("launch log path");
         let file_name = path.file_name().and_then(|name| name.to_str()).unwrap();
 
@@ -311,26 +403,51 @@ mod tests {
         assert!(file_name.contains(&std::process::id().to_string()));
         assert_eq!(
             path.parent().and_then(|dir| dir.file_name()),
-            Some(std::ffi::OsStr::new(LAUNCH_LOG_DIR)),
-            "logs must live in their own directory so the sweep is scoped"
+            Some(std::ffi::OsStr::new(LAUNCH_LOG_DIR))
+        );
+        assert!(
+            !path.starts_with(std::env::temp_dir()),
+            "the shared temp dir is world-writable with a predictable name"
         );
     }
 
     /// SBS-888: `statusline` runs once per editor render, so it must not write
-    /// a temp file on the way in. Clap takes the global flags before the
-    /// subcommand, so those spellings are the same per-render path.
+    /// a file on the way in. Clap takes the global flags before the subcommand,
+    /// so those spellings are the same per-render path.
     #[test]
     fn statusline_skips_the_launch_log_behind_global_flags() {
         assert!(skips_launch_log(["statusline"]));
         assert!(skips_launch_log(["--verbose", "statusline"]));
         assert!(skips_launch_log(["--no-color", "statusline"]));
         assert!(skips_launch_log(["--log-level", "info", "statusline"]));
+        assert!(skips_launch_log(["--log-level=info", "statusline"]));
         assert!(skips_launch_log(["--json-output", "statusline"]));
 
         assert!(!skips_launch_log(["usage"]));
         assert!(!skips_launch_log(["cost", "--days", "7"]));
         assert!(!skips_launch_log(["--verbose", "diagnose"]));
         assert!(!skips_launch_log(Vec::<&str>::new()));
+    }
+
+    /// `statusline` as the *value* of a flag is a failing usage run, and its
+    /// log is exactly the one worth keeping.
+    #[test]
+    fn a_flag_value_named_statusline_does_not_skip_the_log() {
+        assert!(!skips_launch_log(["--provider", "statusline"]));
+        assert!(!skips_launch_log(["-p", "statusline"]));
+        assert!(!skips_launch_log(["usage", "--provider", "statusline"]));
+        assert!(!skips_launch_log(["--format", "statusline"]));
+        assert!(!skips_launch_log(["--", "statusline"]));
+    }
+
+    /// A usage error is the user's typo, already explained on stderr. Bare
+    /// `codexbar` returns it through the `Ok` path, not clap's own exit.
+    #[test]
+    fn only_real_failures_keep_their_log() {
+        assert!(!keeps_launch_log(exit_codes::SUCCESS));
+        assert!(!keeps_launch_log(exit_codes::USAGE_ERROR));
+        assert!(keeps_launch_log(exit_codes::UNEXPECTED_FAILURE));
+        assert!(keeps_launch_log(exit_codes::PROVIDER_MISSING));
     }
 
     #[test]
@@ -393,6 +510,23 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// If `start_launch_log` could not replace a planted link (the victim
+    /// cannot unlink a file in a directory someone else owns), the later
+    /// appends must not write the header into the target either.
+    #[cfg(unix)]
+    #[test]
+    fn appending_does_not_write_through_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("precious.txt");
+        std::fs::write(&victim, b"do not lose me").unwrap();
+        let path = dir.path().join("codexbar_launch_1.log");
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+        append_launch_log(&path, "leaked header\n");
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "do not lose me");
+    }
+
     /// A symlink where the log directory should be means someone is trying to
     /// redirect our writes and our sweep.
     #[cfg(unix)]
@@ -401,7 +535,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = dir.path().join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, dir.path().join(LAUNCH_LOG_DIR)).unwrap();
+        std::fs::create_dir(dir.path().join("Ceiling")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join("Ceiling").join(LAUNCH_LOG_DIR))
+            .unwrap();
 
         assert!(launch_log_dir_in(dir.path()).is_none());
     }
@@ -413,7 +549,7 @@ mod tests {
         let created = launch_log_dir_in(dir.path()).expect("log dir");
 
         assert!(created.is_dir());
-        assert_eq!(created, dir.path().join(LAUNCH_LOG_DIR));
+        assert_eq!(created, dir.path().join("Ceiling").join(LAUNCH_LOG_DIR));
     }
 
     #[test]
