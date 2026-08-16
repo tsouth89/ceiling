@@ -191,6 +191,13 @@ fn strip_readout_percent(readout: &ConstrainingReadout<'_>, show_as_used: bool) 
 }
 
 fn strip_heat(snapshot: &crate::commands::ProviderUsageSnapshot) -> f64 {
+    // Account ranking runs before `widget_model` drops errored snapshots, so a
+    // failed account must rank below a named state or it wins the tile and then
+    // has no readout to paint - an em dash where "Unavailable" was available
+    // from the other account (SBS-876).
+    if snapshot.error.is_some() {
+        return f64::NEG_INFINITY;
+    }
     let readout = constraining_readout(snapshot);
     if readout.named_state.is_some() {
         return -1.0;
@@ -3015,6 +3022,39 @@ mod tests {
         ];
         let picked = select_strip_snapshot(cache.iter(), "codex", None).unwrap();
         assert_eq!(picked.account_id.as_deref(), Some("work"));
+    }
+
+    /// SBS-876: ranking happens before `widget_model` filters errored
+    /// snapshots. A failed account's primary reads 0%, which used to outrank a
+    /// successful account whose Plan is unavailable (heat -1), so the tile was
+    /// handed a snapshot it then refused to read and painted an em dash - while
+    /// the other account could have said "Unavailable".
+    #[test]
+    fn strip_snapshot_prefers_a_named_state_over_a_failed_account() {
+        let mut unavailable = snap("cursor", Some("good"), 0.0);
+        unavailable.primary_label = Some("Plan".into());
+        unavailable
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+        let mut failed = snap("cursor", Some("broken"), 0.0);
+        failed.error = Some("network timeout".into());
+
+        let cache = [failed, unavailable];
+        let picked = select_strip_snapshot(cache.iter(), "cursor", None).unwrap();
+
+        assert_eq!(picked.account_id.as_deref(), Some("good"));
+        assert!(picked.error.is_none());
+
+        // A real reading still beats both.
+        let mut cache = cache.to_vec();
+        cache.push(snap("cursor", Some("hot"), 42.0));
+        let picked = select_strip_snapshot(cache.iter(), "cursor", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("hot"));
     }
 
     #[test]

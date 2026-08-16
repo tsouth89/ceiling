@@ -141,6 +141,22 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   );
 }
 
+/**
+ * Every row `flyoutWindows` had to choose from, before the visible-row cap.
+ *
+ * The "more limits" note is the only sign that something was cut, so it has to
+ * count named-state rows too. Measuring hidden rows against the measured
+ * windows alone hid truncated Unavailable rows entirely, and once named rows
+ * filled the visible slots the subtraction went negative and reported nothing
+ * hidden at all (SBS-876).
+ */
+function flyoutCandidateCount(provider: ProviderUsageSnapshot): number {
+  return (
+    allMeasuredWindows(provider).filter(isMeteredWindow).length +
+    namedStateRows(provider).length
+  );
+}
+
 function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, now }: {
   provider: ProviderUsageSnapshot;
   // True when this provider has more than one account, so the account name is
@@ -186,7 +202,7 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
   const resetCredits = bankedResetCredits(provider);
   const hiddenWindowCount = Math.max(
     0,
-    allMeasuredWindows(provider).filter(isMeteredWindow).length - windows.length,
+    flyoutCandidateCount(provider) - windows.length,
   );
   return (
     <div

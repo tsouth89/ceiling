@@ -475,6 +475,49 @@ describe("TaskbarFlyout", () => {
     expect(screen.queryByText(/more limits in Ceiling/)).not.toBeInTheDocument();
   });
 
+  /**
+   * SBS-876: named-state rows compete for the same four visible slots, but the
+   * hidden-row count only measured metered windows. Three measured rows plus
+   * two Unavailable rows rendered four and reported nothing hidden, because the
+   * subtraction went negative and was clamped to zero.
+   */
+  it("counts truncated named-state rows in the more-limits note", () => {
+    const claude = provider("claude", "Claude", 40, 300, "Session (5h)");
+    claude.secondary = { ...claude.primary, usedPercent: 61, remainingPercent: 39 };
+    claude.secondaryLabel = "Weekly";
+    claude.extraRateWindows = [
+      {
+        id: "claude-opus",
+        title: "Opus weekly",
+        window: { ...claude.primary, usedPercent: 12, remainingPercent: 88 },
+      },
+    ];
+    claude.inactiveRateWindows = [
+      { id: "one", title: "Sonnet weekly", description: "", state: "unavailable" },
+      { id: "two", title: "Haiku weekly", description: "", state: "unavailable" },
+    ];
+    providerState.providers = [claude];
+
+    render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "claude", displayName: "Claude" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["claude"],
+              providerOrder: ["claude"],
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    // 3 measured + 2 named = 5 candidates, 4 slots, so exactly one is cut.
+    expect(screen.getByText("+1 more limits in Ceiling")).toBeInTheDocument();
+  });
+
   it("opens the full dashboard and dismisses the glance flyout", async () => {
     render(<TaskbarFlyout state={state} />);
     fireEvent.click(screen.getByRole("button", { name: "Open Ceiling" }));
