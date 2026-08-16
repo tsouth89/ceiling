@@ -5,7 +5,6 @@ export type SettingsTabId =
   | "providers"
   | "accounts"
   | "notifications"
-  | "menuBar"
   | "menu"
   | "advanced"
   | "about";

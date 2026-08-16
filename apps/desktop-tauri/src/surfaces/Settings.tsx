@@ -76,12 +76,6 @@ const TabIcons: Record<SettingsTab, ReactElement> = {
       <path d="M6.5 13a1.7 1.7 0 0 0 3 0" />
     </Svg>
   ),
-  menuBar: (
-    <Svg>
-      <path d="M1.5 8c1.6-3 4-4.5 6.5-4.5S13 5 14.5 8c-1.5 3-4 4.5-6.5 4.5S3.1 11 1.5 8Z" />
-      <circle cx="8" cy="8" r="2" />
-    </Svg>
-  ),
   menu: (
     <Svg>
       <rect x="2" y="2" width="5" height="5" rx="1" />

@@ -4,12 +4,17 @@ use codexbar::core::ProviderId;
 
 use crate::surface::SurfaceMode;
 
+/// Live Settings shell tabs, in the order `TAB_META` renders them.
+///
+/// Keep this list identical to `SettingsTabId` / `TAB_META` in the frontend.
+/// `settingsTabs.test.ts` compares the three; a silent extra or missing id
+/// is how SBS-872 shipped (`menuBar` / `apiKeys` vs `menu` / `accounts`).
 const SETTINGS_TAB_IDS: &[&str] = &[
     "general",
     "providers",
-    "display",
-    "apiKeys",
-    "cookies",
+    "accounts",
+    "notifications",
+    "menu",
     "advanced",
     "about",
 ];
@@ -88,7 +93,9 @@ pub fn is_supported_settings_tab(tab: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{SurfaceTarget, is_supported_provider_id, is_supported_settings_tab};
+    use super::{
+        SETTINGS_TAB_IDS, SurfaceTarget, is_supported_provider_id, is_supported_settings_tab,
+    };
     use serde_json::json;
 
     #[test]
@@ -171,8 +178,28 @@ mod tests {
 
     #[test]
     fn supported_settings_tabs_match_shell_tabs() {
-        assert!(is_supported_settings_tab("apiKeys"));
-        assert!(is_supported_settings_tab("about"));
-        assert!(!is_supported_settings_tab("security"));
+        // Pins the failure mode in SBS-872: the Rust allowlist sampled its own
+        // constant and never compared it to the Settings shell, so `apiKeys`
+        // stayed allowed after that tab was removed and `accounts` / `menu`
+        // were rejected.
+        const LIVE: &[&str] = &[
+            "general",
+            "providers",
+            "accounts",
+            "notifications",
+            "menu",
+            "advanced",
+            "about",
+        ];
+        assert_eq!(SETTINGS_TAB_IDS, LIVE);
+        for tab in LIVE {
+            assert!(is_supported_settings_tab(tab), "{tab} must be a live tab");
+        }
+        for retired in ["menuBar", "display", "apiKeys", "cookies", "security"] {
+            assert!(
+                !is_supported_settings_tab(retired),
+                "{retired} is not a live Settings tab"
+            );
+        }
     }
 }

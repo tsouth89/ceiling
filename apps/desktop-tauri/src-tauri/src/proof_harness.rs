@@ -82,7 +82,7 @@ static PROOF_SYNC_CONTROL: LazyLock<Mutex<ProofSyncControl>> =
 pub struct ProofConfig {
     /// The surface to show on startup (serialized as the camelCase id).
     pub target_surface: String,
-    /// Optional settings tab id (e.g. `"apiKeys"`, `"cookies"`).
+    /// Optional settings tab id (e.g. `"accounts"`, `"menu"`).
     pub settings_tab: Option<String>,
     /// Optional target payload for richer proof routing, such as
     /// `"provider:codex"` for pop-out provider views.
@@ -695,15 +695,15 @@ mod tests {
 
     #[test]
     fn parse_settings_with_tab() {
-        with_proof_mode_env(Some("settings:apiKeys"), || {
+        with_proof_mode_env(Some("settings:accounts"), || {
             let cfg = ProofConfig::from_env().unwrap();
             assert_eq!(cfg.target_surface, "settings");
-            assert_eq!(cfg.settings_tab.as_deref(), Some("apiKeys"));
+            assert_eq!(cfg.settings_tab.as_deref(), Some("accounts"));
             assert_eq!(cfg.surface_mode(), SurfaceMode::Settings);
             assert_eq!(
                 cfg.surface_target(),
                 SurfaceTarget::Settings {
-                    tab: "apiKeys".into()
+                    tab: "accounts".into()
                 }
             );
         });
@@ -797,6 +797,33 @@ mod tests {
     #[test]
     fn parse_proof_command_rejects_unknown_settings_tab() {
         assert!(ProofCommand::parse("open-settings:security").is_none());
+    }
+
+    #[test]
+    fn parse_proof_command_accepts_live_settings_tabs() {
+        // SBS-872: `accounts` is a live shell tab that the old allowlist dropped.
+        assert_eq!(
+            ProofCommand::parse("open-settings:accounts"),
+            Some(ProofCommand::OpenSettings {
+                tab: "accounts".into()
+            })
+        );
+        assert_eq!(
+            ProofCommand::parse("open-settings:menu"),
+            Some(ProofCommand::OpenSettings { tab: "menu".into() })
+        );
+    }
+
+    #[test]
+    fn parse_proof_command_rejects_retired_settings_tabs() {
+        // SBS-872: these ids used to pass the Rust allowlist (or the TS union)
+        // after the Settings shell stopped rendering them.
+        for retired in ["menuBar", "display", "apiKeys", "cookies"] {
+            assert!(
+                ProofCommand::parse(&format!("open-settings:{retired}")).is_none(),
+                "{retired} must not be a proof-mode settings tab"
+            );
+        }
     }
 
     #[test]
