@@ -27,6 +27,18 @@ describe("chartPalette.providerColor", () => {
     );
   });
 
+  /**
+   * OpenCode and OpenCode Go share one monochrome mark, so a reader seeing two
+   * OpenCode tabs expects one color. Only `opencode` was mapped, so the Go
+   * variant fell through to the generic cost blue and the pair looked unrelated.
+   */
+  it("gives OpenCode Go the same token as OpenCode", () => {
+    const expected = "var(--chart-opencode, var(--chart-cost))";
+    expect(providerCostColor("opencode")).toBe(expected);
+    expect(providerCostColor("opencodego")).toBe(expected);
+    expect(providerCostColor("OpenCode Go")).toBe(expected);
+  });
+
   it("falls back to the generic cost/credits token for unknown providers", () => {
     expect(providerCostColor("unknown-provider-xyz")).toBe("var(--chart-cost)");
     expect(providerCreditsColor("another-ghost")).toBe(

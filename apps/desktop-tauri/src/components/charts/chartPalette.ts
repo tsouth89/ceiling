@@ -26,6 +26,10 @@ const PROVIDER_TOKEN: Record<string, string> = {
   "kimi k2": "--chart-kimik2",
   kiro: "--chart-kiro",
   opencode: "--chart-opencode",
+  // OpenCode Go shares the mark, so it shares the token. Without this it fell
+  // through to the generic cost blue while plain OpenCode went gray.
+  opencodego: "--chart-opencode",
+  "opencode go": "--chart-opencode",
   minimax: "--chart-minimax",
   vertexai: "--chart-vertexai",
   "vertex ai": "--chart-vertexai",
