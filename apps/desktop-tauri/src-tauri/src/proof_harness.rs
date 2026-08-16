@@ -8,9 +8,12 @@
 //!   - `popOut`             — show the pop-out dashboard
 //!   - `popOut:provider:codex` — show a provider pop-out
 //!   - `settings`           — show settings (General tab)
-//!   - `settings:apiKeys`   — show settings on the API Keys tab
-//!   - `settings:cookies`   — show settings on the Cookies tab
+//!   - `settings:accounts`  — show settings on the Accounts tab
+//!   - `settings:menu`      — show settings on the Display tab
 //!   - `settings:about`     — show settings on the About tab
+//!
+//! Every example above is pinned by `header_examples_are_live_proof_mode_values`
+//! so a retired tab id cannot survive here (SBS-872).
 //!
 //! In proof mode the shell immediately transitions to the requested surface
 //! and suppresses blur-dismiss so the window stays visible for automated
@@ -823,6 +826,40 @@ mod tests {
                 ProofCommand::parse(&format!("open-settings:{retired}")).is_none(),
                 "{retired} must not be a proof-mode settings tab"
             );
+        }
+    }
+
+    /// Every backtick-quoted bullet example from this module's header comment.
+    fn header_examples() -> Vec<String> {
+        include_str!("proof_harness.rs")
+            .lines()
+            .take_while(|line| line.starts_with("//!"))
+            .filter_map(|line| {
+                let rest = line.trim_start_matches("//!").trim_start();
+                let (example, _) = rest.strip_prefix("- `")?.split_once('`')?;
+                Some(example.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn header_examples_are_live_proof_mode_values() {
+        // SBS-872: the header advertised `settings:apiKeys` / `settings:cookies`
+        // after the allowlist dropped them, so anyone following it silently got
+        // no proof mode at all.
+        let examples = header_examples();
+        assert_eq!(
+            examples.len(),
+            7,
+            "header bullet list changed shape: {examples:?}"
+        );
+        for example in examples {
+            with_proof_mode_env(Some(&example), || {
+                assert!(
+                    ProofConfig::from_env().is_some(),
+                    "header example `{example}` no longer enters proof mode"
+                );
+            });
         }
     }
 
