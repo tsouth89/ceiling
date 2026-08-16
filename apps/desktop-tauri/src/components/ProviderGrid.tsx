@@ -60,11 +60,13 @@ export default function ProviderGrid({
     if (expanded === undefined) setUncontrolledExpanded(next);
     onExpandedChange?.(next);
   };
-  const gridPercent = (provider: ProviderUsageSnapshot) => {
-    const constraining = constrainingWindow(provider).window;
+  const gridPercent = (provider: ProviderUsageSnapshot): number | null => {
+    const constraining = constrainingWindow(provider);
+    // Named-state windows are not a 0/100 bar (SBS-876 / CEILING_UI.md).
+    if (constraining.namedState) return null;
     const pct = showAsUsed
-      ? constraining.usedPercent
-      : constraining.remainingPercent;
+      ? constraining.window.usedPercent
+      : constraining.window.remainingPercent;
     return Math.max(0, Math.min(100, pct));
   };
   const totalItems = providers.length + 1;
@@ -106,6 +108,7 @@ export default function ProviderGrid({
       {visibleProviders.map((p) => {
         const status = providerGlanceStatus(p);
         const brand = getProviderIcon(p.providerId).brandColor;
+        const percent = gridPercent(p);
         return (
           <button
             key={p.providerId}
@@ -164,12 +167,12 @@ export default function ProviderGrid({
               </span>
             )}
             <span className="provider-grid__label">{labelFor(p.displayName)}</span>
-            {!p.error && (
+            {!p.error && percent != null && (
               <span
                 className="provider-grid__weekly-track"
                 style={
                   {
-                    "--weekly-pct": `${gridPercent(p)}%`,
+                    "--weekly-pct": `${percent}%`,
                     "--weekly-color": brand,
                   } as CSSProperties
                 }

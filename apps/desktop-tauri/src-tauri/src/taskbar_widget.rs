@@ -45,6 +45,12 @@ struct ProviderReadout {
     amount_label_compact: Option<String>,
     window_label: String,
     reset: Option<String>,
+    /// Localized "Unavailable" / "Not currently enforced" for a placeholder
+    /// window. Painted ahead of the em dash so the tile reads as a named state
+    /// rather than as a fetch error (SBS-876).
+    named_label: Option<String>,
+    /// Tile-width spelling of `named_label` for strips too narrow for it.
+    named_label_compact: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -97,6 +103,9 @@ struct ConstrainingReadout<'a> {
     /// percentage is the wrong readout for a spend lane: "62%" of an $1800 cap
     /// does not tell you that you owe $1112.92 (SBS-191).
     amount: Option<&'a crate::commands::WindowAmountBridge>,
+    /// Set when the percent on this window is a placeholder, not a reading
+    /// (SBS-876). The tile must not round that placeholder to 0 or 100.
+    named_state: Option<&'a str>,
 }
 
 impl<'a> ConstrainingReadout<'a> {
@@ -105,8 +114,95 @@ impl<'a> ConstrainingReadout<'a> {
             label,
             window,
             amount: None,
+            named_state: None,
         }
     }
+}
+
+/// Inactive-row ids that mark `primary` as a placeholder, not a reading.
+///
+/// Match by id only. Sweep: only Cursor writes 0% primary plus an inactive
+/// row for that same window (`cursor-plan` / `cursor-monthly`).
+fn primary_named_state(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<&str> {
+    let row = snapshot
+        .inactive_rate_windows
+        .iter()
+        .find(|row| row.id == "cursor-plan" || row.id == "cursor-monthly")?;
+    Some(if row.state == "unavailable" {
+        "unavailable"
+    } else {
+        "notEnforced"
+    })
+}
+
+/// Tile text for a window that reports a named state instead of a reading.
+fn strip_named_label(
+    readout: &ConstrainingReadout<'_>,
+    lang: codexbar::settings::Language,
+) -> Option<String> {
+    let key = match readout.named_state? {
+        "unavailable" => codexbar::locale::LocaleKey::WindowUnavailable,
+        _ => codexbar::locale::LocaleKey::NotCurrentlyEnforced,
+    };
+    Some(codexbar::locale::get_text(lang, key))
+}
+
+/// Tile-width spelling of [`strip_named_label`].
+///
+/// Same reason [`compact_amount_label`] exists: five providers on a crowded
+/// taskbar leave roughly 51px for the headline, and "Unavailable" needs about
+/// 72px at the 14px tile font. Without a short form the ladder falls through to
+/// the em dash — the glyph a fetch error paints — so a known state would read as
+/// an unknown one exactly when the strip is busiest (SBS-876).
+fn compact_named_label(
+    readout: &ConstrainingReadout<'_>,
+    lang: codexbar::settings::Language,
+) -> Option<String> {
+    let key = match readout.named_state? {
+        "unavailable" => codexbar::locale::LocaleKey::StripStateUnavailable,
+        _ => codexbar::locale::LocaleKey::StripStateNotEnforced,
+    };
+    Some(codexbar::locale::get_text(lang, key))
+}
+
+/// Inline reset for the tile, when the user asked for it and the window is a
+/// real reading. A named-state window has no quota to run out, so its
+/// billing-cycle date is not a countdown (SBS-876).
+fn strip_reset_label(readout: &ConstrainingReadout<'_>, show_reset_inline: bool) -> Option<String> {
+    if !show_reset_inline || readout.named_state.is_some() {
+        return None;
+    }
+    crate::tray_bridge::tooltip_short_reset(
+        readout.window.resets_at.as_deref(),
+        readout.window.reset_description.as_deref(),
+    )
+}
+
+fn strip_readout_percent(readout: &ConstrainingReadout<'_>, show_as_used: bool) -> Option<u8> {
+    if readout.named_state.is_some() {
+        return None;
+    }
+    let value = if show_as_used {
+        readout.window.used_percent
+    } else {
+        readout.window.remaining_percent
+    };
+    Some(value.clamp(0.0, 100.0).round() as u8)
+}
+
+fn strip_heat(snapshot: &crate::commands::ProviderUsageSnapshot) -> f64 {
+    // Account ranking runs before `widget_model` drops errored snapshots, so a
+    // failed account must rank below a named state or it wins the tile and then
+    // has no readout to paint - an em dash where "Unavailable" was available
+    // from the other account (SBS-876).
+    if snapshot.error.is_some() {
+        return f64::NEG_INFINITY;
+    }
+    let readout = constraining_readout(snapshot);
+    if readout.named_state.is_some() {
+        return -1.0;
+    }
+    readout.window.used_percent
 }
 
 /// Tile text for a currency-billed lane.
@@ -203,6 +299,7 @@ fn cursor_actionable_windows(
             label: Some(label),
             window: &extra.window,
             amount: extra.amount.as_ref(),
+            named_state: None,
         });
     }
     out
@@ -222,6 +319,7 @@ fn cursor_on_demand_readout(
             }),
             window: &extra.window,
             amount: extra.amount.as_ref(),
+            named_state: None,
         })
 }
 
@@ -293,7 +391,12 @@ fn cursor_strip_readout(
     {
         return readout;
     }
-    ConstrainingReadout::new(snapshot.primary_label.as_deref(), &snapshot.primary)
+    ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+        amount: None,
+        named_state: primary_named_state(snapshot),
+    }
 }
 
 fn constraining_readout(
@@ -303,7 +406,12 @@ fn constraining_readout(
         return cursor_strip_readout(snapshot);
     }
 
-    let mut best = ConstrainingReadout::new(snapshot.primary_label.as_deref(), &snapshot.primary);
+    let mut best = ConstrainingReadout {
+        label: snapshot.primary_label.as_deref(),
+        window: &snapshot.primary,
+        amount: None,
+        named_state: primary_named_state(snapshot),
+    };
 
     // Claude's per-model weekly caps are parallel sub-pools, not blockers: at
     // 100% you switch model rather than stop. The tile shows one lane, so
@@ -343,6 +451,7 @@ fn constraining_readout(
                 label: Some(extra.title.as_str()),
                 window: &extra.window,
                 amount: extra.amount.as_ref(),
+                named_state: None,
             });
         }
         out
@@ -387,10 +496,8 @@ where
         return Some(*hit);
     }
     candidates.into_iter().max_by(|a, b| {
-        constraining_readout(a)
-            .window
-            .used_percent
-            .total_cmp(&constraining_readout(b).window.used_percent)
+        strip_heat(a)
+            .total_cmp(&strip_heat(b))
             .then_with(|| b.account_id.cmp(&a.account_id))
     })
 }
@@ -1133,14 +1240,8 @@ mod windows_host {
                 let constraining = snapshot
                     .filter(|snapshot| snapshot.error.is_none())
                     .map(super::constraining_readout);
-                let percent = constraining.map(|readout| {
-                    let value = if settings.show_as_used {
-                        readout.window.used_percent
-                    } else {
-                        readout.window.remaining_percent
-                    };
-                    value.clamp(0.0, 100.0).round() as u8
-                });
+                let percent = constraining
+                    .and_then(|readout| strip_readout_percent(&readout, settings.show_as_used));
                 // A spend lane's headline is the money, not the fraction.
                 let spend = constraining.and_then(|readout| readout.amount);
                 let amount_label =
@@ -1165,17 +1266,13 @@ mod windows_host {
                                 snapshot.and_then(|snapshot| snapshot.primary.window_minutes)
                             }),
                     ),
-                    reset: settings
-                        .float_bar_show_reset_inline
-                        .then(|| {
-                            constraining.and_then(|readout| {
-                                crate::tray_bridge::tooltip_short_reset(
-                                    readout.window.resets_at.as_deref(),
-                                    readout.window.reset_description.as_deref(),
-                                )
-                            })
-                        })
-                        .flatten(),
+                    reset: constraining.and_then(|readout| {
+                        strip_reset_label(&readout, settings.float_bar_show_reset_inline)
+                    }),
+                    named_label: constraining
+                        .and_then(|readout| strip_named_label(&readout, settings.ui_language)),
+                    named_label_compact: constraining
+                        .and_then(|readout| compact_named_label(&readout, settings.ui_language)),
                 }
             })
             .collect();
@@ -1626,6 +1723,11 @@ mod windows_host {
                 provider.amount_label.as_deref(),
                 provider.amount_label_compact.as_deref(),
                 percent_label.as_deref(),
+                // "Unavailable", then "n/a", before the em dash: a placeholder
+                // window is a known state, not the unknown a fetch error leaves
+                // (SBS-876).
+                provider.named_label.as_deref(),
+                provider.named_label_compact.as_deref(),
                 Some("—"),
             ]
             .into_iter()
@@ -2922,6 +3024,39 @@ mod tests {
         assert_eq!(picked.account_id.as_deref(), Some("work"));
     }
 
+    /// SBS-876: ranking happens before `widget_model` filters errored
+    /// snapshots. A failed account's primary reads 0%, which used to outrank a
+    /// successful account whose Plan is unavailable (heat -1), so the tile was
+    /// handed a snapshot it then refused to read and painted an em dash - while
+    /// the other account could have said "Unavailable".
+    #[test]
+    fn strip_snapshot_prefers_a_named_state_over_a_failed_account() {
+        let mut unavailable = snap("cursor", Some("good"), 0.0);
+        unavailable.primary_label = Some("Plan".into());
+        unavailable
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+        let mut failed = snap("cursor", Some("broken"), 0.0);
+        failed.error = Some("network timeout".into());
+
+        let cache = [failed, unavailable];
+        let picked = select_strip_snapshot(cache.iter(), "cursor", None).unwrap();
+
+        assert_eq!(picked.account_id.as_deref(), Some("good"));
+        assert!(picked.error.is_none());
+
+        // A real reading still beats both.
+        let mut cache = cache.to_vec();
+        cache.push(snap("cursor", Some("hot"), 42.0));
+        let picked = select_strip_snapshot(cache.iter(), "cursor", None).unwrap();
+        assert_eq!(picked.account_id.as_deref(), Some("hot"));
+    }
+
     #[test]
     fn strip_snapshot_respects_pinned_account() {
         let cache = [
@@ -3270,6 +3405,144 @@ mod tests {
         assert_eq!(
             strip_amount_label(amount, false).as_deref(),
             Some("$687.08")
+        );
+    }
+
+    /// SBS-876: Cursor still writes 0% primary when monthly is missing, plus
+    /// `cursor-plan` unavailable. The native tile must not round that
+    /// placeholder to Some(0) or Some(100).
+    #[test]
+    fn cursor_strip_omits_percent_when_plan_is_unavailable() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.named_state, Some("unavailable"));
+        assert_eq!(strip_readout_percent(&readout, true), None);
+        assert_eq!(strip_readout_percent(&readout, false), None);
+
+        // Auto still wins the strip when present; the placeholder does not.
+        snapshot.secondary = Some(rate_window(42.0, Some(43_200)));
+        snapshot.secondary_label = Some("Auto".into());
+        let with_auto = constraining_readout(&snapshot);
+        assert_eq!(with_auto.label, Some("Auto"));
+        assert!(with_auto.named_state.is_none());
+        assert_eq!(strip_readout_percent(&with_auto, true), Some(42));
+    }
+
+    /// SBS-876: omitting the percent is only half the job. Without a label the
+    /// tile falls through to the em dash, which is what a fetch error paints —
+    /// the user cannot tell "no reading exists" from "the fetch broke".
+    #[test]
+    fn cursor_strip_labels_the_named_state_instead_of_an_em_dash() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.primary.resets_at = Some("2099-01-01T00:00:00Z".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        let lang = codexbar::settings::Language::default();
+        assert_eq!(
+            strip_named_label(&readout, lang).as_deref(),
+            Some("Unavailable")
+        );
+
+        // A lifted limit is a different sentence from a missing reading.
+        snapshot.inactive_rate_windows[0].state = "notEnforced".into();
+        let lifted = constraining_readout(&snapshot);
+        assert_eq!(
+            strip_named_label(&lifted, lang).as_deref(),
+            Some("Not currently enforced")
+        );
+
+        // A real reading has no named label to paint.
+        snapshot.inactive_rate_windows.clear();
+        assert!(strip_named_label(&constraining_readout(&snapshot), lang).is_none());
+    }
+
+    /// SBS-876: five providers leave roughly 51px for a tile headline, which
+    /// "Unavailable" (~72px at the 14px tile font) overruns. Without a short
+    /// spelling the ladder reaches the em dash and the named state reads as a
+    /// fetch error on exactly the strips that are busiest.
+    #[test]
+    fn named_state_has_a_spelling_that_fits_a_crowded_tile() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+        let lang = codexbar::settings::Language::default();
+
+        for state in ["unavailable", "notEnforced"] {
+            snapshot.inactive_rate_windows[0].state = state.into();
+            let readout = constraining_readout(&snapshot);
+            let full = strip_named_label(&readout, lang).expect("full spelling");
+            let compact = compact_named_label(&readout, lang).expect("compact spelling");
+            assert!(
+                compact.chars().count() < full.chars().count(),
+                "{state}: compact {compact:?} must be shorter than {full:?}"
+            );
+            // The narrowest tile budget fits about 8 characters of the headline
+            // font. Anything longer lands back on the em dash.
+            assert!(
+                compact.chars().count() <= 8,
+                "{state}: {compact:?} is too wide for a five-provider strip"
+            );
+        }
+
+        // A real reading still has no named spelling at either width.
+        snapshot.inactive_rate_windows.clear();
+        let real = constraining_readout(&snapshot);
+        assert!(compact_named_label(&real, lang).is_none());
+    }
+
+    /// SBS-876: the billing-cycle date on a placeholder Plan is not a countdown,
+    /// so the tile must not print it beside the named state.
+    #[test]
+    fn cursor_strip_omits_reset_when_plan_is_unavailable() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.primary.reset_description = Some("Resets monthly".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        assert_eq!(
+            strip_reset_label(&constraining_readout(&snapshot), true),
+            None
+        );
+
+        // A real reading still shows its reset when the setting is on.
+        snapshot.inactive_rate_windows.clear();
+        assert!(strip_reset_label(&constraining_readout(&snapshot), true).is_some());
+        assert_eq!(
+            strip_reset_label(&constraining_readout(&snapshot), false),
+            None
         );
     }
 

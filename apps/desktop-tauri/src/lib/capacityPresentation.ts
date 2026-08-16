@@ -7,17 +7,30 @@ import type {
 
 export type CapacityFreshness = "live" | "stale" | "error";
 
+/** Named enforcement state for a window that must not paint as 0% / 100%. */
+export type NamedWindowState = "unavailable" | "notEnforced";
+
 export type ConstrainingWindow = {
   id: string;
   label: string;
   window: RateWindowSnapshot;
   /** Money behind this lane, when the provider meters it in currency. */
   amount?: WindowAmountBridge | null;
+  /**
+   * Set when this window's percent is a placeholder, not a reading.
+   * Writers still emit a required primary plus an inactive row for the
+   * same identity (SBS-876 / CEILING_UI.md).
+   */
+  namedState?: NamedWindowState;
 };
 
 export type GlanceMeters = {
-  /** Account plan pool — always the overview hero. */
-  primary: ConstrainingWindow;
+  /**
+   * Account plan pool — overview hero. Null when that window is a named
+   * placeholder (unavailable / not enforced) so Overview does not also
+   * paint a 0% MeterRow (SBS-876).
+   */
+  primary: ConstrainingWindow | null;
   /** Compact non-primary lanes shown beneath the hero. */
   companions: ConstrainingWindow[];
 };
@@ -33,6 +46,51 @@ export type ActivePromoBoost = {
 const STALE_AFTER_MS = 10 * 60 * 1000;
 /** Companion lanes appear on overview when used reaches this share. */
 export const GLANCE_COMPANION_HOT_PERCENT = 70;
+
+/**
+ * Inactive-row ids that mark `primary` as a placeholder, not a reading.
+ *
+ * Match by id only — never by title. Codex can report a real Weekly
+ * primary alongside an unavailable Weekly inactive row with a different
+ * id (`weekly`); title matching would hide that 51% reading (SBS-876).
+ *
+ * Sweep: the only writer that emits 0% primary AND an inactive row for
+ * that same window is Cursor (`cursor-plan` unavailable, `cursor-monthly`
+ * notEnforced in `rust/src/providers/cursor/api.rs`).
+ */
+const PRIMARY_PLACEHOLDER_IDS = new Set(["cursor-plan", "cursor-monthly"]);
+
+export function isPrimaryPlaceholderId(id: string): boolean {
+  return PRIMARY_PLACEHOLDER_IDS.has(id);
+}
+
+/**
+ * When writers must still emit a primary window, they may also emit an
+ * inactiveRateWindows row for that same identity. The percent on primary
+ * is then a placeholder, not a reading (SBS-876 / CEILING_UI.md).
+ *
+ * Missing `state` on an inactive row is notEnforced (existing back-compat).
+ */
+export function primaryNamedState(
+  provider: ProviderUsageSnapshot,
+): NamedWindowState | null {
+  const hit = (provider.inactiveRateWindows ?? []).find((row) =>
+    PRIMARY_PLACEHOLDER_IDS.has(row.id),
+  );
+  if (!hit) return null;
+  return hit.state ?? "notEnforced";
+}
+
+function primaryConstrainingWindow(
+  provider: ProviderUsageSnapshot,
+): ConstrainingWindow {
+  return {
+    id: "primary",
+    label: provider.primaryLabel?.trim() || "Plan",
+    window: provider.primary,
+    namedState: primaryNamedState(provider) ?? undefined,
+  };
+}
 
 /** A window you have already hit stops work no matter what the others read. */
 function isBlocking(window: RateWindowSnapshot): boolean {
@@ -186,11 +244,9 @@ function cursorStripWindow(
     if (exhausted) return exhausted;
   }
   if (onDemand && cursorOnDemandIsActive(provider, onDemand)) return onDemand;
-  return {
-    id: "primary",
-    label: provider.primaryLabel?.trim() || "Plan",
-    window: provider.primary,
-  };
+  // Plan/Monthly fallback. If that window is a placeholder, carry namedState
+  // so the strip does not paint a bare 0% / 100% bar (SBS-876).
+  return primaryConstrainingWindow(provider);
 }
 
 /**
@@ -227,11 +283,7 @@ export function constrainingWindow(
     return cursorStripWindow(provider);
   }
 
-  let best: ConstrainingWindow = {
-    id: "primary",
-    label: provider.primaryLabel?.trim() || "Plan",
-    window: provider.primary,
-  };
+  let best: ConstrainingWindow = primaryConstrainingWindow(provider);
 
   for (const candidate of nonPrimaryWindows(provider)) {
     if (isModelScopedLane(provider.providerId, candidate.id)) continue;
@@ -294,11 +346,8 @@ const PINNED_COMPANION_IDS: Record<string, string[]> = {
  * Clicking never toggles meters — detail mode lists every window.
  */
 export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
-  const primary: ConstrainingWindow = {
-    id: "primary",
-    label: provider.primaryLabel?.trim() || "Plan",
-    window: provider.primary,
-  };
+  const named = primaryNamedState(provider);
+  const primary = named ? null : primaryConstrainingWindow(provider);
 
   const candidates = nonPrimaryWindows(provider);
   const pinned = PINNED_COMPANION_IDS[provider.providerId];
@@ -322,7 +371,12 @@ export function glanceMeters(provider: ProviderUsageSnapshot): GlanceMeters {
 
   let companion: ConstrainingWindow | null = null;
   for (const candidate of candidates) {
-    if (!isCompanionHot(candidate.window, primary.window)) continue;
+    // No real primary: do not compare against a placeholder 0%. A companion
+    // is hot only on its own used percent (SBS-876).
+    const hot = primary
+      ? isCompanionHot(candidate.window, primary.window)
+      : candidate.window.usedPercent >= GLANCE_COMPANION_HOT_PERCENT;
+    if (!hot) continue;
     if (
       !companion ||
       candidate.window.usedPercent > companion.window.usedPercent
@@ -419,12 +473,12 @@ export function bankedResetCredits(
 export function allMeasuredWindows(
   provider: ProviderUsageSnapshot,
 ): ConstrainingWindow[] {
-  const primary: ConstrainingWindow = {
-    id: "primary",
-    label: provider.primaryLabel?.trim() || "Plan",
-    window: provider.primary,
-  };
-  return [primary, ...nonPrimaryWindows(provider)];
+  // A placeholder primary is not a reading — Activity must not list a fake
+  // 0% Plan (SBS-876).
+  if (primaryNamedState(provider)) {
+    return nonPrimaryWindows(provider);
+  }
+  return [primaryConstrainingWindow(provider), ...nonPrimaryWindows(provider)];
 }
 
 /** Grid / glance status chip from constraining pressure. */
@@ -433,6 +487,28 @@ export function providerGlanceStatus(
 ): ProviderGlanceStatus {
   if (provider.error) return "error";
   const constraining = constrainingWindow(provider);
+  // A named-state window is not "ok because 0%" and not exhausted. Fetch
+  // succeeded; the window is named, not a quota. Unavailable is not error
+  // (provider.error is the fetch-failed path). If another measured window
+  // is applying pressure, that window still ranks the status (SBS-876).
+  if (constraining.namedState) {
+    const others = allMeasuredWindows(provider);
+    let hottest: ConstrainingWindow | null = null;
+    for (const candidate of others) {
+      if (
+        !hottest ||
+        candidate.window.usedPercent > hottest.window.usedPercent
+      ) {
+        hottest = candidate;
+      }
+    }
+    if (!hottest) return "ok";
+    if (hottest.window.isExhausted || hottest.window.usedPercent >= 100) {
+      return "exhausted";
+    }
+    if (hottest.window.usedPercent > 80) return "warning";
+    return "ok";
+  }
   if (
     constraining.window.isExhausted ||
     constraining.window.usedPercent >= 100

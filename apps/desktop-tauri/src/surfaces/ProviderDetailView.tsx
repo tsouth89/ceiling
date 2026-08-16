@@ -20,6 +20,8 @@ import {
   allMeasuredWindows,
   bankedResetCredits,
   formatShortDuration,
+  isPrimaryPlaceholderId,
+  primaryNamedState,
 } from "../lib/capacityPresentation";
 
 type DetailWindow = {
@@ -299,12 +301,25 @@ export default function ProviderDetailView({
   );
   const metrics = useMemo(
     () =>
-      // On-demand is the only Cursor lane that bills real money, and it now
-      // carries that money beside its bar, so it is the most actionable row
-      // here rather than noise. (Promotional no longer exists at all.)
-      allMeasuredWindows(provider).slice(1),
+      // Other limits = every measured window except the hero primary.
+      // Filter by id, not `.slice(1)`: when the primary is a named
+      // placeholder it is already omitted, and slicing would drop Auto
+      // (SBS-876).
+      allMeasuredWindows(provider).filter((window) => window.id !== "primary"),
     [provider],
   );
+  const namedPrimary = primaryNamedState(provider);
+  const otherInactiveWindows = (provider.inactiveRateWindows ?? []).filter(
+    (metric) => !namedPrimary || !isPrimaryPlaceholderId(metric.id),
+  );
+  // Pace belongs to whichever long window has the worst delta, not always the
+  // primary (`preferred_pace` in bridge.rs picks across all of them). Drop it
+  // only when it is the placeholder's own verdict, which would read a fake 0%;
+  // an Auto pace beside an unavailable Plan is still a real reading (SBS-876).
+  const pace =
+    namedPrimary && provider.pace?.windowLabel === provider.primaryLabel
+      ? null
+      : provider.pace;
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
   const primaryLabel = provider.primaryLabel?.trim() || "Primary";
   const planName = displayPlanName(provider.planName);
@@ -366,27 +381,41 @@ export default function ProviderDetailView({
           <section className="provider-focus__primary">
             <div className="provider-focus__section-head">
               <h3>{primaryLabel} usage</h3>
-              {primaryReset && <span>{primaryReset}</span>}
+              {primaryReset && !namedPrimary && <span>{primaryReset}</span>}
             </div>
-            <div className="provider-focus__primary-value">
-              <strong>{primaryPercent}%</strong>
-              <span>{showAsUsed ? "used" : "left"}</span>
-            </div>
-            <DetailProgress window={provider.primary} showAsUsed={showAsUsed} />
-            {provider.pace && (
-              <div className="provider-focus__pace-glance" data-tone={paceTone(provider.pace)}>
+            {namedPrimary ? (
+              <div
+                className={`provider-focus__primary-value provider-focus__primary-value--named${namedPrimary === "unavailable" ? " provider-focus__primary-value--unavailable" : ""}`}
+              >
+                <strong>
+                  {namedPrimary === "unavailable"
+                    ? t("WindowUnavailable")
+                    : t("NotCurrentlyEnforced")}
+                </strong>
+              </div>
+            ) : (
+              <>
+                <div className="provider-focus__primary-value">
+                  <strong>{primaryPercent}%</strong>
+                  <span>{showAsUsed ? "used" : "left"}</span>
+                </div>
+                <DetailProgress window={provider.primary} showAsUsed={showAsUsed} />
+              </>
+            )}
+            {pace && (
+              <div className="provider-focus__pace-glance" data-tone={paceTone(pace)}>
                 <i />
-                <strong>{provider.pace.windowLabel} pace</strong>
+                <strong>{pace.windowLabel} pace</strong>
                 <span>
-                  {paceLabel(provider.pace.stage)} ·{" "}
-                  {provider.pace.deltaPercent >= 0 ? "+" : ""}
-                  {provider.pace.deltaPercent.toFixed(1)}%
+                  {paceLabel(pace.stage)} ·{" "}
+                  {pace.deltaPercent >= 0 ? "+" : ""}
+                  {pace.deltaPercent.toFixed(1)}%
                 </span>
               </div>
             )}
           </section>
 
-          {(metrics.length > 0 || (provider.inactiveRateWindows?.length ?? 0) > 0) && (
+          {(metrics.length > 0 || otherInactiveWindows.length > 0) && (
             <section className="provider-focus__section provider-focus__limits">
               <h3>Other limits</h3>
               {metrics.map((metric) => (
@@ -397,7 +426,7 @@ export default function ProviderDetailView({
                   showAsUsed={showAsUsed}
                 />
               ))}
-              {(provider.inactiveRateWindows ?? []).map((metric) => {
+              {otherInactiveWindows.map((metric) => {
                 const unavailable = metric.state === "unavailable";
                 return (
                   <div
@@ -423,7 +452,7 @@ export default function ProviderDetailView({
             </section>
           )}
           {chartData?.localUsage && <LocalActivity summary={chartData.localUsage} />}
-          {provider.pace && <PaceSection pace={provider.pace} />}
+          {pace && <PaceSection pace={pace} />}
         </>
       )}
     </article>

@@ -6,6 +6,7 @@ import {
   glanceMeters,
   activePromoBoosts,
   activePromoInclusions,
+  primaryNamedState,
   providerGlanceStatus,
   resetCreditsAvailable,
   bankedResetCredits,
@@ -343,8 +344,8 @@ describe("capacityPresentation", () => {
         ],
       }),
     );
-    expect(meters.primary.label).toBe("Monthly");
-    expect(meters.primary.window.usedPercent).toBe(62);
+    expect(meters.primary?.label).toBe("Monthly");
+    expect(meters.primary?.window.usedPercent).toBe(62);
     expect(meters.companions.map((meter) => meter.label)).toEqual(["Auto", "API"]);
     expect(meters.companions.map((meter) => meter.window.usedPercent)).toEqual([
       90, 12,
@@ -780,6 +781,125 @@ describe("capacityPresentation", () => {
       const reset = calmPresentation(withResetSnap, constrainingWindow(withResetSnap));
       expect(reset.hasReset).toBe(true);
       expect(reset.showExactFallback).toBe(false);
+    });
+  });
+
+  /**
+   * SBS-876: Cursor still writes 0% primary when monthly is missing, plus an
+   * inactive `cursor-plan` row. Glance readers must treat that percent as a
+   * placeholder, not a reading.
+   */
+  describe("named primary placeholder (SBS-876)", () => {
+    const missingPlan = () =>
+      provider({
+        primary: window(0),
+        primaryLabel: "Plan",
+        inactiveRateWindows: [
+          {
+            id: "cursor-plan",
+            title: "Plan",
+            description: "No usage reported",
+            state: "unavailable",
+          },
+        ],
+      });
+
+    it("does not treat a missing Cursor plan as a 0% hero", () => {
+      const snap = missingPlan();
+      expect(primaryNamedState(snap)).toBe("unavailable");
+      expect(glanceMeters(snap).primary).toBeNull();
+      expect(constrainingWindow(snap).namedState).toBe("unavailable");
+      expect(
+        allMeasuredWindows(snap).some(
+          (measured) =>
+            measured.window.usedPercent === 0 &&
+            measured.label.toLowerCase() === "plan",
+        ),
+      ).toBe(false);
+      expect(providerGlanceStatus(snap)).not.toBe("exhausted");
+      expect(providerGlanceStatus(snap)).toBe("ok");
+    });
+
+    it("keeps glance primary null when Auto is present; strip still prefers Auto", () => {
+      const snap = provider({
+        primary: window(0),
+        primaryLabel: "Plan",
+        secondary: window(44),
+        secondaryLabel: "Auto",
+        inactiveRateWindows: [
+          {
+            id: "cursor-plan",
+            title: "Plan",
+            description: "No usage reported",
+            state: "unavailable",
+          },
+        ],
+      });
+      expect(glanceMeters(snap).primary).toBeNull();
+      expect(glanceMeters(snap).companions.map((meter) => meter.label)).toEqual([
+        "Auto",
+      ]);
+      expect(constrainingWindow(snap).label).toBe("Auto");
+      expect(constrainingWindow(snap).namedState).toBeUndefined();
+      expect(constrainingWindow(snap).window.usedPercent).toBe(44);
+    });
+
+    it("surfaces unlimited monthly as notEnforced, not a 0% hero", () => {
+      const snap = provider({
+        primary: window(0),
+        primaryLabel: "Monthly",
+        inactiveRateWindows: [
+          {
+            id: "cursor-monthly",
+            title: "Monthly",
+            description: "Not currently enforced by Cursor",
+            state: "notEnforced",
+          },
+        ],
+      });
+      expect(primaryNamedState(snap)).toBe("notEnforced");
+      expect(glanceMeters(snap).primary).toBeNull();
+      expect(constrainingWindow(snap).namedState).toBe("notEnforced");
+      expect(
+        allMeasuredWindows(snap).some((measured) => measured.window.usedPercent === 0),
+      ).toBe(false);
+    });
+
+    it("still heroes a real 0% plan when no inactive row marks it a placeholder", () => {
+      // Unknown is not empty: a genuine 0% reading must stay a 0% hero.
+      const snap = provider({
+        primary: window(0),
+        primaryLabel: "Plan",
+        inactiveRateWindows: [],
+      });
+      expect(primaryNamedState(snap)).toBeNull();
+      expect(glanceMeters(snap).primary?.window.usedPercent).toBe(0);
+      expect(constrainingWindow(snap).namedState).toBeUndefined();
+      expect(constrainingWindow(snap).window.usedPercent).toBe(0);
+    });
+
+    it("does not hide a real Weekly primary because an inactive Weekly has the same title", () => {
+      // ProviderDetailView.test.tsx Codex fixture: 51% Weekly primary plus
+      // an unavailable Weekly row with a different id. Title-only matching
+      // would hide the real reading.
+      const snap = provider({
+        providerId: "codex",
+        displayName: "Codex",
+        primary: window(51),
+        primaryLabel: "Weekly",
+        inactiveRateWindows: [
+          {
+            id: "weekly",
+            title: "Weekly",
+            description: "Not reported in the latest update",
+            state: "unavailable",
+          },
+        ],
+      });
+      expect(primaryNamedState(snap)).toBeNull();
+      expect(glanceMeters(snap).primary?.window.usedPercent).toBe(51);
+      expect(constrainingWindow(snap).window.usedPercent).toBe(51);
+      expect(constrainingWindow(snap).namedState).toBeUndefined();
     });
   });
 

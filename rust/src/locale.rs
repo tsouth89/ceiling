@@ -947,6 +947,11 @@ locale_keys! {
     FreshnessError,
     NotCurrentlyEnforced,
     WindowUnavailable,
+    // Tile-width spellings of the two above. A provider tile on a crowded
+    // taskbar has ~51px for its headline, which "Unavailable" overruns, so the
+    // strip needs a short form or it falls back to the error em dash (SBS-876).
+    StripStateUnavailable,
+    StripStateNotEnforced,
     TaskbarUsageTitle,
     ShowTaskbarUsage,
     ShowTaskbarUsageHelp,

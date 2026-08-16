@@ -161,4 +161,104 @@ describe("ProviderDetailView", () => {
     expect(screen.getByText("96.0%")).toBeInTheDocument();
     expect(screen.getByText(/Most used model: gpt-5.6-sol/)).toBeInTheDocument();
   });
+
+  /**
+   * SBS-876: Cursor missing-plan still writes 0% primary. Detail must
+   * headline the named state, not "0% used".
+   */
+  it("does not headline 0% when Cursor plan is unavailable", async () => {
+    const cursor: ProviderUsageSnapshot = {
+      ...codex(),
+      providerId: "cursor",
+      displayName: "Cursor",
+      // Spreading the Codex fixture would otherwise render a ChatGPT plan name
+      // inside a Cursor view, which is exactly what provider siloing forbids.
+      planName: "Ultra",
+      primary: rate(0),
+      primaryLabel: "Plan",
+      extraRateWindows: [],
+      inactiveRateWindows: [
+        {
+          id: "cursor-plan",
+          title: "Plan",
+          description: "No usage reported",
+          state: "unavailable",
+        },
+      ],
+      // The bridge still derives pace from the required 0% primary, so a real
+      // Cursor snapshot arrives with a verdict attached. Keep it here: a null
+      // pace could not catch the pace copy leaking beside "Unavailable".
+      pace: {
+        windowLabel: "Plan",
+        stage: "far_ahead",
+        deltaPercent: -38.6,
+        willLastToReset: true,
+        etaSeconds: null,
+        expectedUsedPercent: 38.6,
+        actualUsedPercent: 0,
+      },
+      resetCreditsAvailable: null,
+    };
+
+    render(
+      <ProviderDetailView
+        provider={cursor}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("Plan usage")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
+    // A pace verdict read off the placeholder 0% is not a reading either.
+    expect(screen.queryByText(/Plan pace/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ahead of budget/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * SBS-876: `preferred_pace` picks the worst delta across every long window,
+   * so pace is often Auto rather than Plan. Dropping pace whenever the primary
+   * is a placeholder threw away that valid Auto verdict too.
+   */
+  it("keeps an Auto pace when only the Cursor Plan is unavailable", async () => {
+    const cursor: ProviderUsageSnapshot = {
+      ...codex(),
+      providerId: "cursor",
+      displayName: "Cursor",
+      planName: "Ultra",
+      primary: rate(0),
+      primaryLabel: "Plan",
+      secondary: rate(44),
+      secondaryLabel: "Auto",
+      extraRateWindows: [],
+      inactiveRateWindows: [
+        {
+          id: "cursor-plan",
+          title: "Plan",
+          description: "No usage reported",
+          state: "unavailable",
+        },
+      ],
+      pace: {
+        windowLabel: "Auto",
+        stage: "far_ahead",
+        deltaPercent: 31.6,
+        willLastToReset: false,
+        etaSeconds: 3600,
+        expectedUsedPercent: 12.4,
+        actualUsedPercent: 44,
+      },
+      resetCreditsAvailable: null,
+    };
+
+    render(
+      <ProviderDetailView provider={cursor} resetTimeRelative showAsUsed />,
+    );
+
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    // The Auto verdict is a reading of a real window, so it survives.
+    expect(screen.getAllByText(/Auto pace/).length).toBeGreaterThan(0);
+  });
 });

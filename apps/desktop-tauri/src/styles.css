@@ -1619,6 +1619,23 @@ body:has(.taskbar-flyout-frame) #root {
   white-space: nowrap;
 }
 
+.taskbar-flyout__inactive {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: rgba(242, 247, 255, 0.56);
+  font-size: 10.5px;
+  line-height: 14px;
+}
+.taskbar-flyout__inactive--unavailable {
+  color: var(--usage-bar-high, #e3b341);
+}
+.taskbar-flyout__inactive--unavailable .taskbar-flyout__meter-label {
+  color: rgba(242, 247, 255, 0.78);
+}
+
 .taskbar-flyout__window-more {
   color: rgba(242, 247, 255, 0.5);
   font-size: 9.5px;
@@ -7188,6 +7205,13 @@ body:has(.dashboard-shell) #root {
   letter-spacing: -0.045em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+}
+.provider-focus__primary-value--named strong {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+.provider-focus__primary-value--unavailable strong {
+  color: var(--usage-bar-high);
 }
 .provider-focus__primary-value span {
   color: var(--text-secondary);

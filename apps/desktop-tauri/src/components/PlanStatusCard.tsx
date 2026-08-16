@@ -298,13 +298,15 @@ export default function PlanStatusCard({
         <p className="plan-status-card__error">{provider.error}</p>
       ) : (
         <div className="plan-status-card__meters">
-          <MeterRow
-            meter={meters.primary}
-            showAsUsed={showAsUsed}
-            resetTimeRelative={resetTimeRelative}
-            showResetWhenExhausted={showResetWhenExhausted}
-            hero
-          />
+          {meters.primary && (
+            <MeterRow
+              meter={meters.primary}
+              showAsUsed={showAsUsed}
+              resetTimeRelative={resetTimeRelative}
+              showResetWhenExhausted={showResetWhenExhausted}
+              hero
+            />
+          )}
           {meters.companions.map((meter) => (
             <MeterRow
               key={meter.id}

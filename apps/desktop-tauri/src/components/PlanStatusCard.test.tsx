@@ -309,6 +309,40 @@ describe("PlanStatusCard", () => {
     expect(screen.queryByText("lifted")).toBeNull();
   });
 
+  /**
+   * SBS-876: a missing Cursor plan used to paint Plan 0% used (or 100% left)
+   * and a quiet "Plan Unavailable" row at the same time.
+   */
+  it("shows Unavailable for a missing Cursor plan and does not paint 0% or 100% left", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          primary: window(0),
+          primaryLabel: "Plan",
+          secondary: null,
+          secondaryLabel: undefined,
+          extraRateWindows: [],
+          inactiveRateWindows: [
+            {
+              id: "cursor-plan",
+              title: "Plan",
+              description: "No usage reported",
+              state: "unavailable",
+            },
+          ],
+        })}
+        resetTimeRelative
+        showAsUsed
+      />,
+    );
+
+    expect(screen.getByText("unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Plan")).toBeInTheDocument();
+    expect(screen.queryByText(/0% used/)).toBeNull();
+    expect(screen.queryByText(/100% left/)).toBeNull();
+    expect(screen.queryByText(/0% left/)).toBeNull();
+  });
+
   it("separates unavailable windows from not-enforced ones", () => {
     render(
       <PlanStatusCard

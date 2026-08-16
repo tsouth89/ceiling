@@ -6,7 +6,13 @@ import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { orderProviderSnapshots } from "../lib/providerOrder";
-import { allMeasuredWindows, bankedResetCredits, type ConstrainingWindow } from "../lib/capacityPresentation";
+import { useLocale } from "../hooks/useLocale";
+import {
+  allMeasuredWindows,
+  bankedResetCredits,
+  type ConstrainingWindow,
+  type NamedWindowState,
+} from "../lib/capacityPresentation";
 import {
   dismissTrayPanel,
   getTaskbarSurfaceColor,
@@ -92,15 +98,31 @@ function isResetClockWindow(window: ConstrainingWindow): boolean {
   );
 }
 
+function namedStateRows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
+  return (provider.inactiveRateWindows ?? []).map((row) => ({
+    id: `inactive-${row.id}`,
+    label: row.title.trim() || row.id,
+    // Percent is not painted for named-state rows; the primary snapshot is
+    // only here to satisfy ConstrainingWindow (SBS-876).
+    window: provider.primary,
+    namedState: (row.state ?? "notEnforced") as NamedWindowState,
+  }));
+}
+
 function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
+  // allMeasuredWindows already omits a placeholder primary (SBS-876).
   const windows = allMeasuredWindows(provider).filter(isMeteredWindow);
+  const named = namedStateRows(provider);
   if (provider.providerId !== "cursor") {
-    return windows.slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
+    return [...windows, ...named].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
   }
 
-  // Cursor's three durable allowances plus the lane that actually charges you.
+  // Cursor's durable allowances plus the lane that actually charges you.
   // On-demand is pinned rather than left to fill a leftover slot: when the
   // other three are depleted it is the only row that still means anything.
+  // A placeholder Plan is not in `windows`; it arrives as a named-state row, so
+  // keeping `primary` in the preference list costs nothing when it is missing
+  // and stops a real Plan reading from being pushed past the visible slots.
   const preferredIds = [
     "primary",
     "secondary",
@@ -113,7 +135,26 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   const remaining = windows.filter(
     (window) => !preferred.some((candidate) => candidate.id === window.id),
   );
-  return [...preferred, ...remaining].slice(0, MAX_VISIBLE_WINDOWS_PER_PROVIDER);
+  return [...preferred, ...remaining, ...named].slice(
+    0,
+    MAX_VISIBLE_WINDOWS_PER_PROVIDER,
+  );
+}
+
+/**
+ * Every row `flyoutWindows` had to choose from, before the visible-row cap.
+ *
+ * The "more limits" note is the only sign that something was cut, so it has to
+ * count named-state rows too. Measuring hidden rows against the measured
+ * windows alone hid truncated Unavailable rows entirely, and once named rows
+ * filled the visible slots the subtraction went negative and reported nothing
+ * hidden at all (SBS-876).
+ */
+function flyoutCandidateCount(provider: ProviderUsageSnapshot): number {
+  return (
+    allMeasuredWindows(provider).filter(isMeteredWindow).length +
+    namedStateRows(provider).length
+  );
 }
 
 function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, now }: {
@@ -127,6 +168,7 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
   showAsUsed: boolean;
   now: number;
 }) {
+  const { t } = useLocale();
   const accountName = showAccount
     ? accountIdentityLabel(provider, hideEmail)
     : null;
@@ -160,7 +202,7 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
   const resetCredits = bankedResetCredits(provider);
   const hiddenWindowCount = Math.max(
     0,
-    allMeasuredWindows(provider).filter(isMeteredWindow).length - windows.length,
+    flyoutCandidateCount(provider) - windows.length,
   );
   return (
     <div
@@ -190,7 +232,23 @@ function ProviderRow({ provider, showAccount, hideEmail, onStrip, showAsUsed, no
           </div>
         )}
         <div className="taskbar-flyout__meters">
-          {windows.map(({ id, label, window, amount }) => {
+          {windows.map(({ id, label, window, amount, namedState }) => {
+            if (namedState) {
+              const unavailable = namedState === "unavailable";
+              return (
+                <div
+                  className={`taskbar-flyout__inactive${unavailable ? " taskbar-flyout__inactive--unavailable" : ""}`}
+                  key={id}
+                >
+                  <span className="taskbar-flyout__meter-label">{label}</span>
+                  <span>
+                    {unavailable
+                      ? t("WindowUnavailable")
+                      : t("NotCurrentlyEnforced")}
+                  </span>
+                </div>
+              );
+            }
             const percent = valueFor(window, showAsUsed);
             const reset = compactDuration(window.resetsAt, window.resetDescription, now);
             const level = meterLevel(window);

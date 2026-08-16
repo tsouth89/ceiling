@@ -38,6 +38,16 @@ vi.mock("../hooks/useSettings", () => ({
   useSettings: (settings: unknown) => ({ settings }),
 }));
 
+vi.mock("../hooks/useLocale", () => ({
+  useLocale: () => ({
+    t: (key: string) => {
+      if (key === "NotCurrentlyEnforced") return "Not currently enforced";
+      if (key === "WindowUnavailable") return "Unavailable";
+      return key;
+    },
+  }),
+}));
+
 import TaskbarFlyout from "./TaskbarFlyout";
 
 function provider(
@@ -373,6 +383,139 @@ describe("TaskbarFlyout", () => {
     expect(screen.getByText("38%")).toBeInTheDocument();
     // ...while the money keeps stating both figures.
     expect(screen.getByText("$1112.92 of $1800.00")).toBeInTheDocument();
+  });
+
+  /**
+   * SBS-876: a missing Cursor plan used to render a lone Plan 0% bar because
+   * flyoutWindows preferred primary and ignored inactiveRateWindows.
+   */
+  it("does not render a 0% Plan bar when Cursor monthly is unavailable", () => {
+    const cursor = provider("cursor", "Cursor", 0, 22 * 24 * 60, "Plan");
+    cursor.inactiveRateWindows = [
+      {
+        id: "cursor-plan",
+        title: "Plan",
+        description: "No usage reported",
+        state: "unavailable",
+      },
+    ];
+    providerState.providers = [cursor];
+
+    render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "cursor", displayName: "Cursor" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["cursor"],
+              providerOrder: ["cursor"],
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Plan")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("progressbar", { name: /Cursor Plan 0%/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+  });
+
+  /**
+   * SBS-876 follow-up: dropping `primary` from the Cursor preference list to
+   * make room for the named-state row also demoted a *real* Plan reading to the
+   * leftover lane, so it rendered last — under On-demand — instead of leading
+   * the provider it is the headline allowance for.
+   */
+  it("keeps a real Cursor Plan at the top of its lanes", () => {
+    const cursor = provider("cursor", "Cursor", 51, 22 * 24 * 60, "Plan");
+    cursor.secondary = { ...cursor.primary, usedPercent: 99, remainingPercent: 1 };
+    cursor.secondaryLabel = "Auto";
+    cursor.extraRateWindows = [
+      {
+        id: "cursor-api",
+        title: "API",
+        window: { ...cursor.primary, usedPercent: 38, remainingPercent: 62 },
+      },
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: { ...cursor.primary, usedPercent: 62, remainingPercent: 38 },
+      },
+    ];
+    providerState.providers = [cursor];
+
+    const { container } = render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "cursor", displayName: "Cursor" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["cursor"],
+              providerOrder: ["cursor"],
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    expect(
+      screen.getByRole("progressbar", { name: "Cursor Plan 51%" }),
+    ).toBeInTheDocument();
+    const labels = Array.from(
+      container.querySelectorAll(".taskbar-flyout__meter-label"),
+    ).map((node) => node.textContent);
+    expect(labels).toEqual(["Plan", "Auto", "API", "On-demand"]);
+    expect(screen.queryByText(/more limits in Ceiling/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * SBS-876: named-state rows compete for the same four visible slots, but the
+   * hidden-row count only measured metered windows. Three measured rows plus
+   * two Unavailable rows rendered four and reported nothing hidden, because the
+   * subtraction went negative and was clamped to zero.
+   */
+  it("counts truncated named-state rows in the more-limits note", () => {
+    const claude = provider("claude", "Claude", 40, 300, "Session (5h)");
+    claude.secondary = { ...claude.primary, usedPercent: 61, remainingPercent: 39 };
+    claude.secondaryLabel = "Weekly";
+    claude.extraRateWindows = [
+      {
+        id: "claude-opus",
+        title: "Opus weekly",
+        window: { ...claude.primary, usedPercent: 12, remainingPercent: 88 },
+      },
+    ];
+    claude.inactiveRateWindows = [
+      { id: "one", title: "Sonnet weekly", description: "", state: "unavailable" },
+      { id: "two", title: "Haiku weekly", description: "", state: "unavailable" },
+    ];
+    providerState.providers = [claude];
+
+    render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "claude", displayName: "Claude" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["claude"],
+              providerOrder: ["claude"],
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    // 3 measured + 2 named = 5 candidates, 4 slots, so exactly one is cut.
+    expect(screen.getByText("+1 more limits in Ceiling")).toBeInTheDocument();
   });
 
   it("opens the full dashboard and dismisses the glance flyout", async () => {

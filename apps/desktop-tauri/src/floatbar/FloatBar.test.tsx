@@ -315,6 +315,56 @@ describe("FloatBar", () => {
     expect(container.querySelector(".floatbar__pct--calm")).toHaveTextContent("60%");
   });
 
+  /**
+   * SBS-876: exact mode already dropped the pace and reset for a placeholder
+   * window. Calm still built both from the required 0% primary, so the pill
+   * read "On pace · resets in 5d" for a plan with no reading at all.
+   */
+  it("calm mode names the state instead of pacing an unavailable plan", async () => {
+    const unavailable: ProviderUsageSnapshot = {
+      ...snapshot("cursor", "Cursor", 0, {
+        resetsAt: new Date(Date.now() + 5 * 24 * 3600_000).toISOString(),
+      }),
+      updatedAt: new Date().toISOString(),
+      inactiveRateWindows: [
+        {
+          id: "cursor-plan",
+          title: "Plan",
+          description: "No usage reported",
+          state: "unavailable",
+        },
+      ],
+      pace: {
+        windowLabel: "Plan",
+        stage: "far_ahead",
+        deltaPercent: -38.6,
+        willLastToReset: true,
+        etaSeconds: null,
+        expectedUsedPercent: 38.6,
+        actualUsedPercent: 0,
+      },
+    };
+    tauriMocks.getCachedProviders.mockResolvedValue([unavailable]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarInformationMode: "calm", enabledProviders: ["cursor"] }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarInformationMode: "calm", enabledProviders: ["cursor"] }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill--calm")).toBeInTheDocument();
+    });
+
+    expect(container.querySelector(".floatbar__pct--calm")).toHaveTextContent(
+      "Unavailable",
+    );
+    expect(container.querySelector(".floatbar__pace")).toBeNull();
+    expect(container.querySelector(".floatbar__calm-reset")).toBeNull();
+    expect(container.querySelector(".floatbar__pill--calm")?.getAttribute("title"))
+      .not.toContain("0%");
+  });
+
   it("does not render hypothetical local costs from the legacy setting", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("codex", "Codex", 75),
