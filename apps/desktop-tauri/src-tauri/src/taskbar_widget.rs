@@ -1929,17 +1929,30 @@ mod windows_host {
 
     /// Pixels held back from the detail line's own tile.
     ///
-    /// The separator is drawn at `item_left + item_width - 1` and the strip does
-    /// not clip, so a line allowed the full width sits on the divider.
-    const DETAIL_GUTTER: i32 = 6;
+    /// Kept small on purpose: the placer gives a provider 104px at most and
+    /// 72px when the gap is tight, so a pixel spent here is roughly a character
+    /// of reset, and enough of them drop the countdown altogether.
+    ///
+    /// Four clears the divider with a pixel to spare on every tile the placer
+    /// can build. `centered_content_x` puts content of width `w` on a tile of
+    /// width `t` at `(t - w) / 2`, and the separator is drawn at `t - 1` while
+    /// the strip does not clip. Three is arguably enough on the arithmetic
+    /// alone, but that margin assumes exact glyph extents, and antialiasing on
+    /// the trailing character does not respect them.
+    /// See `an_accepted_line_never_reaches_the_separator`.
+    const DETAIL_GUTTER: i32 = 4;
 
     /// Spellings of the detail line, widest first.
     ///
     /// Dropping the reset keeps the label that says *which* ceiling this is,
     /// which is the half a glance needs; the countdown is a hover away in the
     /// flyout, and a label with no countdown still reads as a label.
+    ///
+    /// A blank reset is treated as no reset. It formatted to `"Monthly · "`,
+    /// which is wider than the label alone and so would win the ladder and draw
+    /// a separator with nothing after it.
     fn detail_spellings(window_label: &str, reset: Option<&str>) -> Vec<String> {
-        match reset {
+        match reset.filter(|reset| !reset.trim().is_empty()) {
             Some(reset) => vec![
                 format!("{window_label} · {reset}"),
                 window_label.to_string(),
@@ -2021,26 +2034,35 @@ mod windows_host {
             assert_eq!(fit_detail(&spellings, 1, measure), "Weekly");
         }
 
-        /// The shape that shipped in 1.5.32: five providers on a crowded strip,
-        /// where the monthly tile was the one that lost its "h".
         #[test]
-        fn every_window_on_a_five_provider_strip_keeps_a_whole_reset() {
-            // 1992px of strip across five tiles, less the gutter.
-            let budget = 1992 / 5 - DETAIL_GUTTER;
-            for (label, reset) in [
-                ("Weekly", "3d 8h"),
-                ("Weekly", "1d 7h"),
-                ("API", "25d 23h"),
-                ("Weekly", "2d 17h"),
-                ("Monthly", "10d 1h"),
-            ] {
-                let spellings = detail_spellings(label, Some(reset));
-                let chosen = fit_detail(&spellings, budget, measure);
-                assert_eq!(
-                    chosen,
-                    format!("{label} · {reset}"),
-                    "{label} should keep its reset at {budget}px"
-                );
+        fn a_blank_reset_is_treated_as_no_reset() {
+            // `"Monthly · "` is wider than `"Monthly"`, so it would win the
+            // ladder wherever it fits and draw a separator with nothing after.
+            for blank in ["", " ", "   "] {
+                let spellings = detail_spellings("Monthly", Some(blank));
+                assert_eq!(spellings, vec!["Monthly".to_string()], "{blank:?}");
+            }
+        }
+
+        /// Whatever the ladder accepts has to stay off the divider, on every
+        /// tile the placer can produce.
+        ///
+        /// Arithmetic over the real placer range rather than a font
+        /// measurement, so it holds whatever Segoe does with a given string.
+        #[test]
+        fn an_accepted_line_never_reaches_the_separator() {
+            // `placement` gives each provider 104px, or 72px when space is tight.
+            for tile in 72..=104 {
+                let budget = tile - DETAIL_GUTTER;
+                let separator = tile - 1;
+                for width in 1..=budget {
+                    let right_edge = centered_content_x(0, tile, width) + width;
+                    assert!(
+                        right_edge < separator,
+                        "tile {tile}, content {width}: right edge {right_edge} \
+                         reaches separator at {separator}"
+                    );
+                }
             }
         }
     }
