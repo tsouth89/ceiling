@@ -1944,21 +1944,33 @@ mod windows_host {
 
     /// Spellings of the detail line, widest first.
     ///
-    /// Dropping the reset keeps the label that says *which* ceiling this is,
-    /// which is the half a glance needs; the countdown is a hover away in the
-    /// flyout, and a label with no countdown still reads as a label.
+    /// Three rungs, because the drop from a full countdown to none is too far
+    /// to take in one step. `tooltip_short_reset` writes two units (`25d 23h`,
+    /// and `23h 59m` once under a day), and the second of those is the widest
+    /// string this line ever carries — wide enough to miss even the roomiest
+    /// tile. Losing the countdown there means losing it for the last day before
+    /// a reset, which is when it is worth most. So the middle rung keeps the
+    /// leading unit and drops the finer one: a coarser countdown beats none.
+    ///
+    /// The last rung is the bare window name, which still says *which* ceiling
+    /// this is; the figure is a hover away in the flyout.
     ///
     /// A blank reset is treated as no reset. It formatted to `"Monthly · "`,
     /// which is wider than the label alone and so would win the ladder and draw
     /// a separator with nothing after it.
     fn detail_spellings(window_label: &str, reset: Option<&str>) -> Vec<String> {
-        match reset.filter(|reset| !reset.trim().is_empty()) {
-            Some(reset) => vec![
-                format!("{window_label} · {reset}"),
-                window_label.to_string(),
-            ],
-            None => vec![window_label.to_string()],
+        let Some(reset) = reset.filter(|reset| !reset.trim().is_empty()) else {
+            return vec![window_label.to_string()];
+        };
+        let reset = reset.trim();
+        let mut spellings = vec![format!("{window_label} · {reset}")];
+        if let Some(lead) = reset.split_whitespace().next()
+            && lead != reset
+        {
+            spellings.push(format!("{window_label} · {lead}"));
         }
+        spellings.push(window_label.to_string());
+        spellings
     }
 
     /// Widest spelling that fits `budget`; the narrowest when none do.
@@ -2008,14 +2020,14 @@ mod windows_host {
         }
 
         #[test]
-        fn drops_the_reset_rather_than_a_character_of_it() {
+        fn drops_a_whole_unit_rather_than_a_character_of_one() {
             // The bug this replaces: a 15-character cut left "Monthly · 10d 1",
             // which reads as a real countdown that is off by an hour rather than
-            // as a truncation. Losing the whole reset is honest; losing its last
-            // character is not.
+            // as a line that was cut. Every rung below the full spelling is a
+            // countdown someone can trust, just a coarser one.
             let spellings = detail_spellings("Monthly", Some("10d 1h"));
             let budget = measure("Monthly · 10d 1h") - 1;
-            assert_eq!(fit_detail(&spellings, budget, measure), "Monthly");
+            assert_eq!(fit_detail(&spellings, budget, measure), "Monthly · 10d");
         }
 
         #[test]
@@ -2032,6 +2044,61 @@ mod windows_host {
             assert_eq!(spellings.len(), 1);
             assert_eq!(fit_detail(&spellings, 200, measure), "Weekly");
             assert_eq!(fit_detail(&spellings, 1, measure), "Weekly");
+        }
+
+        /// The widest line this row ever carries is the last-day form, because
+        /// `tooltip_short_reset` switches to `{h}h {m}m` under a day and two
+        /// digits of hours plus minutes beats `{d}d {h}h`. It can miss even a
+        /// 104px tile, and dropping straight to the bare label would blank the
+        /// countdown for the final day, when it matters most.
+        #[test]
+        fn a_last_day_countdown_gets_coarser_before_it_disappears() {
+            let spellings = detail_spellings("Monthly", Some("23h 59m"));
+            assert_eq!(
+                spellings,
+                vec![
+                    "Monthly · 23h 59m".to_string(),
+                    "Monthly · 23h".to_string(),
+                    "Monthly".to_string(),
+                ]
+            );
+
+            // Widths standing in for Segoe UI Variable Small at the detail size:
+            // the full line misses a 104px tile's 100px budget, the hours-only
+            // rung clears it comfortably.
+            let widths = |text: &str| match text {
+                "Monthly · 23h 59m" => 103,
+                "Monthly · 23h" => 75,
+                "Monthly" => 45,
+                other => panic!("unexpected spelling {other:?}"),
+            };
+            let budget = 104 - DETAIL_GUTTER;
+            assert_eq!(fit_detail(&spellings, budget, widths), "Monthly · 23h");
+            // A tile too tight for even that still keeps the name.
+            assert_eq!(fit_detail(&spellings, 50, widths), "Monthly");
+        }
+
+        #[test]
+        fn a_single_unit_reset_has_no_middle_rung() {
+            // "45m" has nothing coarser to fall back to.
+            let spellings = detail_spellings("Weekly", Some("45m"));
+            assert_eq!(
+                spellings,
+                vec!["Weekly · 45m".to_string(), "Weekly".to_string()]
+            );
+        }
+
+        #[test]
+        fn a_day_and_hour_reset_falls_back_to_days() {
+            let spellings = detail_spellings("Monthly", Some("25d 23h"));
+            assert_eq!(
+                spellings,
+                vec![
+                    "Monthly · 25d 23h".to_string(),
+                    "Monthly · 25d".to_string(),
+                    "Monthly".to_string(),
+                ]
+            );
         }
 
         #[test]
