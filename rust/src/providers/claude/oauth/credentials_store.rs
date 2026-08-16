@@ -359,23 +359,36 @@ fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError>
 ///
 /// Claude Code owns this file, so the replace preserves its permissions and
 /// follows a symlinked path (dotfile managers, WSL shared targets) instead of
-/// dropping a fresh private file over the link. The read-modify-write runs
-/// under a per-file lock so a desktop and a CLI refresh cannot lose one
-/// another's tokens.
+/// dropping a fresh private file over the link.
+///
+/// `exchanged_refresh_token` is the token this process actually sent to the
+/// server. Claude rotates the refresh token, so it doubles as a
+/// compare-and-swap: if the file no longer holds it, another refresh already
+/// rotated it away and ours is retired.
+///
+/// Returns `None` when our tokens were written, or the live credentials when
+/// another process won the race, so the caller can adopt those rather than
+/// cache a token the server has retired.
 ///
 /// `config_dir` must be the same account the credentials were loaded from, or a
 /// refresh would be written over a different seat's tokens.
 pub(super) fn persist_refreshed_credentials(
     credentials: &ClaudeOAuthCredentials,
     config_dir: Option<&Path>,
-) -> Result<(), ProviderError> {
+    exchanged_refresh_token: &str,
+) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
     let path = credentials_path(config_dir)?;
     if !path.exists() {
         // Loaded from keyring/env; there is no file to update.
-        return Ok(());
+        return Ok(None);
     }
 
-    crate::secure_file::with_file_write_lock(&path, || {
+    // Lock the resolved target, not the link. A Windows path that links at a
+    // WSL file and the WSL path that *is* that file would otherwise take two
+    // different locks and still interleave on the one file they share.
+    let lock_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+
+    crate::secure_file::with_file_write_lock(&lock_path, || {
         // Re-read inside the lock: another process may have rotated the tokens
         // between our refresh and this write.
         let content = std::fs::read_to_string(&path)?;
@@ -383,46 +396,46 @@ pub(super) fn persist_refreshed_credentials(
         let mut root: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-        if disk_credentials_are_newer(&root, credentials) {
-            // Another process won the race. Our tokens came from a refresh the
-            // server has since rotated away, so writing them would sign Claude
-            // Code out. The lock alone cannot prevent this: it orders the
-            // writes, it does not make the later one correct.
-            return Ok(());
+        if !disk_still_holds_exchanged_refresh(&root, exchanged_refresh_token) {
+            // Another process refreshed first and rotated the token we
+            // exchanged. Ours is already retired, so writing it would sign
+            // Claude Code out. Hand back what is actually live.
+            //
+            // Deliberately not ordered on `expiresAt`: both processes set it to
+            // `now + server TTL`, so the winner (which finished its HTTP call
+            // first) usually has the *smaller* value. Only the token identity
+            // says who won.
+            return Ok(parse_credentials_json(&content).ok());
         }
 
         apply_refresh_to_credentials_json(&mut root, credentials)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let serialized = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
-        crate::secure_file::atomic_write_preserving_permissions(&path, &serialized)
+        crate::secure_file::atomic_write_preserving_permissions(&path, &serialized)?;
+        Ok(None)
     })
-    .map_err(|e| ProviderError::OAuth(format!("Failed to update Claude credentials: {e}")))?;
-    Ok(())
+    .map_err(|e| ProviderError::OAuth(format!("Failed to update Claude credentials: {e}")))
 }
 
-/// Whether the file already holds a refresh newer than the one we are about to
-/// write.
+/// Whether the file still holds the refresh token this process exchanged.
 ///
-/// A desktop and a CLI can refresh the same seat at once. Both then hold
-/// tokens derived from the same original refresh, but only the first write
-/// keeps working: Claude rotates the refresh token, so the loser's copy is
-/// already invalid. Writing it anyway signs Claude Code out. Compared on
-/// `expiresAt`, which is the only ordering the file carries.
+/// A desktop and a CLI can refresh the same seat at once, both starting from
+/// the same refresh token. Claude rotates that token, so only the first
+/// exchange stays valid; the loser's copy is already retired and writing it
+/// signs Claude Code out.
 ///
-/// Credentials with no expiry (an environment or keyring token) cannot be
-/// ordered against the file, so they keep the previous write-through behavior.
-fn disk_credentials_are_newer(
-    root: &serde_json::Value,
-    credentials: &ClaudeOAuthCredentials,
-) -> bool {
-    let Some(ours) = credentials.expires_at else {
-        return false;
-    };
+/// Token identity is the discriminator, not `expiresAt`: both processes set
+/// the expiry to `now + server TTL`, so the winner usually has the *smaller*
+/// timestamp and an ordering check gets the race backwards.
+///
+/// A file with no `refreshToken` (never had one, or hand-edited away) is not
+/// evidence that someone else rotated it, so the write proceeds.
+fn disk_still_holds_exchanged_refresh(root: &serde_json::Value, exchanged: &str) -> bool {
     root.get("claudeAiOauth")
-        .and_then(|oauth| oauth.get("expiresAt"))
-        .and_then(serde_json::Value::as_i64)
-        .is_some_and(|on_disk| on_disk > ours.timestamp_millis())
+        .and_then(|oauth| oauth.get("refreshToken"))
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|on_disk| on_disk == exchanged)
 }
 
 /// Pure JSON merge used by [`persist_refreshed_credentials`]. Updates only
@@ -513,8 +526,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = seed_credentials_file(dir.path());
 
-        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
-            .expect("persist");
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
 
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -527,55 +544,64 @@ mod tests {
 
     /// SBS-883: the write lock orders two concurrent refreshes, it does not
     /// make the later one correct. Claude rotates the refresh token, so the
-    /// loser is holding one the server already invalidated.
+    /// loser holds one the server already invalidated.
+    ///
+    /// The winner finishes its HTTP call first and therefore usually has the
+    /// *smaller* `expiresAt`, which is why this is decided on token identity
+    /// rather than on any timestamp ordering.
     #[test]
-    fn persist_leaves_a_newer_refresh_already_on_disk() {
+    fn persist_does_not_overwrite_a_seat_another_process_already_rotated() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(".credentials.json");
+        // The winner already replaced "shared-old-refresh" with its own, and
+        // its expiry is *earlier* than ours because it finished first.
         std::fs::write(
             &path,
             br#"{
               "claudeAiOauth": {
                 "accessToken": "winner-access",
                 "refreshToken": "winner-refresh",
-                "expiresAt": 9000000
-              }
-            }"#,
-        )
-        .unwrap();
-
-        // Ours expires earlier, so the file already holds a later refresh.
-        let mut stale = refreshed_credentials("loser-access");
-        stale.expires_at = chrono::DateTime::from_timestamp(2_000, 0);
-        persist_refreshed_credentials(&stale, Some(dir.path())).expect("persist");
-
-        let root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(root["claudeAiOauth"]["accessToken"], "winner-access");
-        assert_eq!(root["claudeAiOauth"]["refreshToken"], "winner-refresh");
-        assert_eq!(root["claudeAiOauth"]["expiresAt"], 9_000_000i64);
-    }
-
-    #[test]
-    fn persist_still_writes_when_ours_is_the_newer_refresh() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(".credentials.json");
-        std::fs::write(
-            &path,
-            br#"{
-              "claudeAiOauth": {
-                "accessToken": "old-access",
-                "refreshToken": "old-refresh",
                 "expiresAt": 1000
               }
             }"#,
         )
         .unwrap();
 
-        // `refreshed_credentials` expires at 2_000_000 ms, well past the file.
-        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
-            .expect("persist");
+        let live = persist_refreshed_credentials(
+            &refreshed_credentials("loser-access"),
+            Some(dir.path()),
+            "shared-old-refresh",
+        )
+        .expect("persist");
 
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "winner-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "winner-refresh");
+        assert_eq!(
+            live.expect("the winner's credentials come back")
+                .access_token,
+            "winner-access",
+            "the loser must adopt the live tokens, not cache its retired ones"
+        );
+    }
+
+    #[test]
+    fn persist_writes_when_the_exchanged_refresh_is_still_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+
+        let live = persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
+
+        assert!(
+            live.is_none(),
+            "our write won, so there is nothing to adopt"
+        );
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(root["claudeAiOauth"]["accessToken"], "new-access");
@@ -588,9 +614,12 @@ mod tests {
         let path = dir.path().join(".credentials.json");
         std::fs::write(&path, b"{ not json").unwrap();
 
-        let error =
-            persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
-                .expect_err("parse failure must not write");
+        let error = persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect_err("parse failure must not write");
 
         assert!(matches!(error, crate::core::ProviderError::OAuth(_)));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
@@ -614,8 +643,12 @@ mod tests {
         let link = dir.path().join(".credentials.json");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
-            .expect("persist");
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
 
         assert!(
             std::fs::symlink_metadata(&link)
@@ -643,8 +676,12 @@ mod tests {
         let path = seed_credentials_file(dir.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
-        persist_refreshed_credentials(&refreshed_credentials("new-access"), Some(dir.path()))
-            .expect("persist");
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640, "persist must not rewrite the permission bits");
