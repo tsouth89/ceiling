@@ -13,8 +13,8 @@
   <text x="172" y="143" fill="#ECEEEB" font-size="33" font-weight="600" font-family="Segoe UI, Arial, sans-serif">Ceiling</text>
   <text x="100" y="320" fill="#ECEEEB" font-size="88" font-weight="600" font-family="Segoe UI, Arial, sans-serif" letter-spacing="-2">Stay below</text>
   <text x="100" y="412" fill="#ECEEEB" font-size="88" font-weight="600" font-family="Segoe UI, Arial, sans-serif" letter-spacing="-2">the ceiling.</text>
-  <text x="102" y="486" fill="#8A8E8C" font-size="30" font-weight="400" font-family="Segoe UI, Arial, sans-serif">Track your Codex, Claude, Cursor, Gemini, and</text>
-  <text x="102" y="528" fill="#8A8E8C" font-size="30" font-weight="400" font-family="Segoe UI, Arial, sans-serif">Copilot limits from the Windows taskbar.</text>
+  <text x="102" y="486" fill="#8A8E8C" font-size="30" font-weight="400" font-family="Segoe UI, Arial, sans-serif">Track your Codex, Claude, Cursor, Grok, Gemini,</text>
+  <text x="102" y="528" fill="#8A8E8C" font-size="30" font-weight="400" font-family="Segoe UI, Arial, sans-serif">and Copilot limits from the Windows taskbar.</text>
   <rect x="100" y="600" width="1000" height="470" rx="24" fill="#0E1214" stroke="rgba(255,255,255,0.09)"/>
   <text x="140" y="662" fill="#8A8E8C" font-size="21" font-weight="500" font-family="Segoe UI, Arial, sans-serif" letter-spacing="0.4">USAGE AT A GLANCE</text>
     <text x="140" y="726" fill="#ECEEEB" font-size="24" font-weight="500" font-family="Segoe UI, Arial, sans-serif">Codex · Weekly</text>

@@ -20,8 +20,8 @@
   <text x="78" y="292" fill="#ECEEEB" font-size="66" font-weight="600" font-family="Segoe UI, Arial, sans-serif" letter-spacing="-1.6">the ceiling.</text>
 
   <!-- subhead -->
-  <text x="80" y="356" fill="#8A8E8C" font-size="25" font-weight="400" font-family="Segoe UI, Arial, sans-serif">Track your Codex, Claude, Cursor, Gemini, and</text>
-  <text x="80" y="390" fill="#8A8E8C" font-size="25" font-weight="400" font-family="Segoe UI, Arial, sans-serif">Copilot limits from the Windows taskbar.</text>
+  <text x="80" y="356" fill="#8A8E8C" font-size="25" font-weight="400" font-family="Segoe UI, Arial, sans-serif">Track your Codex, Claude, Cursor, Grok, Gemini,</text>
+  <text x="80" y="390" fill="#8A8E8C" font-size="25" font-weight="400" font-family="Segoe UI, Arial, sans-serif">and Copilot limits from the Windows taskbar.</text>
 
   <!-- footer -->
   <text x="80" y="548" fill="#ECEEEB" font-size="24" font-weight="600" font-family="Segoe UI, Arial, sans-serif">ceiling.win</text>

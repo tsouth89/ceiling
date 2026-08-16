@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/ceiling-taskbar.png" alt="Ceiling's capacity strip above the Windows taskbar, showing Codex, Claude, and Cursor usage with reset times" width="820">
+  <img src="site/ceiling-taskbar.png" alt="Ceiling's capacity strip above the Windows taskbar, showing Codex, Claude, Cursor, Grok, and OpenCode usage with reset times" width="820">
 </p>
 
 <h1 align="center">Ceiling</h1>
@@ -26,7 +26,7 @@ Ceiling is a focused, local-first Windows companion for the AI subscriptions you
 
 The goal is not another giant provider dashboard. It is a fast, calm way to answer one question: **how much AI capacity do I have left, and when does it reset?**
 
-## Initial focus
+## Provider focus
 
 - OpenAI Codex
 - Claude
@@ -35,23 +35,25 @@ The goal is not another giant provider dashboard. It is a fast, calm way to answ
 - Gemini / Google AI
 - GitHub Copilot
 
-Additional providers remain available from the underlying foundation while Ceiling is narrowed around reliable support for the core five.
+These six get first-class support: documented data sources, banked resets, and charts. Many more providers remain available from the underlying foundation, and each one reads from a local session or the provider's own usage endpoint. See [How Ceiling gets your data](docs/DATA_SOURCES.md) for the per-provider detail.
 
 <p align="center">
-  <img src="docs/images/ceiling-overview.png" alt="Ceiling's overview showing Codex, Claude, and Cursor usage at a glance" width="520">
+  <img src="docs/images/ceiling-overview.png" alt="Ceiling's overview showing Codex, Claude, Cursor, Grok, and OpenCode Go usage across several accounts" width="520">
 </p>
 
 ## What Ceiling feels like
 
 - **Taskbar-adjacent capacity strip:** Windows 11 does not support old-style third-party taskbar toolbars, so Ceiling uses a transparent, always-on-top strip that sits just above the taskbar without stealing focus.
 - **Tray at a glance:** a compact flyout with each provider's remaining capacity, reset time, source, and freshness.
+- **Several accounts per provider:** a personal and a work seat sit side by side, each with its own limits, resets, and charts.
+- **Usage history and charts:** tokens burned since your last reset with an estimated API value beside them, a 30-day breakdown by model and project, and Codex against Claude on the same rolling clock.
 - **Truthful state:** a visible distinction between live, cached, stale, and failed reads. No fake precision when a provider cannot report a limit cleanly.
 - **Usage and reset alerts:** optional toasts when you approach a limit, and when a window resets unexpectedly, is restored, or grants a banked reset.
 - **Local first:** credentials and usage data stay on the machine. Browser cookies, API keys, and login sources remain opt-in.
 - **Windows-native:** Tauri, React, and Rust; fast startup, low idle work, and system accent-aware appearance.
 
 <p align="center">
-  <img src="docs/images/ceiling-tray.png" alt="Ceiling's tray flyout with each provider's remaining capacity and reset time" width="320">
+  <img src="docs/images/ceiling-tray.png" alt="Ceiling's tray flyout listing each account's remaining capacity, banked resets, and reset time" width="320">
 </p>
 
 ## Download
