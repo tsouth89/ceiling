@@ -696,6 +696,8 @@ export const ALL_LOCALE_KEYS = [
   "FreshnessError",
   "NotCurrentlyEnforced",
   "WindowUnavailable",
+  "StripStateUnavailable",
+  "StripStateNotEnforced",
   "TaskbarUsageTitle",
   "ShowTaskbarUsage",
   "ShowTaskbarUsageHelp",

@@ -49,6 +49,8 @@ struct ProviderReadout {
     /// window. Painted ahead of the em dash so the tile reads as a named state
     /// rather than as a fetch error (SBS-876).
     named_label: Option<String>,
+    /// Tile-width spelling of `named_label` for strips too narrow for it.
+    named_label_compact: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -141,6 +143,24 @@ fn strip_named_label(
     let key = match readout.named_state? {
         "unavailable" => codexbar::locale::LocaleKey::WindowUnavailable,
         _ => codexbar::locale::LocaleKey::NotCurrentlyEnforced,
+    };
+    Some(codexbar::locale::get_text(lang, key))
+}
+
+/// Tile-width spelling of [`strip_named_label`].
+///
+/// Same reason [`compact_amount_label`] exists: five providers on a crowded
+/// taskbar leave roughly 51px for the headline, and "Unavailable" needs about
+/// 72px at the 14px tile font. Without a short form the ladder falls through to
+/// the em dash — the glyph a fetch error paints — so a known state would read as
+/// an unknown one exactly when the strip is busiest (SBS-876).
+fn compact_named_label(
+    readout: &ConstrainingReadout<'_>,
+    lang: codexbar::settings::Language,
+) -> Option<String> {
+    let key = match readout.named_state? {
+        "unavailable" => codexbar::locale::LocaleKey::StripStateUnavailable,
+        _ => codexbar::locale::LocaleKey::StripStateNotEnforced,
     };
     Some(codexbar::locale::get_text(lang, key))
 }
@@ -1244,6 +1264,8 @@ mod windows_host {
                     }),
                     named_label: constraining
                         .and_then(|readout| strip_named_label(&readout, settings.ui_language)),
+                    named_label_compact: constraining
+                        .and_then(|readout| compact_named_label(&readout, settings.ui_language)),
                 }
             })
             .collect();
@@ -1694,9 +1716,11 @@ mod windows_host {
                 provider.amount_label.as_deref(),
                 provider.amount_label_compact.as_deref(),
                 percent_label.as_deref(),
-                // "Unavailable" before the em dash: a placeholder window is a
-                // known state, not the unknown a fetch error leaves (SBS-876).
+                // "Unavailable", then "n/a", before the em dash: a placeholder
+                // window is a known state, not the unknown a fetch error leaves
+                // (SBS-876).
                 provider.named_label.as_deref(),
+                provider.named_label_compact.as_deref(),
                 Some("—"),
             ]
             .into_iter()
@@ -3409,6 +3433,47 @@ mod tests {
         // A real reading has no named label to paint.
         snapshot.inactive_rate_windows.clear();
         assert!(strip_named_label(&constraining_readout(&snapshot), lang).is_none());
+    }
+
+    /// SBS-876: five providers leave roughly 51px for a tile headline, which
+    /// "Unavailable" (~72px at the 14px tile font) overruns. Without a short
+    /// spelling the ladder reaches the em dash and the named state reads as a
+    /// fetch error on exactly the strips that are busiest.
+    #[test]
+    fn named_state_has_a_spelling_that_fits_a_crowded_tile() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+        let lang = codexbar::settings::Language::default();
+
+        for state in ["unavailable", "notEnforced"] {
+            snapshot.inactive_rate_windows[0].state = state.into();
+            let readout = constraining_readout(&snapshot);
+            let full = strip_named_label(&readout, lang).expect("full spelling");
+            let compact = compact_named_label(&readout, lang).expect("compact spelling");
+            assert!(
+                compact.chars().count() < full.chars().count(),
+                "{state}: compact {compact:?} must be shorter than {full:?}"
+            );
+            // The narrowest tile budget fits about 8 characters of the headline
+            // font. Anything longer lands back on the em dash.
+            assert!(
+                compact.chars().count() <= 8,
+                "{state}: {compact:?} is too wide for a five-provider strip"
+            );
+        }
+
+        // A real reading still has no named spelling at either width.
+        snapshot.inactive_rate_windows.clear();
+        let real = constraining_readout(&snapshot);
+        assert!(compact_named_label(&real, lang).is_none());
     }
 
     /// SBS-876: the billing-cycle date on a placeholder Plan is not a countdown,
