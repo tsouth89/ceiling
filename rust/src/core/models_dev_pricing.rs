@@ -27,7 +27,7 @@ mod tests {
     }
 
     #[test]
-    fn save_then_load_round_trips_the_catalog() {
+    fn save_writes_a_complete_catalog_to_disk() {
         let dir = tempfile::tempdir().expect("tempdir");
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
 
@@ -37,17 +37,22 @@ mod tests {
             Some(dir.path())
         ));
 
-        let artifact = ModelsDevCache::load(now, Some(dir.path()))
-            .artifact
-            .expect("cached artifact");
+        // Read the file rather than calling `load`. `load` consults CACHE_MEMO,
+        // which `save` just populated in this process, so it would return the
+        // in-memory artifact even if nothing reached disk.
+        let path = ModelsDevCache::cache_path(Some(dir.path()));
+        let on_disk: ModelsDevCacheArtifact =
+            serde_json::from_slice(&std::fs::read(&path).expect("read the cache file"))
+                .expect("the file itself must hold a complete catalog");
         assert_eq!(
-            artifact
+            on_disk
                 .catalog
                 .lookup("openai", "gpt-fresh")
                 .expect("pricing")
                 .input_cost_per_token,
             2.5e-6
         );
+        assert_eq!(on_disk.version, ModelsDevCache::ARTIFACT_VERSION);
     }
 
     /// SBS-870: `File::create` truncated the live cache to zero bytes before
