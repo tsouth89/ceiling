@@ -65,21 +65,24 @@ mod tests {
     /// unix-only inode check above never ran) if `save` regresses to
     /// `File::create` + `write_all`.
     ///
-    /// The two platforms diverge in what a held-open reader experiences, so
-    /// the assertions diverge too, but both diverge specifically because
-    /// `File::create` truncates a file other handles still have open:
+    /// Deliberately says nothing about whether the second `save` reports
+    /// success. On Unix `rename` always wins over an open reader, but on
+    /// Windows `MoveFileExW` racing a held handle is nondeterministic: ten
+    /// repeats of this test on this machine gave failure, failure, then
+    /// success. Asserting either outcome buys a flaky test. So this asserts
+    /// only the property that holds under both outcomes and that a truncating
+    /// write breaks:
     ///
-    /// - On Unix, `rename` detaches the path from the file the reader has
-    ///   open, so the replace is never blocked by the open handle, and the
-    ///   held reader goes on serving the untouched old bytes.
-    /// - On Windows, `MoveFileExW` cannot replace a file another handle has
-    ///   open at all - confirmed empirically on this machine, deterministically,
-    ///   even when that handle explicitly requests `FILE_SHARE_DELETE` - so a
-    ///   correct atomic `save` fails closed and leaves the previous catalog on
-    ///   disk completely alone. `File::create`, in contrast, only needs write
-    ///   access and truncates that same still-open file in place: exactly the
-    ///   bug this PR fixes. So on Windows, a `save` that reports success while
-    ///   a reader is open is itself the regression signal.
+    /// - replace won  -> the path points at the new file and this handle still
+    ///   holds the whole old one
+    /// - replace lost -> nothing was written, so the old file is untouched
+    /// - `File::create` -> the file this handle is reading is truncated to
+    ///   zero underneath it, and the parse below fails
+    ///
+    /// The Windows nondeterminism is worth knowing about beyond the test: a
+    /// `save` there can genuinely fail while another process holds the cache
+    /// open. It fails closed, keeping the previous catalog, and the next
+    /// refresh retries.
     #[test]
     fn save_does_not_overwrite_the_cache_while_a_reader_holds_it_open() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -95,19 +98,7 @@ mod tests {
         // Hold the file open the way a concurrent reader mid-`load` would.
         let mut reader = std::fs::File::open(&path).expect("open the live cache");
 
-        let second_save_succeeded =
-            ModelsDevCache::save(catalog_priced_at(9.0), now, Some(dir.path()));
-
-        #[cfg(unix)]
-        assert!(
-            second_save_succeeded,
-            "a rename-based replace must not be blocked by a concurrent reader"
-        );
-        #[cfg(windows)]
-        assert!(
-            !second_save_succeeded,
-            "save must not report success while silently overwriting the cache a reader has open"
-        );
+        let _ = ModelsDevCache::save(catalog_priced_at(9.0), now, Some(dir.path()));
 
         let mut previous = Vec::new();
         std::io::Read::read_to_end(&mut reader, &mut previous).expect("read the held handle");
