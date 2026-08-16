@@ -357,31 +357,85 @@ fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError>
 /// updating only the `claudeAiOauth` token fields and leaving everything else
 /// (e.g. `mcpOAuth`) untouched. Written atomically beside the live file.
 ///
+/// Claude Code owns this file, so the replace preserves its permissions and
+/// follows a symlinked path (dotfile managers, WSL shared targets) instead of
+/// dropping a fresh private file over the link.
+///
+/// `exchanged_refresh_token` is the token this process actually sent to the
+/// server. Claude rotates the refresh token, so it doubles as a
+/// compare-and-swap: if the file no longer holds it, another refresh already
+/// rotated it away and ours is retired.
+///
+/// Returns `None` when our tokens were written, or the live credentials when
+/// another process won the race, so the caller can adopt those rather than
+/// cache a token the server has retired.
+///
 /// `config_dir` must be the same account the credentials were loaded from, or a
 /// refresh would be written over a different seat's tokens.
 pub(super) fn persist_refreshed_credentials(
     credentials: &ClaudeOAuthCredentials,
     config_dir: Option<&Path>,
-) -> Result<(), ProviderError> {
+    exchanged_refresh_token: &str,
+) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
     let path = credentials_path(config_dir)?;
     if !path.exists() {
         // Loaded from keyring/env; there is no file to update.
-        return Ok(());
+        return Ok(None);
     }
 
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| ProviderError::OAuth(format!("Failed to read credentials file: {e}")))?;
-    let mut root: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| ProviderError::OAuth(format!("Failed to parse credentials file: {e}")))?;
+    // Lock the resolved target, not the link. A Windows path that links at a
+    // WSL file and the WSL path that *is* that file would otherwise take two
+    // different locks and still interleave on the one file they share.
+    let lock_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
 
-    apply_refresh_to_credentials_json(&mut root, credentials)?;
+    crate::secure_file::with_file_write_lock(&lock_path, || {
+        // Re-read inside the lock: another process may have rotated the tokens
+        // between our refresh and this write.
+        let content = std::fs::read_to_string(&path)?;
+        // A torn or hand-edited file is not ours to rebuild; leave it alone.
+        let mut root: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    let serialized = serde_json::to_string_pretty(&root)
-        .map_err(|e| ProviderError::OAuth(format!("Failed to serialize credentials: {e}")))?;
+        if !disk_still_holds_exchanged_refresh(&root, exchanged_refresh_token) {
+            // Another process refreshed first and rotated the token we
+            // exchanged. Ours is already retired, so writing it would sign
+            // Claude Code out. Hand back what is actually live.
+            //
+            // Deliberately not ordered on `expiresAt`: both processes set it to
+            // `now + server TTL`, so the winner (which finished its HTTP call
+            // first) usually has the *smaller* value. Only the token identity
+            // says who won.
+            return Ok(parse_credentials_json(&content).ok());
+        }
 
-    crate::secure_file::atomic_write(&path, serialized.as_bytes())
-        .map_err(|e| ProviderError::OAuth(format!("Failed to replace credentials file: {e}")))?;
-    Ok(())
+        apply_refresh_to_credentials_json(&mut root, credentials)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let serialized = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
+        crate::secure_file::atomic_write_preserving_permissions(&path, &serialized)?;
+        Ok(None)
+    })
+    .map_err(|e| ProviderError::OAuth(format!("Failed to update Claude credentials: {e}")))
+}
+
+/// Whether the file still holds the refresh token this process exchanged.
+///
+/// A desktop and a CLI can refresh the same seat at once, both starting from
+/// the same refresh token. Claude rotates that token, so only the first
+/// exchange stays valid; the loser's copy is already retired and writing it
+/// signs Claude Code out.
+///
+/// Token identity is the discriminator, not `expiresAt`: both processes set
+/// the expiry to `now + server TTL`, so the winner usually has the *smaller*
+/// timestamp and an ordering check gets the race backwards.
+///
+/// A file with no `refreshToken` (never had one, or hand-edited away) is not
+/// evidence that someone else rotated it, so the write proceeds.
+fn disk_still_holds_exchanged_refresh(root: &serde_json::Value, exchanged: &str) -> bool {
+    root.get("claudeAiOauth")
+        .and_then(|oauth| oauth.get("refreshToken"))
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|on_disk| on_disk == exchanged)
 }
 
 /// Pure JSON merge used by [`persist_refreshed_credentials`]. Updates only
@@ -432,11 +486,405 @@ fn apply_refresh_to_credentials_json(
 mod tests {
     use super::{
         CredentialSource, ENV_TOKEN_KEY, apply_refresh_to_credentials_json,
-        cached_refreshed_if_fresher, credentials_path, load_credentials, parse_credentials_json,
-        store_refreshed,
+        cached_refreshed_if_fresher, credentials_path, disk_still_holds_exchanged_refresh,
+        load_credentials, parse_credentials_json, persist_refreshed_credentials, store_refreshed,
     };
     use crate::providers::claude::oauth::ClaudeOAuthCredentials;
     use std::path::Path;
+
+    fn refreshed_credentials(access_token: &str) -> ClaudeOAuthCredentials {
+        ClaudeOAuthCredentials {
+            access_token: access_token.to_string(),
+            refresh_token: Some("rotated-refresh".to_string()),
+            expires_at: chrono::DateTime::from_timestamp(2_000, 0),
+            scopes: vec!["user:inference".to_string()],
+            rate_limit_tier: None,
+            subscription_type: None,
+        }
+    }
+
+    /// Writes a minimal but realistic `.credentials.json` into `dir`.
+    fn seed_credentials_file(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join(".credentials.json");
+        std::fs::write(
+            &path,
+            br#"{
+              "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "subscriptionType": "max"
+              },
+              "mcpOAuth": { "some-server": { "accessToken": "keepme" } }
+            }"#,
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn persist_updates_tokens_and_keeps_unrelated_blocks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "new-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "rotated-refresh");
+        // Fields Ceiling does not own survive the replace.
+        assert_eq!(root["claudeAiOauth"]["subscriptionType"], "max");
+        assert_eq!(root["mcpOAuth"]["some-server"]["accessToken"], "keepme");
+    }
+
+    /// SBS-883: the write lock orders two concurrent refreshes, it does not
+    /// make the later one correct. Claude rotates the refresh token, so the
+    /// loser holds one the server already invalidated.
+    ///
+    /// The winner finishes its HTTP call first and therefore usually has the
+    /// *smaller* `expiresAt`, which is why this is decided on token identity
+    /// rather than on any timestamp ordering.
+    #[test]
+    fn persist_does_not_overwrite_a_seat_another_process_already_rotated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".credentials.json");
+        // The winner already replaced "shared-old-refresh" with its own, and
+        // its expiry is *earlier* than ours because it finished first.
+        std::fs::write(
+            &path,
+            br#"{
+              "claudeAiOauth": {
+                "accessToken": "winner-access",
+                "refreshToken": "winner-refresh",
+                "expiresAt": 1000
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let live = persist_refreshed_credentials(
+            &refreshed_credentials("loser-access"),
+            Some(dir.path()),
+            "shared-old-refresh",
+        )
+        .expect("persist");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "winner-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "winner-refresh");
+        assert_eq!(
+            live.expect("the winner's credentials come back")
+                .access_token,
+            "winner-access",
+            "the loser must adopt the live tokens, not cache its retired ones"
+        );
+    }
+
+    #[test]
+    fn persist_writes_when_the_exchanged_refresh_is_still_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+
+        let live = persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
+
+        assert!(
+            live.is_none(),
+            "our write won, so there is nothing to adopt"
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["claudeAiOauth"]["accessToken"], "new-access");
+        assert_eq!(root["claudeAiOauth"]["refreshToken"], "rotated-refresh");
+    }
+
+    #[test]
+    fn persist_leaves_an_unparseable_file_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+
+        let error = persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect_err("parse failure must not write");
+
+        assert!(matches!(error, crate::core::ProviderError::OAuth(_)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    /// The decision that settles a concurrent refresh, exercised without any
+    /// file I/O so it is covered on every platform this ships to. The symlink
+    /// and file-mode tests below cannot run everywhere, and this crate's CI
+    /// runs on Windows.
+    #[test]
+    fn the_write_goes_through_while_our_exchanged_refresh_is_still_on_disk() {
+        let root = serde_json::json!({ "claudeAiOauth": { "refreshToken": "old-refresh" } });
+
+        assert!(disk_still_holds_exchanged_refresh(&root, "old-refresh"));
+    }
+
+    #[test]
+    fn a_refresh_token_another_process_rotated_blocks_the_write() {
+        let root = serde_json::json!({ "claudeAiOauth": { "refreshToken": "winner-refresh" } });
+
+        assert!(!disk_still_holds_exchanged_refresh(&root, "old-refresh"));
+    }
+
+    /// No timestamp takes part in the decision. Two refreshes of one seat set
+    /// `expiresAt` to `now + server TTL`, so they land in the same second and
+    /// the winner's is often the *smaller* one; ordering on it would call the
+    /// race backwards.
+    #[test]
+    fn the_race_is_decided_on_token_identity_not_on_expires_at() {
+        let rotated_but_later = serde_json::json!({
+            "claudeAiOauth": { "refreshToken": "winner-refresh", "expiresAt": i64::MAX }
+        });
+        assert!(
+            !disk_still_holds_exchanged_refresh(&rotated_but_later, "old-refresh"),
+            "a rotated token is retired however far out its expiry sits"
+        );
+
+        let ours_but_earlier = serde_json::json!({
+            "claudeAiOauth": { "refreshToken": "old-refresh", "expiresAt": 0 }
+        });
+        assert!(
+            disk_still_holds_exchanged_refresh(&ours_but_earlier, "old-refresh"),
+            "our own token on disk is ours to replace whatever its expiry says"
+        );
+    }
+
+    /// A file with no `refreshToken` at all (never had one, or hand-edited
+    /// away) is not evidence that another process rotated ours.
+    #[test]
+    fn a_file_without_a_refresh_token_is_not_a_lost_race() {
+        let no_token = serde_json::json!({ "claudeAiOauth": { "accessToken": "old-access" } });
+        assert!(disk_still_holds_exchanged_refresh(&no_token, "old-refresh"));
+
+        let no_block = serde_json::json!({ "mcpOAuth": {} });
+        assert!(disk_still_holds_exchanged_refresh(&no_block, "old-refresh"));
+    }
+
+    /// Mirrors the lock-file name `secure_file::with_file_write_lock` derives,
+    /// so a test can say which path the lock was taken on.
+    fn write_lock_path(file_path: &Path) -> std::path::PathBuf {
+        let mut lock_name = std::ffi::OsString::from(".");
+        lock_name.push(file_path.file_name().expect("file name"));
+        lock_name.push(".ceiling-write.lock");
+        file_path.parent().expect("parent").join(lock_name)
+    }
+
+    fn seed_symlink_target(dir: &Path) -> std::path::PathBuf {
+        let target = dir.join("real-credentials.json");
+        std::fs::write(
+            &target,
+            br#"{"claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh"}}"#,
+        )
+        .unwrap();
+        target
+    }
+
+    /// SBS-883: Claude Code owns this file. A dotfile manager or a WSL shared
+    /// target puts a symlink at the credential path; replacing the link with a
+    /// fresh private file splits Ceiling's tokens from the real target.
+    ///
+    /// Shared by the unix and Windows cases, which differ only in how the link
+    /// is made.
+    fn assert_persist_follows_the_symlink(link_dir: &Path, target: &Path, link: &Path) {
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(link_dir),
+            "old-refresh",
+        )
+        .expect("persist");
+
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the credential path must still be a symlink"
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(target).unwrap()).unwrap();
+        assert_eq!(
+            root["claudeAiOauth"]["accessToken"], "new-access",
+            "the refresh must land on the symlink target"
+        );
+        // Every path pointing at this file has to contend for one lock, so it
+        // has to be keyed on the target rather than on the link.
+        assert!(
+            write_lock_path(target).exists(),
+            "the write lock belongs beside the shared target"
+        );
+        assert!(
+            !write_lock_path(link).exists(),
+            "a lock beside the link would not serialize the other path at the same file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_writes_through_a_symlinked_credential_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = tempfile::tempdir().expect("tempdir");
+
+        let target = seed_symlink_target(store.path());
+        let link = dir.path().join(".credentials.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert_persist_follows_the_symlink(dir.path(), &target, &link);
+    }
+
+    /// The same case on the platform this crate's CI actually runs, where the
+    /// atomic replace is `ReplaceFileW` rather than `rename`. This is the
+    /// shipped shape too: a Windows `.claude\.credentials.json` linked at the
+    /// file WSL uses.
+    ///
+    /// Creating a symlink needs a privilege an unelevated account without
+    /// developer mode does not hold, so that machine skips rather than fails.
+    #[cfg(windows)]
+    #[test]
+    fn persist_writes_through_a_symlinked_credential_path() {
+        /// `ERROR_PRIVILEGE_NOT_HELD`.
+        const NO_SYMLINK_PRIVILEGE: i32 = 1314;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = tempfile::tempdir().expect("tempdir");
+
+        let target = seed_symlink_target(store.path());
+        let link = dir.path().join(".credentials.json");
+        match std::os::windows::fs::symlink_file(&target, &link) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(NO_SYMLINK_PRIVILEGE) => {
+                eprintln!("skipped: this account may not create symlinks");
+                return;
+            }
+            Err(error) => panic!("could not create the credential symlink: {error}"),
+        }
+
+        assert_persist_follows_the_symlink(dir.path(), &target, &link);
+    }
+
+    /// The file's own permissions are Claude Code's to choose; a refresh must
+    /// not silently tighten or loosen them.
+    #[cfg(unix)]
+    #[test]
+    fn persist_preserves_the_existing_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "persist must not rewrite the permission bits");
+    }
+
+    /// Whether the file carries a protected DACL of its own instead of
+    /// inheriting one from its directory.
+    ///
+    /// This is what separates the two replaces on Windows. The private one
+    /// moves a temp file that was locked to the current user, so its protected
+    /// DACL becomes the file's. The metadata-preserving one puts the
+    /// destination's own descriptor back afterwards.
+    #[cfg(windows)]
+    fn dacl_is_protected(path: &Path) -> bool {
+        use std::mem::size_of;
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows::Win32::Security::{
+            DACL_SECURITY_INFORMATION, GetFileSecurityW, GetSecurityDescriptorControl,
+            PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+        };
+        use windows::core::PCWSTR;
+
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut needed = 0u32;
+        unsafe {
+            // First call only sizes the buffer, so its failure is expected.
+            let _ = GetFileSecurityW(
+                PCWSTR(wide.as_ptr()),
+                DACL_SECURITY_INFORMATION.0,
+                PSECURITY_DESCRIPTOR(std::ptr::null_mut()),
+                0,
+                &mut needed,
+            );
+        }
+        assert!(needed > 0, "could not size the security descriptor");
+
+        let mut buffer = vec![0usize; (needed as usize).div_ceil(size_of::<usize>())];
+        let descriptor = PSECURITY_DESCRIPTOR(buffer.as_mut_ptr().cast());
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        unsafe {
+            GetFileSecurityW(
+                PCWSTR(wide.as_ptr()),
+                DACL_SECURITY_INFORMATION.0,
+                descriptor,
+                needed,
+                &mut needed,
+            )
+            .ok()
+            .expect("read the security descriptor");
+            GetSecurityDescriptorControl(descriptor, &mut control, &mut revision)
+                .expect("read the descriptor control bits");
+        }
+        control & SE_DACL_PROTECTED.0 != 0
+    }
+
+    /// The Windows half of `persist_preserves_the_existing_file_mode`, and the
+    /// one that runs on this crate's CI. Claude Code's file inherits its DACL;
+    /// a private replace would leave Ceiling's protected current-user DACL on
+    /// it, which is the regression the symlink test cannot catch on a machine
+    /// that may not create symlinks.
+    #[cfg(windows)]
+    #[test]
+    fn persist_keeps_the_files_own_windows_security_descriptor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = seed_credentials_file(dir.path());
+        assert!(
+            !dacl_is_protected(&path),
+            "a plain new file should still inherit its DACL"
+        );
+
+        persist_refreshed_credentials(
+            &refreshed_credentials("new-access"),
+            Some(dir.path()),
+            "old-refresh",
+        )
+        .expect("persist");
+
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("new-access"),
+            "the refresh must still land in the file"
+        );
+        assert!(
+            !dacl_is_protected(&path),
+            "persist must restore the file's own DACL, not stamp Ceiling's private one"
+        );
+    }
 
     /// `CLAUDE_CONFIG_DIR` and the env token are process-global, so the tests
     /// that manipulate them run one at a time.

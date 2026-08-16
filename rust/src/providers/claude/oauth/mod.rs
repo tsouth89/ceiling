@@ -215,14 +215,34 @@ impl ClaudeOAuthFetcher {
 
         match refresh::refresh_access_token(&self.client, &refresh_token, &credentials).await {
             Ok(refreshed) => {
-                credentials_store::store_refreshed(&source, &refreshed);
-                if let Err(err) =
-                    credentials_store::persist_refreshed_credentials(&refreshed, self.config_dir())
-                {
-                    tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
+                // Persist before caching. If another process rotated the token
+                // we exchanged, ours is already retired, and caching it would
+                // authenticate this poll with a token the server rejects.
+                match credentials_store::persist_refreshed_credentials(
+                    &refreshed,
+                    self.config_dir(),
+                    &refresh_token,
+                ) {
+                    Ok(Some(live)) => {
+                        tracing::debug!(
+                            "Another process refreshed this Claude seat first; using its tokens"
+                        );
+                        credentials_store::store_refreshed(&source, &live);
+                        live
+                    }
+                    Ok(None) => {
+                        credentials_store::store_refreshed(&source, &refreshed);
+                        tracing::debug!("Refreshed expired Claude OAuth token");
+                        refreshed
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            "Claude OAuth token refreshed but could not persist: {err}"
+                        );
+                        credentials_store::store_refreshed(&source, &refreshed);
+                        refreshed
+                    }
                 }
-                tracing::debug!("Refreshed expired Claude OAuth token");
-                refreshed
             }
             Err(err) => {
                 tracing::debug!("Claude OAuth token refresh failed: {err}");
