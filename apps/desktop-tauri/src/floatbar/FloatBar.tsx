@@ -245,13 +245,20 @@ function ProviderPill({
   // stays one keyboard/click away. The pill becomes an expandable button, so it
   // opts out of the native drag region (drag the bar by its handle instead).
   if (informationMode === "calm") {
-    const calm = calmPresentation(provider, hero);
+    // A named-state window is not a quota. Its pace and billing reset are both
+    // derived from the placeholder 0%, so calm drops them and shows the same
+    // named label exact mode does (SBS-876).
+    const calm = hero.namedState
+      ? { pace: null, hasReset: false }
+      : calmPresentation(provider, hero);
     // Compact hides the window·reset row, so calm degrades to pace-or-exact.
     // Otherwise show exact only when there is no pace and no reset time to show.
     // Either way the pill is never blank.
     const showResetRow = !isCompact && calm.hasReset;
     const showExact =
-      expanded || (isCompact ? !calm.pace : !calm.pace && !inlineReset);
+      !!hero.namedState ||
+      expanded ||
+      (isCompact ? !calm.pace : !calm.pace && !inlineReset);
     const onKeyToggle = (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();

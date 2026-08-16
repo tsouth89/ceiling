@@ -120,8 +120,11 @@ function flyoutWindows(provider: ProviderUsageSnapshot): ConstrainingWindow[] {
   // Cursor's durable allowances plus the lane that actually charges you.
   // On-demand is pinned rather than left to fill a leftover slot: when the
   // other three are depleted it is the only row that still means anything.
-  // Placeholder Plan is not in `windows`; it arrives as a named-state row.
+  // A placeholder Plan is not in `windows`; it arrives as a named-state row, so
+  // keeping `primary` in the preference list costs nothing when it is missing
+  // and stops a real Plan reading from being pushed past the visible slots.
   const preferredIds = [
+    "primary",
     "secondary",
     "extra-cursor-api",
     "extra-cursor-on-demand",

@@ -425,6 +425,56 @@ describe("TaskbarFlyout", () => {
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
   });
 
+  /**
+   * SBS-876 follow-up: dropping `primary` from the Cursor preference list to
+   * make room for the named-state row also demoted a *real* Plan reading to the
+   * leftover lane, so it rendered last — under On-demand — instead of leading
+   * the provider it is the headline allowance for.
+   */
+  it("keeps a real Cursor Plan at the top of its lanes", () => {
+    const cursor = provider("cursor", "Cursor", 51, 22 * 24 * 60, "Plan");
+    cursor.secondary = { ...cursor.primary, usedPercent: 99, remainingPercent: 1 };
+    cursor.secondaryLabel = "Auto";
+    cursor.extraRateWindows = [
+      {
+        id: "cursor-api",
+        title: "API",
+        window: { ...cursor.primary, usedPercent: 38, remainingPercent: 62 },
+      },
+      {
+        id: "cursor-on-demand",
+        title: "On-demand",
+        window: { ...cursor.primary, usedPercent: 62, remainingPercent: 38 },
+      },
+    ];
+    providerState.providers = [cursor];
+
+    const { container } = render(
+      <TaskbarFlyout
+        state={
+          {
+            ...state,
+            providers: [{ id: "cursor", displayName: "Cursor" }],
+            settings: {
+              ...state.settings,
+              enabledProviders: ["cursor"],
+              providerOrder: ["cursor"],
+            },
+          } as BootstrapState
+        }
+      />,
+    );
+
+    expect(
+      screen.getByRole("progressbar", { name: "Cursor Plan 51%" }),
+    ).toBeInTheDocument();
+    const labels = Array.from(
+      container.querySelectorAll(".taskbar-flyout__meter-label"),
+    ).map((node) => node.textContent);
+    expect(labels).toEqual(["Plan", "Auto", "API", "On-demand"]);
+    expect(screen.queryByText(/more limits in Ceiling/)).not.toBeInTheDocument();
+  });
+
   it("opens the full dashboard and dismisses the glance flyout", async () => {
     render(<TaskbarFlyout state={state} />);
     fireEvent.click(screen.getByRole("button", { name: "Open Ceiling" }));

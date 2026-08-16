@@ -45,6 +45,10 @@ struct ProviderReadout {
     amount_label_compact: Option<String>,
     window_label: String,
     reset: Option<String>,
+    /// Localized "Unavailable" / "Not currently enforced" for a placeholder
+    /// window. Painted ahead of the em dash so the tile reads as a named state
+    /// rather than as a fetch error (SBS-876).
+    named_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -127,6 +131,31 @@ fn primary_named_state(snapshot: &crate::commands::ProviderUsageSnapshot) -> Opt
     } else {
         "notEnforced"
     })
+}
+
+/// Tile text for a window that reports a named state instead of a reading.
+fn strip_named_label(
+    readout: &ConstrainingReadout<'_>,
+    lang: codexbar::settings::Language,
+) -> Option<String> {
+    let key = match readout.named_state? {
+        "unavailable" => codexbar::locale::LocaleKey::WindowUnavailable,
+        _ => codexbar::locale::LocaleKey::NotCurrentlyEnforced,
+    };
+    Some(codexbar::locale::get_text(lang, key))
+}
+
+/// Inline reset for the tile, when the user asked for it and the window is a
+/// real reading. A named-state window has no quota to run out, so its
+/// billing-cycle date is not a countdown (SBS-876).
+fn strip_reset_label(readout: &ConstrainingReadout<'_>, show_reset_inline: bool) -> Option<String> {
+    if !show_reset_inline || readout.named_state.is_some() {
+        return None;
+    }
+    crate::tray_bridge::tooltip_short_reset(
+        readout.window.resets_at.as_deref(),
+        readout.window.reset_description.as_deref(),
+    )
 }
 
 fn strip_readout_percent(readout: &ConstrainingReadout<'_>, show_as_used: bool) -> Option<u8> {
@@ -1210,17 +1239,11 @@ mod windows_host {
                                 snapshot.and_then(|snapshot| snapshot.primary.window_minutes)
                             }),
                     ),
-                    reset: settings
-                        .float_bar_show_reset_inline
-                        .then(|| {
-                            constraining.and_then(|readout| {
-                                crate::tray_bridge::tooltip_short_reset(
-                                    readout.window.resets_at.as_deref(),
-                                    readout.window.reset_description.as_deref(),
-                                )
-                            })
-                        })
-                        .flatten(),
+                    reset: constraining.and_then(|readout| {
+                        strip_reset_label(&readout, settings.float_bar_show_reset_inline)
+                    }),
+                    named_label: constraining
+                        .and_then(|readout| strip_named_label(&readout, settings.ui_language)),
                 }
             })
             .collect();
@@ -1671,6 +1694,9 @@ mod windows_host {
                 provider.amount_label.as_deref(),
                 provider.amount_label_compact.as_deref(),
                 percent_label.as_deref(),
+                // "Unavailable" before the em dash: a placeholder window is a
+                // known state, not the unknown a fetch error leaves (SBS-876).
+                provider.named_label.as_deref(),
                 Some("—"),
             ]
             .into_iter()
@@ -3346,6 +3372,73 @@ mod tests {
         assert_eq!(with_auto.label, Some("Auto"));
         assert!(with_auto.named_state.is_none());
         assert_eq!(strip_readout_percent(&with_auto, true), Some(42));
+    }
+
+    /// SBS-876: omitting the percent is only half the job. Without a label the
+    /// tile falls through to the em dash, which is what a fetch error paints —
+    /// the user cannot tell "no reading exists" from "the fetch broke".
+    #[test]
+    fn cursor_strip_labels_the_named_state_instead_of_an_em_dash() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.primary.resets_at = Some("2099-01-01T00:00:00Z".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        let lang = codexbar::settings::Language::default();
+        assert_eq!(
+            strip_named_label(&readout, lang).as_deref(),
+            Some("Unavailable")
+        );
+
+        // A lifted limit is a different sentence from a missing reading.
+        snapshot.inactive_rate_windows[0].state = "notEnforced".into();
+        let lifted = constraining_readout(&snapshot);
+        assert_eq!(
+            strip_named_label(&lifted, lang).as_deref(),
+            Some("Not currently enforced")
+        );
+
+        // A real reading has no named label to paint.
+        snapshot.inactive_rate_windows.clear();
+        assert!(strip_named_label(&constraining_readout(&snapshot), lang).is_none());
+    }
+
+    /// SBS-876: the billing-cycle date on a placeholder Plan is not a countdown,
+    /// so the tile must not print it beside the named state.
+    #[test]
+    fn cursor_strip_omits_reset_when_plan_is_unavailable() {
+        let mut snapshot = snap("cursor", None, 0.0);
+        snapshot.primary_label = Some("Plan".into());
+        snapshot.primary.reset_description = Some("Resets monthly".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "cursor-plan".into(),
+                title: "Plan".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        assert_eq!(
+            strip_reset_label(&constraining_readout(&snapshot), true),
+            None
+        );
+
+        // A real reading still shows its reset when the setting is on.
+        snapshot.inactive_rate_windows.clear();
+        assert!(strip_reset_label(&constraining_readout(&snapshot), true).is_some());
+        assert_eq!(
+            strip_reset_label(&constraining_readout(&snapshot), false),
+            None
+        );
     }
 
     #[test]

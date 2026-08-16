@@ -312,6 +312,10 @@ export default function ProviderDetailView({
   const otherInactiveWindows = (provider.inactiveRateWindows ?? []).filter(
     (metric) => !namedPrimary || !isPrimaryPlaceholderId(metric.id),
   );
+  // Pace is computed from the primary window. When that primary is a named
+  // placeholder the verdict is a reading of the fake 0%, so drop it rather than
+  // print "Far behind" beside "Unavailable" (SBS-876).
+  const pace = namedPrimary ? null : provider.pace;
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
   const primaryLabel = provider.primaryLabel?.trim() || "Primary";
   const planName = displayPlanName(provider.planName);
@@ -394,14 +398,14 @@ export default function ProviderDetailView({
                 <DetailProgress window={provider.primary} showAsUsed={showAsUsed} />
               </>
             )}
-            {provider.pace && (
-              <div className="provider-focus__pace-glance" data-tone={paceTone(provider.pace)}>
+            {pace && (
+              <div className="provider-focus__pace-glance" data-tone={paceTone(pace)}>
                 <i />
-                <strong>{provider.pace.windowLabel} pace</strong>
+                <strong>{pace.windowLabel} pace</strong>
                 <span>
-                  {paceLabel(provider.pace.stage)} ·{" "}
-                  {provider.pace.deltaPercent >= 0 ? "+" : ""}
-                  {provider.pace.deltaPercent.toFixed(1)}%
+                  {paceLabel(pace.stage)} ·{" "}
+                  {pace.deltaPercent >= 0 ? "+" : ""}
+                  {pace.deltaPercent.toFixed(1)}%
                 </span>
               </div>
             )}
@@ -444,7 +448,7 @@ export default function ProviderDetailView({
             </section>
           )}
           {chartData?.localUsage && <LocalActivity summary={chartData.localUsage} />}
-          {provider.pace && <PaceSection pace={provider.pace} />}
+          {pace && <PaceSection pace={pace} />}
         </>
       )}
     </article>

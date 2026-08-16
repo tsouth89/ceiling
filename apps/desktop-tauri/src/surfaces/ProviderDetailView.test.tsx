@@ -182,7 +182,18 @@ describe("ProviderDetailView", () => {
           state: "unavailable",
         },
       ],
-      pace: null,
+      // The bridge still derives pace from the required 0% primary, so a real
+      // Cursor snapshot arrives with a verdict attached. Keep it here: a null
+      // pace could not catch the pace copy leaking beside "Unavailable".
+      pace: {
+        windowLabel: "Plan",
+        stage: "far_ahead",
+        deltaPercent: -38.6,
+        willLastToReset: true,
+        etaSeconds: null,
+        expectedUsedPercent: 38.6,
+        actualUsedPercent: 0,
+      },
       resetCreditsAvailable: null,
     };
 
@@ -198,5 +209,8 @@ describe("ProviderDetailView", () => {
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
     expect(screen.queryByText("100%")).not.toBeInTheDocument();
+    // A pace verdict read off the placeholder 0% is not a reading either.
+    expect(screen.queryByText(/Plan pace/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ahead of budget/)).not.toBeInTheDocument();
   });
 });
