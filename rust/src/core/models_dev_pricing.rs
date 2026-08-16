@@ -8,6 +8,135 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, UNIX_EPOCH};
 
+    /// A one-model catalog, enough to tell two saves apart by lookup.
+    fn catalog_priced_at(input_per_million: f64) -> ModelsDevCatalog {
+        ModelsDevCatalog::decode(&format!(
+            r#"{{
+                "openai": {{
+                    "id": "openai",
+                    "models": {{
+                        "openai/gpt-fresh": {{
+                            "id": "openai/gpt-fresh",
+                            "cost": {{ "input": {input_per_million}, "output": 10 }}
+                        }}
+                    }}
+                }}
+            }}"#
+        ))
+        .expect("catalog")
+    }
+
+    #[test]
+    fn save_writes_a_complete_catalog_to_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            now,
+            Some(dir.path())
+        ));
+
+        // Read the file rather than calling `load`. `load` consults CACHE_MEMO,
+        // which `save` just populated in this process, so it would return the
+        // in-memory artifact even if nothing reached disk.
+        let path = ModelsDevCache::cache_path(Some(dir.path()));
+        let on_disk: ModelsDevCacheArtifact =
+            serde_json::from_slice(&std::fs::read(&path).expect("read the cache file"))
+                .expect("the file itself must hold a complete catalog");
+        assert_eq!(
+            on_disk
+                .catalog
+                .lookup("openai", "gpt-fresh")
+                .expect("pricing")
+                .input_cost_per_token,
+            2.5e-6
+        );
+        assert_eq!(on_disk.version, ModelsDevCache::ARTIFACT_VERSION);
+    }
+
+    /// SBS-870: `File::create` truncated the live cache to zero bytes before
+    /// the new JSON landed. A second process reading in that window - or this
+    /// one dying mid-write - lost a good catalog and reported no prices.
+    ///
+    /// This test holds a real, live handle open on the cache the way a
+    /// concurrent reader mid-`load` would, then triggers a second `save`, and
+    /// is not platform-gated: it must fail on `windows-latest` CI (where the
+    /// unix-only inode check above never ran) if `save` regresses to
+    /// `File::create` + `write_all`.
+    ///
+    /// Deliberately says nothing about whether the second `save` reports
+    /// success. On Unix `rename` always wins over an open reader, but on
+    /// Windows `MoveFileExW` racing a held handle is nondeterministic: ten
+    /// repeats of this test on this machine gave failure, failure, then
+    /// success. Asserting either outcome buys a flaky test. So this asserts
+    /// only the property that holds under both outcomes and that a truncating
+    /// write breaks:
+    ///
+    /// - replace won  -> the path points at the new file and this handle still
+    ///   holds the whole old one
+    /// - replace lost -> nothing was written, so the old file is untouched
+    /// - `File::create` -> the file this handle is reading is truncated to
+    ///   zero underneath it, and the parse below fails
+    ///
+    /// The Windows nondeterminism is worth knowing about beyond the test: a
+    /// `save` there can genuinely fail while another process holds the cache
+    /// open. It fails closed, keeping the previous catalog, and the next
+    /// refresh retries.
+    #[test]
+    fn save_does_not_overwrite_the_cache_while_a_reader_holds_it_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let path = ModelsDevCache::cache_path(Some(dir.path()));
+
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            now,
+            Some(dir.path())
+        ));
+
+        // Hold the file open the way a concurrent reader mid-`load` would.
+        let mut reader = std::fs::File::open(&path).expect("open the live cache");
+
+        let _ = ModelsDevCache::save(catalog_priced_at(9.0), now, Some(dir.path()));
+
+        let mut previous = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut previous).expect("read the held handle");
+        let held = serde_json::from_slice::<ModelsDevCacheArtifact>(&previous)
+            .expect("the held handle must still see a complete catalog");
+        assert_eq!(
+            held.catalog
+                .lookup("openai", "gpt-fresh")
+                .expect("pricing")
+                .input_cost_per_token,
+            2.5e-6,
+            "the concurrent reader must still get the pre-save catalog, not a \
+             truncated or half-rewritten one"
+        );
+    }
+
+    #[test]
+    fn save_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let path = ModelsDevCache::cache_path(Some(dir.path()));
+
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            now,
+            Some(dir.path())
+        ));
+
+        let parent = path.parent().expect("cache dir");
+        let stray: Vec<_> = std::fs::read_dir(parent)
+            .expect("read cache dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name != "models-dev-v1.json")
+            .collect();
+        assert!(stray.is_empty(), "left temp files behind: {stray:?}");
+    }
+
     #[test]
     fn decodes_top_level_provider_map_and_converts_million_token_rates() {
         let catalog = ModelsDevCatalog::decode(
@@ -626,10 +755,12 @@ impl ModelsDevCache {
         let Ok(contents) = serde_json::to_vec(&*artifact) else {
             return false;
         };
-        let Ok(mut file) = std::fs::File::create(&cache_path) else {
-            return false;
-        };
-        if std::io::Write::write_all(&mut file, &contents).is_err() {
+        // Write via a temp file and rename. `File::create` truncates the live
+        // cache to zero before the new bytes land, so a second process reading
+        // in that window (or this one dying mid-write) loses a good catalog and
+        // silently reports no prices until a network refresh succeeds. The
+        // in-process refresh coordinator does not span processes.
+        if crate::secure_file::atomic_write(&cache_path, &contents).is_err() {
             return false;
         }
         let (modified_at, size) = file_identity(&cache_path);
