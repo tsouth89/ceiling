@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/ceiling-taskbar.png" alt="Ceiling's capacity strip above the Windows taskbar, showing Codex, Claude, Cursor, Grok, and OpenCode usage with reset times" width="820">
+  <img src="site/ceiling-taskbar.png" alt="Ceiling's capacity strip above the Windows taskbar, showing Codex, Claude, Cursor, Grok, and OpenCode Go usage with reset times" width="820">
 </p>
 
 <h1 align="center">Ceiling</h1>
@@ -35,7 +35,7 @@ The goal is not another giant provider dashboard. It is a fast, calm way to answ
 - Gemini / Google AI
 - GitHub Copilot
 
-These six get first-class support: documented data sources, banked resets, and charts. Many more providers remain available from the underlying foundation, and each one reads from a local session or the provider's own usage endpoint. See [How Ceiling gets your data](docs/DATA_SOURCES.md) for the per-provider detail.
+These six get the most complete support, and each one has its data source documented individually. Banked resets are shown for Codex and Grok, the two providers that grant them. Many more providers remain available from the underlying foundation, and each reads from a local session or the provider's own usage endpoint. See [How Ceiling gets your data](docs/DATA_SOURCES.md) for the per-provider detail.
 
 <p align="center">
   <img src="docs/images/ceiling-overview.png" alt="Ceiling's overview showing Codex, Claude, Cursor, Grok, and OpenCode Go usage across several accounts" width="520">
