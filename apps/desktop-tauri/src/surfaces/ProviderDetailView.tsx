@@ -312,10 +312,14 @@ export default function ProviderDetailView({
   const otherInactiveWindows = (provider.inactiveRateWindows ?? []).filter(
     (metric) => !namedPrimary || !isPrimaryPlaceholderId(metric.id),
   );
-  // Pace is computed from the primary window. When that primary is a named
-  // placeholder the verdict is a reading of the fake 0%, so drop it rather than
-  // print "Far behind" beside "Unavailable" (SBS-876).
-  const pace = namedPrimary ? null : provider.pace;
+  // Pace belongs to whichever long window has the worst delta, not always the
+  // primary (`preferred_pace` in bridge.rs picks across all of them). Drop it
+  // only when it is the placeholder's own verdict, which would read a fake 0%;
+  // an Auto pace beside an unavailable Plan is still a real reading (SBS-876).
+  const pace =
+    namedPrimary && provider.pace?.windowLabel === provider.primaryLabel
+      ? null
+      : provider.pace;
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
   const primaryLabel = provider.primaryLabel?.trim() || "Primary";
   const planName = displayPlanName(provider.planName);

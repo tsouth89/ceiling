@@ -213,4 +213,48 @@ describe("ProviderDetailView", () => {
     expect(screen.queryByText(/Plan pace/)).not.toBeInTheDocument();
     expect(screen.queryByText(/ahead of budget/)).not.toBeInTheDocument();
   });
+
+  /**
+   * SBS-876: `preferred_pace` picks the worst delta across every long window,
+   * so pace is often Auto rather than Plan. Dropping pace whenever the primary
+   * is a placeholder threw away that valid Auto verdict too.
+   */
+  it("keeps an Auto pace when only the Cursor Plan is unavailable", async () => {
+    const cursor: ProviderUsageSnapshot = {
+      ...codex(),
+      providerId: "cursor",
+      displayName: "Cursor",
+      primary: rate(0),
+      primaryLabel: "Plan",
+      secondary: rate(44),
+      secondaryLabel: "Auto",
+      extraRateWindows: [],
+      inactiveRateWindows: [
+        {
+          id: "cursor-plan",
+          title: "Plan",
+          description: "No usage reported",
+          state: "unavailable",
+        },
+      ],
+      pace: {
+        windowLabel: "Auto",
+        stage: "far_ahead",
+        deltaPercent: 31.6,
+        willLastToReset: false,
+        etaSeconds: 3600,
+        expectedUsedPercent: 12.4,
+        actualUsedPercent: 44,
+      },
+      resetCreditsAvailable: null,
+    };
+
+    render(
+      <ProviderDetailView provider={cursor} resetTimeRelative showAsUsed />,
+    );
+
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    // The Auto verdict is a reading of a real window, so it survives.
+    expect(screen.getAllByText(/Auto pace/).length).toBeGreaterThan(0);
+  });
 });
