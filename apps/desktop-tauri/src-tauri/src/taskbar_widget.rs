@@ -1776,14 +1776,16 @@ mod windows_host {
 
             // Window label (+ optional reset). Account identity is flyout-only
             // so long tags don't collide with the next tile.
-            let detail = match provider.reset.as_deref() {
-                Some(reset) => format!("{} · {reset}", provider.window_label),
-                None => provider.window_label.clone(),
-            };
-            let detail: String = detail.chars().take(15).collect();
-            let detail = wide_without_nul(&detail);
+            let spellings = detail_spellings(&provider.window_label, provider.reset.as_deref());
             unsafe {
+                // Measure in the font the line is actually drawn in, not the
+                // headline one selected above.
                 SelectObject(hdc, detail_font);
+                let budget = item_width.saturating_sub(DETAIL_GUTTER);
+                let chosen = fit_detail(&spellings, budget, |text| {
+                    text_width(hdc, &wide_without_nul(text))
+                });
+                let detail = wide_without_nul(chosen);
                 SetTextColor(hdc, text_color);
                 let detail_width = text_width(hdc, &detail);
                 TextOutW(
@@ -1922,6 +1924,124 @@ mod windows_host {
             "opencode" | "opencodego" => rgb(231, 233, 234),
             _ if dark_text => rgb(72, 79, 88),
             _ => rgb(204, 211, 220),
+        }
+    }
+
+    /// Pixels held back from the detail line's own tile.
+    ///
+    /// The separator is drawn at `item_left + item_width - 1` and the strip does
+    /// not clip, so a line allowed the full width sits on the divider.
+    const DETAIL_GUTTER: i32 = 6;
+
+    /// Spellings of the detail line, widest first.
+    ///
+    /// Dropping the reset keeps the label that says *which* ceiling this is,
+    /// which is the half a glance needs; the countdown is a hover away in the
+    /// flyout, and a label with no countdown still reads as a label.
+    fn detail_spellings(window_label: &str, reset: Option<&str>) -> Vec<String> {
+        match reset {
+            Some(reset) => vec![
+                format!("{window_label} · {reset}"),
+                window_label.to_string(),
+            ],
+            None => vec![window_label.to_string()],
+        }
+    }
+
+    /// Widest spelling that fits `budget`; the narrowest when none do.
+    ///
+    /// Same ladder the headline uses, and for the same reason. The rule here
+    /// used to be `chars().take(15)`, which is a guess at a pixel width and was
+    /// wrong in both directions: "Monthly · 10d 1h" is 16 characters and lost
+    /// its trailing "h" on every monthly window with a two-digit day, while
+    /// "Weekly · 3d 23h" fit at exactly 15 and a narrow five-provider strip
+    /// could overrun on 15 wide characters anyway. Characters are not a unit of
+    /// width, so measure the text (SBS-889).
+    fn fit_detail(spellings: &[String], budget: i32, measure: impl Fn(&str) -> i32) -> &str {
+        let mut best: Option<(&str, i32)> = None;
+        for candidate in spellings {
+            let width = measure(candidate);
+            // Take the first that fits; failing that, keep the narrowest so a
+            // tile too small for any spelling overruns as little as possible.
+            let better = match best {
+                None => true,
+                Some((_, best_width)) => best_width > budget && width < best_width,
+            };
+            if better {
+                best = Some((candidate.as_str(), width));
+            }
+            if width <= budget {
+                break;
+            }
+        }
+        best.map_or("", |(text, _)| text)
+    }
+
+    #[cfg(test)]
+    mod detail_fit_tests {
+        use super::*;
+
+        /// Stand-in for `text_width`: the real one needs a device context, so
+        /// the ladder takes the measurement as a closure and the test supplies
+        /// a fixed width per character.
+        fn measure(text: &str) -> i32 {
+            text.chars().count() as i32 * 7
+        }
+
+        #[test]
+        fn keeps_the_reset_when_the_tile_can_hold_it() {
+            let spellings = detail_spellings("Monthly", Some("10d 1h"));
+            assert_eq!(fit_detail(&spellings, 200, measure), "Monthly · 10d 1h");
+        }
+
+        #[test]
+        fn drops_the_reset_rather_than_a_character_of_it() {
+            // The bug this replaces: a 15-character cut left "Monthly · 10d 1",
+            // which reads as a real countdown that is off by an hour rather than
+            // as a truncation. Losing the whole reset is honest; losing its last
+            // character is not.
+            let spellings = detail_spellings("Monthly", Some("10d 1h"));
+            let budget = measure("Monthly · 10d 1h") - 1;
+            assert_eq!(fit_detail(&spellings, budget, measure), "Monthly");
+        }
+
+        #[test]
+        fn a_label_that_cannot_fit_overruns_as_little_as_possible() {
+            // No rung fits, so the narrowest wins. It still overruns, but by the
+            // least it can, and it is never a partial reset.
+            let spellings = detail_spellings("Monthly", Some("10d 1h"));
+            assert_eq!(fit_detail(&spellings, 1, measure), "Monthly");
+        }
+
+        #[test]
+        fn a_window_with_no_reset_has_one_rung() {
+            let spellings = detail_spellings("Weekly", None);
+            assert_eq!(spellings.len(), 1);
+            assert_eq!(fit_detail(&spellings, 200, measure), "Weekly");
+            assert_eq!(fit_detail(&spellings, 1, measure), "Weekly");
+        }
+
+        /// The shape that shipped in 1.5.32: five providers on a crowded strip,
+        /// where the monthly tile was the one that lost its "h".
+        #[test]
+        fn every_window_on_a_five_provider_strip_keeps_a_whole_reset() {
+            // 1992px of strip across five tiles, less the gutter.
+            let budget = 1992 / 5 - DETAIL_GUTTER;
+            for (label, reset) in [
+                ("Weekly", "3d 8h"),
+                ("Weekly", "1d 7h"),
+                ("API", "25d 23h"),
+                ("Weekly", "2d 17h"),
+                ("Monthly", "10d 1h"),
+            ] {
+                let spellings = detail_spellings(label, Some(reset));
+                let chosen = fit_detail(&spellings, budget, measure);
+                assert_eq!(
+                    chosen,
+                    format!("{label} · {reset}"),
+                    "{label} should keep its reset at {budget}px"
+                );
+            }
         }
     }
 
