@@ -70,6 +70,8 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `taskbar_widget_open_on_hover` | boolean | `true` | Open the taskbar glance panel after pointer dwell. Safe to edit. |
 | `float_bar_density` | string | `"standard"` | `"compact"`, `"standard"`, or `"detailed"`. Safe to edit. |
 | `float_bar_information_mode` | string | `"exact"` | `"exact"` or `"calm"`. Safe to edit. |
+| `float_bar_selection_mode` | string | `"pinned"` | `"pinned"` (the configured list), `"active"` (the focused supported app), or `"activePlusCritical"` (active plus any pinned provider at or above the warning threshold); an invalid string normalizes to `"pinned"`. Safe to edit. |
+| `float_bar_foreground_detection` | boolean | `true` | When `false`, `"active"` / `"activePlusCritical"` keep the pinned list and do not read the focused window. Safe to edit. |
 | `float_bar_contrast` | string or null | `"auto"` | `"auto"`, `"light-text"`, or `"dark-text"`; an invalid string normalizes to `"auto"`. `null` is accepted and deserializes to `None`, which resolves through the legacy `float_bar_dark_text` flag instead. Safe to edit. |
 | `float_bar_click_through` | boolean | `false` | Make the floating bar fully click-through. Safe to edit. |
 | `float_bar_provider_ids` | array of strings | `[]` | Empty means all enabled providers. Safe to edit. |
