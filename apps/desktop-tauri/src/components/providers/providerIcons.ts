@@ -158,9 +158,13 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   azureopenai: { id: "azureopenai", brandColor: "#0078d4", fallbackLetter: "A" },
   t3chat:      { id: "t3chat",      brandColor: "#8b5cf6", fallbackLetter: "T", svgPath: RAW.t3chat },
   // OpenCode's square-ring mark is monochrome (black on white, white on black),
-  // so — like grok — use a light neutral instead of inventing a brand hue.
-  opencode:    { id: "opencode",    brandColor: "#e7e9ea", fallbackLetter: "○", svgPath: RAW.opencode },
-  opencodego:  { id: "opencodego",  brandColor: "#e7e9ea", fallbackLetter: "○", svgPath: RAW.opencodego },
+  // so there is no brand hue to use. brandColor is baked into an inline `color`
+  // and also paints the fallback letter and legend dots, which a theme override
+  // cannot reach, so it has to be one shade that survives both themes rather
+  // than either end of the brand. This is the mid gray `--chart-opencode`
+  // already uses; a near-white here vanished on the light dashboard.
+  opencode:    { id: "opencode",    brandColor: "#9ca3af", fallbackLetter: "○", svgPath: RAW.opencode },
+  opencodego:  { id: "opencodego",  brandColor: "#9ca3af", fallbackLetter: "○", svgPath: RAW.opencodego },
   openrouter:  { id: "openrouter",  brandColor: "#6b7280", fallbackLetter: "R", svgPath: RAW.openrouter },
   perplexity:  { id: "perplexity",  brandColor: "#1fb8cd", fallbackLetter: "P", svgPath: RAW.perplexity },
   vertexai:    { id: "vertexai",    brandColor: "#4285f4", fallbackLetter: "△", svgPath: RAW.vertexai },

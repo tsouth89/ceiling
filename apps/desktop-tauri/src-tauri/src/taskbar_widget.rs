@@ -1707,7 +1707,7 @@ mod windows_host {
 
         for (index, provider) in model.providers.iter().enumerate() {
             let item_left = i32::try_from(index).unwrap_or(0) * item_width;
-            let color = provider_color(&provider.provider_id);
+            let color = provider_color(&provider.provider_id, model.dark_text);
             const ICON_WIDTH: i32 = 16;
             const ICON_TEXT_GAP: i32 = 5;
             // Widest spelling that stays inside this tile. The strip paints
@@ -1896,21 +1896,89 @@ mod windows_host {
         }
     }
 
-    fn provider_color(provider_id: &str) -> u32 {
+    /// Tile color for a provider mark.
+    ///
+    /// `dark_text` is the strip's own read of `SystemUsesLightTheme`, so it is
+    /// also the answer to "is the taskbar behind this mark light?". A brand with
+    /// a real hue reads on either chrome and ignores it. A monochrome brand does
+    /// not: it ships as black-on-white *and* white-on-black precisely because one
+    /// shade cannot serve both, so painting one fixed shade leaves it at roughly
+    /// 1:1 against half of all taskbars (SBS-876 follow-up).
+    fn provider_color(provider_id: &str, dark_text: bool) -> u32 {
         match provider_id {
             "claude" => rgb(216, 116, 75),
             "cursor" => rgb(15, 201, 181),
             "codex" => rgb(64, 196, 222),
-            // xAI / Grok monogram is monochrome; light silver for dark taskbar chrome.
-            "grok" => rgb(231, 233, 234),
             // Match the web registry brand colors so strip and dashboard agree.
             "gemini" => rgb(171, 135, 234),
             "antigravity" | "agy" => rgb(96, 186, 126),
             "copilot" => rgb(168, 85, 247),
-            // OpenCode's mark is monochrome; light silver for dark taskbar chrome,
-            // matching the web registry (#e7e9ea) so strip and dashboard agree.
+            // Monochrome marks; each takes the half of its own brand that the
+            // current taskbar can actually show.
+            "grok" if dark_text => rgb(24, 24, 24),
+            "grok" => rgb(231, 233, 234),
+            // #211E1E is OpenCode's own black, straight off the brand asset.
+            "opencode" | "opencodego" if dark_text => rgb(33, 30, 30),
             "opencode" | "opencodego" => rgb(231, 233, 234),
+            _ if dark_text => rgb(72, 79, 88),
             _ => rgb(204, 211, 220),
+        }
+    }
+
+    #[cfg(test)]
+    mod tile_color_tests {
+        use super::*;
+
+        /// Relative luminance of a GDI COLORREF (0x00bbggrr), per WCAG 2.x.
+        fn luminance(color: u32) -> f64 {
+            let channel = |shift: u32| {
+                let value = ((color >> shift) & 0xff) as f64 / 255.0;
+                if value <= 0.03928 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(0) + 0.7152 * channel(8) + 0.0722 * channel(16)
+        }
+
+        fn contrast(a: u32, b: u32) -> f64 {
+            let (x, y) = (luminance(a), luminance(b));
+            let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+            (hi + 0.05) / (lo + 0.05)
+        }
+
+        #[test]
+        fn monochrome_marks_follow_the_taskbar_theme() {
+            // Windows 11 taskbars ship in both shades, and `dark_text` is the
+            // strip's own read of which one it is sitting on. A brand with no hue
+            // has to pick the half of itself the current chrome can show; one
+            // fixed shade left the mark at roughly 1:1 on half of all taskbars.
+            const DARK_TASKBAR: u32 = rgb(32, 32, 32);
+            const LIGHT_TASKBAR: u32 = rgb(243, 243, 243);
+
+            for id in ["opencode", "opencodego", "grok"] {
+                let on_dark = provider_color(id, false);
+                let on_light = provider_color(id, true);
+                assert_ne!(on_dark, on_light, "{id} must not paint one fixed shade");
+                assert!(
+                    contrast(on_dark, DARK_TASKBAR) > 3.0,
+                    "{id} is unreadable on a dark taskbar"
+                );
+                assert!(
+                    contrast(on_light, LIGHT_TASKBAR) > 3.0,
+                    "{id} is unreadable on a light taskbar"
+                );
+            }
+
+            // A brand with a real hue reads on either chrome and stays put.
+            for id in ["claude", "cursor", "codex", "gemini", "copilot"] {
+                assert_eq!(
+                    provider_color(id, false),
+                    provider_color(id, true),
+                    "{id} has a brand hue and should not switch"
+                );
+            }
         }
     }
 
