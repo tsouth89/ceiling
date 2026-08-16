@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -12,6 +12,7 @@ const tauriMocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
+  openSettingsWindow: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -756,6 +757,28 @@ describe("FloatBar", () => {
     expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
       "promo promotional",
     );
+  });
+
+  it("opens the live Display settings tab from the menu, not menuBar (SBS-872)", async () => {
+    // Failure mode: FloatBar sent menuBar, Settings.isSettingsTab rejected
+    // it, and the detached window landed on General. PopOutPanel already
+    // uses the live menu id for the same Display tab.
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 40),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.openSettingsWindow.mockResolvedValue(undefined);
+
+    const { container, getByText } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar")).not.toBeNull();
+    });
+
+    fireEvent.contextMenu(container.querySelector(".floatbar")!);
+    fireEvent.click(getByText("FloatBarOpenSettings"));
+
+    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("menu");
+    expect(tauriMocks.openSettingsWindow).not.toHaveBeenCalledWith("menuBar");
   });
 
   it("polls refreshProvidersIfStale on the configured interval", async () => {

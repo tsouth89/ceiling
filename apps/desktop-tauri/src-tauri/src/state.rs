@@ -372,7 +372,7 @@ mod tests {
         let transition = state.transition_surface(
             SurfaceMode::Settings,
             SurfaceTarget::Settings {
-                tab: "apiKeys".into(),
+                tab: "accounts".into(),
             },
         );
 
@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(
             state.current_target,
             SurfaceTarget::Settings {
-                tab: "apiKeys".into()
+                tab: "accounts".into()
             }
         );
     }
@@ -427,7 +427,7 @@ mod tests {
         state.transition_surface(
             SurfaceMode::Settings,
             SurfaceTarget::Settings {
-                tab: "apiKeys".into(),
+                tab: "accounts".into(),
             },
         );
 
@@ -474,7 +474,7 @@ mod tests {
         state.transition_surface(
             SurfaceMode::Settings,
             SurfaceTarget::Settings {
-                tab: "apiKeys".into(),
+                tab: "accounts".into(),
             },
         );
 

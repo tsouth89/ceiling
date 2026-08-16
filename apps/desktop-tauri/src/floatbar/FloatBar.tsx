@@ -702,7 +702,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     setMenuOpen(false);
   }, [settings.floatBarClickThrough]);
   const handleOpenSettings = useCallback(() => {
-    void openSettingsWindow("menuBar").catch(() => {});
+    void openSettingsWindow("menu").catch(() => {});
     setMenuOpen(false);
   }, []);
   const handleHide = useCallback(() => {

@@ -18,7 +18,7 @@ fn validate_surface_target_accepts_matching_target() {
     let target = validate_surface_target(
         SurfaceMode::Settings,
         SurfaceTarget::Settings {
-            tab: "apiKeys".into(),
+            tab: "accounts".into(),
         },
     )
     .unwrap();
@@ -26,7 +26,7 @@ fn validate_surface_target_accepts_matching_target() {
     assert_eq!(
         target,
         SurfaceTarget::Settings {
-            tab: "apiKeys".into()
+            tab: "accounts".into()
         }
     );
 }
@@ -36,7 +36,7 @@ fn validate_surface_target_rejects_mismatched_target() {
     let error = validate_surface_target(
         SurfaceMode::TrayPanel,
         SurfaceTarget::Settings {
-            tab: "apiKeys".into(),
+            tab: "accounts".into(),
         },
     )
     .unwrap_err();

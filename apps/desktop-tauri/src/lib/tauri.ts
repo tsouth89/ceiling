@@ -26,6 +26,7 @@ import type {
   ProviderTokenAccountsBridge,
   TokenAccountSupportBridge,
   SettingsSnapshot,
+  SettingsTabId,
   SettingsUpdate,
   SurfaceMode,
   SurfaceTargetForMode,
@@ -116,7 +117,7 @@ export function endFlyoutGesture(): Promise<void> {
   return invoke<void>("end_flyout_gesture");
 }
 
-export function openSettingsWindow(tab: string): Promise<void> {
+export function openSettingsWindow(tab: SettingsTabId): Promise<void> {
   return invoke<void>("open_settings_window", { tab });
 }
 

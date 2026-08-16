@@ -8,9 +8,12 @@
 //!   - `popOut`             — show the pop-out dashboard
 //!   - `popOut:provider:codex` — show a provider pop-out
 //!   - `settings`           — show settings (General tab)
-//!   - `settings:apiKeys`   — show settings on the API Keys tab
-//!   - `settings:cookies`   — show settings on the Cookies tab
+//!   - `settings:accounts`  — show settings on the Accounts tab
+//!   - `settings:menu`      — show settings on the Display tab
 //!   - `settings:about`     — show settings on the About tab
+//!
+//! Every example above is pinned by `header_examples_are_live_proof_mode_values`
+//! so a retired tab id cannot survive here (SBS-872).
 //!
 //! In proof mode the shell immediately transitions to the requested surface
 //! and suppresses blur-dismiss so the window stays visible for automated
@@ -82,7 +85,7 @@ static PROOF_SYNC_CONTROL: LazyLock<Mutex<ProofSyncControl>> =
 pub struct ProofConfig {
     /// The surface to show on startup (serialized as the camelCase id).
     pub target_surface: String,
-    /// Optional settings tab id (e.g. `"apiKeys"`, `"cookies"`).
+    /// Optional settings tab id (e.g. `"accounts"`, `"menu"`).
     pub settings_tab: Option<String>,
     /// Optional target payload for richer proof routing, such as
     /// `"provider:codex"` for pop-out provider views.
@@ -695,15 +698,15 @@ mod tests {
 
     #[test]
     fn parse_settings_with_tab() {
-        with_proof_mode_env(Some("settings:apiKeys"), || {
+        with_proof_mode_env(Some("settings:accounts"), || {
             let cfg = ProofConfig::from_env().unwrap();
             assert_eq!(cfg.target_surface, "settings");
-            assert_eq!(cfg.settings_tab.as_deref(), Some("apiKeys"));
+            assert_eq!(cfg.settings_tab.as_deref(), Some("accounts"));
             assert_eq!(cfg.surface_mode(), SurfaceMode::Settings);
             assert_eq!(
                 cfg.surface_target(),
                 SurfaceTarget::Settings {
-                    tab: "apiKeys".into()
+                    tab: "accounts".into()
                 }
             );
         });
@@ -797,6 +800,67 @@ mod tests {
     #[test]
     fn parse_proof_command_rejects_unknown_settings_tab() {
         assert!(ProofCommand::parse("open-settings:security").is_none());
+    }
+
+    #[test]
+    fn parse_proof_command_accepts_live_settings_tabs() {
+        // SBS-872: `accounts` is a live shell tab that the old allowlist dropped.
+        assert_eq!(
+            ProofCommand::parse("open-settings:accounts"),
+            Some(ProofCommand::OpenSettings {
+                tab: "accounts".into()
+            })
+        );
+        assert_eq!(
+            ProofCommand::parse("open-settings:menu"),
+            Some(ProofCommand::OpenSettings { tab: "menu".into() })
+        );
+    }
+
+    #[test]
+    fn parse_proof_command_rejects_retired_settings_tabs() {
+        // SBS-872: these ids used to pass the Rust allowlist (or the TS union)
+        // after the Settings shell stopped rendering them.
+        for retired in ["menuBar", "display", "apiKeys", "cookies"] {
+            assert!(
+                ProofCommand::parse(&format!("open-settings:{retired}")).is_none(),
+                "{retired} must not be a proof-mode settings tab"
+            );
+        }
+    }
+
+    /// Every backtick-quoted bullet example from this module's header comment.
+    fn header_examples() -> Vec<String> {
+        include_str!("proof_harness.rs")
+            .lines()
+            .take_while(|line| line.starts_with("//!"))
+            .filter_map(|line| {
+                let rest = line.trim_start_matches("//!").trim_start();
+                let (example, _) = rest.strip_prefix("- `")?.split_once('`')?;
+                Some(example.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn header_examples_are_live_proof_mode_values() {
+        // SBS-872: the header advertised `settings:apiKeys` / `settings:cookies`
+        // after the allowlist dropped them, so anyone following it silently got
+        // no proof mode at all.
+        let examples = header_examples();
+        assert_eq!(
+            examples.len(),
+            7,
+            "header bullet list changed shape: {examples:?}"
+        );
+        for example in examples {
+            with_proof_mode_env(Some(&example), || {
+                assert!(
+                    ProofConfig::from_env().is_some(),
+                    "header example `{example}` no longer enters proof mode"
+                );
+            });
+        }
     }
 
     #[test]
