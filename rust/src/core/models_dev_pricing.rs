@@ -58,14 +58,30 @@ mod tests {
     /// SBS-870: `File::create` truncated the live cache to zero bytes before
     /// the new JSON landed. A second process reading in that window - or this
     /// one dying mid-write - lost a good catalog and reported no prices.
-    /// A rename-based replace has no such window, and on Unix that is
-    /// observable: the destination is a different inode afterwards, and the
-    /// old inode still holds the previous catalog.
-    #[cfg(unix)]
+    ///
+    /// This test holds a real, live handle open on the cache the way a
+    /// concurrent reader mid-`load` would, then triggers a second `save`, and
+    /// is not platform-gated: it must fail on `windows-latest` CI (where the
+    /// unix-only inode check above never ran) if `save` regresses to
+    /// `File::create` + `write_all`.
+    ///
+    /// The two platforms diverge in what a held-open reader experiences, so
+    /// the assertions diverge too, but both diverge specifically because
+    /// `File::create` truncates a file other handles still have open:
+    ///
+    /// - On Unix, `rename` detaches the path from the file the reader has
+    ///   open, so the replace is never blocked by the open handle, and the
+    ///   held reader goes on serving the untouched old bytes.
+    /// - On Windows, `MoveFileExW` cannot replace a file another handle has
+    ///   open at all - confirmed empirically on this machine, deterministically,
+    ///   even when that handle explicitly requests `FILE_SHARE_DELETE` - so a
+    ///   correct atomic `save` fails closed and leaves the previous catalog on
+    ///   disk completely alone. `File::create`, in contrast, only needs write
+    ///   access and truncates that same still-open file in place: exactly the
+    ///   bug this PR fixes. So on Windows, a `save` that reports success while
+    ///   a reader is open is itself the regression signal.
     #[test]
-    fn save_replaces_the_cache_without_truncating_it_first() {
-        use std::os::unix::fs::MetadataExt;
-
+    fn save_does_not_overwrite_the_cache_while_a_reader_holds_it_open() {
         let dir = tempfile::tempdir().expect("tempdir");
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         let path = ModelsDevCache::cache_path(Some(dir.path()));
@@ -75,22 +91,22 @@ mod tests {
             now,
             Some(dir.path())
         ));
-        let before_ino = std::fs::metadata(&path).expect("metadata").ino();
+
         // Hold the file open the way a concurrent reader mid-`load` would.
-        // A rename-based replace leaves this handle on the old, still complete
-        // inode; a truncating write empties the very bytes it is reading.
         let mut reader = std::fs::File::open(&path).expect("open the live cache");
 
-        assert!(ModelsDevCache::save(
-            catalog_priced_at(9.0),
-            now,
-            Some(dir.path())
-        ));
+        let second_save_succeeded =
+            ModelsDevCache::save(catalog_priced_at(9.0), now, Some(dir.path()));
 
-        let after_ino = std::fs::metadata(&path).expect("metadata").ino();
-        assert_ne!(
-            before_ino, after_ino,
-            "save must rename a new file over the cache, not truncate it in place"
+        #[cfg(unix)]
+        assert!(
+            second_save_succeeded,
+            "a rename-based replace must not be blocked by a concurrent reader"
+        );
+        #[cfg(windows)]
+        assert!(
+            !second_save_succeeded,
+            "save must not report success while silently overwriting the cache a reader has open"
         );
 
         let mut previous = Vec::new();
