@@ -140,7 +140,8 @@
   --chart-kimi: rgb(254, 96, 60);
   --chart-kimik2: rgb(76, 0, 255);
   --chart-kiro: rgb(255, 153, 0);
-  --chart-opencode: rgb(59, 130, 246);
+  /* OpenCode mark is monochrome; chart bars use a readable mid gray (icons use brandColor). */
+  --chart-opencode: rgb(156, 163, 175);
   --chart-minimax: rgb(254, 96, 60);
   --chart-vertexai: rgb(66, 133, 244);
   --chart-zai: rgb(232, 90, 106);

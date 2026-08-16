@@ -1907,8 +1907,9 @@ mod windows_host {
             "gemini" => rgb(171, 135, 234),
             "antigravity" | "agy" => rgb(96, 186, 126),
             "copilot" => rgb(168, 85, 247),
-            // Match the web registry (#3b82f6) so strip and dashboard agree.
-            "opencode" | "opencodego" => rgb(59, 130, 246),
+            // OpenCode's mark is monochrome; light silver for dark taskbar chrome,
+            // matching the web registry (#e7e9ea) so strip and dashboard agree.
+            "opencode" | "opencodego" => rgb(231, 233, 234),
             _ => rgb(204, 211, 220),
         }
     }
