@@ -171,6 +171,9 @@ describe("ProviderDetailView", () => {
       ...codex(),
       providerId: "cursor",
       displayName: "Cursor",
+      // Spreading the Codex fixture would otherwise render a ChatGPT plan name
+      // inside a Cursor view, which is exactly what provider siloing forbids.
+      planName: "Ultra",
       primary: rate(0),
       primaryLabel: "Plan",
       extraRateWindows: [],
@@ -224,6 +227,7 @@ describe("ProviderDetailView", () => {
       ...codex(),
       providerId: "cursor",
       displayName: "Cursor",
+      planName: "Ultra",
       primary: rate(0),
       primaryLabel: "Plan",
       secondary: rate(44),
