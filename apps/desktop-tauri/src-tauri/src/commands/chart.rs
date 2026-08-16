@@ -15,7 +15,7 @@ use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -32,19 +32,33 @@ const CHART_CACHE_VERSION: u8 = 9;
 // the *same* key, so without a bound the file grows for the life of the install
 // (SBS-887). A rolled window is never read again; keep entries only long enough
 // to survive a reset the user did not open Charts for.
-// Two days covers roughly ten Claude/Codex/Grok session rolls, so a window a
-// user did not open Charts for still survives, while a genuinely dead one goes
-// quickly. Age is what retires entries here; a week let enough live keys pile
-// up that the count backstop below started doing the eviction instead, and it
+//
+// Two days covers roughly ten Claude/Codex session rolls, so a window a user
+// did not open Charts for still survives, while a genuinely dead one goes
+// quickly. Age is what retires entries here. A week let enough still-live keys
+// pile up that the count backstop below did the eviction instead, and that
 // evicts by refresh time rather than by whether the window is still current.
 const CHART_CACHE_MAX_ENTRY_AGE: Duration = Duration::from_secs(2 * 24 * 60 * 60);
-// Pure backstop against pathological churn, not the primary mechanism. Charts
-// and Compare mint *different* keys for the same provider (Charts carries
-// account scope plus source label, Compare is machine-wide with source
-// unknown), each embedding the 5-hour reset window, and MenuCard and provider
-// detail hold their own stable keys. Three windowed providers on both surfaces
-// is ~60 entries inside the two-day age bound, so this should not be reached in
-// normal use; if it is, evicting the least recently refreshed is the least-bad
+// Pure backstop against pathological churn, not the primary mechanism. Derived
+// from the key shapes that actually churn, rather than picked:
+//
+// * Only two surfaces send usage windows. Charts sends account scope plus a
+//   real source label; Compare sends machine-wide identity with source
+//   "unknown". They mint different keys for the same provider. MenuCard and
+//   provider detail send no windows at all, so their keys are stable and do not
+//   churn with resets.
+// * Only Claude and Codex roll on the 5-hour cadence (~5 rolls/day); both of
+//   their windows live in one key, so it is 5 new keys per provider per day per
+//   distinct scope. Grok only carries a weekly window, and the remaining chart
+//   providers carry none.
+// * Compare is machine-wide, so it is 2 providers x 5 rolls = 10 keys/day
+//   regardless of account count. Charts is per account: 2 x 5 x accounts.
+//
+// So a machine with N accounts mints ~10 + 10N windowed keys/day, and the
+// two-day age bound holds ~20 + 20N of them, plus a couple dozen stable
+// empty-window keys. That is ~60 live entries at 2 accounts and ~100 at 3, so
+// 256 leaves room for roughly eight accounts before the count can bind at all.
+// If it ever does, evicting the least recently refreshed is the least-bad
 // choice available.
 const CHART_CACHE_MAX_ENTRIES: usize = 256;
 
@@ -732,32 +746,45 @@ fn load_persisted_chart_cache() -> PersistedChartCache {
     let Some(path) = chart_cache_path() else {
         return PersistedChartCache::default();
     };
-    let parsed: Option<PersistedChartCache> = fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    // A version mismatch discards the entries but leaves the old file on disk.
-    // It has to be rewritten, or a large v8 cache is re-read on every launch
-    // until some later store happens to overwrite it.
-    let superseded = parsed
+    load_chart_cache_from(&path)
+}
+
+/// Reads the cache file, prunes it, and heals the file on disk when what it
+/// held is no longer usable.
+///
+/// Takes the path so tests can exercise the whole disk round trip; the caller
+/// resolves the real user config directory.
+///
+/// [`store_chart_data`] is the only other write site and it does not run until
+/// someone opens a chart. So anything left here survives to the next launch and
+/// is re-read in full every time. That covers three cases: a file that shrank
+/// under the bounds, a file written by a superseded [`CHART_CACHE_VERSION`]
+/// (whose entries are dropped in memory but would otherwise stay on disk), and
+/// a file that no longer parses.
+fn load_chart_cache_from(path: &Path) -> PersistedChartCache {
+    let bytes = fs::read(path).ok();
+    let parsed: Option<PersistedChartCache> = bytes
         .as_ref()
-        .is_some_and(|cache: &PersistedChartCache| cache.version != CHART_CACHE_VERSION);
+        .and_then(|bytes| serde_json::from_slice(bytes).ok());
+    let unusable = match parsed.as_ref() {
+        Some(cache) => cache.version != CHART_CACHE_VERSION,
+        // Bytes we could read but not parse are dead weight. A file we could
+        // not read at all is not ours to overwrite.
+        None => bytes.is_some(),
+    };
     let cache = parsed
         .filter(|cache: &PersistedChartCache| cache.version == CHART_CACHE_VERSION)
         .unwrap_or_default();
 
     let (cache, shrank) = prune_loaded_chart_cache(cache);
-    if shrank || superseded {
-        // Write it back. Without this the file stays oversized until some later
-        // `store_chart_data` happens to run, so a user who never opens Charts
-        // pays the full read on every launch forever.
-        persist_chart_cache(&cache);
+    if shrank || unusable {
+        write_chart_cache(path, &cache);
     }
     cache
 }
 
 /// Prunes a cache just read from disk, reporting whether it shrank so the
-/// caller knows to write it back. Split out from [`load_persisted_chart_cache`]
-/// because the load path resolves a real user config directory.
+/// caller knows to write it back.
 fn prune_loaded_chart_cache(mut cache: PersistedChartCache) -> (PersistedChartCache, bool) {
     let before = cache.entries.len();
     prune_chart_cache(&mut cache, "");
@@ -772,6 +799,10 @@ fn persist_chart_cache(cache: &PersistedChartCache) {
     let Some(path) = chart_cache_path() else {
         return;
     };
+    write_chart_cache(&path, cache);
+}
+
+fn write_chart_cache(path: &Path, cache: &PersistedChartCache) {
     if let Some(parent) = path.parent()
         && let Err(error) = fs::create_dir_all(parent)
     {
@@ -780,7 +811,7 @@ fn persist_chart_cache(cache: &PersistedChartCache) {
     }
     match serde_json::to_vec(cache) {
         Ok(bytes) => {
-            if let Err(error) = codexbar::secure_file::atomic_write(&path, &bytes) {
+            if let Err(error) = codexbar::secure_file::atomic_write(path, &bytes) {
                 tracing::warn!("failed to persist chart cache: {error}");
             }
         }
@@ -2322,10 +2353,10 @@ mod tests {
         ProviderLocalUsageSummary, activity_heatmap_days, activity_hours_for_provider,
         api_value_period, assemble_activity_heatmap, chart_cache_key, comparison_period_specs,
         cost_fetch_failure_allows_early_retry, current_unix_ms, daily_series_from_report,
-        effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
-        local_yesterday_window_utc, localized_estimate_note, model_breakdown,
-        parse_api_value_custom_range, period_from_daily_series, pricing_coverage_tokens,
-        project_breakdown, prune_chart_cache, prune_loaded_chart_cache,
+        effort_breakdown, format_cost_csv, load_chart_cache_from, local_midnight_in_tz,
+        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
+        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
+        pricing_coverage_tokens, project_breakdown, prune_chart_cache, prune_loaded_chart_cache,
         resolve_chart_account_scope, spend_anomaly_reading, spend_budget_period_details,
         token_breakdown, token_cost_cache_is_fresh,
     };
@@ -2378,7 +2409,7 @@ mod tests {
         assert!(cache.entries.contains_key("fresh"));
         assert!(
             !cache.entries.contains_key("stale"),
-            "an entry older than a week is a dead reset window"
+            "an entry past CHART_CACHE_MAX_ENTRY_AGE is a dead reset window"
         );
     }
 
@@ -2465,23 +2496,280 @@ mod tests {
         assert_eq!(pruned.entries.len(), 2);
     }
 
+    /// Providers that send usage windows and so mint a new key on every roll.
+    /// Grok is in here even though it only carries a weekly window: the fixture
+    /// deliberately rolls all three at the 5-hour cadence, which is the worst
+    /// case the bound has to hold up against.
+    const WINDOWED_PROVIDERS: [&str; 3] = ["claude", "codex", "grok"];
+    /// The Claude/Codex session window length.
+    const ROLL_HOURS: i64 = 5;
+
+    fn session_window(now_ms: i64, rolls_ago: i64) -> Vec<LocalUsageWindowRequest> {
+        let hour_ms = 60 * 60 * 1_000;
+        let starts_at = now_ms - rolls_ago * ROLL_HOURS * hour_ms;
+        vec![LocalUsageWindowRequest {
+            id: "session".to_string(),
+            label: "Session".to_string(),
+            starts_at: starts_at.to_string(),
+            ends_at: (starts_at + ROLL_HOURS * hour_ms).to_string(),
+        }]
+    }
+
+    fn account_scope(account_id: &str) -> ChartAccountScope {
+        ChartAccountScope::Account {
+            account_id: account_id.to_string(),
+            config_dir: PathBuf::from("/tmp/ceiling-test"),
+        }
+    }
+
     /// The age bound has to be what retires rolled windows. If the count cap
     /// binds first it evicts by refresh time, which can drop a window that is
     /// still current.
+    ///
+    /// This builds the real key mix rather than asserting arithmetic: two
+    /// accounts on each windowed provider, seen on both the account-scoped
+    /// Charts tab and the machine-wide Compare tab (which mint different keys
+    /// for the same data), across twice the age bound of 5-hour rolls, plus the
+    /// stable empty-window keys MenuCard and provider detail hold.
     #[test]
-    fn a_realistic_week_of_rolled_windows_stays_under_the_count_cap() {
-        // Three windowed providers, seen on both Charts and Compare (which mint
-        // separate keys), rolling five times a day across the age bound.
-        let providers = 3;
-        let surfaces = 2;
-        let rolls_per_day = 5;
-        let days = CHART_CACHE_MAX_ENTRY_AGE.as_secs() / (24 * 60 * 60);
-        let in_age_entries = providers * surfaces * rolls_per_day * days as usize;
+    fn prune_keeps_every_current_key_across_a_realistic_surface_mix() {
+        let now = current_unix_ms();
+        let hour_ms = 60 * 60 * 1_000;
+        let max_age_ms = CHART_CACHE_MAX_ENTRY_AGE.as_millis() as i64;
+        let rolls = (CHART_CACHE_MAX_ENTRY_AGE.as_secs() / (ROLL_HOURS as u64 * 60 * 60)) as i64;
+
+        let mut cache = PersistedChartCache::default();
+        let mut in_age: Vec<String> = Vec::new();
+        let mut past_age: Vec<String> = Vec::new();
+
+        // Twice the age bound of rolls, so the second half must be retired.
+        for rolls_ago in 0..rolls * 2 {
+            let refreshed_at_ms = now - rolls_ago * ROLL_HOURS * hour_ms;
+            let windows = session_window(now, rolls_ago);
+            for provider in WINDOWED_PROVIDERS {
+                let mut keys = vec![
+                    // Compare: machine-wide identity, no source label.
+                    chart_cache_key(
+                        provider,
+                        None,
+                        None,
+                        None,
+                        &windows,
+                        &ChartAccountScope::MachineWide,
+                    ),
+                ];
+                for account in ["acct-primary", "acct-secondary"] {
+                    // Charts: account scope plus a source label.
+                    keys.push(chart_cache_key(
+                        provider,
+                        Some("user@example.com"),
+                        None,
+                        Some("oauth"),
+                        &windows,
+                        &account_scope(account),
+                    ));
+                }
+                for key in keys {
+                    assert!(
+                        cache
+                            .entries
+                            .insert(key.clone(), cache_entry(refreshed_at_ms))
+                            .is_none(),
+                        "the fixture must not collide keys: {key}"
+                    );
+                    if now - refreshed_at_ms <= max_age_ms {
+                        in_age.push(key);
+                    } else {
+                        past_age.push(key);
+                    }
+                }
+            }
+        }
+
+        // MenuCard and provider detail: stable empty-window keys, last refreshed
+        // a while ago but still inside the age bound.
+        let stable_refreshed_at_ms = now - max_age_ms / 2;
+        let mut stable: Vec<String> = Vec::new();
+        for provider in WINDOWED_PROVIDERS {
+            for account in ["acct-primary", "acct-secondary"] {
+                stable.push(chart_cache_key(
+                    provider,
+                    Some("user@example.com"),
+                    None,
+                    Some("menu"),
+                    &[],
+                    &account_scope(account),
+                ));
+            }
+        }
+        for key in &stable {
+            cache
+                .entries
+                .insert(key.clone(), cache_entry(stable_refreshed_at_ms));
+        }
+
+        let live = in_age.len() + stable.len();
+        assert!(
+            live <= CHART_CACHE_MAX_ENTRIES,
+            "the count backstop must not bind in normal use: {live} live keys vs a \
+             {CHART_CACHE_MAX_ENTRIES} cap"
+        );
+
+        prune_chart_cache(&mut cache, "");
+
+        for key in &in_age {
+            assert!(
+                cache.entries.contains_key(key),
+                "a key inside the age bound must survive: {key}"
+            );
+        }
+        for key in &stable {
+            assert!(
+                cache.entries.contains_key(key),
+                "a stable MenuCard key must survive the window churn around it: {key}"
+            );
+        }
+        for key in &past_age {
+            assert!(
+                !cache.entries.contains_key(key),
+                "a key past the age bound is a dead window: {key}"
+            );
+        }
+        assert_eq!(cache.entries.len(), live);
+    }
+
+    fn write_cache_file(path: &std::path::Path, version: u8, entries: usize, refreshed_at_ms: i64) {
+        let mut cache = PersistedChartCache {
+            version,
+            entries: HashMap::new(),
+        };
+        for index in 0..entries {
+            cache
+                .entries
+                .insert(format!("key-{index:04}"), cache_entry(refreshed_at_ms));
+        }
+        std::fs::write(path, serde_json::to_vec(&cache).expect("serialize fixture"))
+            .expect("write fixture");
+    }
+
+    fn read_cache_file(path: &std::path::Path) -> PersistedChartCache {
+        serde_json::from_slice(&std::fs::read(path).expect("read cache file")).expect("parse cache")
+    }
+
+    /// SBS-887: an oversized file written before the bound existed has to shrink
+    /// on load. Nothing else rewrites it until someone opens a chart, so without
+    /// this every launch pays the full read.
+    #[test]
+    fn an_oversized_current_version_file_shrinks_on_disk_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("chart-data-cache.json");
+        write_cache_file(
+            &path,
+            CHART_CACHE_VERSION,
+            CHART_CACHE_MAX_ENTRIES + 40,
+            current_unix_ms(),
+        );
+        let before = std::fs::metadata(&path).expect("metadata").len();
+
+        let loaded = load_chart_cache_from(&path);
+
+        assert_eq!(loaded.entries.len(), CHART_CACHE_MAX_ENTRIES);
+        let on_disk = read_cache_file(&path);
+        assert_eq!(on_disk.version, CHART_CACHE_VERSION);
+        assert_eq!(
+            on_disk.entries.len(),
+            CHART_CACHE_MAX_ENTRIES,
+            "the file itself has to shrink, not just the in-memory map"
+        );
+        assert!(
+            std::fs::metadata(&path).expect("metadata").len() < before,
+            "the rewritten file must be smaller than the one we read"
+        );
+    }
+
+    /// A superseded-version file is discarded in memory, which used to leave the
+    /// old bytes on disk to be re-read on every launch forever.
+    #[test]
+    fn an_oversized_superseded_version_file_shrinks_on_disk_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("chart-data-cache.json");
+        write_cache_file(
+            &path,
+            CHART_CACHE_VERSION - 1,
+            CHART_CACHE_MAX_ENTRIES + 40,
+            current_unix_ms(),
+        );
+        let before = std::fs::metadata(&path).expect("metadata").len();
+
+        let loaded = load_chart_cache_from(&path);
 
         assert!(
-            in_age_entries < CHART_CACHE_MAX_ENTRIES,
-            "age must retire entries before the count cap does: {in_age_entries} in-age \
-             entries vs a {CHART_CACHE_MAX_ENTRIES} cap"
+            loaded.entries.is_empty(),
+            "a superseded cache is not usable"
+        );
+        let on_disk = read_cache_file(&path);
+        assert_eq!(
+            on_disk.version, CHART_CACHE_VERSION,
+            "the healed file must carry the current version"
+        );
+        assert!(
+            on_disk.entries.is_empty(),
+            "the superseded entries must be gone from disk, not just from memory"
+        );
+        assert!(
+            std::fs::metadata(&path).expect("metadata").len() < before,
+            "the rewritten file must be smaller than the one we read"
+        );
+    }
+
+    #[test]
+    fn an_unparsable_cache_file_is_rewritten_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("chart-data-cache.json");
+        std::fs::write(&path, vec![b'x'; 64 * 1024]).expect("write fixture");
+
+        let loaded = load_chart_cache_from(&path);
+
+        assert!(loaded.entries.is_empty());
+        let on_disk = read_cache_file(&path);
+        assert_eq!(on_disk.version, CHART_CACHE_VERSION);
+        assert!(on_disk.entries.is_empty());
+    }
+
+    #[test]
+    fn an_already_bounded_file_is_left_untouched_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("chart-data-cache.json");
+        let cache = cache_with([("a".to_string(), current_unix_ms())]);
+        // Pretty-printed on purpose: a needless rewrite would compact it.
+        let original = serde_json::to_vec_pretty(&PersistedChartCache {
+            version: CHART_CACHE_VERSION,
+            entries: cache.entries,
+        })
+        .expect("serialize fixture");
+        std::fs::write(&path, &original).expect("write fixture");
+
+        let loaded = load_chart_cache_from(&path);
+
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(
+            std::fs::read(&path).expect("read cache file"),
+            original,
+            "a healthy cache must not be rewritten on every launch"
+        );
+    }
+
+    #[test]
+    fn a_missing_cache_file_is_not_created_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("chart-data-cache.json");
+
+        let loaded = load_chart_cache_from(&path);
+
+        assert!(loaded.entries.is_empty());
+        assert!(
+            !path.exists(),
+            "loading must not create an empty cache file"
         );
     }
 
