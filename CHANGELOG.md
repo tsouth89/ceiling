@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **The taskbar strip stops cutting the last character off a reset.** The second line of a tile was trimmed to fifteen characters, which is a guess at a pixel width rather than a measurement of one. "Monthly · 10d 1h" is sixteen, so every monthly window with a two-digit day lost its trailing "h" and read as a countdown that was an hour out rather than as a line that had been cut, while "Weekly · 3d 23h" fit at exactly fifteen and hid the problem. The line is now measured in the font it is drawn in, against the width of the tile it belongs to. Where the whole thing will not fit it gets shorter in steps you can still trust: the countdown loses its finer unit first, so "Monthly · 23h 59m" becomes "Monthly · 23h" rather than nothing at all. That step matters most in the last day before a reset, when the countdown switches to hours and minutes and becomes the widest thing this line ever carries, wide enough to miss even the roomiest tile. Only when a tile cannot hold a coarse countdown does it fall back to the window name alone, which still says which ceiling it is; the figure is a hover away in the flyout.
+
 ## [Ceiling] 1.5.32 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.

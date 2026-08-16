@@ -1776,14 +1776,16 @@ mod windows_host {
 
             // Window label (+ optional reset). Account identity is flyout-only
             // so long tags don't collide with the next tile.
-            let detail = match provider.reset.as_deref() {
-                Some(reset) => format!("{} · {reset}", provider.window_label),
-                None => provider.window_label.clone(),
-            };
-            let detail: String = detail.chars().take(15).collect();
-            let detail = wide_without_nul(&detail);
+            let spellings = detail_spellings(&provider.window_label, provider.reset.as_deref());
             unsafe {
+                // Measure in the font the line is actually drawn in, not the
+                // headline one selected above.
                 SelectObject(hdc, detail_font);
+                let budget = item_width.saturating_sub(DETAIL_GUTTER);
+                let chosen = fit_detail(&spellings, budget, |text| {
+                    text_width(hdc, &wide_without_nul(text))
+                });
+                let detail = wide_without_nul(chosen);
                 SetTextColor(hdc, text_color);
                 let detail_width = text_width(hdc, &detail);
                 TextOutW(
@@ -1922,6 +1924,213 @@ mod windows_host {
             "opencode" | "opencodego" => rgb(231, 233, 234),
             _ if dark_text => rgb(72, 79, 88),
             _ => rgb(204, 211, 220),
+        }
+    }
+
+    /// Pixels held back from the detail line's own tile.
+    ///
+    /// Kept small on purpose: the placer gives a provider 104px at most and
+    /// 72px when the gap is tight, so a pixel spent here is roughly a character
+    /// of reset, and enough of them drop the countdown altogether.
+    ///
+    /// Four clears the divider with a pixel to spare on every tile the placer
+    /// can build. `centered_content_x` puts content of width `w` on a tile of
+    /// width `t` at `(t - w) / 2`, and the separator is drawn at `t - 1` while
+    /// the strip does not clip. Three is arguably enough on the arithmetic
+    /// alone, but that margin assumes exact glyph extents, and antialiasing on
+    /// the trailing character does not respect them.
+    /// See `an_accepted_line_never_reaches_the_separator`.
+    const DETAIL_GUTTER: i32 = 4;
+
+    /// Spellings of the detail line, widest first.
+    ///
+    /// Three rungs, because the drop from a full countdown to none is too far
+    /// to take in one step. `tooltip_short_reset` writes two units (`25d 23h`,
+    /// and `23h 59m` once under a day), and the second of those is the widest
+    /// string this line ever carries — wide enough to miss even the roomiest
+    /// tile. Losing the countdown there means losing it for the last day before
+    /// a reset, which is when it is worth most. So the middle rung keeps the
+    /// leading unit and drops the finer one: a coarser countdown beats none.
+    ///
+    /// The last rung is the bare window name, which still says *which* ceiling
+    /// this is; the figure is a hover away in the flyout.
+    ///
+    /// A blank reset is treated as no reset. It formatted to `"Monthly · "`,
+    /// which is wider than the label alone and so would win the ladder and draw
+    /// a separator with nothing after it.
+    fn detail_spellings(window_label: &str, reset: Option<&str>) -> Vec<String> {
+        let Some(reset) = reset.filter(|reset| !reset.trim().is_empty()) else {
+            return vec![window_label.to_string()];
+        };
+        let reset = reset.trim();
+        let mut spellings = vec![format!("{window_label} · {reset}")];
+        if let Some(lead) = reset.split_whitespace().next()
+            && lead != reset
+        {
+            spellings.push(format!("{window_label} · {lead}"));
+        }
+        spellings.push(window_label.to_string());
+        spellings
+    }
+
+    /// Widest spelling that fits `budget`; the narrowest when none do.
+    ///
+    /// Same ladder the headline uses, and for the same reason. The rule here
+    /// used to be `chars().take(15)`, which is a guess at a pixel width and was
+    /// wrong in both directions: "Monthly · 10d 1h" is 16 characters and lost
+    /// its trailing "h" on every monthly window with a two-digit day, while
+    /// "Weekly · 3d 23h" fit at exactly 15 and a narrow five-provider strip
+    /// could overrun on 15 wide characters anyway. Characters are not a unit of
+    /// width, so measure the text (SBS-889).
+    fn fit_detail(spellings: &[String], budget: i32, measure: impl Fn(&str) -> i32) -> &str {
+        let mut best: Option<(&str, i32)> = None;
+        for candidate in spellings {
+            let width = measure(candidate);
+            // Take the first that fits; failing that, keep the narrowest so a
+            // tile too small for any spelling overruns as little as possible.
+            let better = match best {
+                None => true,
+                Some((_, best_width)) => best_width > budget && width < best_width,
+            };
+            if better {
+                best = Some((candidate.as_str(), width));
+            }
+            if width <= budget {
+                break;
+            }
+        }
+        best.map_or("", |(text, _)| text)
+    }
+
+    #[cfg(test)]
+    mod detail_fit_tests {
+        use super::*;
+
+        /// Stand-in for `text_width`: the real one needs a device context, so
+        /// the ladder takes the measurement as a closure and the test supplies
+        /// a fixed width per character.
+        fn measure(text: &str) -> i32 {
+            text.chars().count() as i32 * 7
+        }
+
+        #[test]
+        fn keeps_the_reset_when_the_tile_can_hold_it() {
+            let spellings = detail_spellings("Monthly", Some("10d 1h"));
+            assert_eq!(fit_detail(&spellings, 200, measure), "Monthly · 10d 1h");
+        }
+
+        #[test]
+        fn drops_a_whole_unit_rather_than_a_character_of_one() {
+            // The bug this replaces: a 15-character cut left "Monthly · 10d 1",
+            // which reads as a real countdown that is off by an hour rather than
+            // as a line that was cut. Every rung below the full spelling is a
+            // countdown someone can trust, just a coarser one.
+            let spellings = detail_spellings("Monthly", Some("10d 1h"));
+            let budget = measure("Monthly · 10d 1h") - 1;
+            assert_eq!(fit_detail(&spellings, budget, measure), "Monthly · 10d");
+        }
+
+        #[test]
+        fn a_label_that_cannot_fit_overruns_as_little_as_possible() {
+            // No rung fits, so the narrowest wins. It still overruns, but by the
+            // least it can, and it is never a partial reset.
+            let spellings = detail_spellings("Monthly", Some("10d 1h"));
+            assert_eq!(fit_detail(&spellings, 1, measure), "Monthly");
+        }
+
+        #[test]
+        fn a_window_with_no_reset_has_one_rung() {
+            let spellings = detail_spellings("Weekly", None);
+            assert_eq!(spellings.len(), 1);
+            assert_eq!(fit_detail(&spellings, 200, measure), "Weekly");
+            assert_eq!(fit_detail(&spellings, 1, measure), "Weekly");
+        }
+
+        /// The widest line this row ever carries is the last-day form, because
+        /// `tooltip_short_reset` switches to `{h}h {m}m` under a day and two
+        /// digits of hours plus minutes beats `{d}d {h}h`. It can miss even a
+        /// 104px tile, and dropping straight to the bare label would blank the
+        /// countdown for the final day, when it matters most.
+        #[test]
+        fn a_last_day_countdown_gets_coarser_before_it_disappears() {
+            let spellings = detail_spellings("Monthly", Some("23h 59m"));
+            assert_eq!(
+                spellings,
+                vec![
+                    "Monthly · 23h 59m".to_string(),
+                    "Monthly · 23h".to_string(),
+                    "Monthly".to_string(),
+                ]
+            );
+
+            // Widths standing in for Segoe UI Variable Small at the detail size:
+            // the full line misses a 104px tile's 100px budget, the hours-only
+            // rung clears it comfortably.
+            let widths = |text: &str| match text {
+                "Monthly · 23h 59m" => 103,
+                "Monthly · 23h" => 75,
+                "Monthly" => 45,
+                other => panic!("unexpected spelling {other:?}"),
+            };
+            let budget = 104 - DETAIL_GUTTER;
+            assert_eq!(fit_detail(&spellings, budget, widths), "Monthly · 23h");
+            // A tile too tight for even that still keeps the name.
+            assert_eq!(fit_detail(&spellings, 50, widths), "Monthly");
+        }
+
+        #[test]
+        fn a_single_unit_reset_has_no_middle_rung() {
+            // "45m" has nothing coarser to fall back to.
+            let spellings = detail_spellings("Weekly", Some("45m"));
+            assert_eq!(
+                spellings,
+                vec!["Weekly · 45m".to_string(), "Weekly".to_string()]
+            );
+        }
+
+        #[test]
+        fn a_day_and_hour_reset_falls_back_to_days() {
+            let spellings = detail_spellings("Monthly", Some("25d 23h"));
+            assert_eq!(
+                spellings,
+                vec![
+                    "Monthly · 25d 23h".to_string(),
+                    "Monthly · 25d".to_string(),
+                    "Monthly".to_string(),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_blank_reset_is_treated_as_no_reset() {
+            // `"Monthly · "` is wider than `"Monthly"`, so it would win the
+            // ladder wherever it fits and draw a separator with nothing after.
+            for blank in ["", " ", "   "] {
+                let spellings = detail_spellings("Monthly", Some(blank));
+                assert_eq!(spellings, vec!["Monthly".to_string()], "{blank:?}");
+            }
+        }
+
+        /// Whatever the ladder accepts has to stay off the divider, on every
+        /// tile the placer can produce.
+        ///
+        /// Arithmetic over the real placer range rather than a font
+        /// measurement, so it holds whatever Segoe does with a given string.
+        #[test]
+        fn an_accepted_line_never_reaches_the_separator() {
+            // `placement` gives each provider 104px, or 72px when space is tight.
+            for tile in 72..=104 {
+                let budget = tile - DETAIL_GUTTER;
+                let separator = tile - 1;
+                for width in 1..=budget {
+                    let right_edge = centered_content_x(0, tile, width) + width;
+                    assert!(
+                        right_edge < separator,
+                        "tile {tile}, content {width}: right edge {right_edge} \
+                         reaches separator at {separator}"
+                    );
+                }
+            }
         }
     }
 
