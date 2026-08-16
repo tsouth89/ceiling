@@ -32,12 +32,20 @@ const CHART_CACHE_VERSION: u8 = 9;
 // the *same* key, so without a bound the file grows for the life of the install
 // (SBS-887). A rolled window is never read again; keep entries only long enough
 // to survive a reset the user did not open Charts for.
-const CHART_CACHE_MAX_ENTRY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-// Pure backstop, not the primary mechanism: age is what actually retires a
-// rolled window. Sized well above a normal week so count eviction does not
-// reach still-current keys. Charts/Compare mint a key per 5-hour roll (~5 a day
-// per provider) while MenuCard and provider detail hold separate stable keys,
-// so a few providers across a week is already past a hundred entries.
+// Two days covers roughly ten Claude/Codex/Grok session rolls, so a window a
+// user did not open Charts for still survives, while a genuinely dead one goes
+// quickly. Age is what retires entries here; a week let enough live keys pile
+// up that the count backstop below started doing the eviction instead, and it
+// evicts by refresh time rather than by whether the window is still current.
+const CHART_CACHE_MAX_ENTRY_AGE: Duration = Duration::from_secs(2 * 24 * 60 * 60);
+// Pure backstop against pathological churn, not the primary mechanism. Charts
+// and Compare mint *different* keys for the same provider (Charts carries
+// account scope plus source label, Compare is machine-wide with source
+// unknown), each embedding the 5-hour reset window, and MenuCard and provider
+// detail hold their own stable keys. Three windowed providers on both surfaces
+// is ~60 entries inside the two-day age bound, so this should not be reached in
+// normal use; if it is, evicting the least recently refreshed is the least-bad
+// choice available.
 const CHART_CACHE_MAX_ENTRIES: usize = 256;
 
 /// A single (date, value) point for cost or credits history charts.
@@ -724,14 +732,21 @@ fn load_persisted_chart_cache() -> PersistedChartCache {
     let Some(path) = chart_cache_path() else {
         return PersistedChartCache::default();
     };
-    let cache: PersistedChartCache = fs::read(path)
+    let parsed: Option<PersistedChartCache> = fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    // A version mismatch discards the entries but leaves the old file on disk.
+    // It has to be rewritten, or a large v8 cache is re-read on every launch
+    // until some later store happens to overwrite it.
+    let superseded = parsed
+        .as_ref()
+        .is_some_and(|cache: &PersistedChartCache| cache.version != CHART_CACHE_VERSION);
+    let cache = parsed
         .filter(|cache: &PersistedChartCache| cache.version == CHART_CACHE_VERSION)
         .unwrap_or_default();
 
     let (cache, shrank) = prune_loaded_chart_cache(cache);
-    if shrank {
+    if shrank || superseded {
         // Write it back. Without this the file stays oversized until some later
         // `store_chart_data` happens to run, so a user who never opens Charts
         // pays the full read on every launch forever.
@@ -747,9 +762,9 @@ fn prune_loaded_chart_cache(mut cache: PersistedChartCache) -> (PersistedChartCa
     let before = cache.entries.len();
     prune_chart_cache(&mut cache, "");
     let shrank = cache.entries.len() != before;
-    if shrank {
-        cache.version = CHART_CACHE_VERSION;
-    }
+    // Always stamp the version: the caller may write this back because the file
+    // it came from was a superseded version, not because anything was pruned.
+    cache.version = CHART_CACHE_VERSION;
     (cache, shrank)
 }
 
@@ -2300,12 +2315,12 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, CHART_CACHE_MAX_ENTRIES, CHART_CACHE_VERSION,
-        CachedProviderChartData, ChartAccountScope, CostFetchFailure, LocalEffortCost,
-        LocalModelCost, LocalPlanUsage, LocalProjectCost, LocalTokenBreakdown,
-        LocalUsageWindowRequest, PersistedChartCache, ProviderChartData, ProviderLocalUsageSummary,
-        activity_heatmap_days, activity_hours_for_provider, api_value_period,
-        assemble_activity_heatmap, chart_cache_key, comparison_period_specs,
+        ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, CHART_CACHE_MAX_ENTRIES,
+        CHART_CACHE_MAX_ENTRY_AGE, CHART_CACHE_VERSION, CachedProviderChartData, ChartAccountScope,
+        CostFetchFailure, LocalEffortCost, LocalModelCost, LocalPlanUsage, LocalProjectCost,
+        LocalTokenBreakdown, LocalUsageWindowRequest, PersistedChartCache, ProviderChartData,
+        ProviderLocalUsageSummary, activity_heatmap_days, activity_hours_for_provider,
+        api_value_period, assemble_activity_heatmap, chart_cache_key, comparison_period_specs,
         cost_fetch_failure_allows_early_retry, current_unix_ms, daily_series_from_report,
         effort_breakdown, format_cost_csv, local_midnight_in_tz, local_usage_summary_from_report,
         local_yesterday_window_utc, localized_estimate_note, model_breakdown,
@@ -2448,6 +2463,26 @@ mod tests {
 
         assert!(!shrank, "no change means no pointless disk write");
         assert_eq!(pruned.entries.len(), 2);
+    }
+
+    /// The age bound has to be what retires rolled windows. If the count cap
+    /// binds first it evicts by refresh time, which can drop a window that is
+    /// still current.
+    #[test]
+    fn a_realistic_week_of_rolled_windows_stays_under_the_count_cap() {
+        // Three windowed providers, seen on both Charts and Compare (which mint
+        // separate keys), rolling five times a day across the age bound.
+        let providers = 3;
+        let surfaces = 2;
+        let rolls_per_day = 5;
+        let days = CHART_CACHE_MAX_ENTRY_AGE.as_secs() / (24 * 60 * 60);
+        let in_age_entries = providers * surfaces * rolls_per_day * days as usize;
+
+        assert!(
+            in_age_entries < CHART_CACHE_MAX_ENTRIES,
+            "age must retire entries before the count cap does: {in_age_entries} in-age \
+             entries vs a {CHART_CACHE_MAX_ENTRIES} cap"
+        );
     }
 
     #[test]
