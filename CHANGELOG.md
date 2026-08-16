@@ -13,6 +13,7 @@
 
 ### Internal
 - Cursor usage-summary and Composer-activity paths now have deterministic fixtures for normal, partial, duplicate, and malformed data.
+- The Claude credential persist is now covered on Windows, the platform its CI runs on: the rule that settles two concurrent refreshes, the file keeping its own security descriptor, and a symlinked credential path where the account may create one.
 
 ## [Ceiling] 1.5.31 - 2026-08-14
 
