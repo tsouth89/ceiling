@@ -162,11 +162,7 @@ impl StepFunProvider {
     }
 
     fn persist_refreshed_token(&self, token: &str) {
-        if let Ok(entry) = keyring::Entry::new(STEPFUN_CREDENTIAL_TARGET, "api_key")
-            && let Err(error) = entry.set_password(token)
-        {
-            tracing::debug!("Could not persist refreshed StepFun token: {error}");
-        }
+        persist_refreshed_token_in(&OsTokenSecretStore, token);
     }
 
     async fn post_json<T: for<'de> Deserialize<'de>>(
@@ -410,7 +406,82 @@ impl Provider for StepFunProvider {
     }
 }
 
+fn persist_refreshed_token_in(store: &impl TokenSecretStore, token: &str) {
+    if let Err(error) = store.set(STEPFUN_CREDENTIAL_TARGET, "api_key", token) {
+        tracing::debug!("Could not persist refreshed StepFun token: {error}");
+    }
+}
+
+/// Delete the refreshed Oasis token Ceiling wrote to the OS keyring.
+///
+/// `revoke_managed_credentials` clears Preferences / cookies / token-accounts
+/// only. StepFun's live refresh path also writes `codexbar-stepfun` / `api_key`,
+/// and `resolve_token` reads that copy after the Preferences key is gone
+/// (SBS-920). Missing is success; any other keyring error fails closed so
+/// revoke cannot report success while the token remains.
+pub(crate) fn clear_persisted_credentials() -> anyhow::Result<()> {
+    clear_token_secret(&OsTokenSecretStore)
+}
+
+fn clear_token_secret(store: &impl TokenSecretStore) -> anyhow::Result<()> {
+    store
+        .delete(STEPFUN_CREDENTIAL_TARGET, "api_key")
+        .map_err(|error| anyhow::anyhow!("Could not delete StepFun keyring token: {error}"))?;
+    match store.get(STEPFUN_CREDENTIAL_TARGET, "api_key") {
+        Ok(None) => Ok(()),
+        Ok(Some(_)) => Err(anyhow::anyhow!(
+            "StepFun keyring token was still present after delete"
+        )),
+        Err(error) => Err(anyhow::anyhow!(
+            "Could not confirm StepFun keyring token was deleted: {error}"
+        )),
+    }
+}
+
+trait TokenSecretStore {
+    fn get(&self, service: &str, user: &str) -> Result<Option<String>, String>;
+    fn set(&self, service: &str, user: &str, value: &str) -> Result<(), String>;
+    fn delete(&self, service: &str, user: &str) -> Result<(), String>;
+}
+
+struct OsTokenSecretStore;
+
+impl TokenSecretStore for OsTokenSecretStore {
+    fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
+        match entry.get_password() {
+            Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+            Ok(_) => Ok(None),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn set(&self, service: &str, user: &str, value: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
+        entry.set_password(value).map_err(|error| error.to_string())
+    }
+
+    fn delete(&self, service: &str, user: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
 fn resolve_token(
+    explicit: Option<&str>,
+    credential_target: &str,
+    env_names: &[&str],
+) -> Result<String, ProviderError> {
+    resolve_token_in(&OsTokenSecretStore, explicit, credential_target, env_names)
+}
+
+fn resolve_token_in(
+    store: &impl TokenSecretStore,
     explicit: Option<&str>,
     credential_target: &str,
     env_names: &[&str],
@@ -420,11 +491,12 @@ fn resolve_token(
     {
         return Ok(key.trim().to_string());
     }
-    if let Ok(entry) = keyring::Entry::new(credential_target, "api_key")
-        && let Ok(key) = entry.get_password()
-        && !key.trim().is_empty()
-    {
-        return Ok(key);
+    match store.get(credential_target, "api_key") {
+        Ok(Some(key)) if !key.trim().is_empty() => return Ok(key),
+        // Empty, missing, or unreadable: fall through to env, matching the
+        // previous resolver. Revoke does not use this path —
+        // `clear_token_secret` fails closed on the same unknown.
+        Ok(Some(_)) | Ok(None) | Err(_) => {}
     }
     for env in env_names {
         if let Ok(key) = std::env::var(env)
@@ -442,6 +514,91 @@ fn resolve_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    struct MemoryTokenSecretStore {
+        inner: Mutex<HashMap<(String, String), String>>,
+    }
+
+    impl MemoryTokenSecretStore {
+        fn new() -> Self {
+            Self {
+                inner: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    impl TokenSecretStore for MemoryTokenSecretStore {
+        fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
+            Ok(self
+                .inner
+                .lock()
+                .expect("memory token store lock")
+                .get(&(service.to_string(), user.to_string()))
+                .cloned())
+        }
+
+        fn set(&self, service: &str, user: &str, value: &str) -> Result<(), String> {
+            self.inner
+                .lock()
+                .expect("memory token store lock")
+                .insert((service.to_string(), user.to_string()), value.to_string());
+            Ok(())
+        }
+
+        fn delete(&self, service: &str, user: &str) -> Result<(), String> {
+            self.inner
+                .lock()
+                .expect("memory token store lock")
+                .remove(&(service.to_string(), user.to_string()));
+            Ok(())
+        }
+    }
+
+    struct FailingDeleteStore;
+
+    impl TokenSecretStore for FailingDeleteStore {
+        fn get(&self, _service: &str, _user: &str) -> Result<Option<String>, String> {
+            Ok(Some("leftover-oasis-token".to_string()))
+        }
+
+        fn set(&self, _service: &str, _user: &str, _value: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn delete(&self, _service: &str, _user: &str) -> Result<(), String> {
+            Err("keyring locked".to_string())
+        }
+    }
+
+    /// Delete reports success but leaves the secret in place — the revoke
+    /// fail-open that SBS-920 is. Confirmation must reject this.
+    struct LyingDeleteStore {
+        inner: MemoryTokenSecretStore,
+    }
+
+    impl LyingDeleteStore {
+        fn new() -> Self {
+            Self {
+                inner: MemoryTokenSecretStore::new(),
+            }
+        }
+    }
+
+    impl TokenSecretStore for LyingDeleteStore {
+        fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
+            self.inner.get(service, user)
+        }
+
+        fn set(&self, service: &str, user: &str, value: &str) -> Result<(), String> {
+            self.inner.set(service, user, value)
+        }
+
+        fn delete(&self, _service: &str, _user: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn stepfun_snapshot_converts_left_rates_to_used_percent() {
@@ -476,5 +633,79 @@ mod tests {
         assert!(is_authentication_message("token expired"));
         assert!(is_authentication_message("HTTP 401"));
         assert!(!is_authentication_message("rate limit"));
+    }
+
+    /// SBS-920: after revoke, `resolve_token` must not revive the session from
+    /// the leftover keyring copy `persist_refreshed_token` wrote.
+    #[test]
+    fn revoke_clears_refreshed_keyring_token_so_resolve_cannot_revive_session() {
+        let store = MemoryTokenSecretStore::new();
+        persist_refreshed_token_in(&store, "access...refresh");
+        assert_eq!(
+            resolve_token_in(&store, None, STEPFUN_CREDENTIAL_TARGET, &[]).unwrap(),
+            "access...refresh"
+        );
+
+        clear_token_secret(&store).expect("revoke must delete the leftover token");
+
+        let error = resolve_token_in(&store, None, STEPFUN_CREDENTIAL_TARGET, &[])
+            .expect_err("leftover keyring token must not authenticate after revoke");
+        assert!(
+            matches!(error, ProviderError::NotInstalled(_)),
+            "expected NotInstalled after revoke, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn clear_persisted_credentials_is_idempotent_when_keyring_has_no_entry() {
+        let store = MemoryTokenSecretStore::new();
+        clear_token_secret(&store).expect("missing keyring entry is already revoked");
+        let error = resolve_token_in(&store, None, STEPFUN_CREDENTIAL_TARGET, &[])
+            .expect_err("empty store must not resolve a token");
+        assert!(matches!(error, ProviderError::NotInstalled(_)));
+    }
+
+    #[test]
+    fn clear_persisted_credentials_fails_closed_when_keyring_delete_errors() {
+        let error =
+            clear_token_secret(&FailingDeleteStore).expect_err("a locked keyring must fail revoke");
+        assert!(
+            error
+                .to_string()
+                .contains("Could not delete StepFun keyring token"),
+            "got {error}"
+        );
+        assert_eq!(
+            resolve_token_in(&FailingDeleteStore, None, STEPFUN_CREDENTIAL_TARGET, &[]).unwrap(),
+            "leftover-oasis-token"
+        );
+    }
+
+    #[test]
+    fn clear_persisted_credentials_fails_closed_when_delete_lies() {
+        let store = LyingDeleteStore::new();
+        persist_refreshed_token_in(&store, "still-here");
+        let error = clear_token_secret(&store)
+            .expect_err("reporting success while the token remains is fail-open");
+        assert!(
+            error.to_string().contains("still present after delete"),
+            "got {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_token_prefers_explicit_preferences_key_over_keyring() {
+        let store = MemoryTokenSecretStore::new();
+        persist_refreshed_token_in(&store, "keyring-copy");
+        assert_eq!(
+            resolve_token_in(
+                &store,
+                Some(" preferences-copy "),
+                STEPFUN_CREDENTIAL_TARGET,
+                &[]
+            )
+            .unwrap(),
+            "preferences-copy"
+        );
     }
 }

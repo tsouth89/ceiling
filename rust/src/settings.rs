@@ -59,6 +59,11 @@ pub use types::*;
 /// idempotent. An I/O failure between atomic file replacements can leave a
 /// partial revocation, but retrying safely completes it; it can never restore
 /// a credential or lose another provider's concurrent update.
+///
+/// After the shared files are written, the provider-owned hook runs so a
+/// vendor-specific shadow copy (StepFun's refreshed Oasis keyring token,
+/// SBS-920) cannot outlive Sign out. A hook error fails the revoke; retrying
+/// is safe because the file removals and the hook are both idempotent.
 pub fn revoke_managed_credentials(provider: ProviderId) -> anyhow::Result<()> {
     crate::secure_file::with_state_write_lock(|| {
         let keys_path = ApiKeys::keys_path()
@@ -82,7 +87,8 @@ pub fn revoke_managed_credentials(provider: ProviderId) -> anyhow::Result<()> {
             .map_err(std::io::Error::other)?;
         token_store
             .save_unlocked(&token_accounts)
-            .map_err(std::io::Error::other)
+            .map_err(std::io::Error::other)?;
+        crate::providers::clear_persisted_credentials(provider).map_err(std::io::Error::other)
     })
     .map_err(Into::into)
 }

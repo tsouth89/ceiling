@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **Signing out of StepFun no longer leaves a live Oasis token in the keyring.** A successful refresh wrote the new token to the OS keyring (`codexbar-stepfun` / `api_key`), and Revoke stored credentials only cleared Preferences, cookies, and token-accounts. The next fetch then read the leftover and stayed signed in. Revoke now asks the provider to delete that copy. A keyring error fails the revoke instead of reporting success while the token remains.
+
 ## [Ceiling] 1.5.33 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, the taskbar strip stops cutting the last character off a reset, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.
