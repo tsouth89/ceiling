@@ -26,9 +26,9 @@ CLI-only mode (no display server needed):
 
 When running inside WSL, Ceiling:
 
-- **Browser cookies**: Reads Windows browser data from `/mnt/c/Users/<you>/AppData/...`.
-  Chromium cookies encrypted with DPAPI cannot be decrypted from WSL automatically.
-  Use manual cookies (Settings → provider detail → Browser Cookies) or CLI-based provider auth instead.
+- **Browser cookies**: Ceiling does not scan browser cookie databases on Windows or in WSL.
+  Paste a Cookie header in Settings → Providers → provider detail → Browser Cookies, or use CLI-based provider auth.
+  See [COOKIES.md](COOKIES.md).
 - **Provider CLIs**: Works with `codex`, `claude`, `gemini` etc. installed inside WSL natively.
 - **Desktop shell**: Requires WSLg (Windows 11) or an X server. Falls back to CLI mode automatically.
 - **Notifications**: Uses `notify-send` in WSL. Falls back to logging if unavailable.
@@ -39,7 +39,7 @@ When running inside WSL, Ceiling:
 |----------|-------------------|
 | Codex | `npm i -g @openai/codex` inside WSL, then `codex login` |
 | Claude | `npm i -g @anthropic-ai/claude-code` inside WSL, then `claude login` |
-| Gemini | `gcloud auth login` inside WSL (requires gcloud CLI) |
+| Gemini | Install the Gemini CLI inside WSL and run `gemini auth login`. Ceiling reads `~/.gemini/oauth_creds.json`. |
 | Cursor / Kimi | Manual cookies — copy from browser DevTools (F12 → Network → Cookie header) |
 | Copilot | GitHub Device Flow works natively in WSL |
 
@@ -47,6 +47,6 @@ When running inside WSL, Ceiling:
 
 | Feature | Windows | WSL |
 |---------|---------|-----|
-| Cookie Decryption | DPAPI (automatic) | Manual cookies only |
+| Browser cookies | No browser DB scan; paste a cookie header | Same |
 | Desktop Shell | Native | Via WSLg |
 | Notifications | PowerShell toast | notify-send |

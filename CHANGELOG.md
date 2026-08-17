@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **WSL.md no longer documents automatic browser-cookie import or `gcloud auth login` for Gemini.** Cookie extraction is disabled; Gemini reads the Gemini CLI file `~/.gemini/oauth_creds.json`. The site no longer calls cookies "browser imports".
+
 ## [Ceiling] 1.5.33 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, the taskbar strip stops cutting the last character off a reset, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.
