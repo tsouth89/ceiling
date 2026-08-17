@@ -1028,6 +1028,7 @@ locale_keys! {
     AboutDownloading,
     AboutUpdateReady,
     AboutUpToDate,
+    AboutUpdateCheckFailed,
     AboutLinkErrorPrefix,
     AboutCopyrightPrefix,
     AboutCopyrightMid,

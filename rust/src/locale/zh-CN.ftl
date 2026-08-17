@@ -770,6 +770,7 @@ AboutUpdateAvailable = 有可用更新 { "{}" }
 AboutDownloading = 正在下载…
 AboutUpdateReady = 更新已就绪，可以安装
 AboutUpToDate = 已是最新版本！
+AboutUpdateCheckFailed = 无法检查更新。
 AboutLinkErrorPrefix = 错误：
 AboutCopyrightPrefix = Ceiling · MIT 许可证 · 派生自
 ResetCreditsAvailableOne = 剩余 { "{}" } 次重置

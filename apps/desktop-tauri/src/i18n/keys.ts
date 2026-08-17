@@ -774,6 +774,7 @@ export const ALL_LOCALE_KEYS = [
   "AboutDownloading",
   "AboutUpdateReady",
   "AboutUpToDate",
+  "AboutUpdateCheckFailed",
   "AboutLinkErrorPrefix",
   "AboutCopyrightPrefix",
   "AboutCopyrightMid",

@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **A failed update check no longer tells you that you are current.** Checking for updates treated a GitHub outage, a rate-limit, or an unreadable release payload the same as "no newer release", so About said you were up to date. Only a successful "latest is not newer" is Idle now. Failures, including the existing 15s timeout, are Error, and About shows that the check could not run. A second check after a download is ready no longer clears Install & Restart.
+
 ## [Ceiling] 1.5.33 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, the taskbar strip stops cutting the last character off a reset, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.

@@ -163,7 +163,8 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
 
         {updateState.status === "error" && (
           <span className="about-update-msg">
-            {t("AboutLinkErrorPrefix")} {updateState.error}
+            {t("AboutUpdateCheckFailed")}
+            {updateState.error ? ` ${updateState.error}` : ""}
           </span>
         )}
 

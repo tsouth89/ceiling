@@ -770,6 +770,7 @@ AboutUpdateAvailable = Update { "{}" } available
 AboutDownloading = Downloading…
 AboutUpdateReady = Update ready to install
 AboutUpToDate = You're up to date!
+AboutUpdateCheckFailed = Could not check for updates.
 AboutLinkErrorPrefix = Error:
 AboutCopyrightPrefix = Ceiling · MIT License · Forked from
 ResetCreditsAvailableOne = { "{}" } reset available

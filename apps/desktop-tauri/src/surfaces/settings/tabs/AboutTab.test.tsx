@@ -12,12 +12,33 @@ const localeStrings = vi.hoisted(() => ({
   } as Record<string, string>,
 }));
 
+const idleUpdateState = {
+  status: "idle" as const,
+  version: null,
+  error: null,
+  progress: null,
+  releaseUrl: null,
+  canDownload: false,
+  canApply: false,
+  lastCheckedAt: null,
+};
+
 const updateMocks = vi.hoisted(() => ({
   checkNow: vi.fn(),
   download: vi.fn(),
   apply: vi.fn(),
   dismiss: vi.fn(),
   openRelease: vi.fn(),
+  updateState: {
+    status: "idle" as const,
+    version: null as string | null,
+    error: null as string | null,
+    progress: null as number | null,
+    releaseUrl: null as string | null,
+    canDownload: false,
+    canApply: false,
+    lastCheckedAt: null as number | null,
+  },
 }));
 
 vi.mock("../../../lib/tauri", () => tauriMocks);
@@ -28,17 +49,12 @@ vi.mock("../../../hooks/useLocale", () => ({
 }));
 vi.mock("../../../hooks/useUpdateState", () => ({
   useUpdateState: () => ({
-    updateState: {
-      status: "idle",
-      version: null,
-      error: null,
-      progress: null,
-      releaseUrl: null,
-      canDownload: false,
-      canApply: false,
-      lastCheckedAt: null,
-    },
-    ...updateMocks,
+    updateState: updateMocks.updateState,
+    checkNow: updateMocks.checkNow,
+    download: updateMocks.download,
+    apply: updateMocks.apply,
+    dismiss: updateMocks.dismiss,
+    openRelease: updateMocks.openRelease,
   }),
 }));
 
@@ -106,7 +122,13 @@ const settings: SettingsSnapshot = {
 describe("AboutTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localeStrings.current = { AboutLinkErrorPrefix: "Error:" };
+    localeStrings.current = {
+      AboutLinkErrorPrefix: "Error:",
+      AboutUpdateCheckFailed: "Could not check for updates.",
+      AboutUpToDate: "You're up to date!",
+      AboutCheckForUpdates: "Check for Updates…",
+    };
+    Object.assign(updateMocks.updateState, idleUpdateState);
     tauriMocks.getAppInfo.mockResolvedValue({
       name: "Ceiling",
       version: "0.30.3",
@@ -185,5 +207,27 @@ describe("AboutTab", () => {
     await waitFor(() => {
       expect(screen.getByText("Error: no browser")).toBeInTheDocument();
     });
+  });
+
+  it("shows up to date only after a successful idle check", async () => {
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check for Updates…" }));
+    expect(screen.getByText("You're up to date!")).toBeInTheDocument();
+    expect(screen.queryByText(/Could not check for updates/)).not.toBeInTheDocument();
+  });
+
+  it("does not claim the user is current when the update check failed", async () => {
+    Object.assign(updateMocks.updateState, {
+      status: "error",
+      error: "GitHub did not return a release.",
+    });
+
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check for Updates…" }));
+
+    expect(
+      screen.getByText("Could not check for updates. GitHub did not return a release."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("You're up to date!")).not.toBeInTheDocument();
   });
 });

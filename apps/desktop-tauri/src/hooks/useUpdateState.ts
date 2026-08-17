@@ -49,7 +49,18 @@ export function useUpdateState(): UseUpdateStateResult {
   const checkNow = useCallback(() => {
     checkForUpdates()
       .then(setUpdateState)
-      .catch(() => {});
+      .catch((cause: unknown) => {
+        // An invoke failure is not "up to date". About treats idle+hasChecked
+        // as current, so a swallowed error would show the user they are current.
+        setUpdateState({
+          ...IDLE_PAYLOAD,
+          status: "error",
+          error:
+            cause instanceof Error
+              ? cause.message
+              : String(cause || "Could not check for updates."),
+        });
+      });
   }, []);
 
   const download = useCallback(() => {
