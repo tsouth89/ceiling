@@ -13,6 +13,7 @@ import {
   type ConstrainingWindow,
   type NamedWindowState,
 } from "../lib/capacityPresentation";
+import { formatResetCountdown } from "../lib/resetCountdown";
 import {
   dismissTrayPanel,
   getTaskbarSurfaceColor,
@@ -37,14 +38,9 @@ function compactDuration(resetsAt: string | null, fallback: string | null, now: 
   if (!resetsAt) return fallback?.replace(/^resets?\s+(in\s+)?/i, "") ?? "No reset";
   const target = Date.parse(resetsAt);
   if (!Number.isFinite(target)) return fallback ?? "No reset";
-  const minutes = Math.max(0, Math.ceil((target - now) / 60_000));
-  if (minutes === 0) return "Now";
-  const days = Math.floor(minutes / 1440);
-  const hours = Math.floor((minutes % 1440) / 60);
-  const mins = minutes % 60;
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
+  // Floor-and-clamp, same as tray/CLI/tooltip. The old ceil made 61-119s
+  // read "2m" while every other surface said "1m" (SBS-927).
+  return formatResetCountdown(target - now) ?? "Now";
 }
 
 function valueFor(window: RateWindowSnapshot, showAsUsed: boolean): number {

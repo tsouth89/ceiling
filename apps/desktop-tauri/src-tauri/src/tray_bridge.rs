@@ -942,21 +942,27 @@ pub(crate) fn tooltip_short_reset(
     resets_at: Option<&str>,
     reset_desc: Option<&str>,
 ) -> Option<String> {
+    tooltip_short_reset_at(resets_at, reset_desc, chrono::Utc::now())
+}
+
+/// `tooltip_short_reset` against an explicit clock so the 24h cut and the
+/// last-minute clamp can be asserted without racing `Utc::now()`.
+pub(crate) fn tooltip_short_reset_at(
+    resets_at: Option<&str>,
+    reset_desc: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
     if let Some(ra) = resets_at
         && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ra)
     {
         let dt = parsed.with_timezone(&chrono::Utc);
-        let now = chrono::Utc::now();
         if dt > now {
-            let mins = (dt - now).num_minutes().max(0);
-            let (d, h, m) = (mins / 1440, (mins % 1440) / 60, mins % 60);
-            return Some(if d > 0 {
-                format!("{d}d {h}h")
-            } else if h > 0 {
-                format!("{h}h {m}m")
-            } else {
-                format!("{m}m")
-            });
+            // Same floor-and-clamp / 1440-minute day cut as CLI and the TS
+            // hooks. Without the clamp, 1-59s remaining rendered "0m"
+            // (SBS-927 / leftover of SBS-621).
+            return Some(codexbar::core::format_remaining_countdown(
+                (dt - now).num_seconds(),
+            ));
         }
     }
     // Fall back to the provider's own reset description, minus a leading
@@ -1722,5 +1728,45 @@ mod tests {
         let (primary, _) = selected_tray_used_percents(&snapshot, &settings);
 
         assert_eq!(primary, 72.0);
+    }
+
+    /// SBS-927: `num_minutes()` floored a still-future 30s remainder to 0,
+    /// so the taskbar strip and tray tooltip showed "0m" for up to a minute.
+    #[test]
+    fn tooltip_short_reset_does_not_show_zero_minutes_while_time_remains() {
+        let now = "2026-04-02T12:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let resets_at = (now + chrono::Duration::seconds(30)).to_rfc3339();
+        assert_eq!(
+            tooltip_short_reset_at(Some(&resets_at), None, now).as_deref(),
+            Some("1m")
+        );
+    }
+
+    /// SBS-927: 24h 1s and 24h 0m must be "1d 0h", the same class of string
+    /// the CLI and the TypeScript hooks already emit.
+    #[test]
+    fn tooltip_short_reset_cuts_a_day_at_twenty_four_hours() {
+        let now = "2026-04-02T12:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let at = |seconds: i64| (now + chrono::Duration::seconds(seconds)).to_rfc3339();
+        assert_eq!(
+            tooltip_short_reset_at(Some(&at(24 * 3600)), None, now).as_deref(),
+            Some("1d 0h")
+        );
+        assert_eq!(
+            tooltip_short_reset_at(Some(&at(24 * 3600 + 1)), None, now).as_deref(),
+            Some("1d 0h")
+        );
+        assert_eq!(
+            tooltip_short_reset_at(Some(&at(24 * 3600 + 30 * 60)), None, now).as_deref(),
+            Some("1d 0h")
+        );
+        assert_eq!(
+            tooltip_short_reset_at(Some(&at(25 * 3600)), None, now).as_deref(),
+            Some("1d 1h")
+        );
     }
 }

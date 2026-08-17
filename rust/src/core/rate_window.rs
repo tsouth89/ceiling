@@ -22,6 +22,38 @@ pub struct RateWindow {
     pub reset_description: Option<String>,
 }
 
+/// Compact remaining-time string used by every reset-countdown surface.
+///
+/// Floor one total of minutes, clamp a still-future sub-minute remainder
+/// to 1 so the last 59s never read as "0m", and cut days at 1440 minutes
+/// so 24h 0m is "1d 0h" rather than "24h 0m". Matches the TypeScript
+/// hooks and `tooltip_short_reset`. SBS-927 (day cut and last minute)
+/// and SBS-619 (hour-boundary floor).
+pub fn remaining_countdown_parts(remaining_seconds: i64) -> (i64, i64, i64) {
+    let total_minutes = if remaining_seconds > 0 {
+        (remaining_seconds / 60).max(1)
+    } else {
+        0
+    };
+    (
+        total_minutes / 1440,
+        (total_minutes % 1440) / 60,
+        total_minutes % 60,
+    )
+}
+
+/// Compact `{d}d {h}h` / `{h}h {m}m` / `{m}m` form of [`remaining_countdown_parts`].
+pub fn format_remaining_countdown(remaining_seconds: i64) -> String {
+    let (days, hours, minutes) = remaining_countdown_parts(remaining_seconds);
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
 impl RateWindow {
     /// Create a new rate window
     pub fn new(used_percent: f64) -> Self {
@@ -81,30 +113,7 @@ impl RateWindow {
             return Some("now".to_string());
         }
 
-        let duration = resets_at - now;
-        // Derive hours and minutes from ONE rounded total. Taking hours from
-        // `num_hours()` (floor) while taking minutes from a ceiled total let
-        // the two disagree across an hour boundary: at 1h59m30s the total
-        // rounded up into the next hour, so minutes read 0 while hours stayed
-        // 1 and the countdown claimed "1h 0m" — nearly an hour short.
-        //
-        // Floor-and-clamp, matching `useFormattedResetTime` / `useResetCountdown`
-        // exactly. The same `resets_at` must not read "2h 0m" on the taskbar
-        // tile and "1h 59m" in the tray flyout, and flooring never overstates
-        // what is left. The clamp keeps a sub-minute reset at "1m" rather than
-        // "0m", the same as those hooks.
-        let total_minutes = (duration.num_seconds() / 60).max(1);
-        let hours = total_minutes / 60;
-        let minutes = total_minutes % 60;
-
-        if hours > 24 {
-            let days = hours / 24;
-            Some(format!("{}d {}h", days, hours % 24))
-        } else if hours > 0 {
-            Some(format!("{}h {}m", hours, minutes))
-        } else {
-            Some(format!("{}m", minutes))
-        }
+        Some(format_remaining_countdown((resets_at - now).num_seconds()))
     }
 
     fn finite_percent(value: f64) -> f64 {
@@ -197,6 +206,12 @@ mod tests {
             (42 * 60, "42m"),
             (2 * 3600 - 30, "1h 59m"),
             (3600 + 20 * 60, "1h 20m"),
+            // SBS-927: the day cut is minutes/1440, not hours > 24.
+            (24 * 3600, "1d 0h"),
+            (24 * 3600 + 1, "1d 0h"),
+            (24 * 3600 + 30 * 60, "1d 0h"),
+            (25 * 3600, "1d 1h"),
+            (23 * 3600 + 59 * 60 + 59, "23h 59m"),
         ] {
             let actual = RateWindow::with_details(
                 10.0,
@@ -207,5 +222,42 @@ mod tests {
             .format_countdown_at(now);
             assert_eq!(actual.as_deref(), Some(expected), "at {seconds}s");
         }
+    }
+
+    /// SBS-927: CLI used `hours > 24`, so a remaining day stayed "24h Xm"
+    /// while the tray and the TypeScript hooks already rendered "1d 0h".
+    #[test]
+    fn countdown_cuts_a_day_at_twenty_four_hours() {
+        let now = "2026-04-02T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let countdown = |seconds: i64| {
+            RateWindow::with_details(
+                10.0,
+                None,
+                Some(now + chrono::Duration::seconds(seconds)),
+                None,
+            )
+            .format_countdown_at(now)
+        };
+
+        assert_eq!(countdown(24 * 3600).as_deref(), Some("1d 0h"));
+        assert_eq!(countdown(24 * 3600 + 1).as_deref(), Some("1d 0h"));
+        assert_eq!(countdown(24 * 3600 + 10 * 60).as_deref(), Some("1d 0h"));
+        assert_eq!(countdown(24 * 3600 + 30 * 60).as_deref(), Some("1d 0h"));
+        assert_eq!(countdown(25 * 3600).as_deref(), Some("1d 1h"));
+        assert_eq!(countdown(30).as_deref(), Some("1m"));
+    }
+
+    /// The shared helper is what CLI, tooltip, Codex, pace, and Z.ai call.
+    /// Pin both edges here so a later rewrite cannot split them again.
+    #[test]
+    fn remaining_countdown_agrees_at_the_day_cut_and_last_minute() {
+        assert_eq!(format_remaining_countdown(30), "1m");
+        assert_eq!(format_remaining_countdown(59), "1m");
+        assert_eq!(format_remaining_countdown(60), "1m");
+        assert_eq!(format_remaining_countdown(24 * 3600), "1d 0h");
+        assert_eq!(format_remaining_countdown(24 * 3600 + 1), "1d 0h");
+        assert_eq!(format_remaining_countdown(24 * 3600 + 30 * 60), "1d 0h");
+        assert_eq!(format_remaining_countdown(25 * 3600), "1d 1h");
+        assert_eq!(format_remaining_countdown(0), "0m");
     }
 }

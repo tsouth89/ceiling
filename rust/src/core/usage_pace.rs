@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::RateWindow;
+use super::{RateWindow, format_remaining_countdown};
 
 /// Usage pace stage indicating consumption rate relative to time
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,17 +184,7 @@ impl UsagePace {
     /// Format the ETA as a human-readable string
     pub fn format_eta(&self) -> Option<String> {
         let secs = self.eta_seconds?;
-        let hours = (secs / 3600.0) as i64;
-        let minutes = ((secs % 3600.0) / 60.0) as i64;
-
-        if hours > 24 {
-            let days = hours / 24;
-            Some(format!("{}d {}h", days, hours % 24))
-        } else if hours > 0 {
-            Some(format!("{}h {}m", hours, minutes))
-        } else {
-            Some(format!("{}m", minutes))
-        }
+        Some(format_remaining_countdown(secs as i64))
     }
 
     /// Format the pace as a status line
@@ -297,5 +287,29 @@ mod tests {
         assert_eq!(PaceStage::OnTrack.label(), "On Track");
         assert_eq!(PaceStage::FarAhead.label(), "Far Ahead");
         assert_eq!(PaceStage::SlightlyBehind.emoji(), "🐢");
+    }
+
+    /// SBS-927: pace ETA used the same `hours > 24` cut as RateWindow, so a
+    /// remaining day read "24h 0m" while reset surfaces said "1d 0h".
+    #[test]
+    fn format_eta_agrees_at_the_day_cut_and_last_minute() {
+        let pace = |secs: f64| UsagePace {
+            stage: PaceStage::OnTrack,
+            delta_percent: 0.0,
+            expected_used_percent: 0.0,
+            actual_used_percent: 0.0,
+            eta_seconds: Some(secs),
+            will_last_to_reset: false,
+        };
+        assert_eq!(pace(30.0).format_eta().as_deref(), Some("1m"));
+        assert_eq!(pace(24.0 * 3600.0).format_eta().as_deref(), Some("1d 0h"));
+        assert_eq!(
+            pace(24.0 * 3600.0 + 1.0).format_eta().as_deref(),
+            Some("1d 0h")
+        );
+        assert_eq!(
+            pace(24.0 * 3600.0 + 30.0 * 60.0).format_eta().as_deref(),
+            Some("1d 0h")
+        );
     }
 }

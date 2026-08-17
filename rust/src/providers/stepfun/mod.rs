@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    RateWindow, SourceMode, UsageSnapshot, format_remaining_countdown,
 };
 
 const STEPFUN_RATE_LIMIT_URL: &str =
@@ -332,14 +332,10 @@ fn reset_description(date: DateTime<Utc>) -> String {
     if date <= now {
         return "resets now".into();
     }
-    let duration = date - now;
-    let hours = duration.num_hours();
-    let minutes = duration.num_minutes() % 60;
-    if hours > 0 {
-        format!("resets in {hours}h {minutes}m")
-    } else {
-        format!("resets in {minutes}m")
-    }
+    format!(
+        "resets in {}",
+        format_remaining_countdown((date - now).num_seconds())
+    )
 }
 
 fn deserialize_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>

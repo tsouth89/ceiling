@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **Reset countdowns agree at a remaining day and in the last minute.** The CLI statusline used `hours > 24`, so 24h 10m stayed "24h 10m" while the tray and the TypeScript hooks already said "1d 0h". The native tooltip and taskbar strip floored a still-future 30s remainder to "0m", the stuck-timer leftover SBS-621 fixed in the hooks. Every reset surface now floors one total of minutes, clamps a sub-minute remainder to 1, and cuts a day at 1440 minutes. A user looking at the tray, the CLI, and the tooltip at 24h 1s sees "1d 0h" (or "Resets in 1d" in the locale sentence); at 30s they see "1m", never "0m".
+
 ## [Ceiling] 1.5.33 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, the taskbar strip stops cutting the last character off a reset, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.
