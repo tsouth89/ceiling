@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **Charts no longer walks the same transcript trees twice on a cold open.** Opening the tab fired Estimated API value and the activity heatmap as two independent scans of `~/.codex/sessions`, `~/.claude/projects`, and `~/.grok/sessions`, in series, so a large corpus sat blank for 30+ seconds. Both cards now share one pass per provider that fills reset windows and hourly buckets together. A second reader inside five minutes reuses that walk. Hours older than the heatmap's 30-day axis stay in the report for the API-value card and are dropped from the grid.
+
 ## [Ceiling] 1.5.33 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, the taskbar strip stops cutting the last character off a reset, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.

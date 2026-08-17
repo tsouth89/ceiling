@@ -8,8 +8,9 @@
 use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
-    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report,
-    get_cost_usage_report_hourly, get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
+    CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, LOCAL_LOG_PROVIDERS,
+    charts_tab_corpus_reports, get_cost_usage_report, get_cost_usage_report_scoped,
+    get_cost_usage_report_with_windows,
 };
 use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
@@ -822,7 +823,7 @@ fn write_chart_cache(path: &Path, cache: &PersistedChartCache) {
 /// Providers that expose token-derived local usage for the aggregate card.
 /// Inclusion is by capability, not by merely having some other dollar balance.
 // Grok dollars come from session costUsdTicks (API-equivalent), same as provider Charts.
-const API_VALUE_PROVIDERS: [&str; 3] = ["codex", "claude", "grok"];
+const API_VALUE_PROVIDERS: [&str; 3] = LOCAL_LOG_PROVIDERS;
 
 /// Priced vs total model-token counts for pricing-coverage disclosure.
 ///
@@ -1097,10 +1098,27 @@ fn parse_api_value_custom_range(
     ))
 }
 
-fn load_local_api_value_totals(
+/// Scan horizon for the default Charts-tab cards. Custom ranges may extend it.
+fn api_value_scan_days(
     now: DateTime<Local>,
     custom_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
-) -> Vec<LocalApiValueProvider> {
+) -> u32 {
+    let today = now.date_naive();
+    custom_range
+        .map(|(start, _)| {
+            let start_date = start.with_timezone(&Local).date_naive();
+            let days = (today - start_date).num_days().max(0) as u32 + 1;
+            days.max(API_VALUE_DEFAULT_SCAN_DAYS)
+                .min(API_VALUE_CUSTOM_MAX_DAYS as u32)
+        })
+        .unwrap_or(API_VALUE_DEFAULT_SCAN_DAYS)
+}
+
+/// Named [start, end) windows the API-value card reads from one scan.
+fn api_value_windows(
+    now: DateTime<Local>,
+    custom_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<CurrentUsageWindow> {
     let today = now.date_naive();
     let (yesterday_start, yesterday_end) = local_yesterday_window_utc(now);
     // Exact [start, end) windows so thirty-day and prior-thirty stay adjacent
@@ -1109,51 +1127,63 @@ fn load_local_api_value_totals(
     let thirty_start = local_midnight_utc(today - chrono::Duration::days(29));
     let thirty_end = local_midnight_utc(today + chrono::Duration::days(1));
     let prior_start = local_midnight_utc(today - chrono::Duration::days(59));
-    let scan_days = custom_range
-        .map(|(start, _)| {
-            let start_date = start.with_timezone(&Local).date_naive();
-            let days = (today - start_date).num_days().max(0) as u32 + 1;
-            days.max(API_VALUE_DEFAULT_SCAN_DAYS)
-                .min(API_VALUE_CUSTOM_MAX_DAYS as u32)
-        })
-        .unwrap_or(API_VALUE_DEFAULT_SCAN_DAYS);
+    let mut windows = vec![
+        CurrentUsageWindow {
+            id: "yesterday".to_string(),
+            starts_at: yesterday_start,
+            ends_at: yesterday_end,
+        },
+        CurrentUsageWindow {
+            id: "thirty".to_string(),
+            starts_at: thirty_start,
+            ends_at: thirty_end,
+        },
+        CurrentUsageWindow {
+            id: "prior_thirty".to_string(),
+            starts_at: prior_start,
+            ends_at: thirty_start,
+        },
+    ];
+    if let Some((starts_at, ends_at)) = custom_range {
+        windows.push(CurrentUsageWindow {
+            id: "custom".to_string(),
+            starts_at,
+            ends_at,
+        });
+    }
+    // One window per local calendar day for the seven-day trend.
+    for offset in 0..7i64 {
+        let date = today - chrono::Duration::days(offset);
+        windows.push(CurrentUsageWindow {
+            id: format!("day-{offset}"),
+            starts_at: local_midnight_utc(date),
+            ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
+        });
+    }
+    windows
+}
+
+/// One machine-wide walk shared by the API-value card and the heatmap (SBS-909).
+fn charts_tab_reports(
+    now: DateTime<Local>,
+    custom_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> HashMap<String, CostUsageReport> {
+    charts_tab_corpus_reports(
+        api_value_scan_days(now, custom_range),
+        &api_value_windows(now, custom_range),
+    )
+}
+
+fn load_local_api_value_totals(
+    now: DateTime<Local>,
+    custom_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<LocalApiValueProvider> {
+    let today = now.date_naive();
+    let reports = charts_tab_reports(now, custom_range);
     API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
-            let mut windows = vec![
-                CurrentUsageWindow {
-                    id: "yesterday".to_string(),
-                    starts_at: yesterday_start,
-                    ends_at: yesterday_end,
-                },
-                CurrentUsageWindow {
-                    id: "thirty".to_string(),
-                    starts_at: thirty_start,
-                    ends_at: thirty_end,
-                },
-                CurrentUsageWindow {
-                    id: "prior_thirty".to_string(),
-                    starts_at: prior_start,
-                    ends_at: thirty_start,
-                },
-            ];
-            if let Some((starts_at, ends_at)) = custom_range {
-                windows.push(CurrentUsageWindow {
-                    id: "custom".to_string(),
-                    starts_at,
-                    ends_at,
-                });
-            }
-            // One window per local calendar day for the seven-day trend.
-            for offset in 0..7i64 {
-                let date = today - chrono::Duration::days(offset);
-                windows.push(CurrentUsageWindow {
-                    id: format!("day-{offset}"),
-                    starts_at: local_midnight_utc(date),
-                    ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
-                });
-            }
-            let report = get_cost_usage_report_with_windows(provider_id, scan_days, &windows)?;
+            let report = reports.get(*provider_id)?;
             let yesterday = report
                 .current_windows
                 .get("yesterday")
@@ -1348,10 +1378,9 @@ fn activity_heatmap_cache() -> &'static Mutex<Option<CachedActivityHeatmap>> {
 
 /// Local activity by day and hour across every provider with local logs.
 ///
-/// This is a second pass over the same transcripts the API-value card reads, so
-/// results are cached for the same five minutes the chart caches use. Callers
-/// that need fresh numbers after a scan should let the TTL lapse rather than
-/// forcing a rescan on every tab switch.
+/// Derived from the same corpus scan the API-value card pays for (SBS-909).
+/// The assembled heatmap is still cached for five minutes so a tab switch
+/// does not rebuild the grid; the underlying walk is shared, not repeated.
 #[tauri::command]
 pub async fn get_local_activity_heatmap() -> Result<ActivityHeatmap, String> {
     if let Ok(guard) = activity_heatmap_cache().lock()
@@ -1390,6 +1419,23 @@ fn activity_heatmap_days(today: NaiveDate) -> Vec<String> {
                 .format("%Y-%m-%d")
                 .to_string()
         })
+        .collect()
+}
+
+/// Keep only hours that fall on the heatmap day axis.
+///
+/// The shared Charts-tab scan covers 90 days so the API-value card can
+/// fill its series. The heatmap is a 30-day grid; hours outside that
+/// axis would otherwise leak into the weekday view.
+fn heatmap_hours_for_days(
+    provider_id: &str,
+    report: &CostUsageReport,
+    days: &[String],
+) -> Vec<ActivityHourPoint> {
+    let day_set: HashSet<&str> = days.iter().map(String::as_str).collect();
+    activity_hours_for_provider(provider_id, report)
+        .into_iter()
+        .filter(|point| day_set.contains(point.date.as_str()))
         .collect()
 }
 
@@ -1464,18 +1510,18 @@ fn load_activity_heatmap<Tz: TimeZone>(now: DateTime<Tz>) -> ActivityHeatmap
 where
     Tz::Offset: std::fmt::Display,
 {
+    let local_now = now.with_timezone(&Local);
+    let reports = charts_tab_reports(local_now, None);
+    let days = activity_heatmap_days(now.date_naive());
     let per_provider = API_VALUE_PROVIDERS
         .iter()
         .filter_map(|provider_id| {
-            let report = get_cost_usage_report_hourly(provider_id, ACTIVITY_HEATMAP_DAYS)?;
-            Some(activity_hours_for_provider(provider_id, &report))
+            let report = reports.get(*provider_id)?;
+            let hours = heatmap_hours_for_days(provider_id, report, &days);
+            Some(hours)
         })
         .collect();
-    assemble_activity_heatmap(
-        activity_heatmap_days(now.date_naive()),
-        per_provider,
-        format!("UTC{}", now.offset()),
-    )
+    assemble_activity_heatmap(days, per_provider, format!("UTC{}", now.offset()))
 }
 
 /// One model's local Cursor activity. This is code-contribution activity from
@@ -2353,12 +2399,12 @@ mod tests {
         ProviderLocalUsageSummary, activity_heatmap_days, activity_hours_for_provider,
         api_value_period, assemble_activity_heatmap, chart_cache_key, comparison_period_specs,
         cost_fetch_failure_allows_early_retry, current_unix_ms, daily_series_from_report,
-        effort_breakdown, format_cost_csv, load_chart_cache_from, local_midnight_in_tz,
-        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
-        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
-        pricing_coverage_tokens, project_breakdown, prune_chart_cache, prune_loaded_chart_cache,
-        resolve_chart_account_scope, spend_anomaly_reading, spend_budget_period_details,
-        token_breakdown, token_cost_cache_is_fresh,
+        effort_breakdown, format_cost_csv, heatmap_hours_for_days, load_chart_cache_from,
+        local_midnight_in_tz, local_usage_summary_from_report, local_yesterday_window_utc,
+        localized_estimate_note, model_breakdown, parse_api_value_custom_range,
+        period_from_daily_series, pricing_coverage_tokens, project_breakdown, prune_chart_cache,
+        prune_loaded_chart_cache, resolve_chart_account_scope, spend_anomaly_reading,
+        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -3885,5 +3931,48 @@ mod tests {
                 ("2026-08-15", 9, "codex"),
             ],
         );
+    }
+
+    /// SBS-909: the shared 90-day scan can emit hours the 30-day heatmap
+    /// must not display. Those hours stay in the report for the API-value
+    /// card; the grid only keeps days on its own axis.
+    #[test]
+    fn heatmap_hours_drop_days_outside_the_axis() {
+        let mut busy = CostSummary {
+            total_cost_usd: 1.0,
+            input_tokens: 100,
+            output_tokens: 10,
+            ..Default::default()
+        };
+        busy.by_model_tokens.insert(
+            "gpt-5.1-codex".to_string(),
+            ModelTokenCounts {
+                input_tokens: 100,
+                output_tokens: 10,
+                calls: 1,
+                ..Default::default()
+            },
+        );
+        let report = CostUsageReport {
+            hourly_activity: vec![
+                HourlyActivityPoint {
+                    date: NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+                    hour: 9,
+                    summary: busy.clone(),
+                },
+                HourlyActivityPoint {
+                    date: NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(),
+                    hour: 10,
+                    summary: busy,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let hours = heatmap_hours_for_days("codex", &report, &["2026-08-15".to_string()]);
+
+        assert_eq!(hours.len(), 1);
+        assert_eq!(hours[0].date, "2026-08-15");
+        assert_eq!(hours[0].hour, 10);
     }
 }

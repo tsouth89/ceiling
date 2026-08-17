@@ -12,6 +12,8 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use crate::codex_cost_speed::{self, CodexCostSpeed};
 #[cfg(test)]
@@ -1358,19 +1360,13 @@ pub fn get_cost_usage_report(provider: &str, days: u32) -> Option<CostUsageRepor
 
 /// As [`get_cost_usage_report`], but also fills [`CostUsageReport::hourly_activity`].
 ///
-/// Separate entry point because bucketing every record by clock-hour runs its
-/// accounting a second time. Only the activity heatmap needs it; the charts,
-/// reset windows, and API-value card all scan the same trees on every refresh
-/// and would pay for buckets they never read.
+/// Hourly bucketing runs a second accounting pass per record. Callers that
+/// never read those buckets should keep using [`get_cost_usage_report`] or
+/// [`get_cost_usage_report_with_windows`]. The Charts tab's two cards share
+/// [`charts_tab_corpus_reports`] instead, which pays for hourly once and
+/// derives both surfaces from it (SBS-909).
 pub fn get_cost_usage_report_hourly(provider: &str, days: u32) -> Option<CostUsageReport> {
-    let days = days.max(1);
-    let scanner = CostScanner::new(days).with_hourly_activity();
-    match provider {
-        "codex" => Some(scan_codex_report(&scanner, days, &[])),
-        "claude" => Some(scan_claude_report(&scanner, days, &[])),
-        "grok" => Some(scan_grok_report(&scanner, days, &[])),
-        _ => None,
-    }
+    get_cost_usage_report_scoped_opts(provider, days, &[], None, true)
 }
 
 pub fn get_cost_usage_report_with_windows(
@@ -1378,7 +1374,19 @@ pub fn get_cost_usage_report_with_windows(
     days: u32,
     current_windows: &[CurrentUsageWindow],
 ) -> Option<CostUsageReport> {
-    get_cost_usage_report_scoped(provider, days, current_windows, None)
+    get_cost_usage_report_scoped_opts(provider, days, current_windows, None, false)
+}
+
+/// One transcript walk that fills both reset windows and hourly buckets.
+///
+/// The Charts tab opens the API-value card and the heatmap together. Each used
+/// to walk the same trees; this is the pass they now share.
+pub fn get_cost_usage_report_with_windows_hourly(
+    provider: &str,
+    days: u32,
+    current_windows: &[CurrentUsageWindow],
+) -> Option<CostUsageReport> {
+    get_cost_usage_report_scoped_opts(provider, days, current_windows, None, true)
 }
 
 /// As [`get_cost_usage_report_with_windows`], but scoped to one account's config
@@ -1390,17 +1398,171 @@ pub fn get_cost_usage_report_scoped(
     current_windows: &[CurrentUsageWindow],
     scoped_home: Option<PathBuf>,
 ) -> Option<CostUsageReport> {
+    get_cost_usage_report_scoped_opts(provider, days, current_windows, scoped_home, false)
+}
+
+/// Providers whose local JSONL trees feed Estimated API value and the heatmap.
+pub const LOCAL_LOG_PROVIDERS: [&str; 3] = ["codex", "claude", "grok"];
+
+/// How long a Charts-tab corpus scan can be reused by a second card.
+const CHARTS_TAB_CORPUS_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChartsTabCorpusKey {
+    days: u32,
+    windows: Vec<(String, DateTime<Utc>, DateTime<Utc>)>,
+}
+
+impl ChartsTabCorpusKey {
+    fn new(days: u32, windows: &[CurrentUsageWindow]) -> Self {
+        Self {
+            days,
+            windows: windows
+                .iter()
+                .map(|window| (window.id.clone(), window.starts_at, window.ends_at))
+                .collect(),
+        }
+    }
+}
+
+struct CachedChartsTabCorpus {
+    loaded_at: Instant,
+    key: ChartsTabCorpusKey,
+    reports: HashMap<String, CostUsageReport>,
+}
+
+/// In-process reuse of one machine-wide local-log scan.
+///
+/// The Charts tab fires two commands on a cold open. They must wait on the
+/// same walk rather than each starting their own.
+pub struct ChartsTabCorpusCache {
+    inner: Mutex<Option<CachedChartsTabCorpus>>,
+}
+
+impl Default for ChartsTabCorpusCache {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(None),
+        }
+    }
+}
+
+impl ChartsTabCorpusCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Scan each local-log provider once, with windows and hourly buckets.
+    ///
+    /// A second reader with the same key inside [`CHARTS_TAB_CORPUS_TTL`]
+    /// reuses the reports. The lock is held for the walk so two concurrent
+    /// Charts commands cannot start two walks of the same trees.
+    pub fn reports(
+        &self,
+        days: u32,
+        windows: &[CurrentUsageWindow],
+    ) -> HashMap<String, CostUsageReport> {
+        let key = ChartsTabCorpusKey::new(days, windows);
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(cached) = guard.as_ref()
+            && cached.key == key
+            && cached.loaded_at.elapsed() < CHARTS_TAB_CORPUS_TTL
+        {
+            return cached.reports.clone();
+        }
+        let reports = scan_local_log_providers_with_windows_hourly(days, windows);
+        *guard = Some(CachedChartsTabCorpus {
+            loaded_at: Instant::now(),
+            key,
+            reports: reports.clone(),
+        });
+        reports
+    }
+
+    #[cfg(test)]
+    fn reset(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        *guard = None;
+    }
+}
+
+fn charts_tab_corpus_cache() -> &'static ChartsTabCorpusCache {
+    static CACHE: OnceLock<ChartsTabCorpusCache> = OnceLock::new();
+    CACHE.get_or_init(ChartsTabCorpusCache::new)
+}
+
+/// Machine-wide Codex/Claude/Grok reports for the Charts tab cards (SBS-909).
+///
+/// One walk per provider, with hourly buckets always on, reused for five
+/// minutes so the API-value card and the heatmap do not each rescan.
+pub fn charts_tab_corpus_reports(
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> HashMap<String, CostUsageReport> {
+    charts_tab_corpus_cache().reports(days, windows)
+}
+
+fn scan_local_log_providers_with_windows_hourly(
+    days: u32,
+    windows: &[CurrentUsageWindow],
+) -> HashMap<String, CostUsageReport> {
+    LOCAL_LOG_PROVIDERS
+        .iter()
+        .filter_map(|provider_id| {
+            get_cost_usage_report_with_windows_hourly(provider_id, days, windows)
+                .map(|report| ((*provider_id).to_string(), report))
+        })
+        .collect()
+}
+
+fn get_cost_usage_report_scoped_opts(
+    provider: &str,
+    days: u32,
+    current_windows: &[CurrentUsageWindow],
+    scoped_home: Option<PathBuf>,
+    hourly: bool,
+) -> Option<CostUsageReport> {
+    #[cfg(test)]
+    note_cost_scan();
     let days = days.max(1);
-    let scanner = match scoped_home {
+    let mut scanner = match scoped_home {
         Some(home) => CostScanner::scoped_to(days, home),
         None => CostScanner::new(days),
     };
+    if hourly {
+        scanner = scanner.with_hourly_activity();
+    }
     match provider {
         "codex" => Some(scan_codex_report(&scanner, days, current_windows)),
         "claude" => Some(scan_claude_report(&scanner, days, current_windows)),
         "grok" => Some(scan_grok_report(&scanner, days, current_windows)),
         _ => None,
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static COST_SCAN_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_cost_scan() {
+    COST_SCAN_INVOCATIONS.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+pub fn reset_cost_scan_invocations() {
+    COST_SCAN_INVOCATIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub fn cost_scan_invocations() -> usize {
+    COST_SCAN_INVOCATIONS.with(|count| count.get())
+}
+
+#[cfg(test)]
+pub fn reset_charts_tab_corpus_cache() {
+    charts_tab_corpus_cache().reset();
 }
 
 fn empty_current_window_summaries(windows: &[CurrentUsageWindow]) -> HashMap<String, CostSummary> {
@@ -3246,6 +3408,146 @@ mod tests {
         assert!(
             (hourly_cost - daily_cost).abs() < 1e-9,
             "hourly {hourly_cost} vs daily {daily_cost}"
+        );
+    }
+
+    /// SBS-909: the Charts tab needs windows and hourly buckets from one walk.
+    /// A second entry point that only filled one of those is what made the
+    /// cold open scan the same trees twice.
+    #[test]
+    fn windows_and_hourly_are_filled_in_one_scoped_pass() {
+        let recent = Utc::now() - Duration::hours(1);
+        let home = tempfile::tempdir().unwrap();
+        let today = Local::now().date_naive();
+        let day_dir = home
+            .path()
+            .join("sessions")
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        std::fs::write(
+            day_dir.join(format!(
+                "rollout-{}-44444444-4444-4444-4444-444444444444.jsonl",
+                today.format("%Y-%m-%d")
+            )),
+            format!(
+                r#"{{"timestamp":"{}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":400,"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#,
+                recent.to_rfc3339()
+            ),
+        )
+        .unwrap();
+
+        let window = CurrentUsageWindow {
+            id: "today".to_string(),
+            starts_at: recent - Duration::hours(2),
+            ends_at: recent + Duration::hours(2),
+        };
+        let report = scan_codex_report(
+            &CostScanner::scoped_to(2, home.path().to_path_buf()).with_hourly_activity(),
+            2,
+            std::slice::from_ref(&window),
+        );
+
+        assert!(
+            !report.hourly_activity.is_empty(),
+            "hourly buckets must be present for the heatmap"
+        );
+        let today_window = report
+            .current_windows
+            .get("today")
+            .expect("named window must be present for the API-value card");
+        assert_eq!(today_window.input_tokens, 400);
+        assert_eq!(
+            report
+                .hourly_activity
+                .iter()
+                .map(|p| p.summary.input_tokens)
+                .sum::<u64>(),
+            400
+        );
+    }
+
+    /// SBS-909: two Charts-tab readers of the same key must not walk the
+    /// corpus twice. This is the failure mode of the 1.5.33 cold open.
+    #[test]
+    fn charts_tab_corpus_cache_scans_each_provider_once_for_a_second_reader() {
+        reset_cost_scan_invocations();
+        let cache = ChartsTabCorpusCache::new();
+        let now = Utc::now();
+        let windows = [CurrentUsageWindow {
+            id: "today".to_string(),
+            starts_at: now - Duration::hours(24),
+            ends_at: now + Duration::hours(1),
+        }];
+
+        let first = cache.reports(2, &windows);
+        let first_scans = cost_scan_invocations();
+        let second = cache.reports(2, &windows);
+
+        assert_eq!(
+            first_scans,
+            LOCAL_LOG_PROVIDERS.len(),
+            "first reader walks each local-log provider once"
+        );
+        assert_eq!(
+            cost_scan_invocations(),
+            first_scans,
+            "second reader must reuse the first walk, not start another"
+        );
+        assert_eq!(first.keys().len(), second.keys().len());
+        assert_eq!(first.keys().len(), LOCAL_LOG_PROVIDERS.len());
+    }
+
+    /// A different window set is a different question and must not reuse
+    /// reports that never computed that window.
+    #[test]
+    fn charts_tab_corpus_cache_rescans_when_the_windows_change() {
+        reset_cost_scan_invocations();
+        let cache = ChartsTabCorpusCache::new();
+        let now = Utc::now();
+        let today = [CurrentUsageWindow {
+            id: "today".to_string(),
+            starts_at: now - Duration::hours(24),
+            ends_at: now,
+        }];
+        let custom = [CurrentUsageWindow {
+            id: "custom".to_string(),
+            starts_at: now - Duration::days(10),
+            ends_at: now,
+        }];
+
+        let _ = cache.reports(2, &today);
+        let after_first = cost_scan_invocations();
+        let _ = cache.reports(2, &custom);
+
+        assert_eq!(after_first, LOCAL_LOG_PROVIDERS.len());
+        assert_eq!(
+            cost_scan_invocations(),
+            LOCAL_LOG_PROVIDERS.len() * 2,
+            "a new window set is a new walk"
+        );
+    }
+
+    /// The function the Charts tab actually calls must be the cached one.
+    #[test]
+    fn charts_tab_corpus_reports_reuses_the_process_cache() {
+        reset_charts_tab_corpus_cache();
+        reset_cost_scan_invocations();
+        let now = Utc::now();
+        let windows = [CurrentUsageWindow {
+            id: "today".to_string(),
+            starts_at: now - Duration::hours(24),
+            ends_at: now,
+        }];
+
+        let _ = charts_tab_corpus_reports(2, &windows);
+        let _ = charts_tab_corpus_reports(2, &windows);
+
+        assert_eq!(
+            cost_scan_invocations(),
+            LOCAL_LOG_PROVIDERS.len(),
+            "the process cache is what both Charts cards share"
         );
     }
 }
