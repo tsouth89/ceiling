@@ -58,7 +58,7 @@ codexbar --provider all --brief
 
 ## `cost`
 
-Print local token cost usage for Claude and Codex without web or CLI access.
+Print local token cost usage for Claude, Codex, and Grok without web or CLI access.
 
 ```text
 codexbar cost [OPTIONS]

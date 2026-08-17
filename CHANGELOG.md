@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **`codexbar cost` and serve `/cost` now include Grok.** CostScanner and Charts already read `~/.grok/sessions` (`costUsdTicks`). The CLI and the local HTTP endpoint still treated Grok as unsupported and said only Codex and Claude have local logs. After the usage command started enumerating enabled providers (default `claude`, `codex`, `cursor`, `grok`), every bare `codexbar cost` listed Grok as unavailable. The same machine's Charts tab already showed those sessions. `codexbar mcp` get_spend used the same Codex/Claude-only list. Cursor, Gemini, and Copilot stay unsupported.
+
 ## [Ceiling] 1.5.33 - 2026-08-16
 
 Adds an activity heatmap to Charts and an opt-in spend warning that needs no budget set, and lets the floating bar follow whichever app you are working in. Mostly, though, this release stops surfaces reporting a state they could not actually read: a provider outage is now told apart from an empty quota, a missing Cursor plan reads as unavailable rather than 0% used, SuperGrok's weekly figure is decoded rather than guessed at, the taskbar strip stops cutting the last character off a reset, and prices, chart caches, and CLI logs stop losing or hoarding data on disk. Release builds also drop the loopback exception their content policy was carrying from the dev server.
