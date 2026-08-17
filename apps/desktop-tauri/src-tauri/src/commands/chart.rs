@@ -1029,8 +1029,88 @@ fn spend_anomaly_reading(
 
 /// Inclusive local-calendar custom range for Estimated API value (YYYY-MM-DD).
 const API_VALUE_CUSTOM_MAX_DAYS: i64 = 366;
-/// Default scan horizon so custom ranges and daily series cover a full month+.
-const API_VALUE_DEFAULT_SCAN_DAYS: u32 = 90;
+/// Default scan horizon.
+///
+/// The furthest-back period the card shows without a custom range is
+/// "prior thirty days", `[today-59, today-29)`, so 60 days is everything the
+/// default view can read. It used to scan 90, which on a real machine is an
+/// extra gigabyte of transcripts parsed for rows nothing displays.
+const API_VALUE_DEFAULT_SCAN_DAYS: u32 = 60;
+/// How long a cached API-value scan is served before a refresh is scheduled.
+const API_VALUE_TTL: Duration = Duration::from_secs(5 * 60);
+
+static API_VALUE_CACHE: crate::commands::scan_cache::ScanCache<Vec<LocalApiValueProvider>> =
+    crate::commands::scan_cache::ScanCache::new("api-value-cache.json", 1);
+
+/// Delay before the launch prewarm starts, so it never competes with the first
+/// provider refresh or the window's first paint.
+const LOCAL_SCAN_PREWARM_DELAY: Duration = Duration::from_secs(15);
+
+/// Rebuild the local-scan caches in the background at launch.
+///
+/// The first scan of a day costs tens of seconds on a machine holding gigabytes
+/// of transcripts, and it used to land while the user sat watching the card.
+/// Doing it at launch moves that wait off the interaction entirely.
+///
+/// A machine whose caches have never been written is no evidence that anyone
+/// opens these cards, so it stays idle rather than scanning speculatively; the
+/// first open still pays for itself once, and every one after that is warm. The
+/// two scans run one after the other because each already saturates the
+/// machine's cores on its own.
+pub fn prewarm_local_scan_caches() {
+    if !API_VALUE_CACHE.has_entries() && !ACTIVITY_HEATMAP_CACHE.has_entries() {
+        return;
+    }
+    tauri::async_runtime::spawn(async {
+        tokio::time::sleep(LOCAL_SCAN_PREWARM_DELAY).await;
+        if let Err(error) = get_local_api_value_totals(None, None).await {
+            tracing::debug!("API-value prewarm skipped: {error}");
+        }
+        if let Err(error) = get_local_activity_heatmap().await {
+            tracing::debug!("Activity heatmap prewarm skipped: {error}");
+        }
+    });
+}
+
+/// Cache key for one API-value request.
+///
+/// The local date is part of the key because every period on this card is
+/// anchored to "today". A cached bundle from yesterday is not stale, it is
+/// wrong, so a new day mints a new key rather than being served while a refresh
+/// runs behind it.
+fn api_value_cache_key(today: NaiveDate, custom: Option<(DateTime<Utc>, DateTime<Utc>)>) -> String {
+    match custom {
+        Some((start, end)) => format!(
+            "{}:{}:{}",
+            today.format("%F"),
+            start.timestamp_millis(),
+            end.timestamp_millis()
+        ),
+        None => format!("{}:default", today.format("%F")),
+    }
+}
+
+/// Run `scan` for each provider concurrently, keeping the input order.
+///
+/// Each provider reads a different transcript tree, so scanning them one after
+/// another just added their times together. Providers with no data return
+/// `None` and drop out, exactly as the sequential `filter_map` did.
+fn scan_providers_parallel<T, F>(provider_ids: &[&'static str], scan: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(&'static str) -> Option<T> + Sync,
+{
+    std::thread::scope(|scope| {
+        provider_ids
+            .iter()
+            .map(|provider_id| scope.spawn(|| scan(provider_id)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|handle| handle.join().ok().flatten())
+            .collect()
+    })
+}
+
 #[tauri::command]
 pub async fn get_local_api_value_totals(
     since: Option<String>,
@@ -1059,12 +1139,14 @@ pub async fn get_local_api_value_totals(
     };
     // A worker panic/cancel must surface as an error, not an empty result —
     // "unavailable" and "genuinely no data" are distinct on this card.
-    tauri::async_runtime::spawn_blocking(move || load_local_api_value_totals(Local::now(), custom))
+    API_VALUE_CACHE
+        .load(
+            api_value_cache_key(Local::now().date_naive(), custom),
+            API_VALUE_TTL,
+            move || load_local_api_value_totals(Local::now(), custom),
+            "Unable to load local API-value totals.",
+        )
         .await
-        .map_err(|err| {
-            tracing::warn!("Local API-value totals worker failed: {}", err);
-            "Unable to load local API-value totals.".to_string()
-        })
 }
 
 /// Parse and validate an inclusive local-calendar custom range.
@@ -1117,120 +1199,116 @@ fn load_local_api_value_totals(
                 .min(API_VALUE_CUSTOM_MAX_DAYS as u32)
         })
         .unwrap_or(API_VALUE_DEFAULT_SCAN_DAYS);
-    API_VALUE_PROVIDERS
-        .iter()
-        .filter_map(|provider_id| {
-            let mut windows = vec![
-                CurrentUsageWindow {
-                    id: "yesterday".to_string(),
-                    starts_at: yesterday_start,
-                    ends_at: yesterday_end,
-                },
-                CurrentUsageWindow {
-                    id: "thirty".to_string(),
-                    starts_at: thirty_start,
-                    ends_at: thirty_end,
-                },
-                CurrentUsageWindow {
-                    id: "prior_thirty".to_string(),
-                    starts_at: prior_start,
-                    ends_at: thirty_start,
-                },
-            ];
-            if let Some((starts_at, ends_at)) = custom_range {
-                windows.push(CurrentUsageWindow {
-                    id: "custom".to_string(),
-                    starts_at,
-                    ends_at,
-                });
-            }
-            // One window per local calendar day for the seven-day trend.
-            for offset in 0..7i64 {
-                let date = today - chrono::Duration::days(offset);
-                windows.push(CurrentUsageWindow {
-                    id: format!("day-{offset}"),
-                    starts_at: local_midnight_utc(date),
-                    ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
-                });
-            }
-            let report = get_cost_usage_report_with_windows(provider_id, scan_days, &windows)?;
-            let yesterday = report
-                .current_windows
-                .get("yesterday")
-                .cloned()
-                .unwrap_or_default();
-            let thirty_days = report
-                .current_windows
-                .get("thirty")
-                .cloned()
-                .unwrap_or_default();
-            let prior_thirty_days = report
-                .current_windows
-                .get("prior_thirty")
-                .cloned()
-                .unwrap_or_default();
-            let daily_series = daily_series_from_report(&report.daily_costs);
-            let custom = custom_range.map(|(starts_at, ends_at)| {
-                let start_day = starts_at.with_timezone(&Local).date_naive();
-                // ends_at is exclusive midnight; convert to inclusive local day.
-                let end_day =
-                    ends_at.with_timezone(&Local).date_naive() - chrono::Duration::days(1);
-                let from_window = report
-                    .current_windows
-                    .get("custom")
-                    .cloned()
-                    .map(|summary| api_value_period(provider_id, &summary))
-                    .unwrap_or_else(empty_api_value_period);
-                let from_daily = period_from_daily_series(&daily_series, start_day, end_day);
-                // Prefer the richer window (tokens + dollars). If the window is
-                // empty but daily dollars exist, use daily so Custom never lies.
-                if from_window.has_data {
-                    from_window
-                } else {
-                    from_daily
-                }
+    scan_providers_parallel(&API_VALUE_PROVIDERS, |provider_id| {
+        let mut windows = vec![
+            CurrentUsageWindow {
+                id: "yesterday".to_string(),
+                starts_at: yesterday_start,
+                ends_at: yesterday_end,
+            },
+            CurrentUsageWindow {
+                id: "thirty".to_string(),
+                starts_at: thirty_start,
+                ends_at: thirty_end,
+            },
+            CurrentUsageWindow {
+                id: "prior_thirty".to_string(),
+                starts_at: prior_start,
+                ends_at: thirty_start,
+            },
+        ];
+        if let Some((starts_at, ends_at)) = custom_range {
+            windows.push(CurrentUsageWindow {
+                id: "custom".to_string(),
+                starts_at,
+                ends_at,
             });
-            // Oldest first so the trend reads left to right, ending today.
-            let last_seven_days = (0..7i64)
-                .rev()
-                .map(|offset| {
-                    let date = today - chrono::Duration::days(offset);
-                    let summary = report
-                        .current_windows
-                        .get(&format!("day-{offset}"))
-                        .cloned()
-                        .unwrap_or_default();
-                    let period = api_value_period(provider_id, &summary);
-                    LocalApiValueDay {
-                        date: date.format("%Y-%m-%d").to_string(),
-                        api_value_usd: period.api_value_usd,
-                        tokens: period.tokens,
-                    }
-                })
-                .collect();
-            let provider = LocalApiValueProvider {
-                provider_id: provider_id.to_string(),
-                today: api_value_period(provider_id, &report.today),
-                yesterday: api_value_period(provider_id, &yesterday),
-                thirty_days: api_value_period(provider_id, &thirty_days),
-                prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
-                custom,
-                last_seven_days,
-                daily_series,
-            };
-            // Omit providers with no source data in any period.
-            (provider.today.has_data
-                || provider.yesterday.has_data
-                || provider.thirty_days.has_data
-                || provider.prior_thirty_days.has_data
-                || provider.custom.as_ref().is_some_and(|p| p.has_data)
-                || provider
-                    .daily_series
-                    .iter()
-                    .any(|day| day.api_value_usd > 0.0))
-            .then_some(provider)
-        })
-        .collect()
+        }
+        // One window per local calendar day for the seven-day trend.
+        for offset in 0..7i64 {
+            let date = today - chrono::Duration::days(offset);
+            windows.push(CurrentUsageWindow {
+                id: format!("day-{offset}"),
+                starts_at: local_midnight_utc(date),
+                ends_at: local_midnight_utc(date + chrono::Duration::days(1)),
+            });
+        }
+        let report = get_cost_usage_report_with_windows(provider_id, scan_days, &windows)?;
+        let yesterday = report
+            .current_windows
+            .get("yesterday")
+            .cloned()
+            .unwrap_or_default();
+        let thirty_days = report
+            .current_windows
+            .get("thirty")
+            .cloned()
+            .unwrap_or_default();
+        let prior_thirty_days = report
+            .current_windows
+            .get("prior_thirty")
+            .cloned()
+            .unwrap_or_default();
+        let daily_series = daily_series_from_report(&report.daily_costs);
+        let custom = custom_range.map(|(starts_at, ends_at)| {
+            let start_day = starts_at.with_timezone(&Local).date_naive();
+            // ends_at is exclusive midnight; convert to inclusive local day.
+            let end_day = ends_at.with_timezone(&Local).date_naive() - chrono::Duration::days(1);
+            let from_window = report
+                .current_windows
+                .get("custom")
+                .cloned()
+                .map(|summary| api_value_period(provider_id, &summary))
+                .unwrap_or_else(empty_api_value_period);
+            let from_daily = period_from_daily_series(&daily_series, start_day, end_day);
+            // Prefer the richer window (tokens + dollars). If the window is
+            // empty but daily dollars exist, use daily so Custom never lies.
+            if from_window.has_data {
+                from_window
+            } else {
+                from_daily
+            }
+        });
+        // Oldest first so the trend reads left to right, ending today.
+        let last_seven_days = (0..7i64)
+            .rev()
+            .map(|offset| {
+                let date = today - chrono::Duration::days(offset);
+                let summary = report
+                    .current_windows
+                    .get(&format!("day-{offset}"))
+                    .cloned()
+                    .unwrap_or_default();
+                let period = api_value_period(provider_id, &summary);
+                LocalApiValueDay {
+                    date: date.format("%Y-%m-%d").to_string(),
+                    api_value_usd: period.api_value_usd,
+                    tokens: period.tokens,
+                }
+            })
+            .collect();
+        let provider = LocalApiValueProvider {
+            provider_id: provider_id.to_string(),
+            today: api_value_period(provider_id, &report.today),
+            yesterday: api_value_period(provider_id, &yesterday),
+            thirty_days: api_value_period(provider_id, &thirty_days),
+            prior_thirty_days: api_value_period(provider_id, &prior_thirty_days),
+            custom,
+            last_seven_days,
+            daily_series,
+        };
+        // Omit providers with no source data in any period.
+        (provider.today.has_data
+            || provider.yesterday.has_data
+            || provider.thirty_days.has_data
+            || provider.prior_thirty_days.has_data
+            || provider.custom.as_ref().is_some_and(|p| p.has_data)
+            || provider
+                .daily_series
+                .iter()
+                .any(|day| day.api_value_usd > 0.0))
+        .then_some(provider)
+    })
 }
 
 fn empty_api_value_period() -> LocalApiValuePeriod {
@@ -1336,47 +1414,30 @@ pub struct ActivityHeatmap {
 const ACTIVITY_HEATMAP_DAYS: u32 = 30;
 const ACTIVITY_HEATMAP_TTL: Duration = Duration::from_secs(5 * 60);
 
-struct CachedActivityHeatmap {
-    loaded_at: Instant,
-    heatmap: ActivityHeatmap,
-}
-
-fn activity_heatmap_cache() -> &'static Mutex<Option<CachedActivityHeatmap>> {
-    static CACHE: OnceLock<Mutex<Option<CachedActivityHeatmap>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(None))
-}
+static ACTIVITY_HEATMAP_CACHE: crate::commands::scan_cache::ScanCache<ActivityHeatmap> =
+    crate::commands::scan_cache::ScanCache::new("activity-heatmap-cache.json", 1);
 
 /// Local activity by day and hour across every provider with local logs.
 ///
 /// This is a second pass over the same transcripts the API-value card reads, so
-/// results are cached for the same five minutes the chart caches use. Callers
-/// that need fresh numbers after a scan should let the TTL lapse rather than
-/// forcing a rescan on every tab switch.
+/// results are cached for the same five minutes the chart caches use, and the
+/// cache is kept on disk: an app restart used to mean waiting out a full
+/// multi-gigabyte scan before the card drew anything. A cached grid older than
+/// the TTL still paints, with the refresh running behind it.
+///
+/// The key carries the local date because the grid's last column is today.
 #[tauri::command]
 pub async fn get_local_activity_heatmap() -> Result<ActivityHeatmap, String> {
-    if let Ok(guard) = activity_heatmap_cache().lock()
-        && let Some(cached) = guard.as_ref()
-        && cached.loaded_at.elapsed() < ACTIVITY_HEATMAP_TTL
-    {
-        return Ok(cached.heatmap.clone());
-    }
-
     // A worker panic must surface as an error: "unavailable" and "no activity"
     // look identical on a heatmap otherwise.
-    let heatmap = tauri::async_runtime::spawn_blocking(|| load_activity_heatmap(Local::now()))
+    ACTIVITY_HEATMAP_CACHE
+        .load(
+            Local::now().date_naive().format("%F").to_string(),
+            ACTIVITY_HEATMAP_TTL,
+            || load_activity_heatmap(Local::now()),
+            "Unable to read local activity.",
+        )
         .await
-        .map_err(|err| {
-            tracing::warn!("Activity heatmap worker failed: {}", err);
-            "Unable to read local activity.".to_string()
-        })?;
-
-    if let Ok(mut guard) = activity_heatmap_cache().lock() {
-        *guard = Some(CachedActivityHeatmap {
-            loaded_at: Instant::now(),
-            heatmap: heatmap.clone(),
-        });
-    }
-    Ok(heatmap)
 }
 
 /// The day axis: `ACTIVITY_HEATMAP_DAYS` local calendar days ending on `today`,
@@ -1464,13 +1525,10 @@ fn load_activity_heatmap<Tz: TimeZone>(now: DateTime<Tz>) -> ActivityHeatmap
 where
     Tz::Offset: std::fmt::Display,
 {
-    let per_provider = API_VALUE_PROVIDERS
-        .iter()
-        .filter_map(|provider_id| {
-            let report = get_cost_usage_report_hourly(provider_id, ACTIVITY_HEATMAP_DAYS)?;
-            Some(activity_hours_for_provider(provider_id, &report))
-        })
-        .collect();
+    let per_provider = scan_providers_parallel(&API_VALUE_PROVIDERS, |provider_id| {
+        let report = get_cost_usage_report_hourly(provider_id, ACTIVITY_HEATMAP_DAYS)?;
+        Some(activity_hours_for_provider(provider_id, &report))
+    });
     assemble_activity_heatmap(
         activity_heatmap_days(now.date_naive()),
         per_provider,

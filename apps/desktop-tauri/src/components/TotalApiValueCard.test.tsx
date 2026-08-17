@@ -77,6 +77,23 @@ describe("TotalApiValueCard", () => {
     expect(await findByText(/No data for Yesterday/)).toBeTruthy();
   });
 
+  it("switches between built-in periods without rescanning", async () => {
+    // One scan carries every built-in period. Re-running it per click meant a
+    // multi-gigabyte transcript scan for numbers already on screen.
+    tauriMocks.getLocalApiValueTotals.mockResolvedValue(twoProviders);
+    const { getByText, findByText } = render(<TotalApiValueCard />);
+
+    await waitFor(() => expect(getByText("$120.00")).toBeTruthy());
+    expect(tauriMocks.getLocalApiValueTotals).toHaveBeenCalledTimes(1);
+
+    getByText("Yesterday").click();
+    expect(await findByText(/No data for Yesterday/)).toBeTruthy();
+    getByText("30 days").click();
+    await waitFor(() => expect(getByText("$400.00")).toBeTruthy()); // 300 + 100
+
+    expect(tauriMocks.getLocalApiValueTotals).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces an unavailable state when the command fails", async () => {
     tauriMocks.getLocalApiValueTotals.mockRejectedValue(new Error("boom"));
     const { findByText } = render(<TotalApiValueCard />);
