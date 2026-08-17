@@ -11,10 +11,17 @@ const QUOTA_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com/v1internal:ret
 const CODE_ASSIST_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const TOKEN_REFRESH_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
+/// Refresh this far before expiry so a 5-minute auto-refresh never presents
+/// Google with a token that dies at the exact expiry second (SBS-928).
+const ACCESS_TOKEN_REFRESH_SKEW: chrono::TimeDelta = chrono::Duration::minutes(5);
+
 /// Gemini API client
 pub struct GeminiApi {
     client: reqwest::Client,
     home_dir: PathBuf,
+    quota_endpoint: String,
+    code_assist_endpoint: String,
+    token_refresh_endpoint: String,
 }
 
 impl GeminiApi {
@@ -22,6 +29,20 @@ impl GeminiApi {
         Self {
             client: reqwest::Client::new(),
             home_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            quota_endpoint: QUOTA_ENDPOINT.to_string(),
+            code_assist_endpoint: CODE_ASSIST_ENDPOINT.to_string(),
+            token_refresh_endpoint: TOKEN_REFRESH_ENDPOINT.to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(home_dir: PathBuf, quota: &str, code_assist: &str, token_refresh: &str) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            home_dir,
+            quota_endpoint: quota.to_string(),
+            code_assist_endpoint: code_assist.to_string(),
+            token_refresh_endpoint: token_refresh.to_string(),
         }
     }
 
@@ -43,13 +64,43 @@ impl GeminiApi {
         // Gemini quota endpoint requires OAuth credentials (not API keys)
         // Always load OAuth credentials from ~/.gemini/oauth_creds.json
         let mut creds = self.load_credentials()?;
+        let mut refreshed_this_poll = false;
 
-        // Check if token needs refresh
+        // Refresh early (skew) so a still-refreshable seat is not sent to Google
+        // in the last minutes of the access token (SBS-928).
         if creds.is_expired() {
-            tracing::debug!("Gemini token expired, refreshing...");
+            tracing::debug!("Gemini token expired or within refresh skew, refreshing...");
             creds = self.refresh_token(&creds).await?;
+            refreshed_this_poll = true;
         }
 
+        match self.fetch_quota_with_creds(&creds).await {
+            Ok(result) => Ok(result),
+            Err(ProviderError::AuthRequired)
+                if !refreshed_this_poll && creds.has_refresh_token() =>
+            {
+                // 401 is not AuthRequired when a refresh token still exists.
+                // A revoked refresh token fails inside refresh_token().
+                tracing::debug!("Gemini quota returned 401; refreshing once and retrying");
+                creds = self.refresh_token(&creds).await?;
+                self.fetch_quota_with_creds(&creds).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn fetch_quota_with_creds(
+        &self,
+        creds: &OAuthCredentials,
+    ) -> Result<
+        (
+            RateWindow,
+            Option<RateWindow>,
+            Option<String>,
+            Option<String>,
+        ),
+        ProviderError,
+    > {
         let access_token = creds
             .access_token
             .clone()
@@ -57,10 +108,9 @@ impl GeminiApi {
 
         let code_assist = self.load_code_assist_status(&access_token).await;
 
-        // Fetch quota
         let response = self
             .client
-            .post(QUOTA_ENDPOINT)
+            .post(&self.quota_endpoint)
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
             .body("{}")
@@ -84,9 +134,8 @@ impl GeminiApi {
             .await
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
 
-        // Since we use OAuth, we can use the credentials we already loaded for email extraction
         let (primary, model_specific, email) =
-            self.parse_quota_response(quota_response, Some(&creds))?;
+            self.parse_quota_response(quota_response, Some(creds))?;
         let hosted_domain = creds
             .id_token
             .as_deref()
@@ -99,7 +148,7 @@ impl GeminiApi {
     async fn load_code_assist_status(&self, access_token: &str) -> CodeAssistStatus {
         let response = self
             .client
-            .post(CODE_ASSIST_ENDPOINT)
+            .post(&self.code_assist_endpoint)
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
             .body(r#"{"metadata":{"ideType":"GEMINI_CLI","pluginType":"GEMINI"}}"#)
@@ -166,7 +215,7 @@ impl GeminiApi {
 
         let response = self
             .client
-            .post(TOKEN_REFRESH_ENDPOINT)
+            .post(&self.token_refresh_endpoint)
             .form(&params)
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -219,7 +268,7 @@ impl GeminiApi {
     }
 
     fn user_client_config_credentials(&self) -> Option<OAuthClientCredentials> {
-        let cli_config = dirs::home_dir()?.join(".gemini").join("client_config.json");
+        let cli_config = self.home_dir.join(".gemini").join("client_config.json");
         Self::try_read_client_config(&cli_config)
     }
 
@@ -537,13 +586,30 @@ struct OAuthCredentials {
 
 impl OAuthCredentials {
     fn is_expired(&self) -> bool {
-        if let Some(expiry_ms) = self.expiry_date {
-            let expiry_secs = expiry_ms / 1000.0;
-            let now_secs = chrono::Utc::now().timestamp() as f64;
-            now_secs > expiry_secs
-        } else {
-            false
+        self.is_expired_at(chrono::Utc::now())
+    }
+
+    fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
+        match self.expiry_datetime() {
+            Some(expiry) => expiry <= now + ACCESS_TOKEN_REFRESH_SKEW,
+            // Missing or unparseable expiry is unknown, not "still valid".
+            // Try the access token; a 401 still refresh-retries when we can.
+            None => false,
         }
+    }
+
+    fn expiry_datetime(&self) -> Option<DateTime<Utc>> {
+        let expiry_ms = self.expiry_date?;
+        if !expiry_ms.is_finite() {
+            return None;
+        }
+        DateTime::<Utc>::from_timestamp_millis(expiry_ms.round() as i64)
+    }
+
+    fn has_refresh_token(&self) -> bool {
+        self.refresh_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty())
     }
 }
 
@@ -796,6 +862,7 @@ fn jwt_payload(token: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn refreshed_credentials(access_token: &str) -> OAuthCredentials {
         OAuthCredentials {
@@ -1055,5 +1122,255 @@ mod tests {
             resolve_account_plan(&status, Some("example.com")),
             Some("Workspace".to_string())
         );
+    }
+
+    /// Pins SBS-928: at the exact expiry second the access token is already
+    /// treated as expired, and the 5-minute skew matches the auto-refresh interval.
+    #[test]
+    fn token_expiry_honors_the_five_minute_refresh_skew() {
+        let now = Utc::now();
+        let creds = |expiry: DateTime<Utc>| OAuthCredentials {
+            access_token: Some("access".to_string()),
+            id_token: None,
+            refresh_token: Some("refresh".to_string()),
+            expiry_date: Some(expiry.timestamp_millis() as f64),
+        };
+
+        assert!(
+            creds(now).is_expired_at(now),
+            "exact expiry second must refresh"
+        );
+        assert!(creds(now + chrono::Duration::seconds(30)).is_expired_at(now));
+        assert!(creds(now + chrono::Duration::minutes(5)).is_expired_at(now));
+        assert!(
+            !creds(now + chrono::Duration::minutes(5) + chrono::Duration::seconds(1))
+                .is_expired_at(now)
+        );
+
+        let mut unknown = creds(now);
+        unknown.expiry_date = None;
+        assert!(
+            !unknown.is_expired_at(now),
+            "missing expiry is unknown, not expired"
+        );
+        unknown.expiry_date = Some(f64::NAN);
+        assert!(
+            !unknown.is_expired_at(now),
+            "non-finite expiry is unknown, not expired"
+        );
+    }
+
+    fn write_gemini_home(dir: &Path, access: &str, refresh: Option<&str>, expiry_ms: f64) {
+        let gemini = dir.join(".gemini");
+        std::fs::create_dir_all(&gemini).expect("gemini dir");
+        let mut creds = serde_json::json!({
+            "access_token": access,
+            "id_token": test_id_token("user-1", "user@example.com"),
+            "expiry_date": expiry_ms,
+        });
+        if let Some(refresh) = refresh {
+            creds["refresh_token"] = serde_json::Value::String(refresh.to_string());
+        }
+        std::fs::write(
+            gemini.join("oauth_creds.json"),
+            serde_json::to_vec_pretty(&creds).expect("creds bytes"),
+        )
+        .expect("write creds");
+        std::fs::write(
+            gemini.join("client_config.json"),
+            r#"{"client_id":"test-client","client_secret":"test-secret"}"#,
+        )
+        .expect("write client config");
+    }
+
+    fn api_for_server(home: &Path, server: &mockito::Server) -> GeminiApi {
+        GeminiApi::for_test(
+            home.to_path_buf(),
+            &format!("{}/quota", server.url()),
+            &format!("{}/codeassist", server.url()),
+            &format!("{}/token", server.url()),
+        )
+    }
+
+    fn quota_ok_body() -> &'static str {
+        r#"{
+            "buckets": [
+                {
+                    "remainingFraction": 0.8,
+                    "resetTime": "2026-08-18T00:00:00Z",
+                    "modelId": "gemini-2.5-pro"
+                }
+            ]
+        }"#
+    }
+
+    async fn mock_code_assist(server: &mut mockito::Server) -> mockito::Mock {
+        server
+            .mock("POST", "/codeassist")
+            .with_status(200)
+            .with_body(r#"{"currentTier":{"id":"standard-tier"}}"#)
+            .expect_at_least(0)
+            .create_async()
+            .await
+    }
+
+    /// Pins SBS-928: a 401 on a still-refreshable seat refreshes once and
+    /// completes the poll instead of surfacing AuthRequired.
+    #[tokio::test]
+    async fn quota_401_refreshes_once_and_retries_successfully() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expiry_ms = (Utc::now() + chrono::Duration::hours(1)).timestamp_millis() as f64;
+        write_gemini_home(dir.path(), "stale-access", Some("refresh-me"), expiry_ms);
+
+        let mut server = mockito::Server::new_async().await;
+        let _code_assist = mock_code_assist(&mut server).await;
+        let stale_quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer stale-access")
+            .with_status(401)
+            .expect(1)
+            .create_async()
+            .await;
+        let refresh = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_body(r#"{"access_token":"fresh-access","expires_in":3600}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let fresh_quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer fresh-access")
+            .with_status(200)
+            .with_body(quota_ok_body())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let api = api_for_server(dir.path(), &server);
+        let (primary, _, _, plan) = api
+            .fetch_quota(&FetchContext::default())
+            .await
+            .expect("refreshable 401 must succeed after refresh");
+
+        stale_quota.assert_async().await;
+        refresh.assert_async().await;
+        fresh_quota.assert_async().await;
+        assert!((primary.used_percent - 20.0).abs() < 0.01);
+        assert_eq!(plan.as_deref(), Some("Paid"));
+    }
+
+    /// Pins SBS-928: a token 30s from expiry is inside the 5-minute skew, so
+    /// the poll refreshes first and the user still gets a successful reading.
+    #[tokio::test]
+    async fn token_thirty_seconds_from_expiry_still_polls_after_refresh() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expiry_ms = (Utc::now() + chrono::Duration::seconds(30)).timestamp_millis() as f64;
+        write_gemini_home(dir.path(), "stale-access", Some("refresh-me"), expiry_ms);
+
+        let mut server = mockito::Server::new_async().await;
+        let _code_assist = mock_code_assist(&mut server).await;
+        let stale_quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer stale-access")
+            .with_status(401)
+            .expect(0)
+            .create_async()
+            .await;
+        let refresh = server
+            .mock("POST", "/token")
+            .with_status(200)
+            .with_body(r#"{"access_token":"fresh-access","expires_in":3600}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let fresh_quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer fresh-access")
+            .with_status(200)
+            .with_body(quota_ok_body())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let api = api_for_server(dir.path(), &server);
+        let (primary, _, _, _) = api
+            .fetch_quota(&FetchContext::default())
+            .await
+            .expect("token 30s from expiry must refresh then succeed");
+
+        stale_quota.assert_async().await;
+        refresh.assert_async().await;
+        fresh_quota.assert_async().await;
+        assert!((primary.used_percent - 20.0).abs() < 0.01);
+    }
+
+    /// A revoked refresh token is still AuthRequired. 401 is not collapsed
+    /// into "signed out" until refresh itself fails.
+    #[tokio::test]
+    async fn revoked_refresh_token_on_401_is_auth_required() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expiry_ms = (Utc::now() + chrono::Duration::hours(1)).timestamp_millis() as f64;
+        write_gemini_home(
+            dir.path(),
+            "stale-access",
+            Some("revoked-refresh"),
+            expiry_ms,
+        );
+
+        let mut server = mockito::Server::new_async().await;
+        let _code_assist = mock_code_assist(&mut server).await;
+        let stale_quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer stale-access")
+            .with_status(401)
+            .expect(1)
+            .create_async()
+            .await;
+        let refresh = server
+            .mock("POST", "/token")
+            .with_status(400)
+            .with_body(r#"{"error":"invalid_grant"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let api = api_for_server(dir.path(), &server);
+        let error = api
+            .fetch_quota(&FetchContext::default())
+            .await
+            .expect_err("revoked refresh must stay AuthRequired");
+
+        stale_quota.assert_async().await;
+        refresh.assert_async().await;
+        assert!(matches!(error, ProviderError::AuthRequired));
+    }
+
+    #[tokio::test]
+    async fn quota_401_without_refresh_token_is_auth_required() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expiry_ms = (Utc::now() + chrono::Duration::hours(1)).timestamp_millis() as f64;
+        write_gemini_home(dir.path(), "stale-access", None, expiry_ms);
+
+        let mut server = mockito::Server::new_async().await;
+        let _code_assist = mock_code_assist(&mut server).await;
+        let stale_quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer stale-access")
+            .with_status(401)
+            .expect(1)
+            .create_async()
+            .await;
+        let refresh = server.mock("POST", "/token").expect(0).create_async().await;
+
+        let api = api_for_server(dir.path(), &server);
+        let error = api
+            .fetch_quota(&FetchContext::default())
+            .await
+            .expect_err("no refresh token is a hard AuthRequired");
+
+        stale_quota.assert_async().await;
+        refresh.assert_async().await;
+        assert!(matches!(error, ProviderError::AuthRequired));
     }
 }
