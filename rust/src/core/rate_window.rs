@@ -1,6 +1,6 @@
 //! Rate window model - represents a usage limit window (e.g., 5-hour session, 7-day weekly)
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Represents a rate limit window with usage percentage and reset time
@@ -29,9 +29,17 @@ pub struct RateWindow {
 /// so 24h 0m is "1d 0h" rather than "24h 0m". Matches the TypeScript
 /// hooks and `tooltip_short_reset`. SBS-927 (day cut and last minute)
 /// and SBS-619 (hour-boundary floor).
-pub fn remaining_countdown_parts(remaining_seconds: i64) -> (i64, i64, i64) {
-    let total_minutes = if remaining_seconds > 0 {
-        (remaining_seconds / 60).max(1)
+///
+/// Takes a [`Duration`] rather than a count of seconds. Every caller starts
+/// from `resets_at - now` and proves the reset is still in the future first,
+/// and `num_seconds()` truncates the last 999ms of that to zero: the CLI
+/// statusline, the tray, the native tooltip, and the taskbar strip all read
+/// "0m" for the final second of a window, while the TypeScript hooks, which
+/// work in milliseconds, still read "1m". Carrying the unit in the type is
+/// what keeps the two from drifting apart again.
+pub fn remaining_countdown_parts(remaining: Duration) -> (i64, i64, i64) {
+    let total_minutes = if remaining > Duration::zero() {
+        (remaining.num_seconds() / 60).max(1)
     } else {
         0
     };
@@ -43,8 +51,8 @@ pub fn remaining_countdown_parts(remaining_seconds: i64) -> (i64, i64, i64) {
 }
 
 /// Compact `{d}d {h}h` / `{h}h {m}m` / `{m}m` form of [`remaining_countdown_parts`].
-pub fn format_remaining_countdown(remaining_seconds: i64) -> String {
-    let (days, hours, minutes) = remaining_countdown_parts(remaining_seconds);
+pub fn format_remaining_countdown(remaining: Duration) -> String {
+    let (days, hours, minutes) = remaining_countdown_parts(remaining);
     if days > 0 {
         format!("{days}d {hours}h")
     } else if hours > 0 {
@@ -113,7 +121,7 @@ impl RateWindow {
             return Some("now".to_string());
         }
 
-        Some(format_remaining_countdown((resets_at - now).num_seconds()))
+        Some(format_remaining_countdown(resets_at - now))
     }
 
     fn finite_percent(value: f64) -> f64 {
@@ -251,13 +259,42 @@ mod tests {
     /// Pin both edges here so a later rewrite cannot split them again.
     #[test]
     fn remaining_countdown_agrees_at_the_day_cut_and_last_minute() {
-        assert_eq!(format_remaining_countdown(30), "1m");
-        assert_eq!(format_remaining_countdown(59), "1m");
-        assert_eq!(format_remaining_countdown(60), "1m");
-        assert_eq!(format_remaining_countdown(24 * 3600), "1d 0h");
-        assert_eq!(format_remaining_countdown(24 * 3600 + 1), "1d 0h");
-        assert_eq!(format_remaining_countdown(24 * 3600 + 30 * 60), "1d 0h");
-        assert_eq!(format_remaining_countdown(25 * 3600), "1d 1h");
-        assert_eq!(format_remaining_countdown(0), "0m");
+        let secs = Duration::seconds;
+        assert_eq!(format_remaining_countdown(secs(30)), "1m");
+        assert_eq!(format_remaining_countdown(secs(59)), "1m");
+        assert_eq!(format_remaining_countdown(secs(60)), "1m");
+        assert_eq!(format_remaining_countdown(secs(24 * 3600)), "1d 0h");
+        assert_eq!(format_remaining_countdown(secs(24 * 3600 + 1)), "1d 0h");
+        assert_eq!(
+            format_remaining_countdown(secs(24 * 3600 + 30 * 60)),
+            "1d 0h"
+        );
+        assert_eq!(format_remaining_countdown(secs(25 * 3600)), "1d 1h");
+    }
+
+    /// A window with under a second left is still a window with time left.
+    ///
+    /// The seconds-based helper truncated that to zero and printed "0m" on the
+    /// statusline, the tray, the tooltip, and the strip, while the TypeScript
+    /// hooks read the same instant in milliseconds and printed "1m". Only a
+    /// remainder that is genuinely due or past reads as zero.
+    #[test]
+    fn a_sub_second_remainder_still_reads_as_a_minute() {
+        assert_eq!(
+            format_remaining_countdown(Duration::milliseconds(500)),
+            "1m"
+        );
+        assert_eq!(format_remaining_countdown(Duration::milliseconds(1)), "1m");
+        assert_eq!(format_remaining_countdown(Duration::zero()), "0m");
+        assert_eq!(format_remaining_countdown(Duration::milliseconds(-1)), "0m");
+
+        let window = RateWindow::with_details(
+            50.0,
+            Some(300),
+            Some(Utc::now() + Duration::milliseconds(500)),
+            None,
+        );
+        let now = window.resets_at.expect("resets_at") - Duration::milliseconds(500);
+        assert_eq!(window.format_countdown_at(now).as_deref(), Some("1m"));
     }
 }

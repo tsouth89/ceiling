@@ -519,8 +519,7 @@ fn format_compact_reset_countdown_at(
     // Same floor-and-clamp / 1440-minute day cut as CLI, tooltip, and the
     // TypeScript hooks (SBS-927). The previous `num_minutes().max(0)` left
     // the last 59s as "Resets in 0h 00m".
-    let (days, hours, minutes) =
-        codexbar::core::remaining_countdown_parts((resets_at - now).num_seconds());
+    let (days, hours, minutes) = codexbar::core::remaining_countdown_parts(resets_at - now);
 
     if days > 0 {
         locale::format_locale(

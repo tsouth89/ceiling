@@ -332,10 +332,7 @@ fn reset_description(date: DateTime<Utc>) -> String {
     if date <= now {
         return "resets now".into();
     }
-    format!(
-        "resets in {}",
-        format_remaining_countdown((date - now).num_seconds())
-    )
+    format!("resets in {}", format_remaining_countdown(date - now))
 }
 
 fn deserialize_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>

@@ -226,7 +226,7 @@ impl McpDetailsMenu {
             if reset <= now {
                 "now".to_string()
             } else {
-                format_remaining_countdown((reset - now).num_seconds())
+                format_remaining_countdown(reset - now)
             }
         });
 

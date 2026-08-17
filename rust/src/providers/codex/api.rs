@@ -871,7 +871,7 @@ fn format_reset_countdown(reset_at: Option<DateTime<Utc>>) -> Option<String> {
     if dt <= now {
         return Some("now".to_string());
     }
-    Some(format_remaining_countdown((dt - now).num_seconds()))
+    Some(format_remaining_countdown(dt - now))
 }
 
 fn parse_chatgpt_base_url(config_content: &str) -> Option<String> {

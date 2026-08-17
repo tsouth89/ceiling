@@ -3,7 +3,7 @@
 //! Calculates whether the user is On Track, Ahead, or Behind their usage quota
 //! based on elapsed time and consumption rate.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 use super::{RateWindow, format_remaining_countdown};
 
@@ -184,7 +184,7 @@ impl UsagePace {
     /// Format the ETA as a human-readable string
     pub fn format_eta(&self) -> Option<String> {
         let secs = self.eta_seconds?;
-        Some(format_remaining_countdown(secs as i64))
+        Some(format_remaining_countdown(Duration::seconds(secs as i64)))
     }
 
     /// Format the pace as a status line

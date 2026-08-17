@@ -960,9 +960,7 @@ pub(crate) fn tooltip_short_reset_at(
             // Same floor-and-clamp / 1440-minute day cut as CLI and the TS
             // hooks. Without the clamp, 1-59s remaining rendered "0m"
             // (SBS-927 / leftover of SBS-621).
-            return Some(codexbar::core::format_remaining_countdown(
-                (dt - now).num_seconds(),
-            ));
+            return Some(codexbar::core::format_remaining_countdown(dt - now));
         }
     }
     // Fall back to the provider's own reset description, minus a leading
@@ -1738,6 +1736,21 @@ mod tests {
             .parse::<chrono::DateTime<chrono::Utc>>()
             .unwrap();
         let resets_at = (now + chrono::Duration::seconds(30)).to_rfc3339();
+        assert_eq!(
+            tooltip_short_reset_at(Some(&resets_at), None, now).as_deref(),
+            Some("1m")
+        );
+    }
+
+    /// A reset 200ms out is still a reset in the future. Passing the gap as
+    /// seconds truncated it to zero and put "0m" in the tooltip, while the
+    /// TypeScript hooks read the same instant as "1m".
+    #[test]
+    fn tooltip_short_reset_keeps_a_sub_second_remainder_at_one_minute() {
+        let now = "2026-04-02T12:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let resets_at = (now + chrono::Duration::milliseconds(200)).to_rfc3339();
         assert_eq!(
             tooltip_short_reset_at(Some(&resets_at), None, now).as_deref(),
             Some("1m")
