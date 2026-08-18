@@ -79,6 +79,24 @@ pub fn revoke_managed_credentials(provider: ProviderId) -> anyhow::Result<()> {
     .map_err(Into::into)
 }
 
+/// Whether `provider` still has a credential in Preferences.
+///
+/// An unreadable store answers `true`. This exists for the background refresh
+/// paths, which ask "was this revoked while I was working" before writing a
+/// renewed token, and [`ApiKeys::load`] cannot tell an empty store from one
+/// that failed to decode. Reading a decode failure as a revoke would drop a
+/// renewed token and leave the session on a credential the provider may have
+/// already rotated away from.
+pub(crate) fn provider_credential_present(provider: ProviderId) -> bool {
+    match ApiKeys::try_load() {
+        Ok(keys) => keys.has_key(provider.cli_name()),
+        Err(error) => {
+            tracing::warn!("Could not read stored API keys ({error}); treating as still signed in");
+            true
+        }
+    }
+}
+
 /// The body of [`revoke_managed_credentials`], with the paths and the
 /// provider-specific hook passed in so a test can fail the hook on purpose.
 ///

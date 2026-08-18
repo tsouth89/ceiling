@@ -416,12 +416,20 @@ impl Provider for StepFunProvider {
 /// in (SBS-920). Taking the same lock and re-reading Preferences under it is
 /// what makes the two orders decide, rather than race.
 fn persist_refreshed_token_in(store: &impl TokenSecretStore, token: &str) {
+    persist_refreshed_token_checked(store, token, stepfun_credential_configured)
+}
+
+/// Persist under the state lock, asking `configured` while holding it.
+///
+/// The predicate is a parameter so a test can drive the real locked path
+/// rather than only the decision it reaches.
+fn persist_refreshed_token_checked(
+    store: &impl TokenSecretStore,
+    token: &str,
+    configured: impl FnOnce() -> bool,
+) {
     let locked = crate::secure_file::with_state_write_lock(|| {
-        Ok(persist_refreshed_token_when(
-            store,
-            token,
-            stepfun_credential_configured(),
-        ))
+        Ok(persist_refreshed_token_when(store, token, configured()))
     });
     if let Err(error) = locked {
         tracing::debug!(
@@ -436,7 +444,7 @@ fn persist_refreshed_token_in(store: &impl TokenSecretStore, token: &str) {
 /// to remove and authenticates on its own, so a machine configured that way
 /// keeps refreshing normally.
 fn stepfun_credential_configured() -> bool {
-    if crate::settings::ApiKeys::load().has_key(crate::core::ProviderId::StepFun.cli_name()) {
+    if crate::settings::provider_credential_present(crate::core::ProviderId::StepFun) {
         return true;
     }
     ["STEPFUN_OASIS_TOKEN", "STEPFUN_TOKEN"]
@@ -724,6 +732,33 @@ mod tests {
         assert!(
             matches!(error, ProviderError::NotInstalled(_)),
             "expected NotInstalled after revoke, got {error:?}"
+        );
+    }
+
+    /// The locked path itself, not just the decision it reaches.
+    ///
+    /// Without this, dropping the lock or hard-coding the check to true would
+    /// leave every other test here green while the race this closes came back.
+    #[test]
+    fn the_locked_persist_path_writes_nothing_for_a_revoked_credential() {
+        let store = MemoryTokenSecretStore::new();
+
+        persist_refreshed_token_checked(&store, "refreshed-after-revoke", || false);
+
+        let error = resolve_token_in(&store, None, STEPFUN_CREDENTIAL_TARGET, &[])
+            .expect_err("a revoked credential must leave the keyring empty");
+        assert!(matches!(error, ProviderError::NotInstalled(_)));
+    }
+
+    #[test]
+    fn the_locked_persist_path_writes_for_a_live_credential() {
+        let store = MemoryTokenSecretStore::new();
+
+        persist_refreshed_token_checked(&store, "fresh-token", || true);
+
+        assert_eq!(
+            resolve_token_in(&store, None, STEPFUN_CREDENTIAL_TARGET, &[]).unwrap(),
+            "fresh-token"
         );
     }
 
