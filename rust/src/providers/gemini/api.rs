@@ -43,7 +43,6 @@ impl GeminiApi {
     }
 
     #[cfg(test)]
-    #[cfg(test)]
     fn for_test(home_dir: PathBuf, quota: &str, code_assist: &str, token_refresh: &str) -> Self {
         Self {
             client: reqwest::Client::new(),
