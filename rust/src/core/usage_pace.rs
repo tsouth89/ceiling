@@ -181,10 +181,16 @@ impl UsagePace {
         value.clamp(lower, upper)
     }
 
-    /// Format the ETA as a human-readable string
+    /// Format the ETA as a human-readable string.
+    ///
+    /// Converted through milliseconds, not whole seconds. The ETA is a float,
+    /// and truncating it toward zero turned a half-second remaining into "0m"
+    /// while every reset surface reads the same instant as "1m".
     pub fn format_eta(&self) -> Option<String> {
         let secs = self.eta_seconds?;
-        Some(format_remaining_countdown(Duration::seconds(secs as i64)))
+        Some(format_remaining_countdown(Duration::milliseconds(
+            (secs * 1000.0) as i64,
+        )))
     }
 
     /// Format the pace as a status line
@@ -287,6 +293,24 @@ mod tests {
         assert_eq!(PaceStage::OnTrack.label(), "On Track");
         assert_eq!(PaceStage::FarAhead.label(), "Far Ahead");
         assert_eq!(PaceStage::SlightlyBehind.emoji(), "🐢");
+    }
+
+    /// A fraction of a second left is still time left, the same as every other
+    /// countdown surface reports it.
+    #[test]
+    fn format_eta_keeps_a_sub_second_estimate_at_a_minute() {
+        let pace = |secs: f64| UsagePace {
+            stage: PaceStage::OnTrack,
+            delta_percent: 0.0,
+            expected_used_percent: 0.0,
+            actual_used_percent: 0.0,
+            eta_seconds: Some(secs),
+            will_last_to_reset: false,
+        };
+
+        assert_eq!(pace(0.5).format_eta().as_deref(), Some("1m"));
+        assert_eq!(pace(0.001).format_eta().as_deref(), Some("1m"));
+        assert_eq!(pace(0.0).format_eta().as_deref(), Some("0m"));
     }
 
     /// SBS-927: pace ETA used the same `hours > 24` cut as RateWindow, so a
