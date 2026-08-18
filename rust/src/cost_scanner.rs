@@ -689,7 +689,7 @@ impl CostScanner {
 
     /// Stand in for the ambient config home on an already-built scanner.
     #[cfg(test)]
-    fn with_ambient_home(mut self, home: PathBuf) -> Self {
+    pub(crate) fn with_ambient_home(mut self, home: PathBuf) -> Self {
         self.ambient_home_override = Some(home);
         self
     }
@@ -777,6 +777,36 @@ impl CostScanner {
 
         codex_cost_speed::apply_speed_to_summary(&mut summary, self.codex_speed);
         summary
+    }
+
+    /// Scan Grok Build local session logs (`~/.grok/sessions`).
+    ///
+    /// Dollars come from session `costUsdTicks` (API-equivalent), the same
+    /// figure Charts already shows. SBS-934: `codexbar cost` and serve `/cost`
+    /// must call this instead of treating Grok as unsupported.
+    pub fn scan_grok(&self) -> CostSummary {
+        scan_grok_report(self, self.days, &[]).thirty_days
+    }
+
+    /// True when local session logs can be priced for this provider.
+    ///
+    /// Charts, `codexbar cost`, serve `/cost`, and `codexbar mcp` get_spend
+    /// must agree. Cursor, Gemini, and Copilot stay unsupported.
+    pub fn supports_local_scan(provider: ProviderId) -> bool {
+        matches!(
+            provider,
+            ProviderId::Codex | ProviderId::Claude | ProviderId::Grok
+        )
+    }
+
+    /// Scan one provider's local logs, or `None` when that provider has none.
+    pub fn scan_provider(&self, provider: ProviderId) -> Option<CostSummary> {
+        match provider {
+            ProviderId::Codex => Some(self.scan_codex()),
+            ProviderId::Claude => Some(self.scan_claude()),
+            ProviderId::Grok => Some(self.scan_grok()),
+            _ => None,
+        }
     }
 
     /// Scan Claude local logs
@@ -2640,6 +2670,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ProviderId;
     use std::io::Write;
 
     #[test]
@@ -3700,6 +3731,28 @@ mod tests {
         assert!(mixed.thirty_days.unknown_models.contains("grok-4.5"));
         // Priced model remains priced / not unknown.
         assert!(!mixed.thirty_days.unknown_models.contains("grok-4.5-build"));
+    }
+
+    /// SBS-934: CLI/serve used to treat Grok as unsupported even though the
+    /// report scanner already walked `~/.grok/sessions`.
+    #[test]
+    fn scan_provider_supports_grok_and_not_cursor() {
+        assert!(CostScanner::supports_local_scan(ProviderId::Grok));
+        assert!(CostScanner::supports_local_scan(ProviderId::Codex));
+        assert!(CostScanner::supports_local_scan(ProviderId::Claude));
+        assert!(!CostScanner::supports_local_scan(ProviderId::Cursor));
+        assert!(!CostScanner::supports_local_scan(ProviderId::Gemini));
+        assert!(!CostScanner::supports_local_scan(ProviderId::Copilot));
+        assert!(
+            CostScanner::new(1)
+                .scan_provider(ProviderId::Grok)
+                .is_some()
+        );
+        assert!(
+            CostScanner::new(1)
+                .scan_provider(ProviderId::Cursor)
+                .is_none()
+        );
     }
 
     /// Buckets are keyed by the machine's local clock, not UTC, and are created

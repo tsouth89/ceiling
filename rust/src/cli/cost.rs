@@ -1,6 +1,6 @@
 //! Cost command implementation
 //!
-//! Scans local JSONL logs to calculate token costs for Codex and Claude.
+//! Scans local logs to calculate token costs for Codex, Claude, and Grok.
 
 use clap::Args;
 
@@ -11,7 +11,7 @@ use crate::cost_scanner::{CostScanner, CostSummary};
 /// Arguments for the cost command
 #[derive(Args, Debug, Default)]
 pub struct CostArgs {
-    /// Provider to query (codex, claude, cursor, gemini, copilot, all, both)
+    /// Provider to query (codex, claude, grok, cursor, gemini, copilot, all, both)
     #[arg(short, long)]
     pub provider: Option<String>,
 
@@ -63,40 +63,7 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
         scanner.codex_speed()
     );
 
-    // Collect cost data for requested providers
-    let mut results: Vec<CostResult> = Vec::new();
-
-    for provider in providers.as_list() {
-        match provider {
-            ProviderId::Codex => {
-                let summary = scanner.scan_codex();
-                results.push(CostResult {
-                    provider: provider.cli_name().to_string(),
-                    display_name: provider.display_name().to_string(),
-                    summary,
-                    supported: true,
-                });
-            }
-            ProviderId::Claude => {
-                let summary = scanner.scan_claude();
-                results.push(CostResult {
-                    provider: provider.cli_name().to_string(),
-                    display_name: provider.display_name().to_string(),
-                    summary,
-                    supported: true,
-                });
-            }
-            _ => {
-                // Other providers don't have local logs to scan
-                results.push(CostResult {
-                    provider: provider.cli_name().to_string(),
-                    display_name: provider.display_name().to_string(),
-                    summary: CostSummary::default(),
-                    supported: false,
-                });
-            }
-        }
-    }
+    let results = collect_results(&scanner, &providers.as_list());
 
     match format {
         OutputFormat::Text => {
@@ -110,12 +77,79 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+const UNSUPPORTED_LOCAL_LOGS_HINT: &str = "(Only Codex, Claude, and Grok have local logs)";
+
 /// Cost result for a provider
 struct CostResult {
     provider: String,
     display_name: String,
     summary: CostSummary,
     supported: bool,
+}
+
+fn collect_results(scanner: &CostScanner, providers: &[ProviderId]) -> Vec<CostResult> {
+    providers
+        .iter()
+        .copied()
+        .map(|provider| match scanner.scan_provider(provider) {
+            Some(summary) => CostResult {
+                provider: provider.cli_name().to_string(),
+                display_name: provider.display_name().to_string(),
+                summary,
+                supported: true,
+            },
+            None => CostResult {
+                provider: provider.cli_name().to_string(),
+                display_name: provider.display_name().to_string(),
+                summary: CostSummary::default(),
+                supported: false,
+            },
+        })
+        .collect()
+}
+
+fn result_json(result: &CostResult, days: u32) -> serde_json::Value {
+    if !result.supported {
+        serde_json::json!({
+            "provider": result.provider,
+            "supported": false,
+            "error": "Local cost scanning not available for this provider"
+        })
+    } else {
+        serde_json::json!({
+            "provider": result.provider,
+            "supported": true,
+            "days_scanned": days,
+            "cost": {
+                "total_usd": result.summary.total_cost_usd,
+                "currency": "USD",
+                "codex_speed": result.summary.codex_cost_speed,
+                "codex_service_tier": result.summary.codex_service_tier
+            },
+            "tokens": {
+                "input": result.summary.input_tokens,
+                "output": result.summary.output_tokens,
+                "cached": result.summary.cached_tokens,
+                "cache_read": result.summary.cache_read_tokens,
+                "cache_write": result.summary.cache_write_tokens
+            },
+            "sessions_count": result.summary.sessions_count,
+            "by_model": result.summary.by_model,
+            "by_effort": result.summary.by_effort,
+            "by_effort_tokens": result.summary.by_effort_tokens.iter().map(|(bucket, counts)| {
+                (bucket.clone(), serde_json::json!({
+                    "input": counts.input_tokens,
+                    "output": counts.output_tokens,
+                    "cached": counts.cached_tokens,
+                    "total": counts.total()
+                }))
+            }).collect::<serde_json::Map<_, _>>(),
+            "period": {
+                "start": result.summary.period_start.map(|d| d.to_string()),
+                "end": result.summary.period_end.map(|d| d.to_string())
+            }
+        })
+    }
 }
 
 /// Print text output
@@ -132,7 +166,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
 
         if !result.supported {
             println!("  Local cost scanning not available for this provider");
-            println!("  (Only Codex and Claude have local logs)");
+            println!("  {UNSUPPORTED_LOCAL_LOGS_HINT}");
         } else if result.summary.sessions_count == 0 {
             println!("  No usage data found");
             println!("  Check that you have used {} locally", result.display_name);
@@ -220,52 +254,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
 
 /// Print JSON output
 fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
-    let payloads: Vec<serde_json::Value> = results
-        .iter()
-        .map(|r| {
-            if !r.supported {
-                serde_json::json!({
-                    "provider": r.provider,
-                    "supported": false,
-                    "error": "Local cost scanning not available for this provider"
-                })
-            } else {
-                serde_json::json!({
-                    "provider": r.provider,
-                    "supported": true,
-                    "days_scanned": days,
-                    "cost": {
-                        "total_usd": r.summary.total_cost_usd,
-                        "currency": "USD",
-                        "codex_speed": r.summary.codex_cost_speed,
-                        "codex_service_tier": r.summary.codex_service_tier
-                    },
-                    "tokens": {
-                        "input": r.summary.input_tokens,
-                        "output": r.summary.output_tokens,
-                        "cached": r.summary.cached_tokens,
-                        "cache_read": r.summary.cache_read_tokens,
-                        "cache_write": r.summary.cache_write_tokens
-                    },
-                    "sessions_count": r.summary.sessions_count,
-                    "by_model": r.summary.by_model,
-                    "by_effort": r.summary.by_effort,
-                    "by_effort_tokens": r.summary.by_effort_tokens.iter().map(|(bucket, counts)| {
-                        (bucket.clone(), serde_json::json!({
-                            "input": counts.input_tokens,
-                            "output": counts.output_tokens,
-                            "cached": counts.cached_tokens,
-                            "total": counts.total()
-                        }))
-                    }).collect::<serde_json::Map<_, _>>(),
-                    "period": {
-                        "start": r.summary.period_start.map(|d| d.to_string()),
-                        "end": r.summary.period_end.map(|d| d.to_string())
-                    }
-                })
-            }
-        })
-        .collect();
+    let payloads: Vec<serde_json::Value> = results.iter().map(|r| result_json(r, days)).collect();
 
     let output = if pretty {
         serde_json::to_string_pretty(&payloads)?
@@ -313,5 +302,93 @@ mod tests {
     #[test]
     fn format_number_handles_u64_max() {
         assert_eq!(format_number(u64::MAX), "18,446,744,073,709,551,615");
+    }
+
+    /// SBS-934: a default Enabled-providers cost run listed Grok as
+    /// unsupported and told the user only Codex and Claude have local logs.
+    #[test]
+    fn grok_cost_is_supported_and_does_not_claim_codex_claude_only() {
+        let scanner = CostScanner::new(7);
+        let results = collect_results(&scanner, &[ProviderId::Grok, ProviderId::Cursor]);
+        assert!(results[0].supported, "grok must be a local-log scanner");
+        assert!(!results[1].supported, "cursor stays unsupported");
+        let grok_json = result_json(&results[0], 7);
+        assert_eq!(grok_json["supported"], true);
+        assert!(json_has_no_error(&grok_json));
+        let cursor_json = result_json(&results[1], 7);
+        assert_eq!(cursor_json["supported"], false);
+        assert!(
+            !UNSUPPORTED_LOCAL_LOGS_HINT.contains("Only Codex and Claude have local logs"),
+            "hint must name Grok: {UNSUPPORTED_LOCAL_LOGS_HINT}"
+        );
+        assert!(
+            UNSUPPORTED_LOCAL_LOGS_HINT.contains("Grok"),
+            "hint must name Grok: {UNSUPPORTED_LOCAL_LOGS_HINT}"
+        );
+    }
+
+    fn json_has_no_error(value: &serde_json::Value) -> bool {
+        value.get("error").is_none()
+    }
+
+    /// SBS-934: when Grok sessions exist, cost must report their ticks the
+    /// same way Charts already does — not `supported: false`.
+    #[test]
+    fn grok_cost_reads_session_ticks_when_sessions_exist() {
+        let home = tempfile::tempdir().unwrap();
+        let session = home
+            .path()
+            .join("sessions")
+            .join("proj")
+            .join("019f-session");
+        std::fs::create_dir_all(&session).unwrap();
+        let now = chrono::Utc::now();
+        let ts = now.timestamp() as f64;
+        let ms = now.timestamp_millis();
+        let updates = format!(
+            r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelCalls":17,"costUsdTicks":5912850000,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":800,"reasoningTokens":40,"modelCalls":17,"costUsdTicks":5912850000}}}}}}}}}}}}"#
+        );
+        std::fs::write(session.join("updates.jsonl"), updates).unwrap();
+        std::fs::write(
+            session.join("summary.json"),
+            r#"{"info":{"cwd":"C:\\projects\\personal\\ceiling"},"reasoning_effort":"high","current_model_id":"grok-4.5"}"#,
+        )
+        .unwrap();
+
+        let scanner = CostScanner::new(7).with_ambient_home(home.path().to_path_buf());
+        let results = collect_results(&scanner, &[ProviderId::Grok]);
+        assert!(results[0].supported);
+        assert_eq!(results[0].summary.sessions_count, 1);
+        assert!(
+            (results[0].summary.total_cost_usd - 0.591285).abs() < 1e-9,
+            "got {}",
+            results[0].summary.total_cost_usd
+        );
+        let payload = result_json(&results[0], 7);
+        assert_eq!(payload["supported"], true);
+        assert_eq!(payload["sessions_count"], 1);
+    }
+
+    /// SBS-934: default enabled providers include grok; that entry must not
+    /// be the unsupported arm.
+    #[test]
+    fn default_enabled_cost_marks_grok_supported() {
+        let settings = crate::settings::Settings::default();
+        let providers = ProviderSelection::Enabled.as_list_from(&settings);
+        assert!(
+            providers.contains(&ProviderId::Grok),
+            "default enabled set must still include grok: {providers:?}"
+        );
+        let results = collect_results(&CostScanner::new(1), &providers);
+        let grok = results
+            .iter()
+            .find(|r| r.provider == "grok")
+            .expect("grok row");
+        assert!(grok.supported);
+        let cursor = results
+            .iter()
+            .find(|r| r.provider == "cursor")
+            .expect("cursor row");
+        assert!(!cursor.supported);
     }
 }
