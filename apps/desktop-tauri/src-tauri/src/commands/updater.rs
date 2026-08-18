@@ -10,7 +10,7 @@ use tauri::Manager;
 use super::open_url_in_browser;
 use crate::events;
 use crate::state::{AppState, UpdateState, UpdateStatePayload};
-use codexbar::updater::UpdateInfo;
+use codexbar::updater::{UpdateCheckError, UpdateInfo};
 
 #[tauri::command]
 pub fn get_update_state(state: tauri::State<'_, Mutex<AppState>>) -> UpdateStatePayload {
@@ -25,14 +25,13 @@ pub async fn check_for_updates(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<UpdateStatePayload, String> {
-    // Guard: skip if already checking or downloading.
+    // Guard: skip if already checking, downloading, or ready to install.
+    // Ready keeps installer_path; a second check that found "still latest"
+    // used to map to Idle and hide Install & Restart (SBS-931 leftover).
     {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
-        match guard.update_state {
-            UpdateState::Checking | UpdateState::Downloading(_) => {
-                return Ok(guard.update_payload());
-            }
-            _ => {}
+        if should_skip_update_check(&guard.update_state) {
+            return Ok(guard.update_payload());
         }
         guard.update_state = UpdateState::Checking;
         guard.update_info = None;
@@ -53,14 +52,7 @@ pub async fn check_for_updates(
     )
     .await;
 
-    let (new_state, new_info) = match result {
-        Ok(Some(info)) => (UpdateState::Available(info.version.clone()), Some(info)),
-        Ok(None) => (UpdateState::Idle, None),
-        Err(_) => (
-            UpdateState::Error("Update check timed out".to_string()),
-            None,
-        ),
-    };
+    let (new_state, new_info) = state_from_check_result(result);
 
     let payload = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
@@ -72,6 +64,34 @@ pub async fn check_for_updates(
     events::emit_update_state_changed(&app, &payload);
 
     Ok(payload)
+}
+
+fn should_skip_update_check(state: &UpdateState) -> bool {
+    matches!(
+        state,
+        UpdateState::Checking | UpdateState::Downloading(_) | UpdateState::Ready
+    )
+}
+
+/// Map a completed check onto Idle / Available / Error.
+///
+/// Idle is only a successful "no newer release". Timeout, transport, HTTP,
+/// and parse failures are Error so About cannot say the user is current.
+fn state_from_check_result(
+    result: Result<Result<Option<UpdateInfo>, UpdateCheckError>, tokio::time::error::Elapsed>,
+) -> (UpdateState, Option<UpdateInfo>) {
+    match result {
+        Ok(Ok(Some(info))) => (UpdateState::Available(info.version.clone()), Some(info)),
+        Ok(Ok(None)) => (UpdateState::Idle, None),
+        Ok(Err(error)) => (UpdateState::Error(error.user_message()), None),
+        Err(_) => (
+            UpdateState::Error(codexbar::locale::get_text(
+                codexbar::locale::current_language(),
+                codexbar::locale::LocaleKey::UpdateErrorTimedOut,
+            )),
+            None,
+        ),
+    }
 }
 
 #[tauri::command]
@@ -281,8 +301,78 @@ pub fn open_release_page(state: tauri::State<'_, Mutex<AppState>>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{AppState, UpdateState};
-    use codexbar::updater::{UpdateDelivery, UpdateInfo};
+    #[cfg(target_os = "windows")]
+    use crate::state::AppState;
+    use crate::state::UpdateState;
+    use codexbar::updater::{UpdateCheckError, UpdateDelivery, UpdateInfo};
+
+    fn sample_info(version: &str) -> UpdateInfo {
+        UpdateInfo {
+            version: version.to_string(),
+            download_url: "https://example.com/Ceiling-Setup.exe".to_string(),
+            expected_sha256: Some("a".repeat(64)),
+            release_url: "https://example.com/release".to_string(),
+            release_notes: String::new(),
+            delivery: UpdateDelivery::Installer,
+        }
+    }
+
+    /// SBS-931: GitHub/network/parse failures must not become Idle.
+    #[test]
+    fn failed_github_check_is_error_not_idle() {
+        for error in [
+            UpdateCheckError::Network,
+            UpdateCheckError::Http { status: 403 },
+            UpdateCheckError::Parse,
+            UpdateCheckError::Client,
+        ] {
+            let (state, info) = state_from_check_result(Ok(Err(error.clone())));
+            match state {
+                UpdateState::Error(message) => {
+                    assert_eq!(message, error.user_message());
+                    assert!(
+                        !message.to_ascii_lowercase().contains("up to date"),
+                        "{message}"
+                    );
+                }
+                other => panic!("expected Error, got {other:?} for {error:?}"),
+            }
+            assert!(info.is_none());
+        }
+    }
+
+    /// Only a successful "no newer release" is Idle.
+    #[test]
+    fn successful_current_release_is_idle() {
+        let (state, info) = state_from_check_result(Ok(Ok(None)));
+        assert_eq!(state, UpdateState::Idle);
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn successful_newer_release_is_available() {
+        let info = sample_info("v99.0.0");
+        let (state, stored) = state_from_check_result(Ok(Ok(Some(info))));
+        assert_eq!(state, UpdateState::Available("v99.0.0".to_string()));
+        assert_eq!(
+            stored.as_ref().map(|item| item.version.as_str()),
+            Some("v99.0.0")
+        );
+    }
+
+    #[test]
+    fn ready_check_is_skipped_so_install_affordance_stays() {
+        assert!(should_skip_update_check(&UpdateState::Ready));
+        assert!(should_skip_update_check(&UpdateState::Checking));
+        assert!(should_skip_update_check(&UpdateState::Downloading(0.5)));
+        assert!(!should_skip_update_check(&UpdateState::Idle));
+        assert!(!should_skip_update_check(&UpdateState::Error(
+            "GitHub did not return a release.".to_string()
+        )));
+        assert!(!should_skip_update_check(&UpdateState::Available(
+            "v99.0.0".to_string()
+        )));
+    }
 
     #[cfg(target_os = "windows")]
     #[test]
