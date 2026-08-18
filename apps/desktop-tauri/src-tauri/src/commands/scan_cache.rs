@@ -30,6 +30,15 @@ pub(crate) struct CachedScan<T> {
 struct PersistedScanCache<T> {
     #[serde(default)]
     version: u8,
+    /// Fingerprint of the model prices these results were computed under.
+    ///
+    /// Both cards carry dollar figures, so this is derived data rather than a
+    /// user setting: a file written under different prices is discarded, the
+    /// same way the record index is. Without it a cache written minutes before
+    /// a price change would keep serving the old dollars for its whole TTL,
+    /// and the index rebuild behind it would never be asked for.
+    #[serde(default)]
+    fingerprint: u64,
     #[serde(default = "HashMap::new")]
     entries: HashMap<String, CachedScan<T>>,
 }
@@ -38,6 +47,7 @@ impl<T> Default for PersistedScanCache<T> {
     fn default() -> Self {
         Self {
             version: 0,
+            fingerprint: 0,
             entries: HashMap::new(),
         }
     }
@@ -131,7 +141,17 @@ where
     }
 
     fn cached(&'static self, key: &str) -> Option<CachedScan<T>> {
-        self.entries().lock().ok()?.entries.get(key).cloned()
+        let mut guard = self.entries().lock().ok()?;
+        // Prices moved since this was written, so the dollars in it are stale
+        // in a way the TTL knows nothing about.
+        if guard.fingerprint != codexbar::usage_index::pricing_fingerprint() {
+            if !guard.entries.is_empty() {
+                tracing::info!("model prices changed; dropping cached {}", self.file_name);
+                guard.entries.clear();
+            }
+            return None;
+        }
+        guard.entries.get(key).cloned()
     }
 
     /// Whether anything has ever been cached here, for any key.
@@ -149,6 +169,7 @@ where
             return;
         };
         guard.version = self.version;
+        guard.fingerprint = codexbar::usage_index::pricing_fingerprint();
         guard.entries.insert(
             key.clone(),
             CachedScan {
@@ -213,10 +234,11 @@ where
         let Some(path) = self.path() else {
             return PersistedScanCache::default();
         };
+        let prices = codexbar::usage_index::pricing_fingerprint();
         fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<PersistedScanCache<T>>(&bytes).ok())
-            .filter(|cache| cache.version == self.version)
+            .filter(|cache| cache.version == self.version && cache.fingerprint == prices)
             .unwrap_or_default()
     }
 }
@@ -337,6 +359,29 @@ mod tests {
         let now = 1_000_000_000;
 
         assert!(!is_stale(now + 60_000, now, ttl));
+    }
+
+    /// A file written under other prices is not read back.
+    ///
+    /// These entries carry dollar figures, so a price change makes them wrong
+    /// rather than merely old, and the TTL cannot see that.
+    #[test]
+    fn a_cache_written_under_other_prices_is_discarded() {
+        let mut cache = cache_with(&[("today", 1)]);
+        cache.version = 1;
+        cache.fingerprint = 7;
+        let bytes = serde_json::to_vec(&cache).expect("encode");
+
+        let same: PersistedScanCache<Row> = serde_json::from_slice(&bytes).expect("decode");
+        assert_eq!(same.entries.len(), 1);
+
+        let reread: Option<PersistedScanCache<Row>> = serde_json::from_slice(&bytes)
+            .ok()
+            .filter(|cache: &PersistedScanCache<Row>| cache.version == 1 && cache.fingerprint == 8);
+        assert!(
+            reread.is_none(),
+            "a different fingerprint must not be read back"
+        );
     }
 
     #[test]

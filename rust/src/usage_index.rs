@@ -406,10 +406,15 @@ impl<R: IndexedRecord> UsageIndex<R> {
         if entry.covers_from_ms > needs_from_ms {
             return Lookup::Miss;
         }
-        if entry.len == facts.len && entry.mtime_ms == facts.mtime_ms {
+        // An entry that stopped short of the file it describes is not a
+        // complete answer, whatever wrote it. Reading it as one is how a
+        // transcript that was briefly unreadable would report short totals for
+        // as long as it sat unchanged.
+        let complete = entry.parsed_bytes >= entry.len;
+        if complete && entry.len == facts.len && entry.mtime_ms == facts.mtime_ms {
             return Lookup::Hit(&entry.records);
         }
-        if R::RESUMABLE && facts.len > entry.len && entry.parsed_bytes <= facts.len {
+        if R::RESUMABLE && facts.len >= entry.len && entry.parsed_bytes < facts.len {
             return Lookup::Append {
                 from: entry.parsed_bytes,
                 prior: &entry.records,
@@ -600,6 +605,13 @@ impl<R: IndexedRecord> IndexStore<R> {
             .state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A scan that was all hits still proves those transcripts are in use.
+        // That only has to reach disk before the TTL sweep would drop them:
+        // rewriting the whole index on every scan would cost more than it saves.
+        let stale_touch = touched
+            .iter()
+            .filter_map(|path| guard.entries.get(path))
+            .any(|entry| now_ms().saturating_sub(entry.used_at_ms) > ENTRY_TTL_MS / 2);
         for path in touched {
             guard.touch(path);
         }
@@ -607,7 +619,7 @@ impl<R: IndexedRecord> IndexStore<R> {
         for entry in updates {
             guard.insert(entry);
         }
-        if !changed {
+        if !changed && !stale_touch {
             return;
         }
         if let Some(path) = self.path() {
@@ -657,7 +669,7 @@ impl<R: IndexedRecord> IndexStore<R> {
 /// even when no price moved, and an mtime would throw the index away every day
 /// for nothing. The app version rides along because the built-in rate card
 /// ships with the binary.
-fn pricing_fingerprint() -> u64 {
+pub fn pricing_fingerprint() -> u64 {
     let catalog = crate::core::pricing_catalog_path()
         .and_then(|path| fs::read(path).ok())
         .map(|bytes| fnv1a64(&bytes))
@@ -785,6 +797,30 @@ mod tests {
                 assert_eq!(prior.len(), 1);
             }
             _ => panic!("a longer file should resume, not re-read"),
+        }
+    }
+
+    /// A stored entry that stopped short of the file is not a complete answer.
+    ///
+    /// A transcript that could not be read to the end once would otherwise be
+    /// served as its short self on every later scan, quietly under-reporting
+    /// until something rewrote the file.
+    #[test]
+    fn an_entry_that_stopped_short_of_the_file_is_not_a_hit() {
+        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(1);
+        index.insert(NewEntry {
+            parsed_bytes: 40,
+            ..entry(
+                "/logs/a.jsonl",
+                facts(100, 5),
+                vec![claude_record("claude-opus-4-8", 1.0)],
+            )
+        });
+
+        match index.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME) {
+            Lookup::Append { from, .. } => assert_eq!(from, 40, "resume where it stopped"),
+            Lookup::Hit(_) => panic!("a short entry must not answer as complete"),
+            Lookup::Miss => {}
         }
     }
 

@@ -1144,12 +1144,15 @@ where
                 Lookup::Hit(records) => (FileRecords::Cached(records), IndexOutcome::Reused),
                 Lookup::Append { .. } | Lookup::Miss => {
                     // A rollout is parsed whole or not at all, so there is no
-                    // partial read to guard against here.
-                    let records = JsonlScanner::parse_codex_file(path, &range, 0, None, None)
-                        .map(|parsed| parsed.records)
-                        .unwrap_or_default();
+                    // partial read to guard against. A read that failed is a
+                    // different matter: storing it would record "this rollout
+                    // has no usage" against a file that was simply busy.
+                    let Ok(parsed) = JsonlScanner::parse_codex_file(path, &range, 0, None, None)
+                    else {
+                        return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
+                    };
                     (
-                        FileRecords::Parsed(records),
+                        FileRecords::Parsed(parsed.records),
                         IndexOutcome::Store {
                             facts,
                             parsed_bytes: facts.len,
@@ -1352,16 +1355,16 @@ type IndexedFile<'a, R> = (FileRecords<'a, R>, IndexOutcome);
 /// exactly those and serve the truncated set as a hit.
 fn read_outcome(
     cancel: Option<&AtomicBool>,
+    read: &StreamedRecords,
     facts: FileFacts,
-    parsed_bytes: u64,
     covers_from_ms: i64,
 ) -> IndexOutcome {
-    if is_cancelled(cancel) {
+    if is_cancelled(cancel) || !read.reached_end {
         return IndexOutcome::Incomplete;
     }
     IndexOutcome::Store {
         facts,
-        parsed_bytes,
+        parsed_bytes: read.parsed_bytes,
         covers_from_ms,
     }
 }
@@ -1446,7 +1449,7 @@ fn for_each_claude_file<F>(
                     covers_from_ms,
                 } => {
                     let mut records = prior.to_vec();
-                    let at = stream_claude_records(path, from, cancel, |record| {
+                    let read = stream_claude_records(path, from, cancel, |record| {
                         if keep(&record) {
                             records.push(record);
                         }
@@ -1455,19 +1458,19 @@ fn for_each_claude_file<F>(
                     // fresh horizon would, so the entry keeps its own claim.
                     (
                         FileRecords::Parsed(records),
-                        read_outcome(cancel, facts, at, covers_from_ms),
+                        read_outcome(cancel, &read, facts, covers_from_ms),
                     )
                 }
                 Lookup::Miss => {
                     let mut records = Vec::new();
-                    let at = stream_claude_records(path, 0, cancel, |record| {
+                    let read = stream_claude_records(path, 0, cancel, |record| {
                         if keep(&record) {
                             records.push(record);
                         }
                     });
                     (
                         FileRecords::Parsed(records),
-                        read_outcome(cancel, facts, at, horizon_ms),
+                        read_outcome(cancel, &read, facts, horizon_ms),
                     )
                 }
             }
@@ -1511,28 +1514,50 @@ fn for_each_claude_file<F>(
 ///
 /// The offset is only meaningful because Claude appends whole JSON lines and
 /// never rewrites them, so resuming there picks up exactly where this stopped.
+struct StreamedRecords {
+    /// Byte offset the read stopped at.
+    parsed_bytes: u64,
+    /// Whether the read got to the end of the file under its own steam.
+    ///
+    /// False when the file could not be opened, sought, or read. A read that
+    /// failed holds part of a transcript, and storing that part against the
+    /// whole file's size and mtime would serve the short version forever: an
+    /// antivirus or sync client holding a file open for a moment would cost
+    /// that transcript from every total until it was rewritten.
+    reached_end: bool,
+}
+
 fn stream_claude_records<F>(
     path: &Path,
     from: u64,
     cancel: Option<&AtomicBool>,
     mut on_record: F,
-) -> u64
+) -> StreamedRecords
 where
     F: FnMut(ClaudeUsageRecord),
 {
     let Ok(file) = File::open(path) else {
-        return from;
+        return StreamedRecords {
+            parsed_bytes: from,
+            reached_end: false,
+        };
     };
     let mut reader = BufReader::new(file);
     if from > 0 && reader.seek(SeekFrom::Start(from)).is_err() {
-        return from;
+        return StreamedRecords {
+            parsed_bytes: from,
+            reached_end: false,
+        };
     }
 
     let mut at = from;
+    let mut reached_end = true;
     let mut line = Vec::with_capacity(16 * 1024);
     loop {
         line.clear();
         let Ok(bytes_read) = reader.read_until(b'\n', &mut line) else {
+            // A read that errored part way holds an unknown remainder.
+            reached_end = false;
             break;
         };
         if bytes_read == 0 {
@@ -1562,7 +1587,10 @@ where
             on_record(record);
         }
     }
-    at
+    StreamedRecords {
+        parsed_bytes: at,
+        reached_end,
+    }
 }
 
 /// Stream the de-duplicated, in-window usage records from one transcript
@@ -3338,7 +3366,8 @@ mod tests {
         drop(file);
 
         let mut first_pass = Vec::new();
-        let offset = stream_claude_records(&path, 0, None, |record| first_pass.push(record));
+        let offset =
+            stream_claude_records(&path, 0, None, |record| first_pass.push(record)).parsed_bytes;
         assert_eq!(first_pass.len(), 3);
         assert_eq!(offset, fs::metadata(&path).unwrap().len());
 
@@ -3349,7 +3378,8 @@ mod tests {
         drop(file);
 
         let mut resumed = first_pass.clone();
-        let end = stream_claude_records(&path, offset, None, |record| resumed.push(record));
+        let end =
+            stream_claude_records(&path, offset, None, |record| resumed.push(record)).parsed_bytes;
         let mut whole = Vec::new();
         stream_claude_records(&path, 0, None, |record| whole.push(record));
 
@@ -3386,7 +3416,8 @@ mod tests {
         let at = stream_claude_records(&path, 0, Some(&cancel), |record| {
             taken.push(record);
             cancel.store(true, Ordering::Relaxed);
-        });
+        })
+        .parsed_bytes;
 
         assert_eq!(taken.len(), 1, "cancellation must stop the read");
         assert!(at < fs::metadata(&path).unwrap().len());
@@ -3424,7 +3455,8 @@ mod tests {
         drop(file);
 
         let mut records = Vec::new();
-        let offset = stream_claude_records(&path, 0, None, |record| records.push(record));
+        let offset =
+            stream_claude_records(&path, 0, None, |record| records.push(record)).parsed_bytes;
 
         assert_eq!(records.len(), 1);
         assert!(offset < fs::metadata(&path).unwrap().len());
