@@ -1471,6 +1471,25 @@ fn activity_heatmap_days(today: NaiveDate) -> Vec<String> {
         .collect()
 }
 
+/// Keep only the hours that fall on the grid's own day axis.
+///
+/// The report a scan produces is not required to stop where the grid does, and
+/// today it does not have to: an hour from a day the calendar strip never draws
+/// would still land in the weekday-by-hour view, which reads as activity on a
+/// day the user cannot see. Filtering here keeps the two views of the same data
+/// answering the same question, whatever window the report was built for.
+fn heatmap_hours_for_days(
+    provider_id: &str,
+    report: &CostUsageReport,
+    days: &[String],
+) -> Vec<ActivityHourPoint> {
+    let axis: HashSet<&str> = days.iter().map(String::as_str).collect();
+    activity_hours_for_provider(provider_id, report)
+        .into_iter()
+        .filter(|point| axis.contains(point.date.as_str()))
+        .collect()
+}
+
 /// Hour rows for one provider's report.
 fn activity_hours_for_provider(
     provider_id: &str,
@@ -1542,15 +1561,12 @@ fn load_activity_heatmap<Tz: TimeZone>(now: DateTime<Tz>) -> ActivityHeatmap
 where
     Tz::Offset: std::fmt::Display,
 {
+    let days = activity_heatmap_days(now.date_naive());
     let per_provider = scan_providers_parallel(&API_VALUE_PROVIDERS, |provider_id| {
         let report = get_cost_usage_report_hourly(provider_id, ACTIVITY_HEATMAP_DAYS)?;
-        Some(activity_hours_for_provider(provider_id, &report))
+        Some(heatmap_hours_for_days(provider_id, &report, &days))
     });
-    assemble_activity_heatmap(
-        activity_heatmap_days(now.date_naive()),
-        per_provider,
-        format!("UTC{}", now.offset()),
-    )
+    assemble_activity_heatmap(days.clone(), per_provider, format!("UTC{}", now.offset()))
 }
 
 /// One model's local Cursor activity. This is code-contribution activity from
@@ -2428,12 +2444,12 @@ mod tests {
         ProviderLocalUsageSummary, activity_heatmap_days, activity_hours_for_provider,
         api_value_period, assemble_activity_heatmap, chart_cache_key, comparison_period_specs,
         cost_fetch_failure_allows_early_retry, current_unix_ms, daily_series_from_report,
-        effort_breakdown, format_cost_csv, load_chart_cache_from, local_midnight_in_tz,
-        local_usage_summary_from_report, local_yesterday_window_utc, localized_estimate_note,
-        model_breakdown, parse_api_value_custom_range, period_from_daily_series,
-        pricing_coverage_tokens, project_breakdown, prune_chart_cache, prune_loaded_chart_cache,
-        resolve_chart_account_scope, spend_anomaly_reading, spend_budget_period_details,
-        token_breakdown, token_cost_cache_is_fresh,
+        effort_breakdown, format_cost_csv, heatmap_hours_for_days, load_chart_cache_from,
+        local_midnight_in_tz, local_usage_summary_from_report, local_yesterday_window_utc,
+        localized_estimate_note, model_breakdown, parse_api_value_custom_range,
+        period_from_daily_series, pricing_coverage_tokens, project_breakdown, prune_chart_cache,
+        prune_loaded_chart_cache, resolve_chart_account_scope, spend_anomaly_reading,
+        spend_budget_period_details, token_breakdown, token_cost_cache_is_fresh,
     };
     use crate::commands::is_provider_cache_fresh;
     use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -3877,6 +3893,47 @@ mod tests {
             hour,
             summary,
         }
+    }
+
+    /// An hour from a day the strip does not draw must not reach the grid.
+    ///
+    /// The two views are the same data asked two ways, so an hour the calendar
+    /// cannot show would read as activity on a day that is not there.
+    #[test]
+    fn heatmap_hours_keep_only_the_days_on_the_axis() {
+        let mut busy = CostSummary {
+            total_cost_usd: 1.0,
+            ..CostSummary::default()
+        };
+        busy.by_model_tokens.insert(
+            "gpt-5".to_string(),
+            ModelTokenCounts {
+                input_tokens: 10,
+                output_tokens: 5,
+                calls: 1,
+                ..ModelTokenCounts::default()
+            },
+        );
+        let report = CostUsageReport {
+            hourly_activity: vec![
+                HourlyActivityPoint {
+                    date: NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(),
+                    hour: 9,
+                    summary: busy.clone(),
+                },
+                HourlyActivityPoint {
+                    date: NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+                    hour: 9,
+                    summary: busy,
+                },
+            ],
+            ..CostUsageReport::default()
+        };
+
+        let hours = heatmap_hours_for_days("codex", &report, &["2026-08-15".to_string()]);
+
+        assert_eq!(hours.len(), 1);
+        assert_eq!(hours[0].date, "2026-08-15");
     }
 
     /// An hour with no tokens, dollars, or calls is not activity. Emitting it
