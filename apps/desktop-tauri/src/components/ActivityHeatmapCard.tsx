@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getLocalActivityHeatmap } from "../lib/tauri";
+import { useLocalScanRefresh } from "../hooks/useLocalScanRefresh";
 import type { ActivityHeatmap } from "../types/bridge";
 import { getProviderIcon } from "./providers/providerIcons";
 import {
@@ -80,6 +81,9 @@ export function ActivityHeatmapCard() {
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
 
+  // Ticks when a rescan started behind a stale answer has finished.
+  const refreshes = useLocalScanRefresh("activity-heatmap");
+
   useEffect(() => {
     let live = true;
     setLoading(true);
@@ -97,7 +101,7 @@ export function ActivityHeatmapCard() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [refreshes]);
 
   const providerIds = heatmap?.providerIds ?? [];
   // Chips toggle providers off, so a provider that appears after a rescan is
