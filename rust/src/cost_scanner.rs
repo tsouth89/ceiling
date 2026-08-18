@@ -1136,36 +1136,50 @@ where
         cancel,
         |path| -> IndexedFile<'_, CodexUsageRecord> {
             let Some(facts) = file_facts(path) else {
-                return (FileRecords::Parsed(Vec::new()), None);
+                return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
             };
             // A rollout is read whole or not at all, so its entry covers
             // whatever the file holds and no scan can out-reach it.
             match index.lookup(path, &facts, i64::MIN) {
-                Lookup::Hit(records) => (FileRecords::Cached(records), None),
+                Lookup::Hit(records) => (FileRecords::Cached(records), IndexOutcome::Reused),
                 Lookup::Append { .. } | Lookup::Miss => {
+                    // A rollout is parsed whole or not at all, so there is no
+                    // partial read to guard against here.
                     let records = JsonlScanner::parse_codex_file(path, &range, 0, None, None)
                         .map(|parsed| parsed.records)
                         .unwrap_or_default();
                     (
                         FileRecords::Parsed(records),
-                        Some((facts, facts.len, i64::MIN)),
+                        IndexOutcome::Store {
+                            facts,
+                            parsed_bytes: facts.len,
+                            covers_from_ms: i64::MIN,
+                        },
                     )
                 }
             }
         },
-        |path, (records, update)| {
+        |path, (records, outcome)| {
             fold(path, records.as_slice());
-            match (update, records) {
-                (Some((facts, at, covers_from_ms)), FileRecords::Parsed(records)) => {
-                    updates.push(NewEntry {
-                        path: path.to_path_buf(),
+            match (outcome, records) {
+                (
+                    IndexOutcome::Store {
                         facts,
-                        parsed_bytes: at,
+                        parsed_bytes,
                         covers_from_ms,
-                        records,
-                    })
-                }
-                _ => touched.push(path.to_path_buf()),
+                    },
+                    FileRecords::Parsed(records),
+                ) => updates.push(NewEntry {
+                    path: path.to_path_buf(),
+                    facts,
+                    parsed_bytes,
+                    covers_from_ms,
+                    records,
+                }),
+                (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
+                // Incomplete, or a shape that cannot occur: leave the index
+                // exactly as it was.
+                _ => {}
             }
         },
     );
@@ -1308,9 +1322,49 @@ impl<R> FileRecords<'_, R> {
     }
 }
 
-/// One file's outcome: its records, plus what to index (facts, end offset, and
-/// the oldest instant the records cover) when the file actually had to be read.
-type IndexedFile<'a, R> = (FileRecords<'a, R>, Option<(FileFacts, u64, i64)>);
+/// What the index should do with one file once a scan has read it.
+enum IndexOutcome {
+    /// Served from the index. Keep the entry alive.
+    Reused,
+    /// Read in full. Store it under these facts.
+    Store {
+        facts: FileFacts,
+        parsed_bytes: u64,
+        covers_from_ms: i64,
+    },
+    /// The read was cut short, so these records are only part of the file.
+    ///
+    /// Storing them would record the whole file's length and mtime against a
+    /// truncated set of records, and the next scan would match on exactly those
+    /// and serve the short version as a hit. Every card would then under-report
+    /// that transcript until it was appended to or replaced.
+    Incomplete,
+}
+
+/// One file's outcome: its records, and what to do with its index entry.
+type IndexedFile<'a, R> = (FileRecords<'a, R>, IndexOutcome);
+
+/// Classify a read that has just finished.
+///
+/// A cancelled scan is thrown away by its caller, so its records going nowhere
+/// costs nothing. What must not happen is storing them: they would be indexed
+/// against the whole file's length and mtime, and the next scan would match on
+/// exactly those and serve the truncated set as a hit.
+fn read_outcome(
+    cancel: Option<&AtomicBool>,
+    facts: FileFacts,
+    parsed_bytes: u64,
+    covers_from_ms: i64,
+) -> IndexOutcome {
+    if is_cancelled(cancel) {
+        return IndexOutcome::Incomplete;
+    }
+    IndexOutcome::Store {
+        facts,
+        parsed_bytes,
+        covers_from_ms,
+    }
+}
 
 /// Whether scans consult the on-disk record index.
 ///
@@ -1382,10 +1436,10 @@ fn for_each_claude_file<F>(
         cancel,
         |path| -> IndexedFile<'_, ClaudeUsageRecord> {
             let Some(facts) = file_facts(path) else {
-                return (FileRecords::Parsed(Vec::new()), None);
+                return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
             };
             match index.lookup(path, &facts, needs_from.timestamp_millis()) {
-                Lookup::Hit(records) => (FileRecords::Cached(records), None),
+                Lookup::Hit(records) => (FileRecords::Cached(records), IndexOutcome::Reused),
                 Lookup::Append {
                     from,
                     prior,
@@ -1401,7 +1455,7 @@ fn for_each_claude_file<F>(
                     // fresh horizon would, so the entry keeps its own claim.
                     (
                         FileRecords::Parsed(records),
-                        Some((facts, at, covers_from_ms)),
+                        read_outcome(cancel, facts, at, covers_from_ms),
                     )
                 }
                 Lookup::Miss => {
@@ -1411,25 +1465,36 @@ fn for_each_claude_file<F>(
                             records.push(record);
                         }
                     });
-                    (FileRecords::Parsed(records), Some((facts, at, horizon_ms)))
+                    (
+                        FileRecords::Parsed(records),
+                        read_outcome(cancel, facts, at, horizon_ms),
+                    )
                 }
             }
         },
-        |path, (records, update)| {
+        |path, (records, outcome)| {
             fold(path, records.as_slice());
             // The records move straight into the index entry, so a file that
             // was read is never held twice.
-            match (update, records) {
-                (Some((facts, at, covers_from_ms)), FileRecords::Parsed(records)) => {
-                    updates.push(NewEntry {
-                        path: path.to_path_buf(),
+            match (outcome, records) {
+                (
+                    IndexOutcome::Store {
                         facts,
-                        parsed_bytes: at,
+                        parsed_bytes,
                         covers_from_ms,
-                        records,
-                    })
-                }
-                _ => touched.push(path.to_path_buf()),
+                    },
+                    FileRecords::Parsed(records),
+                ) => updates.push(NewEntry {
+                    path: path.to_path_buf(),
+                    facts,
+                    parsed_bytes,
+                    covers_from_ms,
+                    records,
+                }),
+                (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
+                // Incomplete, or a shape that cannot occur: leave the index
+                // exactly as it was.
+                _ => {}
             }
         },
     );
@@ -1478,10 +1543,12 @@ where
         if !line.ends_with(b"\n") {
             break;
         }
-        at += bytes_read as u64;
+        // Cancel before claiming the bytes. A line counted as parsed but never
+        // handed to `on_record` is lost to every later resume.
         if is_cancelled(cancel) {
             break;
         }
+        at += bytes_read as u64;
         // Claude transcripts contain large user/tool payloads that can never
         // contribute token usage. Avoid allocating a String and asking serde
         // to parse those lines; only assistant events with a usage object can
@@ -3294,6 +3361,54 @@ mod tests {
             assert_eq!(resumed.cost, whole.cost);
             assert_eq!(resumed.timestamp, whole.timestamp);
         }
+    }
+
+    /// A cancelled read must not swallow the line it stopped on.
+    ///
+    /// The offset it reports is where the next read resumes, and it used to be
+    /// advanced before the cancellation check, so the record on that line was
+    /// never emitted and never read again. Combined with an index entry stored
+    /// under the whole file's facts, that silently dropped usage from every
+    /// total until the file changed.
+    #[test]
+    fn a_cancelled_read_leaves_the_line_it_stopped_on_for_the_next_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut file = File::create(&path).unwrap();
+        for index in 0..3 {
+            writeln!(file, "{}", claude_event_line(index, 100)).unwrap();
+        }
+        drop(file);
+
+        // Cancel as soon as the first record is in hand.
+        let cancel = AtomicBool::new(false);
+        let mut taken = Vec::new();
+        let at = stream_claude_records(&path, 0, Some(&cancel), |record| {
+            taken.push(record);
+            cancel.store(true, Ordering::Relaxed);
+        });
+
+        assert_eq!(taken.len(), 1, "cancellation must stop the read");
+        assert!(at < fs::metadata(&path).unwrap().len());
+
+        let mut rest = Vec::new();
+        stream_claude_records(&path, at, None, |record| rest.push(record));
+
+        assert_eq!(
+            rest.len(),
+            2,
+            "the two records after the cancellation point must survive"
+        );
+        let dedup_keys: Vec<_> = taken
+            .iter()
+            .chain(rest.iter())
+            .map(|record| record.dedup_key.clone())
+            .collect();
+        let mut unique = dedup_keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(dedup_keys.len(), unique.len(), "no record read twice");
+        assert_eq!(unique.len(), 3, "every record accounted for exactly once");
     }
 
     #[test]

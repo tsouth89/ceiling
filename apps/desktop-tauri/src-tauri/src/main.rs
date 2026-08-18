@@ -261,7 +261,7 @@ fn main() {
             floatbar::install(app.handle());
             taskbar_widget::install(app.handle());
             auto_refresh::install(app.handle().clone());
-            commands::prewarm_local_scan_caches();
+            commands::prewarm_local_scan_caches(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {
                 powertoys::install(app.handle().clone());
             }

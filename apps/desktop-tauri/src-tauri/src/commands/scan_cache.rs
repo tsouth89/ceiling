@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// One cached scan result and when it was produced.
@@ -55,6 +55,10 @@ pub(crate) struct ScanCache<T: 'static> {
     version: u8,
     state: OnceLock<Mutex<PersistedScanCache<T>>>,
     refreshing: OnceLock<Mutex<HashSet<String>>>,
+    /// One gate per key for the cold path, so two callers arriving on an empty
+    /// cache do not both start the same multi-gigabyte scan. Launch prewarming
+    /// and a card opened straight away is exactly that race.
+    building: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl<T> ScanCache<T>
@@ -67,6 +71,7 @@ where
             version,
             state: OnceLock::new(),
             refreshing: OnceLock::new(),
+            building: OnceLock::new(),
         }
     }
 
@@ -78,20 +83,31 @@ where
     /// blocking worker; a worker that dies surfaces as `Err(error_message)`
     /// rather than an empty result, because "unavailable" and "no local
     /// activity" are different answers on these cards.
-    pub(crate) async fn load<F>(
+    pub(crate) async fn load<F, N>(
         &'static self,
         key: String,
         ttl: Duration,
         build: F,
+        on_refreshed: N,
         error_message: &str,
     ) -> Result<T, String>
     where
         F: Fn() -> T + Send + Sync + Clone + 'static,
+        N: Fn() + Send + 'static,
     {
         if let Some(cached) = self.cached(&key) {
             if now_ms().saturating_sub(cached.refreshed_at_ms) > ttl.as_millis() as i64 {
-                self.schedule_refresh(key, build);
+                self.schedule_refresh(key, build, on_refreshed);
             }
+            return Ok(cached.value);
+        }
+
+        // Hold the per-key gate across the whole cold build. A second caller
+        // waits here and then finds the value below rather than starting its
+        // own scan of the same gigabytes.
+        let gate = self.gate(&key);
+        let _building = gate.lock().await;
+        if let Some(cached) = self.cached(&key) {
             return Ok(cached.value);
         }
 
@@ -103,6 +119,15 @@ where
             })?;
         self.store(key, value.clone());
         Ok(value)
+    }
+
+    /// The gate for one key, created on first use.
+    fn gate(&'static self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut guard = self
+            .building()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.entry(key.to_string()).or_default().clone()
     }
 
     fn cached(&'static self, key: &str) -> Option<CachedScan<T>> {
@@ -137,9 +162,10 @@ where
         }
     }
 
-    fn schedule_refresh<F>(&'static self, key: String, build: F)
+    fn schedule_refresh<F, N>(&'static self, key: String, build: F, on_refreshed: N)
     where
         F: Fn() -> T + Send + Sync + Clone + 'static,
+        N: Fn() + Send + 'static,
     {
         let Ok(mut active) = self.refreshing().lock() else {
             return;
@@ -151,7 +177,13 @@ where
 
         tauri::async_runtime::spawn(async move {
             match tauri::async_runtime::spawn_blocking(build).await {
-                Ok(value) => self.store(key.clone(), value),
+                Ok(value) => {
+                    self.store(key.clone(), value);
+                    // A card that is already open asked before this ran and got
+                    // the stale answer. Without this it would keep showing it
+                    // until it was remounted.
+                    on_refreshed();
+                }
                 Err(err) => tracing::warn!("{} refresh failed: {}", self.file_name, err),
             }
             if let Ok(mut active) = self.refreshing().lock() {
@@ -166,6 +198,10 @@ where
 
     fn refreshing(&'static self) -> &'static Mutex<HashSet<String>> {
         self.refreshing.get_or_init(|| Mutex::new(HashSet::new()))
+    }
+
+    fn building(&'static self) -> &'static Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+        self.building.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     fn path(&self) -> Option<PathBuf> {

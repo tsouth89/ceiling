@@ -42,6 +42,17 @@ const HEAD_SAMPLE_BYTES: usize = 4096;
 /// index would keep their records for the life of the install.
 const ENTRY_TTL_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 
+/// Smallest possible encoding of one record: every id and count at its
+/// narrowest. Used only to bound a claimed record count against the file that
+/// claims it.
+const MIN_RECORD_BYTES: usize = 16;
+
+/// How many records to reserve room for, given a claimed count and the size of
+/// the file it came from.
+fn plausible_capacity(claimed: u32, file_len: usize) -> usize {
+    (claimed as usize).min(file_len / MIN_RECORD_BYTES + 1)
+}
+
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
@@ -490,7 +501,10 @@ impl<R: IndexedRecord> UsageIndex<R> {
             let covers_from_ms = cursor.i64()?;
             let used_at_ms = cursor.i64()?;
             let record_count = cursor.u32()?;
-            let mut records = Vec::with_capacity(record_count as usize);
+            // Reserve for what the file could actually hold, not for what its
+            // header claims. A corrupt or truncated count would otherwise ask
+            // for gigabytes before the first read failed.
+            let mut records = Vec::with_capacity(plausible_capacity(record_count, bytes.len()));
             for _ in 0..record_count {
                 records.push(R::decode(&mut cursor, &strings)?);
             }
@@ -867,6 +881,15 @@ mod tests {
             decoded.lookup(Path::new("/logs/gone.jsonl"), &facts(10, 1), ANY_TIME),
             Lookup::Miss
         ));
+    }
+
+    #[test]
+    fn a_record_count_is_not_trusted_to_size_an_allocation() {
+        // A header claiming four billion records in a few bytes must not turn
+        // into a four-billion-element reservation before the read fails.
+        assert_eq!(plausible_capacity(u32::MAX, 64), 5);
+        assert_eq!(plausible_capacity(3, 4096), 3);
+        assert_eq!(plausible_capacity(0, 0), 0);
     }
 
     #[test]

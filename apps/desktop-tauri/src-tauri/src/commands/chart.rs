@@ -1057,16 +1057,16 @@ const LOCAL_SCAN_PREWARM_DELAY: Duration = Duration::from_secs(15);
 /// first open still pays for itself once, and every one after that is warm. The
 /// two scans run one after the other because each already saturates the
 /// machine's cores on its own.
-pub fn prewarm_local_scan_caches() {
+pub fn prewarm_local_scan_caches(app: tauri::AppHandle) {
     if !API_VALUE_CACHE.has_entries() && !ACTIVITY_HEATMAP_CACHE.has_entries() {
         return;
     }
-    tauri::async_runtime::spawn(async {
+    tauri::async_runtime::spawn(async move {
         tokio::time::sleep(LOCAL_SCAN_PREWARM_DELAY).await;
-        if let Err(error) = get_local_api_value_totals(None, None).await {
+        if let Err(error) = get_local_api_value_totals(app.clone(), None, None).await {
             tracing::debug!("API-value prewarm skipped: {error}");
         }
-        if let Err(error) = get_local_activity_heatmap().await {
+        if let Err(error) = get_local_activity_heatmap(app).await {
             tracing::debug!("Activity heatmap prewarm skipped: {error}");
         }
     });
@@ -1095,6 +1095,11 @@ fn api_value_cache_key(today: NaiveDate, custom: Option<(DateTime<Utc>, DateTime
 /// Each provider reads a different transcript tree, so scanning them one after
 /// another just added their times together. Providers with no data return
 /// `None` and drop out, exactly as the sequential `filter_map` did.
+///
+/// A worker that panics is re-raised on this thread rather than swallowed. Both
+/// commands that call this promise an error when a scan fails, and a provider
+/// silently missing from a spend total looks exactly like a provider that was
+/// idle.
 fn scan_providers_parallel<T, F>(provider_ids: &[&'static str], scan: F) -> Vec<T>
 where
     T: Send,
@@ -1106,13 +1111,18 @@ where
             .map(|provider_id| scope.spawn(|| scan(provider_id)))
             .collect::<Vec<_>>()
             .into_iter()
-            .filter_map(|handle| handle.join().ok().flatten())
+            .filter_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
             .collect()
     })
 }
 
 #[tauri::command]
 pub async fn get_local_api_value_totals(
+    app: tauri::AppHandle,
     since: Option<String>,
     until: Option<String>,
 ) -> Result<Vec<LocalApiValueProvider>, String> {
@@ -1144,6 +1154,7 @@ pub async fn get_local_api_value_totals(
             api_value_cache_key(Local::now().date_naive(), custom),
             API_VALUE_TTL,
             move || load_local_api_value_totals(Local::now(), custom),
+            move || crate::events::emit_local_scan_refreshed(&app, "api-value"),
             "Unable to load local API-value totals.",
         )
         .await
@@ -1427,7 +1438,7 @@ static ACTIVITY_HEATMAP_CACHE: crate::commands::scan_cache::ScanCache<ActivityHe
 ///
 /// The key carries the local date because the grid's last column is today.
 #[tauri::command]
-pub async fn get_local_activity_heatmap() -> Result<ActivityHeatmap, String> {
+pub async fn get_local_activity_heatmap(app: tauri::AppHandle) -> Result<ActivityHeatmap, String> {
     // A worker panic must surface as an error: "unavailable" and "no activity"
     // look identical on a heatmap otherwise.
     ACTIVITY_HEATMAP_CACHE
@@ -1435,6 +1446,7 @@ pub async fn get_local_activity_heatmap() -> Result<ActivityHeatmap, String> {
             Local::now().date_naive().format("%F").to_string(),
             ACTIVITY_HEATMAP_TTL,
             || load_activity_heatmap(Local::now()),
+            move || crate::events::emit_local_scan_refreshed(&app, "activity-heatmap"),
             "Unable to read local activity.",
         )
         .await

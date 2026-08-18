@@ -7,6 +7,25 @@ const tauriMocks = vi.hoisted(() => ({
 
 vi.mock("../lib/tauri", () => tauriMocks);
 
+const eventMocks = vi.hoisted(() => {
+  const handlers: Record<string, (event: { payload: unknown }) => void> = {};
+  return {
+    handlers,
+    listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+      handlers[name] = handler;
+      return Promise.resolve(() => {
+        delete handlers[name];
+      });
+    }),
+    emit(name: string, payload: unknown) {
+      handlers[name]?.({ payload });
+    },
+  };
+});
+
+vi.mock("@tauri-apps/api/event", () => ({ listen: eventMocks.listen }));
+
+
 import { TotalApiValueCard } from "./TotalApiValueCard";
 
 function period(over: Record<string, number | boolean>) {
@@ -90,6 +109,42 @@ describe("TotalApiValueCard", () => {
     expect(await findByText(/No data for Yesterday/)).toBeTruthy();
     getByText("30 days").click();
     await waitFor(() => expect(getByText("$400.00")).toBeTruthy()); // 300 + 100
+
+    expect(tauriMocks.getLocalApiValueTotals).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks up a background rescan without being remounted", async () => {
+    // A cached answer up to five minutes old is served straight away and the
+    // rescan runs behind it. An open card used to keep the stale figures until
+    // it was remounted.
+    tauriMocks.getLocalApiValueTotals.mockResolvedValueOnce(twoProviders);
+    const { getByText, getAllByText } = render(<TotalApiValueCard />);
+    await waitFor(() => expect(getByText("$120.00")).toBeTruthy());
+
+    tauriMocks.getLocalApiValueTotals.mockResolvedValueOnce([
+      {
+        providerId: "codex",
+        today: period({ apiValueUsd: 500, tokens: 50, pricedTokens: 50, totalTokens: 50, hasData: true }),
+        yesterday: period({}),
+        thirtyDays: period({}),
+        priorThirtyDays: period({}),
+      },
+    ]);
+    eventMocks.emit("local-scan-refreshed", "api-value");
+
+    await waitFor(() =>
+      expect(getAllByText("$500.00").length).toBeGreaterThan(0),
+    );
+  });
+
+  it("ignores a rescan that belongs to another card", async () => {
+    tauriMocks.getLocalApiValueTotals.mockResolvedValue(twoProviders);
+    render(<TotalApiValueCard />);
+    await waitFor(() =>
+      expect(tauriMocks.getLocalApiValueTotals).toHaveBeenCalledTimes(1),
+    );
+
+    eventMocks.emit("local-scan-refreshed", "activity-heatmap");
 
     expect(tauriMocks.getLocalApiValueTotals).toHaveBeenCalledTimes(1);
   });
