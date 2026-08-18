@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Added
+- **Ceiling asks for a GitHub star, at most twice ever.** A card in the bottom-right of the dashboard, and the only thing Ceiling has ever asked of anyone using it. The first ask waits until a provider has actually reported a reading and that reading has been on screen for twenty seconds, so it lands after the app has done something useful rather than during setup, when it would be asking to be paid before the work. The second, if the first went unanswered, waits for a later version to have shipped and for a week to have passed since the first, because a version bump the day after is still two asks in one week. Clicking through to GitHub ends it permanently; so does reaching the second ask. Later and the close button mean the same thing and never count as interest. It is not a Windows notification, it takes no focus and traps none, Escape closes it, and the only network call involved is opening the repository in your browser when you ask for it.
+
 ## [Ceiling] 1.5.34 - 2026-08-18
 
 Charts opens in about two seconds instead of about thirty. Each local transcript is now parsed once into a small index beside your settings rather than re-read from the top by every card, every time, and the cards keep their last result so a restart is not a cold start. The numbers are unchanged: an indexed scan is checked against a full re-parse, and the index is discarded outright whenever model prices move.

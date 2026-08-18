@@ -41,6 +41,8 @@ import {
   orderedEnabledProviderSlots,
 } from "../lib/trayProviders";
 import AgentSessions from "../components/AgentSessions";
+import StarPrompt from "../components/StarPrompt";
+import { useStarPrompt } from "../hooks/useStarPrompt";
 
 /** Provider IDs that have a dashboard URL in the backend */
 const HAS_DASHBOARD = new Set([
@@ -434,6 +436,18 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const handleGestureEnd = useCallback(() => {
     void endFlyoutGesture().catch(() => {});
   }, []);
+  // Asks for a GitHub star, at most twice ever (SOU-311). Gated on a real
+  // reading, so the empty state below never sees it.
+  const starPrompt = useStarPrompt(sorted);
+  const starPromptCard =
+    starPrompt.reason !== null ? (
+      <StarPrompt
+        reason={starPrompt.reason}
+        version={starPrompt.version}
+        onStar={starPrompt.onStar}
+        onDismiss={starPrompt.onDismiss}
+      />
+    ) : null;
   const banner = (
     <UpdateBanner
       updateState={updateState}
@@ -587,6 +601,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           </div>
         )}
       </MenuSurface>
+      {starPromptCard}
       <TrayResizeHandles />
     </div>
   );

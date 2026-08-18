@@ -9863,6 +9863,128 @@ body:has(.dashboard-shell) #root {
   opacity: 0.9;
 }
 
+/* ── GitHub star prompt (SOU-311) ──────────────────────────────────── */
+
+/* Anchored to the window rather than to the panel so the tray surface's `zoom`
+   does not scale it: this is chrome over the dashboard, not part of it. It sits
+   below .confirm-dialog-backdrop (z-index 80) because a confirmation the user
+   asked for always outranks a favour Ceiling is asking of them. */
+.star-prompt {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 60;
+  width: min(320px, calc(100vw - 28px));
+  padding: 14px 16px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--provider-icon-ring, rgba(255, 255, 255, 0.08));
+  background: var(--ceiling-panel-bg);
+  color: var(--text-primary);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.star-prompt__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Ring plus tick, drawn rather than shipped as an asset so it follows the
+   theme's success color the way every other confirmation mark does. */
+.star-prompt__check {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--status-success-text, #5eead4);
+}
+.star-prompt__check::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--status-success-text, #5eead4);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.star-prompt__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.star-prompt__close {
+  appearance: none;
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.star-prompt__close:hover {
+  color: var(--text-primary);
+}
+
+.star-prompt__body {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.star-prompt__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.star-prompt__action {
+  appearance: none;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--provider-icon-ring, rgba(255, 255, 255, 0.1));
+  background: var(--provider-row-bg, rgba(255, 255, 255, 0.04));
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.star-prompt__action:hover {
+  opacity: 0.9;
+}
+
+/* The star is the action being asked for, so it carries the accent. Kept as a
+   tinted fill and ring rather than a solid accent button: this is an optional
+   favour sitting on top of someone's data, and it should not shout louder than
+   the numbers underneath it. */
+.star-prompt__action--primary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.star-prompt__star {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
 /* ── Config-directory accounts (SOU-285) ───────────────────────────── */
 
 /* Which account a card is reporting, tinted when the account has a color set.
