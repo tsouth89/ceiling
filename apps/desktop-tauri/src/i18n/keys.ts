@@ -778,6 +778,7 @@ export const ALL_LOCALE_KEYS = [
   "UpdateErrorNetwork",
   "UpdateErrorHttp",
   "UpdateErrorParse",
+  "UpdateErrorTimedOut",
   "AboutLinkErrorPrefix",
   "AboutCopyrightPrefix",
   "AboutCopyrightMid",

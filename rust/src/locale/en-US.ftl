@@ -774,6 +774,7 @@ AboutUpdateCheckFailed = Could not check for updates.
 UpdateErrorNetwork = Could not reach GitHub to check for updates.
 UpdateErrorHttp = GitHub did not return a release.
 UpdateErrorParse = Could not read the GitHub release response.
+UpdateErrorTimedOut = The update check took too long.
 AboutLinkErrorPrefix = Error:
 AboutCopyrightPrefix = Ceiling · MIT License · Forked from
 ResetCreditsAvailableOne = { "{}" } reset available

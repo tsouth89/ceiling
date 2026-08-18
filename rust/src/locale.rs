@@ -1032,6 +1032,7 @@ locale_keys! {
     UpdateErrorNetwork,
     UpdateErrorHttp,
     UpdateErrorParse,
+    UpdateErrorTimedOut,
     AboutLinkErrorPrefix,
     AboutCopyrightPrefix,
     AboutCopyrightMid,

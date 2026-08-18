@@ -709,15 +709,16 @@ mod tests {
             .with_idle_timeout(2.0)
             .with_script_line_delay(0.1);
 
-        // Name the shell by its absolute path. A bare "cmd" resolves
-        // through the enriched PATH, which puts the npm directory first, so a
-        // machine carrying an extensionless npm shim called `cmd` fails the
-        // launch with "not a valid Win32 application": a fact about that
-        // machine rather than about the PTY this covers.
+        // Windows names the shell absolutely. A bare "cmd" resolves through
+        // the enriched PATH, which puts the npm directory first, so a machine
+        // carrying an extensionless npm shim called `cmd` fails the launch with
+        // "not a valid Win32 application": a fact about that machine rather
+        // than about the PTY this covers. Unix keeps the PATH lookup, where sh
+        // is not always at /bin/sh.
         #[cfg(windows)]
         let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string());
         #[cfg(not(windows))]
-        let shell = "/bin/sh".to_string();
+        let shell = "sh".to_string();
         let result = runner.run(&shell, "echo CODEXBAR_PTY_OK\nexit", opts);
 
         let result = result.expect("pty command should run");

@@ -85,7 +85,10 @@ fn state_from_check_result(
         Ok(Ok(None)) => (UpdateState::Idle, None),
         Ok(Err(error)) => (UpdateState::Error(error.user_message()), None),
         Err(_) => (
-            UpdateState::Error("Update check timed out".to_string()),
+            UpdateState::Error(codexbar::locale::get_text(
+                codexbar::locale::current_language(),
+                codexbar::locale::LocaleKey::UpdateErrorTimedOut,
+            )),
             None,
         ),
     }

@@ -96,8 +96,6 @@ pub enum UpdateCheckError {
     Http { status: u16 },
     /// Body was not a release JSON object/array we can read.
     Parse,
-    /// Beta listing had no non-draft release.
-    Empty,
 }
 
 impl UpdateCheckError {
@@ -112,7 +110,7 @@ impl UpdateCheckError {
             match self {
                 Self::Client | Self::Network => crate::locale::LocaleKey::UpdateErrorNetwork,
                 Self::Http { .. } => crate::locale::LocaleKey::UpdateErrorHttp,
-                Self::Parse | Self::Empty => crate::locale::LocaleKey::UpdateErrorParse,
+                Self::Parse => crate::locale::LocaleKey::UpdateErrorParse,
             },
         )
     }
