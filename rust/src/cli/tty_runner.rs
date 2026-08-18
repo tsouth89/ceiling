@@ -704,9 +704,13 @@ mod tests {
     #[test]
     fn test_run_sends_script_through_pty() {
         let runner = TtyCommandRunner::new();
+        // Generous on purpose: this measures a real shell starting on
+        // whatever machine runs the suite. A cold CI runner can take longer
+        // than two seconds to reach a prompt, and the test then sees only the
+        // banner and calls the PTY broken.
         let opts = TtyCommandOptions::new()
-            .with_timeout(5.0)
-            .with_idle_timeout(2.0)
+            .with_timeout(30.0)
+            .with_idle_timeout(10.0)
             .with_script_line_delay(0.1);
 
         // Windows names the shell absolutely. A bare "cmd" resolves through
