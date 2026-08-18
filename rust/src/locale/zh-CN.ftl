@@ -659,6 +659,14 @@ FirstRunOpenProviders = 打开服务商设置
 FirstRunOpenDisplay = 打开显示设置
 FirstRunDismiss = 忽略
 
+# GitHub star prompt (SOU-311)
+StarPromptAriaLabel = 在 GitHub 上给 Ceiling 加星
+StarPromptTitleRunning = Ceiling 已开始运行
+StarPromptTitleUpdated = 已更新到
+StarPromptBody = 如果 Ceiling 对你有用，在 GitHub 上加星可以帮助更多开发者发现它。
+StarPromptStar = 在 GitHub 上加星
+StarPromptLater = 以后再说
+
 # Config-directory accounts (SOU-285)
 SectionAccounts = 账户
 AccountsIntro = 此处列出的每个账户都会被跟踪，并各自拥有独立的用量条。添加一个配置目录以跟踪另一个账户。

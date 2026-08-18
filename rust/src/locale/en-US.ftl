@@ -659,6 +659,14 @@ FirstRunOpenProviders = Open provider settings
 FirstRunOpenDisplay = Open display settings
 FirstRunDismiss = Dismiss
 
+# GitHub star prompt (SOU-311)
+StarPromptAriaLabel = Star Ceiling on GitHub
+StarPromptTitleRunning = Ceiling is up and running
+StarPromptTitleUpdated = Updated to
+StarPromptBody = If Ceiling is useful to you, a GitHub star helps other developers find it.
+StarPromptStar = Star on GitHub
+StarPromptLater = Later
+
 # Config-directory accounts (SOU-285)
 SectionAccounts = Accounts
 AccountsIntro = Every account listed here is tracked, and each one gets its own bars. Add a config directory to track another.

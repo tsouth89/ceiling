@@ -941,6 +941,14 @@ locale_keys! {
     FirstRunOpenDisplay,
     FirstRunDismiss,
 
+    // GitHub star prompt (SOU-311)
+    StarPromptAriaLabel,
+    StarPromptTitleRunning,
+    StarPromptTitleUpdated,
+    StarPromptBody,
+    StarPromptStar,
+    StarPromptLater,
+
     // Leftover English (SBS-156)
     StatusConnected,
     FreshnessStale,

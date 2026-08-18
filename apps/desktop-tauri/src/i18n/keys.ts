@@ -691,6 +691,14 @@ export const ALL_LOCALE_KEYS = [
   "FirstRunOpenDisplay",
   "FirstRunDismiss",
 
+  // GitHub star prompt (SOU-311)
+  "StarPromptAriaLabel",
+  "StarPromptTitleRunning",
+  "StarPromptTitleUpdated",
+  "StarPromptBody",
+  "StarPromptStar",
+  "StarPromptLater",
+
   "StatusConnected",
   "FreshnessStale",
   "FreshnessError",

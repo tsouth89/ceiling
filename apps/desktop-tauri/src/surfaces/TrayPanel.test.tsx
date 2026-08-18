@@ -30,6 +30,9 @@ const tauriMocks = vi.hoisted(() => ({
   getCurrentSurfaceState: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
+  // Used by the star prompt (SOU-311); resolved in beforeEach.
+  getAppInfo: vi.fn(),
+  openExternalUrl: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -197,6 +200,18 @@ describe("TrayPanel provider grid", () => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
     tauriMocks.flyoutStoredSize.mockResolvedValue(null);
+    // The star prompt (SOU-311) reads the version on mount. Its settle
+    // delay and the cleared localStorage keep it off screen here, but the
+    // call still has to resolve or the effect rejects mid-render.
+    tauriMocks.getAppInfo.mockResolvedValue({
+      name: "Ceiling",
+      version: "1.5.34",
+      buildNumber: "1",
+      updateChannel: "stable",
+      tagline: "",
+    });
+    tauriMocks.openExternalUrl.mockResolvedValue(undefined);
+    localStorage.clear();
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.dismissTrayPanel.mockResolvedValue(undefined);
