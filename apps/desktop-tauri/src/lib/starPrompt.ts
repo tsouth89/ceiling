@@ -52,6 +52,14 @@ export interface StarPromptState {
   lastAskedVersion: string | null;
   /** Epoch ms of the last ask, for MIN_GAP_MS. */
   lastAskedAt: number | null;
+  /**
+   * The record exists but could not be read or trusted. Terminal, and the
+   * reason a failed read cannot just return a zeroed state: a record we cannot
+   * read may already say "asked twice" or "starred", and a storage layer that
+   * keeps throwing would hand back that zeroed state on every launch, turning
+   * a two-ask lifetime cap into an ask every time the app starts.
+   */
+  unreadable: boolean;
 }
 
 const EMPTY: StarPromptState = {
@@ -59,53 +67,95 @@ const EMPTY: StarPromptState = {
   starred: false,
   lastAskedVersion: null,
   lastAskedAt: null,
+  unreadable: false,
 };
 
+const UNREADABLE: StarPromptState = { ...EMPTY, unreadable: true };
+
+/** A field is acceptable when it is absent entirely, or is the type it should be. */
+function optional(value: unknown, check: (v: unknown) => boolean): boolean {
+  return value === undefined || value === null || check(value);
+}
+
 /**
- * Read the stored state. Anything malformed is treated as a fresh install
- * rather than repaired: the only cost is one extra ask over the app's life,
- * and guessing at a half-written record risks the opposite.
+ * Read the stored state. A missing key is the only fresh-install case;
+ * anything present but unreadable fails closed rather than being repaired or
+ * zeroed, because a half-written record cannot tell us whether the user has
+ * already been asked or has already starred.
  */
 export function readStarPromptState(): StarPromptState {
+  let raw: string | null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...EMPTY };
-    const parsed = JSON.parse(raw) as Partial<StarPromptState>;
-    return {
-      asked:
-        typeof parsed.asked === "number" && Number.isFinite(parsed.asked)
-          ? Math.max(0, Math.trunc(parsed.asked))
-          : 0,
-      starred: parsed.starred === true,
-      lastAskedVersion:
-        typeof parsed.lastAskedVersion === "string"
-          ? parsed.lastAskedVersion
-          : null,
-      lastAskedAt:
-        typeof parsed.lastAskedAt === "number" &&
-        Number.isFinite(parsed.lastAskedAt)
-          ? parsed.lastAskedAt
-          : null,
-    };
+    raw = localStorage.getItem(STORAGE_KEY);
   } catch {
-    return { ...EMPTY };
+    // Storage is unavailable (private mode, disabled storage). Nothing can be
+    // recorded either, so asking would repeat on every launch.
+    return { ...UNREADABLE };
   }
+  if (raw === null) return { ...EMPTY };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...UNREADABLE };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { ...UNREADABLE };
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const { asked, starred, lastAskedVersion, lastAskedAt } = record;
+  const wellFormed =
+    optional(
+      asked,
+      (v) => typeof v === "number" && Number.isFinite(v) && v >= 0,
+    ) &&
+    optional(starred, (v) => typeof v === "boolean") &&
+    optional(lastAskedVersion, (v) => typeof v === "string") &&
+    optional(lastAskedAt, (v) => typeof v === "number" && Number.isFinite(v));
+  if (!wellFormed) return { ...UNREADABLE };
+
+  return {
+    asked: typeof asked === "number" ? Math.trunc(asked) : 0,
+    starred: starred === true,
+    lastAskedVersion:
+      typeof lastAskedVersion === "string" ? lastAskedVersion : null,
+    lastAskedAt: typeof lastAskedAt === "number" ? lastAskedAt : null,
+    unreadable: false,
+  };
 }
 
-function writeStarPromptState(state: StarPromptState): void {
+/** Write the record and confirm it survived. False means it did not persist. */
+function writeStarPromptState(state: StarPromptState): boolean {
+  const { unreadable: _unreadable, ...persisted } = state;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {
-    // Storage can be unavailable (private mode, disabled storage). Losing the
-    // record means at most one extra ask later, which is the safe direction to
-    // fail in; it is not worth surfacing to the user.
+    return false;
   }
+  // Read the record back and compare rather than trust the write. A storage
+  // layer that accepts a `setItem` and drops it would otherwise leave an ask
+  // shown but uncounted, which is an ask that comes back on every launch.
+  const back = readStarPromptState();
+  return (
+    !back.unreadable &&
+    back.asked === persisted.asked &&
+    back.starred === persisted.starred &&
+    back.lastAskedVersion === persisted.lastAskedVersion &&
+    back.lastAskedAt === persisted.lastAskedAt
+  );
 }
 
-/** Record that an ask was shown. Called once, when the toast first appears. */
-export function recordStarPromptShown(version: string, now: number): void {
+/**
+ * Record that an ask is about to be shown. Returns false when the record did
+ * not persist, in which case the caller must not show the prompt: an ask that
+ * cannot be counted is an ask with no cap on it.
+ */
+export function recordStarPromptShown(version: string, now: number): boolean {
   const state = readStarPromptState();
-  writeStarPromptState({
+  if (state.unreadable) return false;
+  return writeStarPromptState({
     ...state,
     asked: state.asked + 1,
     lastAskedVersion: version,
@@ -115,7 +165,35 @@ export function recordStarPromptShown(version: string, now: number): void {
 
 /** Record that the user clicked through to GitHub. Ends all future asks. */
 export function recordStarPromptStarred(): void {
-  writeStarPromptState({ ...readStarPromptState(), starred: true });
+  const state = readStarPromptState();
+  // An unreadable record already blocks every future ask, so there is nothing
+  // to preserve and overwriting it would be guessing at the counts.
+  if (state.unreadable) return;
+  writeStarPromptState({ ...state, starred: true });
+}
+
+/**
+ * Compare two `X.Y.Z` versions. Null when either side is not a plain triplet,
+ * which is what a prerelease or a locally built version string looks like, and
+ * which the caller treats as "do not ask".
+ */
+export function isLaterVersion(
+  version: string,
+  previous: string,
+): boolean | null {
+  const next = parseTriplet(version);
+  const prior = parseTriplet(previous);
+  if (!next || !prior) return null;
+  for (let i = 0; i < 3; i += 1) {
+    if (next[i] !== prior[i]) return next[i] > prior[i];
+  }
+  return false;
+}
+
+function parseTriplet(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
 /**
@@ -160,6 +238,7 @@ export function starPromptReason({
   readingSince,
   now,
 }: StarPromptInput): StarPromptReason | null {
+  if (state.unreadable) return null;
   if (state.starred) return null;
   if (state.asked >= MAX_ASKS) return null;
   // Without a version there is no way to honour the version-bump gate on the
@@ -172,7 +251,10 @@ export function starPromptReason({
 
   // Second ask: a genuinely later version, and not hard on the heels of the
   // first. A missing timestamp on a prior ask is treated as "too soon".
-  if (state.lastAskedVersion === version) return null;
+  if (state.lastAskedVersion == null) return null;
+  // Later by release order, not merely different: rolling back to an older
+  // build is not an update, and must not spend the second ask.
+  if (isLaterVersion(version, state.lastAskedVersion) !== true) return null;
   if (state.lastAskedAt == null) return null;
   if (now - state.lastAskedAt < MIN_GAP_MS) return null;
   return "afterUpdate";

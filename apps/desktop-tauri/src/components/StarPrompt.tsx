@@ -33,14 +33,22 @@ export default function StarPrompt({
 
   // Escape is the expected way out of anything that floats above the page, and
   // it counts as "Later" — the same as the close button, and never as a star.
+  //
+  // Captured, and the event stopped dead. TrayPanel has its own window-level
+  // Escape handler that closes the whole dashboard, and `preventDefault` alone
+  // does not stop it: without this, answering the prompt would also shut the
+  // window the user was reading. Capture puts this listener ahead of that one
+  // regardless of which mounted first.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      event.stopImmediatePropagation();
       onDismissRef.current();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, []);
 
   const title =

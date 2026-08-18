@@ -180,4 +180,50 @@ describe("useStarPrompt", () => {
     expect(currentReason()).toBe("none");
     expect(readStarPromptState().asked).toBe(0);
   });
+
+  it("restarts the wait when the reading disappears part-way through it", async () => {
+    // A failed refresh must not bank credit toward the settle period: the next
+    // reading starts its twenty seconds over.
+    const view = render(<Harness providers={[reading()]} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MS - 2_000);
+    });
+
+    view.rerender(<Harness providers={[]} />);
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    view.rerender(<Harness providers={[reading()]} />);
+
+    // The old partial wait plus this one would already be past SETTLE_MS.
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MS - 5_000);
+    });
+    expect(currentReason()).toBe("none");
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(currentReason()).toBe("firstValue");
+  });
+
+  it("does not show an ask it cannot record", async () => {
+    // Storage that will not hold the record means no cap, so no prompt at all
+    // rather than one on every launch.
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("storage disabled");
+      });
+    try {
+      render(<Harness providers={[reading()]} />);
+      await settle();
+      expect(currentReason()).toBe("none");
+    } finally {
+      setItem.mockRestore();
+    }
+  });
 });

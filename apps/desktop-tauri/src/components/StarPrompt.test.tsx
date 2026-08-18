@@ -97,6 +97,37 @@ describe("StarPrompt", () => {
     expect(onStar).not.toHaveBeenCalled();
   });
 
+  it("keeps Escape to itself so it cannot also close the dashboard", async () => {
+    // TrayPanel has its own window-level Escape handler that dismisses the
+    // whole tray panel. Answering the prompt must not shut the window the
+    // user was reading.
+    const trayEscape = vi.fn();
+    window.addEventListener("keydown", trayEscape);
+    try {
+      const { onDismiss } = renderPrompt("firstValue");
+      await screen.findByRole("dialog", { name: "Star Ceiling on GitHub" });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(onDismiss).toHaveBeenCalledOnce();
+      expect(trayEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", trayEscape);
+    }
+  });
+
+  it("leaves other keys alone", async () => {
+    const other = vi.fn();
+    window.addEventListener("keydown", other);
+    try {
+      const { onDismiss } = renderPrompt("firstValue");
+      await screen.findByRole("dialog", { name: "Star Ceiling on GitHub" });
+      fireEvent.keyDown(window, { key: "r", ctrlKey: true });
+      expect(other).toHaveBeenCalledOnce();
+      expect(onDismiss).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", other);
+    }
+  });
+
   it("does not take focus from whatever the user was reading", async () => {
     const before = document.activeElement;
     renderPrompt("firstValue");

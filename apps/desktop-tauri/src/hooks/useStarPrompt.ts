@@ -64,8 +64,14 @@ export function useStarPrompt(
   }, [enabled]);
 
   const hasReading = enabled && hasRealReading(providers);
-  if (hasReading && readingSinceRef.current == null) {
-    readingSinceRef.current = Date.now();
+  if (hasReading) {
+    readingSinceRef.current ??= Date.now();
+  } else if (reason === null) {
+    // The reading went away before it had settled — a failed refresh, a
+    // provider dropping out. The next one starts its twenty seconds over
+    // rather than inheriting credit from a reading that is no longer there.
+    // Once the card is up this stops applying; see the effect below.
+    readingSinceRef.current = null;
   }
 
   // Re-evaluate on a slow tick so the settle delay can elapse without needing a
@@ -78,6 +84,7 @@ export function useStarPrompt(
 
   useEffect(() => {
     if (!enabled || reason !== null || answeredRef.current) return;
+    if (!version) return;
     const next = starPromptReason({
       state: readStarPromptState(),
       version,
@@ -86,8 +93,11 @@ export function useStarPrompt(
       now: Date.now(),
     });
     if (!next) return;
-    // Count the ask at the moment it becomes visible.
-    recordStarPromptShown(version ?? "", Date.now());
+    // Count the ask before it becomes visible, and only show it if that count
+    // actually persisted. An ask that cannot be recorded is an ask with no cap
+    // on it, so a storage layer that will not hold the record means no prompt
+    // at all rather than one on every launch.
+    if (!recordStarPromptShown(version, Date.now())) return;
     setReason(next);
   }, [enabled, reason, version, hasReading, tick]);
 
