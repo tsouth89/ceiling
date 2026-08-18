@@ -25,6 +25,7 @@ use crate::surface_target::SurfaceTarget;
 mod accounts;
 mod chart;
 mod diagnostics;
+mod scan_cache;
 mod tokens;
 mod updater;
 

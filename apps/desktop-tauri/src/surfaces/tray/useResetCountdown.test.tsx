@@ -88,6 +88,13 @@ describe("useResetCountdown", () => {
     expect(screen.getByTestId("cd")).toHaveTextContent("2d 5h");
   });
 
+  // SBS-927: 24h 1s is a day, not "24h 0m".
+  it("cuts a day at twenty-four hours", async () => {
+    const target = new Date("2024-06-02T00:00:01Z").toISOString();
+    await mountWithLocale(<Probe resetsAt={target} fallback="x" />);
+    expect(screen.getByTestId("cd")).toHaveTextContent("1d 0h");
+  });
+
   it("reports 'resetting' when the target is already in the past", async () => {
     const past = new Date("2024-05-31T23:00:00Z").toISOString();
     await mountWithLocale(<Probe resetsAt={past} fallback="x" />);

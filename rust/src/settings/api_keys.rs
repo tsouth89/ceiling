@@ -88,7 +88,7 @@ impl ApiKeys {
         })
     }
 
-    pub(super) fn try_load() -> anyhow::Result<Self> {
+    pub(crate) fn try_load() -> anyhow::Result<Self> {
         let Some(path) = Self::keys_path() else {
             return Ok(Self::default());
         };

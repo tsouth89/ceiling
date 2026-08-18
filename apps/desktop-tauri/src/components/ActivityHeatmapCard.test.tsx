@@ -7,6 +7,25 @@ vi.mock("../lib/tauri", () => ({
   getLocalActivityHeatmap: () => getLocalActivityHeatmap(),
 }));
 
+const eventMocks = vi.hoisted(() => {
+  const handlers: Record<string, (event: { payload: unknown }) => void> = {};
+  return {
+    handlers,
+    listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+      handlers[name] = handler;
+      return Promise.resolve(() => {
+        delete handlers[name];
+      });
+    }),
+    emit(name: string, payload: unknown) {
+      handlers[name]?.({ payload });
+    },
+  };
+});
+
+vi.mock("@tauri-apps/api/event", () => ({ listen: eventMocks.listen }));
+
+
 const { ActivityHeatmapCard } = await import("./ActivityHeatmapCard");
 
 const hour = (over: Partial<ActivityHourPoint> = {}): ActivityHourPoint => ({
@@ -82,6 +101,17 @@ describe("ActivityHeatmapCard", () => {
     await waitFor(() =>
       expect(screen.getByText(/No local activity in this window yet/)).toBeInTheDocument(),
     );
+  });
+
+  it("picks up a background rescan without being remounted", async () => {
+    getLocalActivityHeatmap.mockResolvedValueOnce(heatmap());
+    render(<ActivityHeatmapCard />);
+    await waitFor(() => expect(getLocalActivityHeatmap).toHaveBeenCalledTimes(1));
+
+    getLocalActivityHeatmap.mockResolvedValueOnce(heatmap());
+    eventMocks.emit("local-scan-refreshed", "activity-heatmap");
+
+    await waitFor(() => expect(getLocalActivityHeatmap).toHaveBeenCalledTimes(2));
   });
 
   it("surfaces a failed read instead of drawing an empty grid", async () => {
