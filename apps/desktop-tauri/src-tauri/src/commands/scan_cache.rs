@@ -96,7 +96,7 @@ where
         N: Fn() + Send + 'static,
     {
         if let Some(cached) = self.cached(&key) {
-            if now_ms().saturating_sub(cached.refreshed_at_ms) > ttl.as_millis() as i64 {
+            if is_stale(cached.refreshed_at_ms, now_ms(), ttl) {
                 self.schedule_refresh(key, build, on_refreshed);
             }
             return Ok(cached.value);
@@ -221,6 +221,14 @@ where
     }
 }
 
+/// Whether a cached entry is old enough to schedule a refresh behind it.
+///
+/// An entry stamped in the future (a clock that moved backwards) counts as
+/// fresh rather than as stale forever: `saturating_sub` floors the age at zero.
+fn is_stale(refreshed_at_ms: i64, now_ms: i64, ttl: Duration) -> bool {
+    now_ms.saturating_sub(refreshed_at_ms) > ttl.as_millis() as i64
+}
+
 /// Evict the least recently refreshed entries until the map fits. `keep` is the
 /// key the caller just stored, which a backwards clock could otherwise select.
 fn prune<T>(cache: &mut PersistedScanCache<T>, keep: &str) {
@@ -308,6 +316,27 @@ mod tests {
                 .entries
                 .contains_key(&format!("key-{}", MAX_ENTRIES + 2))
         );
+    }
+
+    #[test]
+    fn an_entry_is_served_until_the_ttl_lapses() {
+        let ttl = Duration::from_secs(300);
+        let now = 1_000_000_000;
+
+        assert!(!is_stale(now, now, ttl));
+        assert!(!is_stale(now - 299_000, now, ttl));
+        assert!(!is_stale(now - 300_000, now, ttl));
+        assert!(is_stale(now - 300_001, now, ttl));
+    }
+
+    #[test]
+    fn a_clock_that_moved_backwards_does_not_make_an_entry_stale() {
+        // Stamped a minute into the future. The age floors at zero rather than
+        // going negative and tipping the comparison the wrong way.
+        let ttl = Duration::from_secs(300);
+        let now = 1_000_000_000;
+
+        assert!(!is_stale(now + 60_000, now, ttl));
     }
 
     #[test]

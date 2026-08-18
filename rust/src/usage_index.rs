@@ -552,10 +552,40 @@ impl<R: IndexedRecord> IndexStore<R> {
     }
 
     /// Borrow the index for the length of a scan.
+    ///
+    /// Re-checks the pricing fingerprint first. The catalog is refetched on a
+    /// daily cadence while the app keeps running, so checking it only when the
+    /// index was first loaded would serve dollars computed under the old rates
+    /// until the next restart.
     pub fn read(&'static self) -> RwLockReadGuard<'static, UsageIndex<R>> {
+        self.discard_if_prices_moved();
         self.state()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Drop everything if the prices the stored numbers were computed under are
+    /// no longer the prices in force.
+    fn discard_if_prices_moved(&'static self) {
+        let current = pricing_fingerprint();
+        {
+            let guard = self
+                .state()
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if guard.fingerprint == current {
+                return;
+            }
+        }
+        let mut guard = self
+            .state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Another thread may have replaced it between the two locks.
+        if guard.fingerprint != current {
+            tracing::info!("model prices changed; rebuilding the usage index");
+            *guard = UsageIndex::empty(current);
+        }
     }
 
     /// Apply one scan's newly parsed files and write the index back.

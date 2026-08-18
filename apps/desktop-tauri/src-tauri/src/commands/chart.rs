@@ -1058,15 +1058,20 @@ const LOCAL_SCAN_PREWARM_DELAY: Duration = Duration::from_secs(15);
 /// two scans run one after the other because each already saturates the
 /// machine's cores on its own.
 pub fn prewarm_local_scan_caches(app: tauri::AppHandle) {
-    if !API_VALUE_CACHE.has_entries() && !ACTIVITY_HEATMAP_CACHE.has_entries() {
+    // Each card is judged on its own cache. Someone who only ever opens
+    // Estimated API value should not have the heatmap scan saturating their
+    // cores for a card they have never looked at.
+    let api_value = API_VALUE_CACHE.has_entries();
+    let heatmap = ACTIVITY_HEATMAP_CACHE.has_entries();
+    if !api_value && !heatmap {
         return;
     }
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(LOCAL_SCAN_PREWARM_DELAY).await;
-        if let Err(error) = get_local_api_value_totals(app.clone(), None, None).await {
+        if api_value && let Err(error) = get_local_api_value_totals(app.clone(), None, None).await {
             tracing::debug!("API-value prewarm skipped: {error}");
         }
-        if let Err(error) = get_local_activity_heatmap(app).await {
+        if heatmap && let Err(error) = get_local_activity_heatmap(app).await {
             tracing::debug!("Activity heatmap prewarm skipped: {error}");
         }
     });
