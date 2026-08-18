@@ -7,8 +7,6 @@ Some providers authenticate through their website (Claude, Cursor, Kimi, and sim
 - **Cursor** defaults to **Automatic** — Ceiling reads the signed-in Cursor IDE session, so a cookie is usually unnecessary.
 - **Every other cookie-based provider** defaults to **Manual**. You paste the cookie header once and Ceiling stores it encrypted.
 
-Change a provider's source in **Settings → Providers → provider detail → Browser Cookies**.
-
 ## Copy a cookie header
 
 1. Open the provider's website in your browser (e.g. `claude.ai`) and make sure you are logged in.

@@ -158,6 +158,18 @@ pub(crate) fn resolve_api_key(
     )))
 }
 
+/// Delete provider-owned copies of live tokens that survive the shared
+/// credential files. `revoke_managed_credentials` calls this so settings does
+/// not hardcode a vendor. Today only StepFun writes a refreshed token to the
+/// OS keyring (SBS-920). Other providers only *read* keyring entries the user
+/// or another app placed there; those are left alone.
+pub(crate) fn clear_persisted_credentials(provider: crate::core::ProviderId) -> anyhow::Result<()> {
+    match provider {
+        crate::core::ProviderId::StepFun => stepfun::clear_persisted_credentials(),
+        _ => Ok(()),
+    }
+}
+
 /// Whether a parsed URL points at the local machine.
 ///
 /// Host-based, never prefix-based: `http://localhost@evil.example` and
@@ -228,5 +240,11 @@ mod browser_cookie_policy_tests {
             browser_cookie_header(&["example.com"]),
             Err(crate::core::ProviderError::NoCookies)
         ));
+    }
+
+    #[test]
+    fn clear_persisted_credentials_is_noop_for_providers_without_a_shadow_store() {
+        assert!(clear_persisted_credentials(crate::core::ProviderId::Claude).is_ok());
+        assert!(clear_persisted_credentials(crate::core::ProviderId::Codex).is_ok());
     }
 }

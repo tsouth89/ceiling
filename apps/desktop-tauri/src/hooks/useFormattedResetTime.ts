@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { remainingCountdownParts } from "../lib/resetCountdown";
 import { useLocale } from "./useLocale";
 
 /**
@@ -39,15 +40,11 @@ export function useFormattedResetTime(
   }
 
   if (relative) {
-    const diffMs = target - now;
-    if (diffMs <= 0) return t("TrayResetsDueNow");
-    // Never floor to zero. Between 1ms and 59.999s the reset is imminent, not
-    // absent, and "Resets in 0m" reads as a stuck timer. Clamp to one minute
-    // rather than ceiling the whole range, so 61s still reads "1m".
-    const totalMinutes = Math.max(1, Math.floor(diffMs / 60_000));
-    const days = Math.floor(totalMinutes / 1440);
-    const hours = Math.floor((totalMinutes % 1440) / 60);
-    const minutes = totalMinutes % 60;
+    const parts = remainingCountdownParts(target - now);
+    if (!parts) return t("TrayResetsDueNow");
+    // Locale sentences can drop a zero unit ("Resets in 1d"); compact
+    // surfaces keep "1d 0h". The day cut and last-minute clamp are shared.
+    const { days, hours, minutes } = parts;
     if (days > 0) {
       if (hours === 0) {
         return t("ResetsInDays").replace("{}", String(days));

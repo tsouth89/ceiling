@@ -26,6 +26,7 @@ pub mod windows_security;
 pub mod status;
 pub mod tray;
 pub mod updater;
+pub mod usage_index;
 pub mod wsl;
 
 mod codex_costs;
