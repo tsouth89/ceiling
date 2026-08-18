@@ -104,7 +104,8 @@ pub fn gemini_cli_credentials_path() -> Option<std::path::PathBuf> {
 }
 
 /// `true` when the Gemini CLI's credentials file exists (i.e. the user has
-/// signed in via `gemini auth login` locally).
+/// signed in by running `gemini` locally; it has no login subcommand and
+/// authenticates from inside its own interface).
 pub fn gemini_cli_signed_in() -> bool {
     gemini_cli_credentials_path()
         .map(|p| p.exists())

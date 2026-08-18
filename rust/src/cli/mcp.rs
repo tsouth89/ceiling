@@ -3,7 +3,7 @@
 //! Speaks Model Context Protocol over stdio so Claude Code / Codex can query
 //! remaining quota and estimated spend mid-conversation. Quota comes from the
 //! desktop widget snapshot (cache-only, no network). Spend comes from local
-//! Codex/Claude JSONL logs via [`crate::cost_scanner`].
+//! Codex, Claude, and Grok session logs via [`crate::cost_scanner`].
 
 use clap::Args;
 use rmcp::{
@@ -22,9 +22,7 @@ use serde_json::json;
 use crate::core::{
     ProviderId, RateWindow, WidgetProviderEntry, WidgetSnapshot, WidgetSnapshotStore,
 };
-use crate::cost_scanner::{CostSummary, get_cost_usage_report};
-
-const COST_SUPPORTED: &[&str] = &["codex", "claude"];
+use crate::cost_scanner::{CostScanner, CostSummary, get_cost_usage_report};
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct McpArgs {}
@@ -50,7 +48,7 @@ impl CeilingMcp {
     }
 
     #[tool(
-        description = "List providers with cached quota and whether local spend scanning is supported (Codex/Claude)."
+        description = "List providers with cached quota and whether local spend scanning is supported (Codex/Claude/Grok)."
     )]
     fn list_providers(&self) -> Result<CallToolResult, McpError> {
         Ok(json_tool_result(list_providers_payload(
@@ -72,7 +70,7 @@ impl CeilingMcp {
     }
 
     #[tool(
-        description = "Get estimated API-value spend from local Codex/Claude logs for today, 7 days, and 30 days. Local-only; not a bill."
+        description = "Get estimated API-value spend from local Codex/Claude/Grok logs for today, 7 days, and 30 days. Local-only; not a bill."
     )]
     fn get_spend(
         &self,
@@ -103,7 +101,7 @@ impl ServerHandler for CeilingMcp {
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_instructions(
                 "Ceiling local usage/spend tools. get_usage reads the desktop widget snapshot \
-(cache-only). get_spend scans local Codex/Claude logs. Prefer get_status for a quick \
+(cache-only). get_spend scans local Codex/Claude/Grok logs. Prefer get_status for a quick \
 remaining-quota + today-$ check before starting a large job. Values are estimated API \
 value, never a billed invoice."
                     .to_string(),
@@ -120,6 +118,19 @@ pub async fn run(_args: McpArgs) -> anyhow::Result<()> {
 
 fn json_tool_result(value: serde_json::Value) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(value.to_string())])
+}
+
+fn local_spend_supported(cli: &str) -> bool {
+    ProviderId::from_cli_name(cli).is_some_and(CostScanner::supports_local_scan)
+}
+
+fn local_spend_cli_names() -> Vec<&'static str> {
+    ProviderId::all()
+        .iter()
+        .copied()
+        .filter(|&id| CostScanner::supports_local_scan(id))
+        .map(|id| id.cli_name())
+        .collect()
 }
 
 fn list_providers_payload(snapshot: Option<&WidgetSnapshot>) -> serde_json::Value {
@@ -140,7 +151,7 @@ fn list_providers_payload(snapshot: Option<&WidgetSnapshot>) -> serde_json::Valu
             "id": cli,
             "display_name": id.display_name(),
             "has_quota_snapshot": in_snapshot,
-            "local_spend_supported": COST_SUPPORTED.contains(&cli),
+            "local_spend_supported": local_spend_supported(cli),
         }));
     }
 
@@ -218,18 +229,18 @@ fn spend_payload(provider: Option<&str>) -> serde_json::Value {
             let cli = ProviderId::from_cli_name(name)
                 .map(|id| id.cli_name())
                 .unwrap_or(name);
-            if !COST_SUPPORTED.contains(&cli) {
+            if !local_spend_supported(cli) {
                 return json!({
                     "ok": false,
                     "error": format!(
-                        "Local spend scanning is only available for Codex and Claude (got '{cli}')"
+                        "Local spend scanning is only available for Codex, Claude, and Grok (got '{cli}')"
                     ),
                     "providers": []
                 });
             }
             vec![cli]
         }
-        None => COST_SUPPORTED.to_vec(),
+        None => local_spend_cli_names(),
     };
 
     let mut providers = Vec::new();
@@ -297,7 +308,7 @@ fn status_payload(snapshot: Option<&WidgetSnapshot>, provider: Option<&str>) -> 
 
     let spend = chosen.and_then(|id| {
         let cli = id.cli_name();
-        if !COST_SUPPORTED.contains(&cli) {
+        if !local_spend_supported(cli) {
             return None;
         }
         get_cost_usage_report(cli, 30).map(|report| summary_json(&report.today))
@@ -398,6 +409,31 @@ mod tests {
     fn spend_rejects_unsupported_provider() {
         let payload = spend_payload(Some("cursor"));
         assert_eq!(payload["ok"], false);
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Grok"),
+            "error must name Grok: {payload}"
+        );
+    }
+
+    /// SBS-934: get_cost_usage_report already scans Grok; MCP still advertised
+    /// Codex/Claude only and rejected `provider=grok`.
+    #[test]
+    fn list_providers_and_spend_include_grok() {
+        let payload = list_providers_payload(None);
+        let grok = payload["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "grok")
+            .expect("grok");
+        assert_eq!(grok["local_spend_supported"], true);
+        let spend = spend_payload(Some("grok"));
+        assert_eq!(spend["ok"], true);
+        assert_eq!(spend["providers"][0]["provider"], "grok");
+        assert_eq!(spend["providers"][0]["supported"], true);
     }
 
     #[test]

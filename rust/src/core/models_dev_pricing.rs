@@ -645,6 +645,15 @@ struct ModelsDevCacheMemoEntry {
 static CACHE_MEMO: LazyLock<Mutex<HashMap<PathBuf, ModelsDevCacheMemoEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Where the fetched pricing catalog is cached on this machine.
+///
+/// Exposed so caches that store numbers *derived* from these prices can notice
+/// when the catalog changes, without having to know how the path is built.
+pub fn pricing_catalog_path() -> Option<PathBuf> {
+    let path = ModelsDevCache::cache_path(None);
+    (!path.as_os_str().is_empty()).then_some(path)
+}
+
 struct ModelsDevCache;
 
 impl ModelsDevCache {

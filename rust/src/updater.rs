@@ -82,12 +82,49 @@ struct GitHubAsset {
     digest: Option<String>,
 }
 
+/// Why an update check could not decide whether a newer release exists.
+///
+/// Idle / "up to date" is only a successful "latest is not newer". A GitHub
+/// 403, a dropped connection, or unreadable JSON is this error, not current.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateCheckError {
+    /// HTTP client could not be constructed.
+    Client,
+    /// Transport failure talking to GitHub.
+    Network,
+    /// GitHub answered, but not with a successful release payload.
+    Http { status: u16 },
+    /// Body was not a release JSON object/array we can read.
+    Parse,
+}
+
+impl UpdateCheckError {
+    /// Safe, user-facing sentence. No URLs, bodies, or raw error chains.
+    ///
+    /// Localized here rather than in the surface that shows it: this is the
+    /// whole sentence the user reads, and About used to glue an English one
+    /// onto a translated prefix.
+    pub fn user_message(&self) -> String {
+        crate::locale::get_text(
+            crate::locale::current_language(),
+            match self {
+                Self::Client | Self::Network => crate::locale::LocaleKey::UpdateErrorNetwork,
+                Self::Http { .. } => crate::locale::LocaleKey::UpdateErrorHttp,
+                Self::Parse => crate::locale::LocaleKey::UpdateErrorParse,
+            },
+        )
+    }
+}
+
 /// Check for updates from GitHub releases
 ///
 /// When `channel` is `UpdateChannel::Beta`, includes pre-release versions.
 /// When `channel` is `UpdateChannel::Stable`, only considers stable releases.
+///
+/// `Ok(Some)` is a newer release. `Ok(None)` is a successful "no newer
+/// release". Failures are `Err` so callers cannot treat them as current.
 #[allow(dead_code)]
-pub async fn check_for_updates() -> Option<UpdateInfo> {
+pub async fn check_for_updates() -> Result<Option<UpdateInfo>, UpdateCheckError> {
     check_for_updates_with_channel(UpdateChannel::Stable).await
 }
 
@@ -95,17 +132,27 @@ pub async fn check_for_updates() -> Option<UpdateInfo> {
 ///
 /// When `channel` is `UpdateChannel::Beta`, includes pre-release versions.
 /// When `channel` is `UpdateChannel::Stable`, only considers stable releases.
-pub async fn check_for_updates_with_channel(channel: UpdateChannel) -> Option<UpdateInfo> {
-    let client = update_client()?;
-    let response = client.get(release_url(channel)).send().await.ok()?;
-    let release = parse_release_response(response, channel).await?;
-    let remote_version = remote_version_from_tag(&release.tag_name);
-
-    if is_newer_version(remote_version, CURRENT_VERSION) {
-        select_release_target(&release)
-    } else {
-        None
-    }
+///
+/// SBS-931: only a successful "latest is not newer" is `Ok(None)` (Idle).
+/// Network, HTTP, and parse failures are `Err`.
+pub async fn check_for_updates_with_channel(
+    channel: UpdateChannel,
+) -> Result<Option<UpdateInfo>, UpdateCheckError> {
+    let client = update_client().ok_or(UpdateCheckError::Client)?;
+    let response = client
+        .get(release_url(channel))
+        .send()
+        .await
+        .map_err(|_| UpdateCheckError::Network)?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|_| UpdateCheckError::Network)?;
+    let Some(release) = interpret_release_http(status, &body, channel)? else {
+        return Ok(None);
+    };
+    Ok(update_from_release(release))
 }
 
 fn release_url(channel: UpdateChannel) -> String {
@@ -127,21 +174,46 @@ fn update_client() -> Option<reqwest::Client> {
         .ok()
 }
 
-async fn parse_release_response(
-    response: reqwest::Response,
+/// Classify a GitHub releases HTTP response.
+///
+/// A non-success status or unreadable body is an error, not "no update".
+/// The release to consider, or `None` when the listing simply has none.
+///
+/// A beta listing with nothing published yet, or only drafts, is a successful
+/// answer meaning "no release to offer". Reporting it as a failure made a new
+/// or draft-only repository read as "Could not check for updates" on About.
+fn interpret_release_http(
+    status: reqwest::StatusCode,
+    body: &[u8],
     channel: UpdateChannel,
-) -> Option<GitHubRelease> {
-    if !response.status().is_success() {
-        tracing::debug!("GitHub API returned status: {}", response.status());
-        return None;
+) -> Result<Option<GitHubRelease>, UpdateCheckError> {
+    if !status.is_success() {
+        tracing::debug!("GitHub API returned status: {status}");
+        return Err(UpdateCheckError::Http {
+            status: status.as_u16(),
+        });
     }
 
     match channel {
         UpdateChannel::Beta => {
-            let releases: Vec<GitHubRelease> = response.json().await.ok()?;
-            releases.into_iter().find(|r| !r.draft)
+            let releases: Vec<GitHubRelease> =
+                serde_json::from_slice(body).map_err(|_| UpdateCheckError::Parse)?;
+            Ok(releases.into_iter().find(|r| !r.draft))
         }
-        UpdateChannel::Stable => response.json().await.ok(),
+        UpdateChannel::Stable => serde_json::from_slice(body)
+            .map(Some)
+            .map_err(|_| UpdateCheckError::Parse),
+    }
+}
+
+/// `Some` only when the remote tag is newer than this build. A readable
+/// same-or-older release is `None` (current), not a failure.
+fn update_from_release(release: GitHubRelease) -> Option<UpdateInfo> {
+    let remote_version = remote_version_from_tag(&release.tag_name);
+    if is_newer_version(remote_version, CURRENT_VERSION) {
+        select_release_target(&release)
+    } else {
+        None
     }
 }
 
@@ -959,6 +1031,98 @@ mod tests {
             far_future > current,
             "a genuinely newer installer must survive pruning"
         );
+    }
+
+    fn sample_stable_release_json(tag: &str) -> String {
+        format!(
+            r#"{{
+                "tag_name": "{tag}",
+                "html_url": "https://github.com/tsouth89/ceiling/releases/tag/{tag}",
+                "body": "notes",
+                "assets": [],
+                "draft": false,
+                "prerelease": false
+            }}"#
+        )
+    }
+
+    /// SBS-931: GitHub 403/502 is a failed check, not "you are current".
+    #[test]
+    fn github_http_error_is_not_a_current_release() {
+        for status in [
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::BAD_GATEWAY,
+        ] {
+            let result = interpret_release_http(status, b"{}", UpdateChannel::Stable);
+            assert!(
+                matches!(result, Err(UpdateCheckError::Http { status: code }) if code == status.as_u16()),
+                "{status} must be Error, not Idle/current: {result:?}"
+            );
+        }
+    }
+
+    /// SBS-931: unreadable JSON after HTTP 200 is a failed check, not current.
+    #[test]
+    fn unreadable_release_json_is_not_a_current_release() {
+        let result =
+            interpret_release_http(reqwest::StatusCode::OK, b"not-json", UpdateChannel::Stable);
+        assert!(
+            matches!(result, Err(UpdateCheckError::Parse)),
+            "unreadable JSON must be Error, not Idle/current: {result:?}"
+        );
+    }
+
+    /// A successful latest payload whose tag is this build is current.
+    #[test]
+    fn successful_same_version_is_current_not_an_error() {
+        let body = sample_stable_release_json(&format!("v{CURRENT_VERSION}"));
+        let release = interpret_release_http(
+            reqwest::StatusCode::OK,
+            body.as_bytes(),
+            UpdateChannel::Stable,
+        )
+        .expect("readable current release")
+        .expect("a stable payload always carries a release");
+        assert!(
+            update_from_release(release).is_none(),
+            "same version must be Idle/current"
+        );
+    }
+
+    /// A successful latest payload newer than this build is Available.
+    #[test]
+    fn successful_newer_release_is_available() {
+        let (major, minor, patch) = parse_version_triplet(CURRENT_VERSION);
+        let tag = format!("v{}.{}.{}", major, minor, patch + 1);
+        let body = sample_stable_release_json(&tag);
+        let release = interpret_release_http(
+            reqwest::StatusCode::OK,
+            body.as_bytes(),
+            UpdateChannel::Stable,
+        )
+        .expect("readable newer release")
+        .expect("a stable payload always carries a release");
+        let update = update_from_release(release).expect("newer release");
+        assert_eq!(update.version, tag);
+    }
+
+    /// A beta listing with nothing published, or only drafts, is a successful
+    /// "no release to offer". Reporting it as a failure put "Could not check
+    /// for updates" on About for a repository that was simply empty.
+    #[test]
+    fn an_empty_beta_listing_is_not_a_failure() {
+        let empty = interpret_release_http(reqwest::StatusCode::OK, b"[]", UpdateChannel::Beta)
+            .expect("an empty listing is a successful answer");
+        assert!(empty.is_none());
+
+        let drafts_only = interpret_release_http(
+            reqwest::StatusCode::OK,
+            br#"[{"tag_name":"v9.9.9","html_url":"https://example.com","draft":true,"prerelease":true,"assets":[]}]"#,
+            UpdateChannel::Beta,
+        )
+        .expect("a draft-only listing is a successful answer");
+        assert!(drafts_only.is_none());
     }
 
     #[test]

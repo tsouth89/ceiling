@@ -59,6 +59,11 @@ pub use types::*;
 /// idempotent. An I/O failure between atomic file replacements can leave a
 /// partial revocation, but retrying safely completes it; it can never restore
 /// a credential or lose another provider's concurrent update.
+///
+/// After the shared files are written, the provider-owned hook runs so a
+/// vendor-specific shadow copy (StepFun's refreshed Oasis keyring token,
+/// SBS-920) cannot outlive Sign out. A hook error fails the revoke; retrying
+/// is safe because the file removals and the hook are both idempotent.
 pub fn revoke_managed_credentials(provider: ProviderId) -> anyhow::Result<()> {
     crate::secure_file::with_state_write_lock(|| {
         let keys_path = ApiKeys::keys_path()
@@ -67,24 +72,71 @@ pub fn revoke_managed_credentials(provider: ProviderId) -> anyhow::Result<()> {
             .ok_or_else(|| std::io::Error::other("Could not determine cookies path"))?;
         let token_store = crate::core::TokenAccountStore::new();
 
-        let mut keys = ApiKeys::try_load_from(&keys_path).map_err(std::io::Error::other)?;
-        let mut cookies =
-            ManualCookies::try_load_from(&cookies_path).map_err(std::io::Error::other)?;
-        let mut token_accounts = token_store.load().map_err(std::io::Error::other)?;
-
-        keys.remove(provider.cli_name());
-        cookies.remove(provider.cli_name());
-        token_accounts.remove(&provider);
-
-        keys.save_to(&keys_path).map_err(std::io::Error::other)?;
-        cookies
-            .save_to(&cookies_path)
-            .map_err(std::io::Error::other)?;
-        token_store
-            .save_unlocked(&token_accounts)
-            .map_err(std::io::Error::other)
+        revoke_managed_credentials_in(provider, &keys_path, &cookies_path, &token_store, || {
+            crate::providers::clear_persisted_credentials(provider)
+        })
     })
     .map_err(Into::into)
+}
+
+/// Whether `provider` still has a credential in Preferences.
+///
+/// An unreadable store answers `true`. This exists for the background refresh
+/// paths, which ask "was this revoked while I was working" before writing a
+/// renewed token, and [`ApiKeys::load`] cannot tell an empty store from one
+/// that failed to decode. Reading a decode failure as a revoke would drop a
+/// renewed token and leave the session on a credential the provider may have
+/// already rotated away from.
+pub(crate) fn provider_credential_present(provider: ProviderId) -> bool {
+    match ApiKeys::try_load() {
+        Ok(keys) => keys.has_key(provider.cli_name()),
+        Err(error) => {
+            tracing::warn!("Could not read stored API keys ({error}); treating as still signed in");
+            true
+        }
+    }
+}
+
+/// The body of [`revoke_managed_credentials`], with the paths and the
+/// provider-specific hook passed in so a test can fail the hook on purpose.
+///
+/// The caller holds the state write lock.
+fn revoke_managed_credentials_in(
+    provider: ProviderId,
+    keys_path: &std::path::Path,
+    cookies_path: &std::path::Path,
+    token_store: &crate::core::TokenAccountStore,
+    clear_persisted: impl FnOnce() -> anyhow::Result<()>,
+) -> std::io::Result<()> {
+    let mut keys = ApiKeys::try_load_from(keys_path).map_err(std::io::Error::other)?;
+    let mut cookies = ManualCookies::try_load_from(cookies_path).map_err(std::io::Error::other)?;
+    let mut token_accounts = token_store.load().map_err(std::io::Error::other)?;
+
+    keys.remove(provider.cli_name());
+    cookies.remove(provider.cli_name());
+    token_accounts.remove(&provider);
+
+    // The keyring copy goes first, and the file stores only after it is
+    // confirmed gone. Both of the orders' failure modes are real:
+    //
+    // * A hook that errors after the files were already emptied returns
+    //   Err with every file store reporting "no credential", which is
+    //   exactly the state that hides the Revoke control. The user is left
+    //   unable to retry a revoke that did not finish, while the leftover
+    //   keyring token still authenticates.
+    // * A crash in the gap between the two leaves whichever half ran. With
+    //   the keyring first that is a live-looking file store and no token,
+    //   which fails closed; the other way round it is a signed-out UI over
+    //   a token that still works.
+    clear_persisted().map_err(std::io::Error::other)?;
+
+    keys.save_to(keys_path).map_err(std::io::Error::other)?;
+    cookies
+        .save_to(cookies_path)
+        .map_err(std::io::Error::other)?;
+    token_store
+        .save_unlocked(&token_accounts)
+        .map_err(std::io::Error::other)
 }
 
 #[cfg(test)]

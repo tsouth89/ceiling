@@ -2,7 +2,10 @@
 //!
 //! Uses OAuth tokens stored by the Codex CLI in ~/.codex/auth.json
 
-use crate::core::{CostSnapshot, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot};
+use crate::core::{
+    CostSnapshot, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot,
+    format_remaining_countdown,
+};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -868,27 +871,7 @@ fn format_reset_countdown(reset_at: Option<DateTime<Utc>>) -> Option<String> {
     if dt <= now {
         return Some("now".to_string());
     }
-    let diff = dt - now;
-    let total_mins = diff.num_minutes();
-    let hours = diff.num_hours();
-    let mins = total_mins % 60;
-    if hours >= 24 {
-        let days = hours / 24;
-        let rem_h = hours % 24;
-        if rem_h == 0 {
-            Some(format!("{}d", days))
-        } else {
-            Some(format!("{}d {}h", days, rem_h))
-        }
-    } else if hours > 0 {
-        if mins == 0 {
-            Some(format!("{}h", hours))
-        } else {
-            Some(format!("{}h {}m", hours, mins))
-        }
-    } else {
-        Some(format!("{}m", mins))
-    }
+    Some(format_remaining_countdown(dt - now))
 }
 
 fn parse_chatgpt_base_url(config_content: &str) -> Option<String> {

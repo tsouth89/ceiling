@@ -114,7 +114,7 @@ pub enum Commands {
     /// Print usage from enabled providers as text or JSON (default command)
     Usage(usage::UsageArgs),
 
-    /// Print local token cost usage (Claude + Codex) without web/CLI access
+    /// Print local token cost usage (Claude, Codex, and Grok) without web/CLI access
     Cost(cost::CostArgs),
 
     /// Export safe provider diagnostics as JSON
@@ -184,6 +184,24 @@ mod tests {
 
         let help = String::from_utf8(output).expect("help should be valid utf-8");
         assert!(help.contains("nanogpt"));
+    }
+
+    #[test]
+    fn cost_subcommand_help_mentions_grok() {
+        let mut command = Cli::command();
+        let cost = command
+            .find_subcommand_mut("cost")
+            .expect("cost subcommand should exist");
+        let mut output = Vec::new();
+        cost.write_long_help(&mut output)
+            .expect("cost help should render");
+
+        let help = String::from_utf8(output).expect("help should be valid utf-8");
+        assert!(help.contains("grok"), "cost help should list grok: {help}");
+        assert!(
+            help.contains("Claude, Codex, and Grok"),
+            "cost about should name Grok: {help}"
+        );
     }
 
     #[test]

@@ -9,9 +9,10 @@ use chrono::{DateTime, Duration, Local, NaiveDate, Timelike, Utc};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::codex_cost_speed::{self, CodexCostSpeed};
 #[cfg(test)]
@@ -22,13 +23,15 @@ use crate::codex_costs::{
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{
-    ConfiguredAccounts, CostUsageDayRange, CostUsagePricing, JsonlScanner, ProviderId,
+    CodexUsageRecord, ConfiguredAccounts, CostUsageDayRange, CostUsagePricing, JsonlScanner,
+    ProviderId,
 };
 use crate::grok_costs::{
     GrokUsageRecord, discover_grok_session_dirs, grok_sessions_dir, load_session_meta,
     parse_grok_updates_file, should_count_grok_record,
 };
 use crate::settings::Settings;
+use crate::usage_index::{FileFacts, Lookup, NewEntry, file_facts};
 
 /// Config directories for every directory-backed account of `provider`.
 ///
@@ -585,18 +588,23 @@ struct ClaudeCacheCreation {
     ephemeral_1h_input_tokens: Option<u64>,
 }
 
+/// One priced Claude usage event.
+///
+/// `pub(crate)` so [`crate::usage_index`] can store and rebuild these; the
+/// dollar figure is computed here at parse time, which is why the index
+/// invalidates itself when prices change.
 #[derive(Debug, Clone)]
-struct ClaudeUsageRecord {
-    model: String,
-    timestamp: Option<DateTime<Utc>>,
-    dedup_key: Option<String>,
+pub(crate) struct ClaudeUsageRecord {
+    pub(crate) model: String,
+    pub(crate) timestamp: Option<DateTime<Utc>>,
+    pub(crate) dedup_key: Option<String>,
     /// Project/repo (basename of the line's cwd), for per-project cost.
-    project: Option<String>,
-    input: u64,
-    output: u64,
-    cache_create: u64,
-    cache_read: u64,
-    cost: f64,
+    pub(crate) project: Option<String>,
+    pub(crate) input: u64,
+    pub(crate) output: u64,
+    pub(crate) cache_create: u64,
+    pub(crate) cache_read: u64,
+    pub(crate) cost: f64,
 }
 
 /// Cost usage scanner
@@ -681,7 +689,7 @@ impl CostScanner {
 
     /// Stand in for the ambient config home on an already-built scanner.
     #[cfg(test)]
-    fn with_ambient_home(mut self, home: PathBuf) -> Self {
+    pub(crate) fn with_ambient_home(mut self, home: PathBuf) -> Self {
         self.ambient_home_override = Some(home);
         self
     }
@@ -771,6 +779,36 @@ impl CostScanner {
         summary
     }
 
+    /// Scan Grok Build local session logs (`~/.grok/sessions`).
+    ///
+    /// Dollars come from session `costUsdTicks` (API-equivalent), the same
+    /// figure Charts already shows. SBS-934: `codexbar cost` and serve `/cost`
+    /// must call this instead of treating Grok as unsupported.
+    pub fn scan_grok(&self) -> CostSummary {
+        scan_grok_report(self, self.days, &[]).thirty_days
+    }
+
+    /// True when local session logs can be priced for this provider.
+    ///
+    /// Charts, `codexbar cost`, serve `/cost`, and `codexbar mcp` get_spend
+    /// must agree. Cursor, Gemini, and Copilot stay unsupported.
+    pub fn supports_local_scan(provider: ProviderId) -> bool {
+        matches!(
+            provider,
+            ProviderId::Codex | ProviderId::Claude | ProviderId::Grok
+        )
+    }
+
+    /// Scan one provider's local logs, or `None` when that provider has none.
+    pub fn scan_provider(&self, provider: ProviderId) -> Option<CostSummary> {
+        match provider {
+            ProviderId::Codex => Some(self.scan_codex()),
+            ProviderId::Claude => Some(self.scan_claude()),
+            ProviderId::Grok => Some(self.scan_grok()),
+            _ => None,
+        }
+    }
+
     /// Scan Claude local logs
     pub fn scan_claude(&self) -> CostSummary {
         self.scan_claude_with_cancel(None)
@@ -810,21 +848,20 @@ impl CostScanner {
         }
         files.sort();
         files.dedup();
-        let parsed_files = parse_claude_files(&files, &cutoff, cancel);
         let mut seen = HashSet::new();
-        for (_, records) in parsed_files {
+        for_each_claude_file(&files, &cutoff, cancel, |_, records| {
             let mut counted = 0;
             for record in records {
-                if !should_count_claude_record(&record, &cutoff, &mut seen) {
+                if !should_count_claude_record(record, &cutoff, &mut seen) {
                     continue;
                 }
                 counted += 1;
-                add_claude_record_to_summary(&mut summary, &record);
+                add_claude_record_to_summary(&mut summary, record);
             }
             if counted > 0 {
                 summary.sessions_count += 1;
             }
-        }
+        });
 
         summary
     }
@@ -878,36 +915,8 @@ impl CostScanner {
         seen: &mut HashSet<String>,
         cancel: Option<&AtomicBool>,
     ) {
-        // Iterate through the date-based directory structure with one day of
-        // padding on each side. Codex JSONL timestamps are UTC, while the tray
-        // presents local calendar days; the parser filters back to `range`.
-        for date in codex_scan_dates(range) {
-            if is_cancelled(cancel) {
-                break;
-            }
-            let year = date.format("%Y").to_string();
-            let month = date.format("%m").to_string();
-            let day = date.format("%d").to_string();
-
-            let day_dir = sessions_dir.join(&year).join(&month).join(&day);
-            if !day_dir.exists() {
-                continue;
-            }
-
-            if let Ok(entries) = fs::read_dir(&day_dir) {
-                for entry in entries.flatten() {
-                    if is_cancelled(cancel) {
-                        break;
-                    }
-                    let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "jsonl")
-                        && mark_unseen_rollout(&path, seen)
-                    {
-                        self.parse_codex_file(&path, summary, cancel);
-                    }
-                }
-            }
-        }
+        let files = codex_session_files(sessions_dir, range, seen, cancel);
+        parse_codex_files_into(&files, range, summary, cancel);
     }
 
     /// Scan the flat `archived_sessions` dir. Files are `rollout-<date>-<id>.jsonl`;
@@ -920,28 +929,8 @@ impl CostScanner {
         seen: &mut HashSet<String>,
         cancel: Option<&AtomicBool>,
     ) {
-        let Ok(entries) = fs::read_dir(archived_dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if is_cancelled(cancel) {
-                break;
-            }
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "jsonl") {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if !archived_rollout_day_in_range(name, range) {
-                continue;
-            }
-            if !mark_unseen_rollout(&path, seen) {
-                continue;
-            }
-            self.parse_codex_file(&path, summary, cancel);
-        }
+        let files = codex_archived_files(archived_dir, range, seen, cancel);
+        parse_codex_files_into(&files, range, summary, cancel);
     }
 
     /// Every Claude `projects/` root to scan unscoped: ambient config, then
@@ -997,32 +986,6 @@ impl CostScanner {
         dirs
     }
 
-    fn parse_codex_file(
-        &self,
-        path: &Path,
-        summary: &mut CostSummary,
-        cancel: Option<&AtomicBool>,
-    ) {
-        if is_cancelled(cancel) {
-            return;
-        }
-        let today = Local::now().date_naive();
-        let start_date = codex_period_start(today, self.days);
-        let range = CostUsageDayRange::new(start_date, today);
-        let parse_result = match JsonlScanner::parse_codex_file(path, &range, 0, None, None) {
-            Ok(result) => result,
-            Err(_) => return,
-        };
-
-        let (session_cost, has_tokens) =
-            add_codex_records_to_summary(summary, &parse_result.records, &range);
-
-        if has_tokens {
-            summary.total_cost_usd += session_cost;
-            summary.sessions_count += 1;
-        }
-    }
-
     fn walk_claude_files<F>(
         &self,
         dir: &Path,
@@ -1044,12 +1007,21 @@ impl CostScanner {
             if is_cancelled(cancel) {
                 break;
             }
+            // `entry.file_type()` and `entry.metadata()` reuse what the
+            // directory read already returned on Windows. `path.is_dir()` plus
+            // `fs::metadata(&path)` re-stat every entry instead, which on a
+            // projects tree of a thousand transcripts is three syscalls per
+            // file where one will do.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_dir() {
                 self.walk_claude_files(&path, cutoff, cancel, on_file);
             } else if path.extension().is_some_and(|e| e == "jsonl") {
-                // Check file modification time
-                if let Ok(metadata) = fs::metadata(&path)
+                // Only files touched inside the window can hold in-window
+                // records, so the mtime is the cheap gate before opening one.
+                if let Ok(metadata) = entry.metadata()
                     && let Ok(modified) = metadata.modified()
                 {
                     let modified_dt: DateTime<Utc> = modified.into();
@@ -1076,83 +1048,562 @@ impl CostScanner {
     }
 }
 
-fn parse_claude_files(
-    files: &[PathBuf],
-    cutoff: &DateTime<Utc>,
+/// Rollout paths in `range` under a date-nested `sessions/` tree, deduped by
+/// file name, in scan order.
+///
+/// Collected before anything is parsed so the files can be read concurrently.
+/// The walk itself only touches directory metadata; the reading is what costs.
+fn codex_session_files(
+    sessions_dir: &Path,
+    range: &CostUsageDayRange,
+    seen: &mut HashSet<String>,
     cancel: Option<&AtomicBool>,
-) -> Vec<(PathBuf, Vec<ClaudeUsageRecord>)> {
-    if files.is_empty() {
-        return Vec::new();
+) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    // Walk the date-based directory structure with one day of padding on each
+    // side. Codex JSONL timestamps are UTC while the tray presents local
+    // calendar days; the parser filters back to `range`.
+    for date in codex_scan_dates(range) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let day_dir = sessions_dir
+            .join(date.format("%Y").to_string())
+            .join(date.format("%m").to_string())
+            .join(date.format("%d").to_string());
+        let Ok(entries) = fs::read_dir(&day_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "jsonl") && mark_unseen_rollout(&path, seen) {
+                files.push(path);
+            }
+        }
     }
-    let workers = std::thread::available_parallelism()
+    files
+}
+
+/// Rollout paths in `range` from a flat `archived_sessions/` dir, deduped by
+/// file name. Files are `rollout-<date>-<id>.jsonl`; the date prefix is what
+/// keeps rollouts far outside the window from being read at all.
+fn codex_archived_files(
+    archived_dir: &Path,
+    range: &CostUsageDayRange,
+    seen: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
+) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = fs::read_dir(archived_dir) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "jsonl") {
+            continue;
+        }
+        let in_range = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| archived_rollout_day_in_range(name, range));
+        if in_range && mark_unseen_rollout(&path, seen) {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// The widest day range the parser accepts.
+///
+/// Rollouts are parsed against this rather than the caller's window so one
+/// index entry serves every window: a narrower range would bake the caller's
+/// dates into the stored records. Every fold filters by its own range anyway,
+/// so a wider parse only ever supplies a superset.
+///
+/// The end deliberately stops short of year 9999. [`CostUsageDayRange`] pads
+/// its bounds by a day and compares the formatted keys as text, and a padded
+/// year 10000 formats as `+10000-01-01`, which sorts *below* every real date
+/// and would exclude everything.
+fn unbounded_day_range() -> CostUsageDayRange {
+    CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date"),
+        NaiveDate::from_ymd_opt(9000, 1, 1).expect("valid date"),
+    )
+}
+
+/// Stream each rollout's records to `fold`, in file order, using the index.
+///
+/// A rollout's token counts are cumulative and the parser carries state across
+/// its lines, so a changed rollout is re-read whole rather than resumed. In
+/// practice only the session being written right now changes.
+fn for_each_codex_file<F>(files: &[PathBuf], cancel: Option<&AtomicBool>, mut fold: F)
+where
+    F: FnMut(&Path, &[CodexUsageRecord]),
+{
+    let range = unbounded_day_range();
+    if !index_enabled() {
+        for_each_parsed_file(
+            files,
+            cancel,
+            |path| {
+                JsonlScanner::parse_codex_file(path, &range, 0, None, None)
+                    .map(|parsed| parsed.records)
+                    .unwrap_or_default()
+            },
+            |path, records| fold(path, &records),
+        );
+        return;
+    }
+
+    let index = crate::usage_index::CODEX_INDEX.read();
+    let mut updates: Vec<NewEntry<CodexUsageRecord>> = Vec::new();
+    let mut touched = Vec::new();
+    for_each_parsed_file(
+        files,
+        cancel,
+        |path| -> IndexedFile<'_, CodexUsageRecord> {
+            let Some(facts) = file_facts(path) else {
+                return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
+            };
+            // A rollout is read whole or not at all, so its entry covers
+            // whatever the file holds and no scan can out-reach it.
+            match index.lookup(path, &facts, i64::MIN) {
+                Lookup::Hit(records) => (FileRecords::Cached(records), IndexOutcome::Reused),
+                Lookup::Append { .. } | Lookup::Miss => {
+                    // A rollout is parsed whole or not at all, so there is no
+                    // partial read to guard against. A read that failed is a
+                    // different matter: storing it would record "this rollout
+                    // has no usage" against a file that was simply busy.
+                    let Ok(parsed) = JsonlScanner::parse_codex_file(path, &range, 0, None, None)
+                    else {
+                        return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
+                    };
+                    (
+                        FileRecords::Parsed(parsed.records),
+                        IndexOutcome::Store {
+                            facts,
+                            parsed_bytes: facts.len,
+                            covers_from_ms: i64::MIN,
+                        },
+                    )
+                }
+            }
+        },
+        |path, (records, outcome)| {
+            fold(path, records.as_slice());
+            match (outcome, records) {
+                (
+                    IndexOutcome::Store {
+                        facts,
+                        parsed_bytes,
+                        covers_from_ms,
+                    },
+                    FileRecords::Parsed(records),
+                ) => updates.push(NewEntry {
+                    path: path.to_path_buf(),
+                    facts,
+                    parsed_bytes,
+                    covers_from_ms,
+                    records,
+                }),
+                (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
+                // Incomplete, or a shape that cannot occur: leave the index
+                // exactly as it was.
+                _ => {}
+            }
+        },
+    );
+    drop(index);
+    crate::usage_index::CODEX_INDEX.commit(updates, &touched);
+}
+
+/// Parse already-deduped rollout paths and fold them into one summary.
+fn parse_codex_files_into(
+    files: &[PathBuf],
+    range: &CostUsageDayRange,
+    summary: &mut CostSummary,
+    cancel: Option<&AtomicBool>,
+) {
+    for_each_codex_file(files, cancel, |_, records| {
+        let (session_cost, has_tokens) = add_codex_records_to_summary(summary, records, range);
+        if has_tokens {
+            summary.total_cost_usd += session_cost;
+            summary.sessions_count += 1;
+        }
+    });
+}
+
+/// Files handed to the pool before any of their results are folded, per worker.
+///
+/// Parsing is the expensive half of a scan and is embarrassingly parallel; the
+/// fold has to stay sequential and in file order because cross-file
+/// de-duplication depends on that order. Parsing *every* file before folding
+/// any of them is what made a 90-day scan hold every record of gigabytes of
+/// transcripts at once, so the work runs a batch at a time: enough files to
+/// keep every worker busy, few enough that only one batch is live.
+const PARSE_BATCH_PER_WORKER: usize = 4;
+
+/// Threads to parse with. Capped at 8 because these scans run behind a UI on a
+/// machine that is also running the agents that write these logs.
+fn parse_workers(files: usize) -> usize {
+    std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1)
         .clamp(1, 8)
-        .min(files.len());
-    let chunk_size = files.len().div_ceil(workers);
-    std::thread::scope(|scope| {
-        let handles = files
-            .chunks(chunk_size)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    chunk
-                        .iter()
-                        .map(|path| {
-                            let mut records = Vec::new();
-                            let mut local_seen = HashSet::new();
-                            for_each_claude_usage_record(
-                                path,
-                                cutoff,
-                                &mut local_seen,
-                                cancel,
-                                |record| records.push(record.clone()),
-                            );
-                            (path.clone(), records)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().unwrap_or_default())
-            .collect::<Vec<_>>()
-    })
+        .min(files.max(1))
 }
 
-/// Stream the de-duplicated, in-window usage records from one transcript
-/// file into `on_record`. Both the summary scan and the daily-history scan
-/// consume this single reader, so Claude log semantics live in one place.
-/// Returns the number of records consumed, so callers can tell whether the
-/// file contributed anything.
-fn for_each_claude_usage_record<F>(
-    path: &Path,
-    cutoff: &DateTime<Utc>,
-    seen: &mut HashSet<String>,
+/// Parse `files` on a worker pool, handing each result to `fold` in file order.
+///
+/// `fold` runs on the calling thread, so callers keep one `seen` set, one
+/// summary, and one deterministic order without any locking of their own.
+fn for_each_parsed_file<T, P, F>(
+    files: &[PathBuf],
     cancel: Option<&AtomicBool>,
-    mut on_record: F,
-) -> usize
-where
-    F: FnMut(&ClaudeUsageRecord),
+    parse: P,
+    mut fold: F,
+) where
+    P: Fn(&Path) -> T + Sync,
+    T: Send,
+    F: FnMut(&Path, T),
 {
-    let Ok(file) = File::open(path) else {
-        return 0;
+    if files.is_empty() {
+        return;
+    }
+    let workers = parse_workers(files.len());
+    let batch = workers.saturating_mul(PARSE_BATCH_PER_WORKER).max(1);
+    for chunk in files.chunks(batch) {
+        if is_cancelled(cancel) {
+            return;
+        }
+        for (path, parsed) in parse_batch(chunk, workers, &parse, cancel) {
+            fold(path, parsed);
+        }
+    }
+}
+
+/// Parse one batch concurrently and return the results in `chunk` order.
+///
+/// Workers pull the next index rather than taking a fixed slice each: transcript
+/// sizes differ by orders of magnitude, and a fixed split leaves every other
+/// worker idle behind the one that drew the largest file.
+fn parse_batch<'a, T, P>(
+    chunk: &'a [PathBuf],
+    workers: usize,
+    parse: &P,
+    cancel: Option<&AtomicBool>,
+) -> Vec<(&'a Path, T)>
+where
+    P: Fn(&Path) -> T + Sync,
+    T: Send,
+{
+    if workers <= 1 || chunk.len() == 1 {
+        return chunk
+            .iter()
+            .take_while(|_| !is_cancelled(cancel))
+            .map(|path| (path.as_path(), parse(path)))
+            .collect();
+    }
+
+    let next = AtomicUsize::new(0);
+    let done: Mutex<Vec<(usize, T)>> = Mutex::new(Vec::with_capacity(chunk.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    if is_cancelled(cancel) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(path) = chunk.get(index) else {
+                        break;
+                    };
+                    let parsed = parse(path);
+                    // A poisoned lock means another worker panicked. Keep the
+                    // results already collected rather than losing the batch.
+                    done.lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .push((index, parsed));
+                }
+            });
+        }
+    });
+
+    let mut parsed = done.into_inner().unwrap_or_else(|err| err.into_inner());
+    parsed.sort_by_key(|(index, _)| *index);
+    parsed
+        .into_iter()
+        .map(|(index, value)| (chunk[index].as_path(), value))
+        .collect()
+}
+
+/// A file's records, either borrowed from the index or just parsed.
+enum FileRecords<'a, R> {
+    Cached(&'a [R]),
+    Parsed(Vec<R>),
+}
+
+impl<R> FileRecords<'_, R> {
+    fn as_slice(&self) -> &[R] {
+        match self {
+            Self::Cached(records) => records,
+            Self::Parsed(records) => records,
+        }
+    }
+}
+
+/// What the index should do with one file once a scan has read it.
+enum IndexOutcome {
+    /// Served from the index. Keep the entry alive.
+    Reused,
+    /// Read in full. Store it under these facts.
+    Store {
+        facts: FileFacts,
+        parsed_bytes: u64,
+        covers_from_ms: i64,
+    },
+    /// The read was cut short, so these records are only part of the file.
+    ///
+    /// Storing them would record the whole file's length and mtime against a
+    /// truncated set of records, and the next scan would match on exactly those
+    /// and serve the short version as a hit. Every card would then under-report
+    /// that transcript until it was appended to or replaced.
+    Incomplete,
+}
+
+/// One file's outcome: its records, and what to do with its index entry.
+type IndexedFile<'a, R> = (FileRecords<'a, R>, IndexOutcome);
+
+/// Classify a read that has just finished.
+///
+/// A cancelled scan is thrown away by its caller, so its records going nowhere
+/// costs nothing. What must not happen is storing them: they would be indexed
+/// against the whole file's length and mtime, and the next scan would match on
+/// exactly those and serve the truncated set as a hit.
+fn read_outcome(
+    cancel: Option<&AtomicBool>,
+    read: &StreamedRecords,
+    facts: FileFacts,
+    covers_from_ms: i64,
+) -> IndexOutcome {
+    if is_cancelled(cancel) || !read.reached_end {
+        return IndexOutcome::Incomplete;
+    }
+    IndexOutcome::Store {
+        facts,
+        parsed_bytes: read.parsed_bytes,
+        covers_from_ms,
+    }
+}
+
+/// Whether scans consult the on-disk record index.
+///
+/// Off under `cfg(test)`: the suite scans throwaway fixture directories, and it
+/// must neither read nor write the developer's real index to do it.
+fn index_enabled() -> bool {
+    !cfg!(test)
+}
+
+/// How far back a transcript is indexed.
+///
+/// A project transcript can be appended to for a year, and indexing all of it
+/// costs real time on the pass that builds the index — for records no window in
+/// this app asks about. The longest supported lookback is a 366-day custom
+/// range on Estimated API value, so a year plus a month of slack covers every
+/// window a card can request. A scan that asks for more (the CLI takes any
+/// `--days`) sees the entry as a miss and reads the file in full, so the bound
+/// costs time, never accuracy.
+const INDEX_HORIZON_DAYS: i64 = 400;
+
+/// The oldest instant newly indexed records are kept from.
+fn index_horizon(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - chrono::Duration::days(INDEX_HORIZON_DAYS)
+}
+
+/// Stream each Claude transcript's records to `fold`, in file order.
+///
+/// Files already in the record index are served from it; a file that grew since
+/// it was indexed is resumed from its last byte offset rather than re-read. The
+/// caller still applies the window and the cross-file `seen` set, so what the
+/// fold sees is exactly what a cold parse would have produced.
+fn for_each_claude_file<F>(
+    files: &[PathBuf],
+    needs_from: &DateTime<Utc>,
+    cancel: Option<&AtomicBool>,
+    mut fold: F,
+) where
+    F: FnMut(&Path, &[ClaudeUsageRecord]),
+{
+    if !index_enabled() {
+        for_each_parsed_file(
+            files,
+            cancel,
+            |path| {
+                let mut records = Vec::new();
+                stream_claude_records(path, 0, cancel, |record| records.push(record));
+                records
+            },
+            |path, records| fold(path, &records),
+        );
+        return;
+    }
+
+    // Never index less than the scan itself needs, or the entry it writes would
+    // be a miss for the very scan that just built it.
+    let horizon = index_horizon(Utc::now()).min(*needs_from);
+    let horizon_ms = horizon.timestamp_millis();
+    let keep = |record: &ClaudeUsageRecord| {
+        // Undated records are kept regardless: the folds report them separately
+        // and there is no timestamp to judge them by.
+        record.timestamp.is_none_or(|at| at >= horizon)
     };
 
-    let mut counted = 0;
+    let index = crate::usage_index::CLAUDE_INDEX.read();
+    let mut updates: Vec<NewEntry<ClaudeUsageRecord>> = Vec::new();
+    let mut touched = Vec::new();
+    for_each_parsed_file(
+        files,
+        cancel,
+        |path| -> IndexedFile<'_, ClaudeUsageRecord> {
+            let Some(facts) = file_facts(path) else {
+                return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
+            };
+            match index.lookup(path, &facts, needs_from.timestamp_millis()) {
+                Lookup::Hit(records) => (FileRecords::Cached(records), IndexOutcome::Reused),
+                Lookup::Append {
+                    from,
+                    prior,
+                    covers_from_ms,
+                } => {
+                    let mut records = prior.to_vec();
+                    let read = stream_claude_records(path, from, cancel, |record| {
+                        if keep(&record) {
+                            records.push(record);
+                        }
+                    });
+                    // The kept prior records already reach further back than a
+                    // fresh horizon would, so the entry keeps its own claim.
+                    (
+                        FileRecords::Parsed(records),
+                        read_outcome(cancel, &read, facts, covers_from_ms),
+                    )
+                }
+                Lookup::Miss => {
+                    let mut records = Vec::new();
+                    let read = stream_claude_records(path, 0, cancel, |record| {
+                        if keep(&record) {
+                            records.push(record);
+                        }
+                    });
+                    (
+                        FileRecords::Parsed(records),
+                        read_outcome(cancel, &read, facts, horizon_ms),
+                    )
+                }
+            }
+        },
+        |path, (records, outcome)| {
+            fold(path, records.as_slice());
+            // The records move straight into the index entry, so a file that
+            // was read is never held twice.
+            match (outcome, records) {
+                (
+                    IndexOutcome::Store {
+                        facts,
+                        parsed_bytes,
+                        covers_from_ms,
+                    },
+                    FileRecords::Parsed(records),
+                ) => updates.push(NewEntry {
+                    path: path.to_path_buf(),
+                    facts,
+                    parsed_bytes,
+                    covers_from_ms,
+                    records,
+                }),
+                (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
+                // Incomplete, or a shape that cannot occur: leave the index
+                // exactly as it was.
+                _ => {}
+            }
+        },
+    );
+    drop(index);
+    crate::usage_index::CLAUDE_INDEX.commit(updates, &touched);
+}
+
+/// Stream every usage record in one transcript file, starting at byte
+/// `from`, and report the offset reading stopped at.
+///
+/// No filtering happens here: the caller decides what is in window and what is
+/// a duplicate. That split is what lets the record index store a file's records
+/// once and serve scans with different windows from the same entry.
+///
+/// The offset is only meaningful because Claude appends whole JSON lines and
+/// never rewrites them, so resuming there picks up exactly where this stopped.
+struct StreamedRecords {
+    /// Byte offset the read stopped at.
+    parsed_bytes: u64,
+    /// Whether the read got to the end of the file under its own steam.
+    ///
+    /// False when the file could not be opened, sought, or read. A read that
+    /// failed holds part of a transcript, and storing that part against the
+    /// whole file's size and mtime would serve the short version forever: an
+    /// antivirus or sync client holding a file open for a moment would cost
+    /// that transcript from every total until it was rewritten.
+    reached_end: bool,
+}
+
+fn stream_claude_records<F>(
+    path: &Path,
+    from: u64,
+    cancel: Option<&AtomicBool>,
+    mut on_record: F,
+) -> StreamedRecords
+where
+    F: FnMut(ClaudeUsageRecord),
+{
+    let Ok(file) = File::open(path) else {
+        return StreamedRecords {
+            parsed_bytes: from,
+            reached_end: false,
+        };
+    };
     let mut reader = BufReader::new(file);
+    if from > 0 && reader.seek(SeekFrom::Start(from)).is_err() {
+        return StreamedRecords {
+            parsed_bytes: from,
+            reached_end: false,
+        };
+    }
+
+    let mut at = from;
+    let mut reached_end = true;
     let mut line = Vec::with_capacity(16 * 1024);
     loop {
         line.clear();
         let Ok(bytes_read) = reader.read_until(b'\n', &mut line) else {
+            // A read that errored part way holds an unknown remainder.
+            reached_end = false;
             break;
         };
         if bytes_read == 0 {
             break;
         }
+        // A trailing line with no newline is a half-written record. Stop before
+        // it and leave the offset there, so the next scan reads it whole.
+        if !line.ends_with(b"\n") {
+            break;
+        }
+        // Cancel before claiming the bytes. A line counted as parsed but never
+        // handed to `on_record` is lost to every later resume.
         if is_cancelled(cancel) {
             break;
         }
+        at += bytes_read as u64;
         // Claude transcripts contain large user/tool payloads that can never
         // contribute token usage. Avoid allocating a String and asking serde
         // to parse those lines; only assistant events with a usage object can
@@ -1162,12 +1613,42 @@ where
         }
         if let Ok(event) = serde_json::from_slice::<ClaudeEvent>(&line)
             && let Some(record) = claude_usage_record_from_event(&event)
-            && should_count_claude_record(&record, cutoff, seen)
         {
-            counted += 1;
-            on_record(&record);
+            on_record(record);
         }
     }
+    StreamedRecords {
+        parsed_bytes: at,
+        reached_end,
+    }
+}
+
+/// Stream the de-duplicated, in-window usage records from one transcript
+/// file into `on_record`. Both the summary scan and the daily-history scan
+/// consume this single reader, so Claude log semantics live in one place.
+/// Returns the number of records consumed, so callers can tell whether the
+/// file contributed anything.
+///
+/// Records are handed over by value: the collecting caller keeps them, and the
+/// summing callers borrow what they are given. Passing a reference meant every
+/// kept record was cloned, strings and all, on the hottest path in the scan.
+fn for_each_claude_usage_record<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    seen: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
+    mut on_record: F,
+) -> usize
+where
+    F: FnMut(ClaudeUsageRecord),
+{
+    let mut counted = 0;
+    stream_claude_records(path, 0, cancel, |record| {
+        if should_count_claude_record(&record, cutoff, seen) {
+            counted += 1;
+            on_record(record);
+        }
+    });
     counted
 }
 
@@ -1272,8 +1753,62 @@ fn should_count_claude_record(
     true
 }
 
-fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) {
-    if CostUsagePricing::claude_cost_usd(&record.model, 0, 0, 0, 0).is_none() {
+/// The part of folding a record that does not depend on which summary it lands
+/// in.
+///
+/// One record is folded into a dozen summaries — the file, every caller window,
+/// its day, its hour — and all of this used to be redone for each: a pricing
+/// lookup that reads the clock and normalizes the model name, plus a fresh
+/// allocation of the project bucket. Over a real 60-day scan that is millions
+/// of repeats of work whose answer never changes.
+struct PreparedClaudeRecord<'a> {
+    record: &'a ClaudeUsageRecord,
+    project: String,
+    unknown_model: bool,
+}
+
+fn prepare_claude_record(record: &ClaudeUsageRecord) -> PreparedClaudeRecord<'_> {
+    PreparedClaudeRecord {
+        record,
+        project: crate::codex_costs::project_bucket(record.project.as_deref()),
+        unknown_model: CostUsagePricing::claude_cost_usd(&record.model, 0, 0, 0, 0).is_none(),
+    }
+}
+
+/// Add `cost` under `key`.
+///
+/// `HashMap::entry` takes an owned key, so it allocates on every call, hit or
+/// miss. These maps hold a handful of models and projects and are written to
+/// millions of times, so the string is only built when the key is genuinely new.
+fn add_keyed_cost(map: &mut HashMap<String, f64>, key: &str, cost: f64) {
+    match map.get_mut(key) {
+        Some(total) => *total += cost,
+        None => {
+            map.insert(key.to_string(), cost);
+        }
+    }
+}
+
+fn add_keyed_claude_tokens(
+    map: &mut HashMap<String, ModelTokenCounts>,
+    key: &str,
+    record: &ClaudeUsageRecord,
+) {
+    let counts = match map.get_mut(key) {
+        Some(counts) => counts,
+        None => map.entry(key.to_string()).or_default(),
+    };
+    counts.input_tokens += record.input;
+    counts.output_tokens += record.output;
+    counts.cached_tokens += record.cache_create + record.cache_read;
+    counts.cache_read_tokens += record.cache_read;
+    counts.cache_write_tokens += record.cache_create;
+    counts.calls += 1;
+}
+
+fn add_prepared_claude_record(summary: &mut CostSummary, prepared: &PreparedClaudeRecord<'_>) {
+    let record = prepared.record;
+    if prepared.unknown_model && !summary.unknown_models.contains(&record.model) {
         summary.unknown_models.insert(record.model.clone());
     }
 
@@ -1284,31 +1819,14 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
     summary.cache_write_tokens += record.cache_create;
     summary.total_cost_usd += record.cost;
 
-    *summary.by_model.entry(record.model.clone()).or_insert(0.0) += record.cost;
+    add_keyed_cost(&mut summary.by_model, &record.model, record.cost);
+    add_keyed_claude_tokens(&mut summary.by_model_tokens, &record.model, record);
+    add_keyed_cost(&mut summary.by_project, &prepared.project, record.cost);
+    add_keyed_claude_tokens(&mut summary.by_project_tokens, &prepared.project, record);
+}
 
-    let model_tokens = summary
-        .by_model_tokens
-        .entry(record.model.clone())
-        .or_default();
-    model_tokens.input_tokens += record.input;
-    model_tokens.output_tokens += record.output;
-    model_tokens.cached_tokens += record.cache_create + record.cache_read;
-    model_tokens.cache_read_tokens += record.cache_read;
-    model_tokens.cache_write_tokens += record.cache_create;
-    model_tokens.calls += 1;
-
-    let project_bucket = crate::codex_costs::project_bucket(record.project.as_deref());
-    *summary
-        .by_project
-        .entry(project_bucket.clone())
-        .or_insert(0.0) += record.cost;
-    let project_tokens = summary.by_project_tokens.entry(project_bucket).or_default();
-    project_tokens.input_tokens += record.input;
-    project_tokens.output_tokens += record.output;
-    project_tokens.cached_tokens += record.cache_create + record.cache_read;
-    project_tokens.cache_read_tokens += record.cache_read;
-    project_tokens.cache_write_tokens += record.cache_create;
-    project_tokens.calls += 1;
+fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) {
+    add_prepared_claude_record(summary, &prepare_claude_record(record));
 }
 
 /// Add one usage record to the per-day cost buckets, keyed by the record's
@@ -1614,9 +2132,6 @@ struct CodexReportRollups<'a> {
     today_sessions: u32,
     seven_day_sessions: u32,
     period_sessions: u32,
-    /// Rollout file names already counted. One rollout can appear in the
-    /// sessions tree, the archive dir, and across homes/WSL roots.
-    seen: HashSet<String>,
 }
 
 impl<'a> CodexReportRollups<'a> {
@@ -1640,31 +2155,17 @@ impl<'a> CodexReportRollups<'a> {
             today_sessions: 0,
             seven_day_sessions: 0,
             period_sessions: 0,
-            seen: HashSet::new(),
         }
     }
 
-    fn ingest(&mut self, path: &Path) {
-        if path
-            .extension()
-            .is_none_or(|extension| extension != "jsonl")
-        {
-            return;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            return;
-        };
-        if !self.seen.insert(name.to_string()) {
-            return;
-        }
-        let Ok(parsed) = JsonlScanner::parse_codex_file(path, self.range, 0, None, None) else {
-            return;
-        };
-
+    /// Fold one already-parsed rollout in. Callers dedup by rollout file name
+    /// while collecting the paths, so the same rollout reaching this twice is
+    /// a caller bug rather than something to filter here.
+    fn ingest_parsed(&mut self, path: &Path, records: &[CodexUsageRecord]) {
         let mut file_summary = CostSummary::default();
         let mut contributed_today = false;
         let mut contributed_seven_days = false;
-        for record in parsed.records.iter().filter(|record| {
+        for record in records.iter().filter(|record| {
             CostUsageDayRange::is_in_range(
                 &record.day_key,
                 &self.range.since_key,
@@ -1754,45 +2255,23 @@ fn scan_codex_report(
     let range = CostUsageDayRange::new(start, today);
     let mut rollups = CodexReportRollups::new(days, &range, windows, today, scanner.collect_hourly);
 
+    // Collect every rollout first, then read them concurrently. One rollout can
+    // appear in the sessions tree, the archive, and across homes, so the dedup
+    // set spans both passes.
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
     for sessions_dir in scanner.get_codex_sessions_dirs() {
-        if !sessions_dir.exists() {
-            continue;
-        }
-        for scan_date in codex_scan_dates(&range) {
-            let day_dir = sessions_dir
-                .join(scan_date.format("%Y").to_string())
-                .join(scan_date.format("%m").to_string())
-                .join(scan_date.format("%d").to_string());
-            let Ok(entries) = fs::read_dir(day_dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                rollups.ingest(&entry.path());
-            }
-        }
+        files.extend(codex_session_files(&sessions_dir, &range, &mut seen, None));
     }
-
     // The archive is a flat dir, so gate on the rollout's filename date rather
     // than walking a date tree that does not exist there.
     for archived_dir in scanner.get_codex_archived_dirs() {
-        if !archived_dir.exists() {
-            continue;
-        }
-        let Ok(entries) = fs::read_dir(archived_dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let in_range = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| archived_rollout_day_in_range(name, &range));
-            if !in_range {
-                continue;
-            }
-            rollups.ingest(&path);
-        }
+        files.extend(codex_archived_files(&archived_dir, &range, &mut seen, None));
     }
+
+    for_each_codex_file(&files, None, |path, records| {
+        rollups.ingest_parsed(path, records);
+    });
 
     let mut report = rollups.finish(days);
     // Apply ccusage-compatible priority/fast multiplier to every Codex window.
@@ -2033,31 +2512,34 @@ fn scan_claude_report(
     let mut seven_day_sessions = 0;
     let mut period_sessions = 0;
 
-    for (path, records) in parse_claude_files(&files, &cutoff, None) {
+    for_each_claude_file(&files, &cutoff, None, |path, records| {
         let mut file_summary = CostSummary::default();
         let mut latest_recorded_at: Option<DateTime<Utc>> = None;
         let mut contributed_today = false;
         let mut contributed_seven_days = false;
         let mut counted = 0;
         for record in records {
-            if !should_count_claude_record(&record, &cutoff, &mut seen) {
+            if !should_count_claude_record(record, &cutoff, &mut seen) {
                 continue;
             }
             counted += 1;
-            add_claude_record_to_summary(&mut file_summary, &record);
+            // Prepared once, then folded into the file, the windows, the day,
+            // and the hour.
+            let prepared = prepare_claude_record(record);
+            add_prepared_claude_record(&mut file_summary, &prepared);
             add_to_current_windows(&mut current_windows, windows, record.timestamp, |summary| {
-                add_claude_record_to_summary(summary, &record)
+                add_prepared_claude_record(summary, &prepared)
             });
             if let Some(timestamp) = record.timestamp {
                 let date = timestamp.with_timezone(&Local).date_naive();
                 let day = date.format("%Y-%m-%d").to_string();
                 if let Some(day_summary) = daily.get_mut(&day) {
-                    add_claude_record_to_summary(day_summary, &record);
+                    add_prepared_claude_record(day_summary, &prepared);
                     add_to_hourly(
                         scanner.collect_hourly,
                         &mut hourly,
                         record.timestamp,
-                        |summary| add_claude_record_to_summary(summary, &record),
+                        |summary| add_prepared_claude_record(summary, &prepared),
                     );
                 }
                 contributed_today |= date == today;
@@ -2066,17 +2548,17 @@ fn scan_claude_report(
                     latest_recorded_at = Some(timestamp);
                 }
             } else {
-                add_claude_record_to_summary(&mut undated, &record);
+                add_prepared_claude_record(&mut undated, &prepared);
             }
         }
         if counted == 0 {
-            continue;
+            return;
         }
         file_summary.sessions_count = 1;
         period_sessions += 1;
         today_sessions += u32::from(contributed_today);
         seven_day_sessions += u32::from(contributed_seven_days);
-        let fallback_modified = fs::metadata(&path)
+        let fallback_modified = fs::metadata(path)
             .and_then(|metadata| metadata.modified())
             .ok()
             .map(DateTime::<Utc>::from)
@@ -2088,7 +2570,7 @@ fn scan_claude_report(
         {
             latest = Some((recorded_at, file_summary));
         }
-    }
+    });
 
     finish_report(
         daily,
@@ -2165,7 +2647,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
             let mut seen = HashSet::new();
             let mut handle_file = |path: &Path| {
                 for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-                    add_claude_record_to_daily_costs(&mut daily_costs, record);
+                    add_claude_record_to_daily_costs(&mut daily_costs, &record);
                 });
             };
             for projects_dir in scanner
@@ -2188,6 +2670,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ProviderId;
     use std::io::Write;
 
     #[test]
@@ -2765,9 +3248,10 @@ mod tests {
         .unwrap();
         drop(file);
 
-        let scanner = CostScanner::new(30);
+        let today = Local::now().date_naive();
+        let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
         let mut summary = CostSummary::default();
-        scanner.parse_codex_file(&path, &mut summary, None);
+        parse_codex_files_into(std::slice::from_ref(&path), &range, &mut summary, None);
 
         assert_eq!(summary.sessions_count, 1);
         assert_eq!(summary.input_tokens, 125);
@@ -2887,6 +3371,138 @@ mod tests {
         assert_eq!(summary.sessions_count, 0);
     }
 
+    /// One Claude assistant event with a unique message id.
+    fn claude_event_line(index: u32, output_tokens: u64) -> String {
+        let ts = (Utc::now() - Duration::minutes(index as i64))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","requestId":"req-{index}","message":{{"id":"msg-{index}","model":"claude-opus-4-8","usage":{{"input_tokens":10,"output_tokens":{output_tokens},"cache_read_input_tokens":5}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn resuming_an_appended_transcript_reads_the_same_records_as_a_full_parse() {
+        // This is what the record index does to a transcript that grew: it
+        // keeps the records it already has and reads only the new bytes. If the
+        // two ever disagree, every dollar on every card is wrong.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut file = File::create(&path).unwrap();
+        for index in 0..3 {
+            writeln!(file, "{}", claude_event_line(index, 100)).unwrap();
+            // Bulk payloads the scanner must skip, between the events.
+            writeln!(file, r#"{{"type":"user","message":{{"content":"hello"}}}}"#).unwrap();
+        }
+        drop(file);
+
+        let mut first_pass = Vec::new();
+        let offset =
+            stream_claude_records(&path, 0, None, |record| first_pass.push(record)).parsed_bytes;
+        assert_eq!(first_pass.len(), 3);
+        assert_eq!(offset, fs::metadata(&path).unwrap().len());
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        for index in 3..6 {
+            writeln!(file, "{}", claude_event_line(index, 250)).unwrap();
+        }
+        drop(file);
+
+        let mut resumed = first_pass.clone();
+        let end =
+            stream_claude_records(&path, offset, None, |record| resumed.push(record)).parsed_bytes;
+        let mut whole = Vec::new();
+        stream_claude_records(&path, 0, None, |record| whole.push(record));
+
+        assert_eq!(end, fs::metadata(&path).unwrap().len());
+        assert_eq!(resumed.len(), whole.len());
+        for (resumed, whole) in resumed.iter().zip(whole.iter()) {
+            assert_eq!(resumed.dedup_key, whole.dedup_key);
+            assert_eq!(resumed.output, whole.output);
+            assert_eq!(resumed.cost, whole.cost);
+            assert_eq!(resumed.timestamp, whole.timestamp);
+        }
+    }
+
+    /// A cancelled read must not swallow the line it stopped on.
+    ///
+    /// The offset it reports is where the next read resumes, and it used to be
+    /// advanced before the cancellation check, so the record on that line was
+    /// never emitted and never read again. Combined with an index entry stored
+    /// under the whole file's facts, that silently dropped usage from every
+    /// total until the file changed.
+    #[test]
+    fn a_cancelled_read_leaves_the_line_it_stopped_on_for_the_next_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut file = File::create(&path).unwrap();
+        for index in 0..3 {
+            writeln!(file, "{}", claude_event_line(index, 100)).unwrap();
+        }
+        drop(file);
+
+        // Cancel as soon as the first record is in hand.
+        let cancel = AtomicBool::new(false);
+        let mut taken = Vec::new();
+        let at = stream_claude_records(&path, 0, Some(&cancel), |record| {
+            taken.push(record);
+            cancel.store(true, Ordering::Relaxed);
+        })
+        .parsed_bytes;
+
+        assert_eq!(taken.len(), 1, "cancellation must stop the read");
+        assert!(at < fs::metadata(&path).unwrap().len());
+
+        let mut rest = Vec::new();
+        stream_claude_records(&path, at, None, |record| rest.push(record));
+
+        assert_eq!(
+            rest.len(),
+            2,
+            "the two records after the cancellation point must survive"
+        );
+        let dedup_keys: Vec<_> = taken
+            .iter()
+            .chain(rest.iter())
+            .map(|record| record.dedup_key.clone())
+            .collect();
+        let mut unique = dedup_keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(dedup_keys.len(), unique.len(), "no record read twice");
+        assert_eq!(unique.len(), 3, "every record accounted for exactly once");
+    }
+
+    #[test]
+    fn a_half_written_line_is_left_for_the_next_read() {
+        // Transcripts are appended to while a scan runs. Stopping before a line
+        // with no newline keeps the offset on a record boundary, so the partial
+        // record is read once, whole, next time.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "{}", claude_event_line(0, 100)).unwrap();
+        write!(file, "{}", &claude_event_line(1, 200)[..40]).unwrap();
+        drop(file);
+
+        let mut records = Vec::new();
+        let offset =
+            stream_claude_records(&path, 0, None, |record| records.push(record)).parsed_bytes;
+
+        assert_eq!(records.len(), 1);
+        assert!(offset < fs::metadata(&path).unwrap().len());
+
+        // Finish the truncated line; the resumed read picks it up in full.
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", &claude_event_line(1, 200)[40..]).unwrap();
+        drop(file);
+
+        let mut resumed = Vec::new();
+        stream_claude_records(&path, offset, None, |record| resumed.push(record));
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].output, 200);
+    }
+
     #[test]
     fn claude_transcript_discovery_is_deterministically_sorted() {
         let dir = tempfile::tempdir().expect("temp directory");
@@ -3001,7 +3617,7 @@ mod tests {
         let mut seen = HashSet::new();
         for path in [&file_a, &file_b] {
             for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-                add_claude_record_to_daily_costs(&mut daily_costs, record);
+                add_claude_record_to_daily_costs(&mut daily_costs, &record);
             });
         }
 
@@ -3115,6 +3731,28 @@ mod tests {
         assert!(mixed.thirty_days.unknown_models.contains("grok-4.5"));
         // Priced model remains priced / not unknown.
         assert!(!mixed.thirty_days.unknown_models.contains("grok-4.5-build"));
+    }
+
+    /// SBS-934: CLI/serve used to treat Grok as unsupported even though the
+    /// report scanner already walked `~/.grok/sessions`.
+    #[test]
+    fn scan_provider_supports_grok_and_not_cursor() {
+        assert!(CostScanner::supports_local_scan(ProviderId::Grok));
+        assert!(CostScanner::supports_local_scan(ProviderId::Codex));
+        assert!(CostScanner::supports_local_scan(ProviderId::Claude));
+        assert!(!CostScanner::supports_local_scan(ProviderId::Cursor));
+        assert!(!CostScanner::supports_local_scan(ProviderId::Gemini));
+        assert!(!CostScanner::supports_local_scan(ProviderId::Copilot));
+        assert!(
+            CostScanner::new(1)
+                .scan_provider(ProviderId::Grok)
+                .is_some()
+        );
+        assert!(
+            CostScanner::new(1)
+                .scan_provider(ProviderId::Cursor)
+                .is_none()
+        );
     }
 
     /// Buckets are keyed by the machine's local clock, not UTC, and are created

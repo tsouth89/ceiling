@@ -165,15 +165,18 @@ async fn cost_response(provider: Option<&str>) -> String {
         }
     };
     let scanner = CostScanner::new(30);
-    let mut results = Vec::new();
-    for provider_id in selection.as_list() {
-        let (supported, summary) = match provider_id {
-            ProviderId::Codex => (true, scanner.scan_codex()),
-            ProviderId::Claude => (true, scanner.scan_claude()),
-            _ => (false, Default::default()),
-        };
-        if supported {
-            results.push(serde_json::json!({
+    json_response(
+        200,
+        serde_json::Value::Array(cost_payloads(&scanner, &selection.as_list())),
+    )
+}
+
+fn cost_payloads(scanner: &CostScanner, providers: &[ProviderId]) -> Vec<serde_json::Value> {
+    providers
+        .iter()
+        .copied()
+        .map(|provider_id| match scanner.scan_provider(provider_id) {
+            Some(summary) => serde_json::json!({
                 "provider": provider_id.cli_name(),
                 "supported": true,
                 "days_scanned": 30,
@@ -188,16 +191,14 @@ async fn cost_response(provider: Option<&str>) -> String {
                 },
                 "sessions_count": summary.sessions_count,
                 "by_model": summary.by_model,
-            }));
-        } else {
-            results.push(serde_json::json!({
+            }),
+            None => serde_json::json!({
                 "provider": provider_id.cli_name(),
                 "supported": false,
                 "error": "Local cost scanning not available for this provider"
-            }));
-        }
-    }
-    json_response(200, serde_json::Value::Array(results))
+            }),
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -650,6 +651,19 @@ mod tests {
         assert!(headers_complete(
             b"GET /usage HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\n\r\n"
         ));
+    }
+
+    /// SBS-934: GET /cost used the same Codex/Claude-only match as the CLI
+    /// and marked Grok unsupported even when CostScanner can scan it.
+    #[test]
+    fn cost_payloads_mark_grok_supported_and_cursor_not() {
+        let scanner = CostScanner::new(7);
+        let payloads = cost_payloads(&scanner, &[ProviderId::Grok, ProviderId::Cursor]);
+        assert_eq!(payloads[0]["provider"], "grok");
+        assert_eq!(payloads[0]["supported"], true);
+        assert!(payloads[0].get("error").is_none());
+        assert_eq!(payloads[1]["provider"], "cursor");
+        assert_eq!(payloads[1]["supported"], false);
     }
 
     #[tokio::test]
