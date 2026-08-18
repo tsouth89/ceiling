@@ -504,15 +504,22 @@ fn format_compact_reset_countdown(
     resets_at: chrono::DateTime<chrono::Utc>,
     lang: codexbar::settings::Language,
 ) -> String {
-    let now = chrono::Utc::now();
+    format_compact_reset_countdown_at(resets_at, lang, chrono::Utc::now())
+}
+
+fn format_compact_reset_countdown_at(
+    resets_at: chrono::DateTime<chrono::Utc>,
+    lang: codexbar::settings::Language,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     if resets_at <= now {
         return locale::get_text(lang, locale::LocaleKey::ResetInProgress);
     }
 
-    let total_minutes = (resets_at - now).num_minutes().max(0);
-    let days = total_minutes / 1440;
-    let hours = (total_minutes % 1440) / 60;
-    let minutes = total_minutes % 60;
+    // Same floor-and-clamp / 1440-minute day cut as CLI, tooltip, and the
+    // TypeScript hooks (SBS-927). The previous `num_minutes().max(0)` left
+    // the last 59s as "Resets in 0h 00m".
+    let (days, hours, minutes) = codexbar::core::remaining_countdown_parts(resets_at - now);
 
     if days > 0 {
         locale::format_locale(
@@ -520,11 +527,17 @@ fn format_compact_reset_countdown(
             locale::LocaleKey::ResetsInDaysHours,
             &[&days.to_string(), &hours.to_string()],
         )
+    } else if hours == 0 {
+        locale::format_locale(
+            lang,
+            locale::LocaleKey::ResetsInMinutes,
+            &[&minutes.to_string()],
+        )
     } else {
         locale::format_locale(
             lang,
             locale::LocaleKey::ResetsInHoursMinutes,
-            &[&hours.to_string(), &format!("{minutes:02}")],
+            &[&hours.to_string(), &minutes.to_string()],
         )
     }
 }
@@ -1074,6 +1087,36 @@ mod tests {
         assert_eq!(
             compact_tray_status_label(&window, Language::English),
             "8% • Resets in 2h 05m"
+        );
+    }
+
+    /// SBS-927: last sub-minute must not render as "Resets in 0h 00m".
+    #[test]
+    fn compact_reset_countdown_does_not_show_zero_minutes_while_time_remains() {
+        let now = "2026-04-02T12:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let resets_at = now + chrono::Duration::seconds(30);
+        assert_eq!(
+            format_compact_reset_countdown_at(resets_at, Language::English, now),
+            "Resets in 1m"
+        );
+    }
+
+    /// SBS-927: 24h 1s is a day, not "Resets in 24h 00m".
+    #[test]
+    fn compact_reset_countdown_cuts_a_day_at_twenty_four_hours() {
+        let now = "2026-04-02T12:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let at = |seconds: i64| now + chrono::Duration::seconds(seconds);
+        assert_eq!(
+            format_compact_reset_countdown_at(at(24 * 3600 + 1), Language::English, now),
+            "Resets in 1d 0h"
+        );
+        assert_eq!(
+            format_compact_reset_countdown_at(at(24 * 3600 + 30 * 60), Language::English, now),
+            "Resets in 1d 0h"
         );
     }
 }

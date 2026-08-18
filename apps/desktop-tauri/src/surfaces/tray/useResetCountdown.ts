@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { remainingCountdownParts } from "../../lib/resetCountdown";
 import { useLocale } from "../../hooks/useLocale";
 
 /**
@@ -28,16 +29,9 @@ export function useResetCountdown(
   const target = Date.parse(resetsAt);
   if (Number.isNaN(target)) return fallback;
 
-  const diffMs = target - now;
-  if (diffMs <= 0) return t("TrayResetsDueNow");
-
-  // Never floor to zero: the last sub-minute before a reset is imminent, not
-  // absent, and "Resets in 0m" reads as a stuck timer. Same clamp as
-  // useFormattedResetTime, so the tray and the strip agree.
-  const totalMinutes = Math.max(1, Math.floor(diffMs / 60_000));
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
+  const parts = remainingCountdownParts(target - now);
+  if (!parts) return t("TrayResetsDueNow");
+  const { days, hours, minutes } = parts;
 
   if (days > 0) {
     return t("ResetsInDaysHours")

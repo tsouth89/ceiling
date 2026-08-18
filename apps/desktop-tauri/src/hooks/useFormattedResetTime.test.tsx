@@ -77,6 +77,16 @@ describe("useFormattedResetTime", () => {
     expect(screen.getByTestId("reset")).toHaveTextContent("Resets in 24d");
   });
 
+  // SBS-927: 24h 1s is a day. The locale sentence drops the zero hour
+  // ("Resets in 1d"); compact surfaces keep "1d 0h".
+  it("cuts a day at twenty-four hours", async () => {
+    const target = new Date("2024-06-02T00:00:01Z").toISOString();
+    await mountWithLocale(
+      <Probe resetsAt={target} fallback="later" relative={true} />,
+    );
+    expect(screen.getByTestId("reset")).toHaveTextContent("Resets in 1d");
+  });
+
   // SBS-621: flooring to whole minutes turned the last sub-minute into
   // "Resets in 0m", which reads as a broken timer rather than an imminent
   // reset.
