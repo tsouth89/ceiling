@@ -18,7 +18,14 @@ const ACCESS_TOKEN_REFRESH_SKEW: chrono::TimeDelta = chrono::Duration::minutes(5
 /// Gemini API client
 pub struct GeminiApi {
     client: reqwest::Client,
-    home_dir: PathBuf,
+    /// The user's home, or `None` on a machine that reports none.
+    ///
+    /// Kept as an `Option` rather than resolved to a fallback at construction:
+    /// reading `~/.gemini/oauth_creds.json` from the working directory is a
+    /// long-standing behaviour that costs nothing when it misses, but doing the
+    /// same for `client_config.json` would pick up a checked-in fixture in a
+    /// container or CI and try to refresh with the wrong client id.
+    home_dir: Option<PathBuf>,
     quota_endpoint: String,
     code_assist_endpoint: String,
     token_refresh_endpoint: String,
@@ -28,7 +35,7 @@ impl GeminiApi {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
-            home_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            home_dir: dirs::home_dir(),
             quota_endpoint: QUOTA_ENDPOINT.to_string(),
             code_assist_endpoint: CODE_ASSIST_ENDPOINT.to_string(),
             token_refresh_endpoint: TOKEN_REFRESH_ENDPOINT.to_string(),
@@ -36,10 +43,11 @@ impl GeminiApi {
     }
 
     #[cfg(test)]
+    #[cfg(test)]
     fn for_test(home_dir: PathBuf, quota: &str, code_assist: &str, token_refresh: &str) -> Self {
         Self {
             client: reqwest::Client::new(),
-            home_dir,
+            home_dir: Some(home_dir),
             quota_endpoint: quota.to_string(),
             code_assist_endpoint: code_assist.to_string(),
             token_refresh_endpoint: token_refresh.to_string(),
@@ -68,10 +76,26 @@ impl GeminiApi {
 
         // Refresh early (skew) so a still-refreshable seat is not sent to Google
         // in the last minutes of the access token (SBS-928).
-        if creds.is_expired() {
+        //
+        // A refresh that cannot be done, or that fails, must not cost the poll a
+        // token Google would still accept: without a refresh token there is
+        // nothing to refresh, and a token endpoint that times out says nothing
+        // about the access token in hand. Only a token that is genuinely past
+        // its expiry has nothing left to try.
+        if creds.is_expired() && creds.has_refresh_token() {
             tracing::debug!("Gemini token expired or within refresh skew, refreshing...");
-            creds = self.refresh_token(&creds).await?;
-            refreshed_this_poll = true;
+            match self.refresh_token(&creds).await {
+                Ok(refreshed) => {
+                    creds = refreshed;
+                    refreshed_this_poll = true;
+                }
+                Err(error) if !creds.is_past_expiry() => {
+                    tracing::debug!(
+                        "Gemini early refresh failed ({error}); using the access token that is still in date"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         match self.fetch_quota_with_creds(&creds).await {
@@ -178,7 +202,7 @@ impl GeminiApi {
     }
 
     fn load_credentials(&self) -> Result<OAuthCredentials, ProviderError> {
-        let creds_path = self.home_dir.join(".gemini").join("oauth_creds.json");
+        let creds_path = self.gemini_dir().join("oauth_creds.json");
 
         if !creds_path.exists() {
             return Err(ProviderError::NotInstalled(
@@ -254,7 +278,7 @@ impl GeminiApi {
     }
 
     fn save_credentials(&self, creds: &OAuthCredentials) -> Result<(), ProviderError> {
-        let creds_path = self.home_dir.join(".gemini").join("oauth_creds.json");
+        let creds_path = self.gemini_dir().join("oauth_creds.json");
         persist_refreshed_credentials(&creds_path, creds)
     }
 
@@ -267,8 +291,27 @@ impl GeminiApi {
             .unwrap_or_else(Self::oauth_credentials_from_env)
     }
 
+    /// The `.gemini` directory to read the credentials file from.
+    ///
+    /// Falls back to the working directory when the machine reports no home,
+    /// which is what this has always done: a miss there costs a "not logged in"
+    /// message, nothing more.
+    fn gemini_dir(&self) -> PathBuf {
+        self.home_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".gemini")
+    }
+
     fn user_client_config_credentials(&self) -> Option<OAuthClientCredentials> {
-        let cli_config = self.home_dir.join(".gemini").join("client_config.json");
+        // No home means no user config to read. Probing the working directory
+        // here would load whatever `./.gemini/client_config.json` happened to
+        // contain and refresh against the wrong client id.
+        let cli_config = self
+            .home_dir
+            .as_ref()?
+            .join(".gemini")
+            .join("client_config.json");
         Self::try_read_client_config(&cli_config)
     }
 
@@ -594,6 +637,23 @@ impl OAuthCredentials {
             Some(expiry) => expiry <= now + ACCESS_TOKEN_REFRESH_SKEW,
             // Missing or unparseable expiry is unknown, not "still valid".
             // Try the access token; a 401 still refresh-retries when we can.
+            None => false,
+        }
+    }
+
+    /// Whether the access token is past its own expiry, skew aside.
+    ///
+    /// [`is_expired`](Self::is_expired) answers "should this be refreshed now",
+    /// which is deliberately early. This answers "is this token dead", which is
+    /// what decides whether a failed refresh leaves anything worth sending.
+    fn is_past_expiry(&self) -> bool {
+        self.is_past_expiry_at(chrono::Utc::now())
+    }
+
+    fn is_past_expiry_at(&self, now: DateTime<Utc>) -> bool {
+        match self.expiry_datetime() {
+            Some(expiry) => expiry <= now,
+            // An unknown expiry is not a dead token.
             None => false,
         }
     }
@@ -1303,6 +1363,75 @@ mod tests {
         refresh.assert_async().await;
         fresh_quota.assert_async().await;
         assert!((primary.used_percent - 20.0).abs() < 0.01);
+    }
+
+    /// A refresh that cannot be reached must not cost a token Google would
+    /// still accept.
+    ///
+    /// Refreshing early is a precaution. Failing the whole poll because the
+    /// precaution failed, while holding an access token that is still in date,
+    /// would turn a token-endpoint outage into a signed-out provider.
+    #[tokio::test]
+    async fn a_failed_early_refresh_still_polls_with_the_valid_access_token() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expiry_ms = (Utc::now() + chrono::Duration::seconds(30)).timestamp_millis() as f64;
+        write_gemini_home(dir.path(), "stale-access", Some("refresh-me"), expiry_ms);
+
+        let mut server = mockito::Server::new_async().await;
+        let _code_assist = mock_code_assist(&mut server).await;
+        let refresh = server
+            .mock("POST", "/token")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+        let quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer stale-access")
+            .with_status(200)
+            .with_body(quota_ok_body())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let api = api_for_server(dir.path(), &server);
+        let (primary, _, _, _) = api
+            .fetch_quota(&FetchContext::default())
+            .await
+            .expect("a token still in date must be used when the refresh fails");
+
+        refresh.assert_async().await;
+        quota.assert_async().await;
+        assert!((primary.used_percent - 20.0).abs() < 0.01);
+    }
+
+    /// With no refresh token there is nothing to refresh, so the near-expiry
+    /// precaution is skipped rather than attempted and failed.
+    #[tokio::test]
+    async fn a_near_expiry_token_without_a_refresh_token_still_polls() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expiry_ms = (Utc::now() + chrono::Duration::seconds(30)).timestamp_millis() as f64;
+        write_gemini_home(dir.path(), "only-access", None, expiry_ms);
+
+        let mut server = mockito::Server::new_async().await;
+        let _code_assist = mock_code_assist(&mut server).await;
+        let refresh = server.mock("POST", "/token").expect(0).create_async().await;
+        let quota = server
+            .mock("POST", "/quota")
+            .match_header("authorization", "Bearer only-access")
+            .with_status(200)
+            .with_body(quota_ok_body())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let api = api_for_server(dir.path(), &server);
+        api.fetch_quota(&FetchContext::default())
+            .await
+            .expect("a seat with no refresh token must still poll");
+
+        refresh.assert_async().await;
+        quota.assert_async().await;
     }
 
     /// A revoked refresh token is still AuthRequired. 401 is not collapsed
