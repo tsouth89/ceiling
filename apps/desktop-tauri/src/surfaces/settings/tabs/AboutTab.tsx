@@ -163,8 +163,14 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
 
         {updateState.status === "error" && (
           <span className="about-update-msg">
-            {t("AboutUpdateCheckFailed")}
-            {updateState.error ? ` ${updateState.error}` : ""}
+            {/*
+              The backend sentence stands on its own, and it is not always a
+              check failure: a hash mismatch or a rejected signature from
+              Download or Install lands here too. Prefixing every one of them
+              with "Could not check for updates." mislabelled those and read as
+              a duplicate for the check failures that already say it.
+            */}
+            {updateState.error || t("AboutUpdateCheckFailed")}
           </span>
         )}
 

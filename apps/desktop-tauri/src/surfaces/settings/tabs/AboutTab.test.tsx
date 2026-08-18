@@ -226,8 +226,34 @@ describe("AboutTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Check for Updates…" }));
 
     expect(
-      screen.getByText("Could not check for updates. GitHub did not return a release."),
+      screen.getByText("GitHub did not return a release."),
     ).toBeInTheDocument();
     expect(screen.queryByText("You're up to date!")).not.toBeInTheDocument();
+  });
+
+  it("does not label a download failure as a failed update check", async () => {
+    // Download and Install set their own errors. Prefixing them with the
+    // check-failure sentence told the user the wrong thing went wrong.
+    Object.assign(updateMocks.updateState, {
+      status: "error",
+      error: "SHA256 mismatch: the installer did not match its published hash.",
+    });
+
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check for Updates…" }));
+
+    expect(
+      screen.getByText("SHA256 mismatch: the installer did not match its published hash."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Could not check for updates/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the check-failure sentence when the error is empty", async () => {
+    Object.assign(updateMocks.updateState, { status: "error", error: null });
+
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check for Updates…" }));
+
+    expect(screen.getByText("Could not check for updates.")).toBeInTheDocument();
   });
 });

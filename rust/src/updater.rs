@@ -102,14 +102,19 @@ pub enum UpdateCheckError {
 
 impl UpdateCheckError {
     /// Safe, user-facing sentence. No URLs, bodies, or raw error chains.
+    ///
+    /// Localized here rather than in the surface that shows it: this is the
+    /// whole sentence the user reads, and About used to glue an English one
+    /// onto a translated prefix.
     pub fn user_message(&self) -> String {
-        match self {
-            Self::Client | Self::Network => {
-                "Could not reach GitHub to check for updates.".to_string()
-            }
-            Self::Http { .. } => "GitHub did not return a release.".to_string(),
-            Self::Parse | Self::Empty => "Could not read the GitHub release response.".to_string(),
-        }
+        crate::locale::get_text(
+            crate::locale::current_language(),
+            match self {
+                Self::Client | Self::Network => crate::locale::LocaleKey::UpdateErrorNetwork,
+                Self::Http { .. } => crate::locale::LocaleKey::UpdateErrorHttp,
+                Self::Parse | Self::Empty => crate::locale::LocaleKey::UpdateErrorParse,
+            },
+        )
     }
 }
 
@@ -146,7 +151,9 @@ pub async fn check_for_updates_with_channel(
         .bytes()
         .await
         .map_err(|_| UpdateCheckError::Network)?;
-    let release = interpret_release_http(status, &body, channel)?;
+    let Some(release) = interpret_release_http(status, &body, channel)? else {
+        return Ok(None);
+    };
     Ok(update_from_release(release))
 }
 
@@ -172,11 +179,16 @@ fn update_client() -> Option<reqwest::Client> {
 /// Classify a GitHub releases HTTP response.
 ///
 /// A non-success status or unreadable body is an error, not "no update".
+/// The release to consider, or `None` when the listing simply has none.
+///
+/// A beta listing with nothing published yet, or only drafts, is a successful
+/// answer meaning "no release to offer". Reporting it as a failure made a new
+/// or draft-only repository read as "Could not check for updates" on About.
 fn interpret_release_http(
     status: reqwest::StatusCode,
     body: &[u8],
     channel: UpdateChannel,
-) -> Result<GitHubRelease, UpdateCheckError> {
+) -> Result<Option<GitHubRelease>, UpdateCheckError> {
     if !status.is_success() {
         tracing::debug!("GitHub API returned status: {status}");
         return Err(UpdateCheckError::Http {
@@ -188,12 +200,11 @@ fn interpret_release_http(
         UpdateChannel::Beta => {
             let releases: Vec<GitHubRelease> =
                 serde_json::from_slice(body).map_err(|_| UpdateCheckError::Parse)?;
-            releases
-                .into_iter()
-                .find(|r| !r.draft)
-                .ok_or(UpdateCheckError::Empty)
+            Ok(releases.into_iter().find(|r| !r.draft))
         }
-        UpdateChannel::Stable => serde_json::from_slice(body).map_err(|_| UpdateCheckError::Parse),
+        UpdateChannel::Stable => serde_json::from_slice(body)
+            .map(Some)
+            .map_err(|_| UpdateCheckError::Parse),
     }
 }
 
@@ -1073,7 +1084,8 @@ mod tests {
             body.as_bytes(),
             UpdateChannel::Stable,
         )
-        .expect("readable current release");
+        .expect("readable current release")
+        .expect("a stable payload always carries a release");
         assert!(
             update_from_release(release).is_none(),
             "same version must be Idle/current"
@@ -1091,9 +1103,28 @@ mod tests {
             body.as_bytes(),
             UpdateChannel::Stable,
         )
-        .expect("readable newer release");
+        .expect("readable newer release")
+        .expect("a stable payload always carries a release");
         let update = update_from_release(release).expect("newer release");
         assert_eq!(update.version, tag);
+    }
+
+    /// A beta listing with nothing published, or only drafts, is a successful
+    /// "no release to offer". Reporting it as a failure put "Could not check
+    /// for updates" on About for a repository that was simply empty.
+    #[test]
+    fn an_empty_beta_listing_is_not_a_failure() {
+        let empty = interpret_release_http(reqwest::StatusCode::OK, b"[]", UpdateChannel::Beta)
+            .expect("an empty listing is a successful answer");
+        assert!(empty.is_none());
+
+        let drafts_only = interpret_release_http(
+            reqwest::StatusCode::OK,
+            br#"[{"tag_name":"v9.9.9","html_url":"https://example.com","draft":true,"prerelease":true,"assets":[]}]"#,
+            UpdateChannel::Beta,
+        )
+        .expect("a draft-only listing is a successful answer");
+        assert!(drafts_only.is_none());
     }
 
     #[test]

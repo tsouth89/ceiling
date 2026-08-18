@@ -52,4 +52,27 @@ describe("useUpdateState", () => {
     expect(result.current.updateState.error).toBe("bridge down");
     expect(result.current.updateState.status).not.toBe("idle");
   });
+
+  it("keeps a downloaded update on screen when a later check cannot run", async () => {
+    // The backend still holds the installer. Turning the surface into an error
+    // took Install and Restart away from an update sitting ready on disk.
+    tauriMocks.getUpdateState.mockResolvedValue({
+      ...idle,
+      status: "ready",
+      version: "9.9.9",
+      canApply: true,
+    });
+    tauriMocks.checkForUpdates.mockRejectedValue(new Error("bridge down"));
+
+    const { result } = renderHook(() => useUpdateState());
+    await waitFor(() => expect(result.current.updateState.status).toBe("ready"));
+
+    act(() => {
+      result.current.checkNow();
+    });
+
+    await waitFor(() => expect(tauriMocks.checkForUpdates).toHaveBeenCalled());
+    expect(result.current.updateState.status).toBe("ready");
+    expect(result.current.updateState.canApply).toBe(true);
+  });
 });

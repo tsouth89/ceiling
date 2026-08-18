@@ -52,13 +52,25 @@ export function useUpdateState(): UseUpdateStateResult {
       .catch((cause: unknown) => {
         // An invoke failure is not "up to date". About treats idle+hasChecked
         // as current, so a swallowed error would show the user they are current.
-        setUpdateState({
-          ...IDLE_PAYLOAD,
-          status: "error",
-          error:
-            cause instanceof Error
-              ? cause.message
-              : String(cause || "Could not check for updates."),
+        setUpdateState((previous) => {
+          // A downloaded update the backend still holds must survive a failed
+          // check. Resetting to idle here took Install and Restart off screen
+          // for an update that was sitting ready on disk.
+          if (
+            previous.status === "ready" ||
+            previous.status === "downloading" ||
+            previous.status === "available"
+          ) {
+            return previous;
+          }
+          return {
+            ...IDLE_PAYLOAD,
+            status: "error",
+            error:
+              cause instanceof Error
+                ? cause.message
+                : String(cause || "Could not check for updates."),
+          };
         });
       });
   }, []);
