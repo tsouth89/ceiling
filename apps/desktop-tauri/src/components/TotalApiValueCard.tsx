@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getLocalApiValueTotals } from "../lib/tauri";
+import { useLocalScanRefresh } from "../hooks/useLocalScanRefresh";
 import type { LocalApiValueDay, LocalApiValueProvider } from "../types/bridge";
 import { getProviderIcon } from "./providers/providerIcons";
 import {
@@ -161,23 +162,25 @@ export function TotalApiValueCard() {
     [period, customSince, customUntil],
   );
 
+  // A cached answer can be up to five minutes old; the backend serves it and
+  // rescans behind. This ticks when that rescan lands.
+  const refreshes = useLocalScanRefresh("api-value");
+
+  // One scan answers every built-in period, so this depends on the custom range
+  // and that tick alone: switching Today / Yesterday / 30d re-reads what is
+  // already in state instead of re-running a multi-gigabyte transcript scan.
   useEffect(() => {
     let live = true;
     setFailed(false);
     setRangeError(null);
     setLoading(true);
 
-    const options =
-      period === "custom" && customSince && customUntil
-        ? { since: customSince, until: customUntil }
-        : undefined;
-
-    getLocalApiValueTotals(options)
+    getLocalApiValueTotals(customRange ?? undefined)
       .then((rows) => {
         if (!live) return;
         // If the backend forgot custom but daily series covers the range, fill
         // it here so the ring never sits empty after a successful scan.
-        if (period === "custom" && customSince && customUntil) {
+        if (customRange) {
           setProviders(
             rows.map((row) => {
               if (row.custom?.hasData) return row;
@@ -186,8 +189,8 @@ export function TotalApiValueCard() {
                 : row.lastSevenDays;
               const synthesized = periodFromDailySeries(
                 series,
-                customSince,
-                customUntil,
+                customRange.since,
+                customRange.until,
               );
               return synthesized.hasData ? { ...row, custom: synthesized } : row;
             }),
@@ -199,7 +202,7 @@ export function TotalApiValueCard() {
       .catch((err: unknown) => {
         if (!live) return;
         const message = tauriErrorMessage(err);
-        if (period === "custom" && message) {
+        if (customRange && message) {
           setRangeError(message);
           return;
         }
@@ -211,7 +214,7 @@ export function TotalApiValueCard() {
     return () => {
       live = false;
     };
-  }, [period, customSince, customUntil]);
+  }, [customRange, refreshes]);
 
   const model = useMemo(
     () =>

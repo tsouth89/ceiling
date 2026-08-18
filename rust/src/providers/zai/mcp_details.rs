@@ -5,6 +5,7 @@
 //! - Time limits
 //! - Per-model usage details for MCP (Model Context Protocol)
 
+use crate::core::format_remaining_countdown;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -225,18 +226,7 @@ impl McpDetailsMenu {
             if reset <= now {
                 "now".to_string()
             } else {
-                let duration = reset - now;
-                let hours = duration.num_hours();
-                let minutes = duration.num_minutes() % 60;
-
-                if hours > 24 {
-                    let days = hours / 24;
-                    format!("{}d {}h", days, hours % 24)
-                } else if hours > 0 {
-                    format!("{}h {}m", hours, minutes)
-                } else {
-                    format!("{}m", minutes)
-                }
+                format_remaining_countdown(reset - now)
             }
         });
 

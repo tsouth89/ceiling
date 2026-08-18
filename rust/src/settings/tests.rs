@@ -1548,3 +1548,71 @@ fn taskbar_account_map_is_sanitized_on_load() {
     );
     assert_eq!(map.len(), 2, "blank provider keys must be dropped too");
 }
+
+/// SBS-920: the keyring copy is cleared before the file stores, so a hook that
+/// fails leaves the credential visible in Preferences.
+///
+/// The other order emptied every file store first, and the Revoke control is
+/// hidden exactly when they all report "no credential". A user whose revoke
+/// failed halfway would be left with no way to retry it and a keyring token
+/// that still authenticates.
+#[test]
+fn a_failing_revoke_hook_leaves_the_credential_in_preferences() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let keys_path = dir.path().join("api_keys.json");
+    let cookies_path = dir.path().join("cookies.json");
+    let token_store = crate::core::TokenAccountStore::with_path(dir.path().join("tokens.json"));
+
+    let mut keys = ApiKeys::default();
+    keys.set(ProviderId::StepFun.cli_name(), "oasis-token", None);
+    keys.save_to(&keys_path).expect("seed api keys");
+
+    let error = revoke_managed_credentials_in(
+        ProviderId::StepFun,
+        &keys_path,
+        &cookies_path,
+        &token_store,
+        || Err(anyhow::anyhow!("keyring is locked")),
+    )
+    .expect_err("a hook that cannot clear the keyring must fail the revoke");
+    assert!(
+        error.to_string().contains("keyring is locked"),
+        "got {error}"
+    );
+
+    let after = ApiKeys::try_load_from(&keys_path).expect("reload api keys");
+    assert!(
+        after.has_key(ProviderId::StepFun.cli_name()),
+        "the credential must survive so Revoke stays available to retry"
+    );
+}
+
+/// The successful path still clears every store it owns.
+#[test]
+fn a_successful_revoke_clears_preferences_after_the_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let keys_path = dir.path().join("api_keys.json");
+    let cookies_path = dir.path().join("cookies.json");
+    let token_store = crate::core::TokenAccountStore::with_path(dir.path().join("tokens.json"));
+
+    let mut keys = ApiKeys::default();
+    keys.set(ProviderId::StepFun.cli_name(), "oasis-token", None);
+    keys.save_to(&keys_path).expect("seed api keys");
+
+    let mut hook_ran = false;
+    revoke_managed_credentials_in(
+        ProviderId::StepFun,
+        &keys_path,
+        &cookies_path,
+        &token_store,
+        || {
+            hook_ran = true;
+            Ok(())
+        },
+    )
+    .expect("revoke");
+
+    assert!(hook_ran, "the keyring hook must run");
+    let after = ApiKeys::try_load_from(&keys_path).expect("reload api keys");
+    assert!(!after.has_key(ProviderId::StepFun.cli_name()));
+}
