@@ -1634,5 +1634,8 @@ fn unparseable_settings_are_moved_aside_instead_of_overwritten() {
         "the live path must be vacated so a later save cannot clobber the original"
     );
     let backup = Settings::backup_path(&path);
-    assert_eq!(std::fs::read_to_string(&backup).expect("read backup"), original);
+    assert_eq!(
+        std::fs::read_to_string(&backup).expect("read backup"),
+        original
+    );
 }
