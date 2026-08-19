@@ -191,7 +191,10 @@ impl<'a> Cursor<'a> {
             return Some(None);
         }
         let bytes = self.take(len as usize)?;
-        Some(String::from_utf8(bytes.to_vec()).ok())
+        // Invalid UTF-8 is corruption, not absence. Treating it as None let a
+        // damaged Claude `dedup_key` skip de-duplication and double-count the
+        // record (SBS-949). Absence is only the NONE_ID length sentinel.
+        Some(Some(String::from_utf8(bytes.to_vec()).ok()?))
     }
 
     fn timestamp(&mut self) -> Option<Option<DateTime<Utc>>> {
@@ -1001,5 +1004,72 @@ mod tests {
         for cut in [0, 4, MAGIC.len(), bytes.len() / 2, bytes.len() - 1] {
             assert!(UsageIndex::<ClaudeUsageRecord>::decode(&bytes[..cut], 1).is_none());
         }
+    }
+
+    /// SBS-949: a missing Claude de-duplication key is encoded as the length
+    /// sentinel, not as a failed UTF-8 decode. That path has to keep working
+    /// after the decoder starts rejecting corrupt bytes.
+    #[test]
+    fn an_absent_dedup_key_round_trips_as_absent() {
+        let mut record = claude_record("claude-opus-4-8", 1.0);
+        record.dedup_key = None;
+        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(1);
+        index.insert(entry("/logs/a.jsonl", facts(100, 5), vec![record]));
+
+        let decoded = UsageIndex::<ClaudeUsageRecord>::decode(&index.encode(), 1).expect("decode");
+        match decoded.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME) {
+            Lookup::Hit(records) => assert_eq!(records[0].dedup_key, None),
+            _ => panic!("expected a hit for an unchanged file"),
+        }
+    }
+
+    /// SBS-949: bit-flipped bytes inside a present `dedup_key` used to decode
+    /// as `None` and keep the rest of the index. The record then skipped
+    /// `should_count_claude_record`'s seen-set and double-counted its
+    /// counterpart. Invalid UTF-8 must reject the file so the next scan
+    /// rebuilds from the transcripts.
+    #[test]
+    fn a_corrupt_dedup_key_rejects_the_index() {
+        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(1);
+        index.insert(entry(
+            "/logs/a.jsonl",
+            facts(100, 5),
+            vec![claude_record("claude-opus-4-8", 1.0)],
+        ));
+        let mut bytes = index.encode();
+        let key = b"msg-1:req-1";
+        let pos = bytes
+            .windows(key.len())
+            .position(|window| window == key)
+            .expect("the inline dedup_key is in the encoded file");
+        bytes[pos] = 0xFF;
+        assert!(
+            UsageIndex::<ClaudeUsageRecord>::decode(&bytes, 1).is_none(),
+            "invalid UTF-8 in a present optional string must drop the index"
+        );
+    }
+
+    /// SBS-949: the helper itself, not just the index wrapper. Invalid UTF-8
+    /// is `None` (reject). The NONE_ID sentinel is `Some(None)` (absent).
+    #[test]
+    fn optional_string_rejects_invalid_utf8_and_keeps_the_absent_sentinel() {
+        let mut present = Vec::new();
+        push_string(&mut present, "msg-1:req-1");
+        assert_eq!(
+            Cursor::new(&present).optional_string(),
+            Some(Some("msg-1:req-1".to_string()))
+        );
+
+        let mut absent = Vec::new();
+        push_u32(&mut absent, NONE_ID);
+        assert_eq!(Cursor::new(&absent).optional_string(), Some(None));
+
+        let mut corrupt = Vec::new();
+        push_u32(&mut corrupt, 1);
+        corrupt.push(0xFF);
+        assert!(
+            Cursor::new(&corrupt).optional_string().is_none(),
+            "a failed UTF-8 decode is not an absent field"
+        );
     }
 }
