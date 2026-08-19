@@ -1188,6 +1188,12 @@ fn parse_api_value_custom_range(
             "Custom range can span at most {API_VALUE_CUSTOM_MAX_DAYS} days."
         ));
     }
+    let start_age_days = (today - start).num_days() + 1;
+    if start_age_days > API_VALUE_CUSTOM_MAX_DAYS {
+        return Err(format!(
+            "Custom range must start within the last {API_VALUE_CUSTOM_MAX_DAYS} days."
+        ));
+    }
     // Inclusive end day → [start midnight, day-after-end midnight).
     Ok((
         local_midnight_utc(start),
@@ -1212,7 +1218,6 @@ fn load_local_api_value_totals(
             let start_date = start.with_timezone(&Local).date_naive();
             let days = (today - start_date).num_days().max(0) as u32 + 1;
             days.max(API_VALUE_DEFAULT_SCAN_DAYS)
-                .min(API_VALUE_CUSTOM_MAX_DAYS as u32)
         })
         .unwrap_or(API_VALUE_DEFAULT_SCAN_DAYS);
     scan_providers_parallel(&API_VALUE_PROVIDERS, |provider_id| {
@@ -3780,6 +3785,11 @@ mod tests {
         assert!(parse_api_value_custom_range("2026-07-10", "2026-07-01", today).is_err());
         assert!(parse_api_value_custom_range("2026-07-01", "2026-08-01", today).is_err());
         assert!(parse_api_value_custom_range("not-a-date", "2026-07-01", today).is_err());
+        // Span is legal (214 days) but the start is more than 366 days ago, so
+        // the old scan clamp would have silently truncated June/July 2025.
+        let later = NaiveDate::from_ymd_opt(2026, 8, 18).unwrap();
+        assert!(parse_api_value_custom_range("2025-06-01", "2025-12-31", later).is_err());
+        assert!(parse_api_value_custom_range("2025-08-20", "2025-12-31", later).is_ok());
     }
 
     #[test]
