@@ -178,7 +178,39 @@ describe("FloatBar settings", () => {
     expect(checkbox).toBeDisabled();
     fireEvent.click(checkbox);
     expect(set).not.toHaveBeenCalled();
-    expect(screen.getByText("StripKeepAtLeastOne")).toBeInTheDocument();
+    const hint = screen.getByText("StripKeepAtLeastOne");
+    expect(hint).toBeInTheDocument();
+    // The lock has to explain itself to a screen reader too, not only on screen.
+    expect(checkbox).toHaveAttribute("aria-describedby", hint.id);
+  });
+
+  /// Automatic order with one enabled provider also lands on a single strip
+  /// entry, but there are no choices to restore and the button that would
+  /// restore them is hidden, so the custom-mode copy would be a dead end.
+  it("explains the locked checkbox without offering automatic order twice", () => {
+    render(
+      <FloatBarSettingsSection
+        settings={{
+          ...settings,
+          floatBarProviderIds: [],
+          enabledProviders: ["grok"],
+          providerOrder: ["grok"],
+        }}
+        saving={false}
+        set={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "StripUseAutomaticOrder" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("StripKeepAtLeastOne")).not.toBeInTheDocument();
+    const hint = screen.getByText("StripAlwaysOneProvider");
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Show Grok on taskbar strip",
+    });
+    expect(checkbox).toBeDisabled();
+    expect(checkbox).toHaveAttribute("aria-describedby", hint.id);
   });
 
   it("persists floating-bar provider selection mode", () => {

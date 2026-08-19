@@ -724,6 +724,7 @@ export const ALL_LOCALE_KEYS = [
   "StripProvidersHelp",
   "StripUseAutomaticOrder",
   "StripKeepAtLeastOne",
+  "StripAlwaysOneProvider",
   "StripEnableProvidersFirst",
   "StripShowProvider",
   "StripMoveUp",

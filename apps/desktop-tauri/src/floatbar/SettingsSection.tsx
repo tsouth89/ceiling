@@ -118,6 +118,8 @@ function useDraftNumber(value: number) {
 /**
  * Settings UI for the two independent at-a-glance surfaces.
  */
+const KEEP_ONE_HINT_ID = "strip-keep-one-hint";
+
 export default function FloatBarSettingsSection({ settings, saving, set }: Props) {
   const { t } = useLocale();
   const opacity = useDraftNumber(settings.floatBarOpacity);
@@ -363,6 +365,9 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                               lastChecked ||
                               (atCap && !checked)
                             }
+                            aria-describedby={
+                              lastChecked ? KEEP_ONE_HINT_ID : undefined
+                            }
                             aria-label={formatLocale(t("StripShowProvider"), providerLabel(id))}
                             onChange={(e) =>
                               toggleStripProvider(id, e.target.checked)
@@ -436,7 +441,13 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                 })}
               </ul>
               {selectedStripIds.length === 1 && (
-                <p className="settings-section__hint">{t("StripKeepAtLeastOne")}</p>
+                <p id={KEEP_ONE_HINT_ID} className="settings-section__hint">
+                  {/* Automatic order has no choices to restore, and the button
+                      that would do it is hidden, so name the real way out. */}
+                  {customStrip
+                    ? t("StripKeepAtLeastOne")
+                    : t("StripAlwaysOneProvider")}
+                </p>
               )}
             </>
           )}
