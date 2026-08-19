@@ -552,6 +552,10 @@ pub struct IndexStore<R: 'static> {
     /// change has to drop them. Codex records store only tokens.
     price_sensitive: bool,
     state: OnceLock<RwLock<UsageIndex<R>>>,
+    /// Tests point a leaked store at a temp file so they do not touch the
+    /// real settings directory.
+    #[cfg(test)]
+    path_override: OnceLock<PathBuf>,
 }
 
 impl<R: IndexedRecord> IndexStore<R> {
@@ -560,6 +564,8 @@ impl<R: IndexedRecord> IndexStore<R> {
             file_name,
             price_sensitive,
             state: OnceLock::new(),
+            #[cfg(test)]
+            path_override: OnceLock::new(),
         }
     }
 
@@ -607,6 +613,11 @@ impl<R: IndexedRecord> IndexStore<R> {
     ///
     /// `touched` are the paths the scan read from the index unchanged; they are
     /// marked so an idle-but-live transcript does not age out.
+    ///
+    /// The write guard stays held through `atomic_write`. Encoding under the
+    /// lock does not by itself order the file replaces: two cards can scan at
+    /// once, and the slower writer would otherwise put an older snapshot back
+    /// on disk (SBS-948).
     pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf]) {
         if updates.is_empty() && touched.is_empty() {
             return;
@@ -634,7 +645,8 @@ impl<R: IndexedRecord> IndexStore<R> {
         }
         if let Some(path) = self.path() {
             let bytes = guard.encode();
-            drop(guard);
+            #[cfg(test)]
+            linger_after_encode_for_tests();
             if let Some(parent) = path.parent()
                 && let Err(error) = fs::create_dir_all(parent)
             {
@@ -645,6 +657,11 @@ impl<R: IndexedRecord> IndexStore<R> {
                 tracing::warn!("failed to persist usage index: {error}");
             }
         }
+    }
+
+    #[cfg(test)]
+    fn override_path(&self, path: PathBuf) {
+        let _ = self.path_override.set(path);
     }
 
     fn state(&'static self) -> &'static RwLock<UsageIndex<R>> {
@@ -663,6 +680,10 @@ impl<R: IndexedRecord> IndexStore<R> {
     }
 
     fn path(&self) -> Option<PathBuf> {
+        #[cfg(test)]
+        if let Some(path) = self.path_override.get() {
+            return Some(path.clone());
+        }
         crate::settings::Settings::settings_path().and_then(|path| {
             path.parent()
                 .map(|parent| parent.join("usage-index").join(self.file_name))
@@ -695,9 +716,20 @@ pub fn pricing_fingerprint() -> u64 {
 pub(crate) static CLAUDE_INDEX: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin", true);
 pub(crate) static CODEX_INDEX: IndexStore<CodexUsageRecord> = IndexStore::new("codex.bin", false);
 
+/// Test-only pause after encode so a concurrent commit can finish its write
+/// if this thread has already released the lock. Held lock + pause just
+/// delays the other commit; that is the SBS-948 race window.
+#[cfg(test)]
+fn linger_after_encode_for_tests() {
+    tests::note_encoded_and_maybe_pause();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
 
     /// A scan with no lower bound on how far back it looks.
     const ANY_TIME: i64 = i64::MIN;
@@ -1070,6 +1102,83 @@ mod tests {
         assert!(
             Cursor::new(&corrupt).optional_string().is_none(),
             "a failed UTF-8 decode is not an absent field"
+        );
+    }
+
+    static PAUSE_AFTER_ENCODE: AtomicBool = AtomicBool::new(false);
+    static ENCODED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn note_encoded_and_maybe_pause() {
+        ENCODED.store(true, Ordering::SeqCst);
+        if PAUSE_AFTER_ENCODE.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// SBS-948: encoding under the write lock does not order the file
+    /// replaces. If the lock is dropped before `atomic_write`, the first
+    /// encoder can put its older snapshot over a later one and those files
+    /// are fully re-parsed after a restart.
+    #[test]
+    fn a_later_commit_is_not_overwritten_by_an_earlier_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let index_path = dir.path().join("usage-index").join("sbs-948.bin");
+        let store: &'static IndexStore<ClaudeUsageRecord> =
+            Box::leak(Box::new(IndexStore::new("sbs-948.bin", true)));
+        store.override_path(index_path.clone());
+
+        ENCODED.store(false, Ordering::SeqCst);
+        PAUSE_AFTER_ENCODE.store(true, Ordering::SeqCst);
+
+        let first = thread::spawn(move || {
+            store.commit(
+                vec![entry(
+                    "/logs/first.jsonl",
+                    facts(100, 5),
+                    vec![claude_record("claude-opus-4-8", 1.0)],
+                )],
+                &[],
+            );
+        });
+
+        let started = std::time::Instant::now();
+        while !ENCODED.load(Ordering::SeqCst) {
+            if started.elapsed() > Duration::from_secs(2) {
+                PAUSE_AFTER_ENCODE.store(false, Ordering::SeqCst);
+                panic!("first commit never reached encode");
+            }
+            thread::yield_now();
+        }
+        // The first commit is now in the pause. A second commit that is
+        // allowed to write during that window must still be on disk after
+        // the first writer finishes.
+        PAUSE_AFTER_ENCODE.store(false, Ordering::SeqCst);
+        store.commit(
+            vec![entry(
+                "/logs/second.jsonl",
+                facts(80, 6),
+                vec![claude_record("claude-haiku-4-5", 0.25)],
+            )],
+            &[],
+        );
+        first.join().expect("first commit");
+
+        let bytes = fs::read(&index_path).expect("index was written");
+        let decoded = UsageIndex::<ClaudeUsageRecord>::decode(&bytes, pricing_fingerprint())
+            .expect("reload the snapshot a restart would load");
+        assert!(
+            matches!(
+                decoded.lookup(Path::new("/logs/first.jsonl"), &facts(100, 5), ANY_TIME),
+                Lookup::Hit(_)
+            ),
+            "first scan's file must still be indexed"
+        );
+        assert!(
+            matches!(
+                decoded.lookup(Path::new("/logs/second.jsonl"), &facts(80, 6), ANY_TIME),
+                Lookup::Hit(_)
+            ),
+            "second scan's file must not have been overwritten"
         );
     }
 }
