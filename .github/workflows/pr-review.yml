@@ -58,7 +58,7 @@ jobs:
       # Pin the reviewed action commit: mutable refs must not execute on a
       # persistent self-hosted machine with repository secrets.
       - name: Review
-        uses: tsouth89/coderev@94fa1be29c17a184292dd21902e81c1806922c7f
+        uses: tsouth89/coderev@c9af902adc5b19e58c9707617b2ede2c124bad00
         with:
           provider: exec
           model: grok-subscription
