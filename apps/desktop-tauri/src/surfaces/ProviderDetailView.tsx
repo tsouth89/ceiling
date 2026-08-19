@@ -316,12 +316,17 @@ export default function ProviderDetailView({
   // primary (`preferred_pace` in bridge.rs picks across all of them). Drop it
   // only when it is the placeholder's own verdict, which would read a fake 0%;
   // an Auto pace beside an unavailable Plan is still a real reading (SBS-876).
+  const rawPrimaryLabel = provider.primaryLabel?.trim() ?? "";
+  const primaryLabel = rawPrimaryLabel || "Primary";
+  const paceWindow = provider.pace?.windowLabel?.trim() ?? "";
   const pace =
-    namedPrimary && provider.pace?.windowLabel === provider.primaryLabel
+    namedPrimary &&
+    !!rawPrimaryLabel &&
+    !!paceWindow &&
+    paceWindow === rawPrimaryLabel
       ? null
       : provider.pace;
   const primaryPercent = Math.round(percentFor(provider.primary, showAsUsed));
-  const primaryLabel = provider.primaryLabel?.trim() || "Primary";
   const planName = displayPlanName(provider.planName);
   // A drill-in opens a specific account, so name it whenever there is an email.
   // Without this, two accounts on one provider open two identical detail views.
