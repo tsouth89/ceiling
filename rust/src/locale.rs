@@ -977,6 +977,8 @@ locale_keys! {
     StripProvidersTitle,
     StripProvidersHelp,
     StripUseAutomaticOrder,
+    StripKeepAtLeastOne,
+    StripAlwaysOneProvider,
     StripEnableProvidersFirst,
     StripShowProvider,
     StripMoveUp,
