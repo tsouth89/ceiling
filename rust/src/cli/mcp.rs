@@ -26,7 +26,12 @@ use crate::cost_scanner::{CostScanner, CostSummary, get_cost_usage_report};
 use crate::settings::Settings;
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct McpArgs {}
+pub struct McpArgs {
+    /// Include account email and login method in tool output.
+    /// Off by default; `codexbar serve` uses the same privacy default.
+    #[arg(long)]
+    pub include_identity: bool,
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ProviderFilter {
@@ -38,13 +43,15 @@ struct ProviderFilter {
 #[derive(Clone)]
 struct CeilingMcp {
     tool_router: rmcp::handler::server::router::tool::ToolRouter<CeilingMcp>,
+    include_identity: bool,
 }
 
 #[tool_router]
 impl CeilingMcp {
-    fn new() -> Self {
+    fn new(include_identity: bool) -> Self {
         Self {
             tool_router: Self::tool_router(),
+            include_identity,
         }
     }
 
@@ -68,6 +75,7 @@ impl CeilingMcp {
         Ok(json_tool_result(usage_payload(
             WidgetSnapshotStore::load().as_ref(),
             provider.as_deref(),
+            self.include_identity,
         )))
     }
 
@@ -95,6 +103,7 @@ impl CeilingMcp {
             WidgetSnapshotStore::load().as_ref(),
             provider.as_deref(),
             &enabled_provider_ids(),
+            self.include_identity,
         )))
     }
 }
@@ -109,15 +118,18 @@ impl ServerHandler for CeilingMcp {
                 "Ceiling local usage/spend tools. get_usage reads the desktop widget snapshot \
 (cache-only). get_spend scans local Codex/Claude/Grok logs. Prefer get_status for a quick \
 remaining-quota + today-$ check before starting a large job. Values are estimated API \
-value, never a billed invoice."
+value, never a billed invoice. Account email and login method are omitted unless the \
+server was started with --include-identity."
                     .to_string(),
             )
     }
 }
 
-pub async fn run(_args: McpArgs) -> anyhow::Result<()> {
+pub async fn run(args: McpArgs) -> anyhow::Result<()> {
     tracing::info!("Starting Ceiling MCP server (stdio)");
-    let service = CeilingMcp::new().serve(stdio()).await?;
+    let service = CeilingMcp::new(args.include_identity)
+        .serve(stdio())
+        .await?;
     service.waiting().await?;
     Ok(())
 }
@@ -180,7 +192,11 @@ fn list_providers_payload(
     })
 }
 
-fn usage_payload(snapshot: Option<&WidgetSnapshot>, provider: Option<&str>) -> serde_json::Value {
+fn usage_payload(
+    snapshot: Option<&WidgetSnapshot>,
+    provider: Option<&str>,
+    include_identity: bool,
+) -> serde_json::Value {
     let Some(snapshot) = snapshot else {
         return json!({
             "ok": false,
@@ -203,7 +219,10 @@ fn usage_payload(snapshot: Option<&WidgetSnapshot>, provider: Option<&str>) -> s
         None => snapshot.entries.iter().collect(),
     };
 
-    let providers: Vec<_> = entries.iter().map(|e| entry_usage_json(e)).collect();
+    let providers: Vec<_> = entries
+        .iter()
+        .map(|e| entry_usage_json(e, include_identity))
+        .collect();
     json!({
         "ok": true,
         "source": "widget-snapshot",
@@ -212,13 +231,13 @@ fn usage_payload(snapshot: Option<&WidgetSnapshot>, provider: Option<&str>) -> s
     })
 }
 
-fn entry_usage_json(entry: &WidgetProviderEntry) -> serde_json::Value {
+fn entry_usage_json(entry: &WidgetProviderEntry, include_identity: bool) -> serde_json::Value {
     json!({
         "provider": entry.provider.cli_name(),
         "display_name": entry.provider.display_name(),
         "updated_at": entry.updated_at.to_rfc3339(),
-        "account_email": entry.account_email,
-        "login_method": entry.login_method,
+        "account_email": include_identity.then(|| entry.account_email.clone()).flatten(),
+        "login_method": include_identity.then(|| entry.login_method.clone()).flatten(),
         "credits_remaining": entry.credits_remaining,
         "primary": window_json(entry.primary.as_ref()),
         "secondary": window_json(entry.secondary.as_ref()),
@@ -313,6 +332,7 @@ fn status_payload(
     snapshot: Option<&WidgetSnapshot>,
     provider: Option<&str>,
     enabled: &[ProviderId],
+    include_identity: bool,
 ) -> serde_json::Value {
     if let Some(name) = provider
         && ProviderId::from_cli_name(name).is_none()
@@ -325,7 +345,9 @@ fn status_payload(
 
     let chosen = choose_status_provider(snapshot, provider, enabled);
     let usage = match (&chosen, snapshot) {
-        (Some(id), Some(snap)) => snap.entry_for(*id).map(entry_usage_json),
+        (Some(id), Some(snap)) => snap
+            .entry_for(*id)
+            .map(|entry| entry_usage_json(entry, include_identity)),
         _ => None,
     };
 
@@ -397,7 +419,8 @@ mod tests {
                 Some(Utc::now() + chrono::Duration::hours(3)),
                 Some("in 3h".into()),
             ))
-            .with_login_method("Claude Pro");
+            .with_login_method("Claude Pro")
+            .with_account_email("user@example.com");
         WidgetSnapshot::new(vec![entry], Utc::now())
     }
 
@@ -425,14 +448,14 @@ mod tests {
 
     #[test]
     fn usage_requires_snapshot() {
-        let payload = usage_payload(None, None);
+        let payload = usage_payload(None, None, false);
         assert_eq!(payload["ok"], false);
     }
 
     #[test]
     fn usage_filters_provider() {
         let snap = sample_snapshot();
-        let payload = usage_payload(Some(&snap), Some("claude"));
+        let payload = usage_payload(Some(&snap), Some("claude"), false);
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["providers"].as_array().unwrap().len(), 1);
         assert_eq!(payload["providers"][0]["primary"]["used_percent"], 42.0);
@@ -440,6 +463,19 @@ mod tests {
             payload["providers"][0]["primary"]["remaining_percent"],
             58.0
         );
+        assert!(payload["providers"][0]["account_email"].is_null());
+        assert!(payload["providers"][0]["login_method"].is_null());
+    }
+
+    #[test]
+    fn usage_includes_identity_only_when_requested() {
+        let snap = sample_snapshot();
+        let redacted = usage_payload(Some(&snap), Some("claude"), false);
+        assert!(redacted["providers"][0]["account_email"].is_null());
+        assert!(redacted["providers"][0]["login_method"].is_null());
+        let full = usage_payload(Some(&snap), Some("claude"), true);
+        assert_eq!(full["providers"][0]["account_email"], "user@example.com");
+        assert_eq!(full["providers"][0]["login_method"], "Claude Pro");
     }
 
     #[test]
@@ -479,6 +515,7 @@ mod tests {
             Some(&sample_snapshot()),
             Some("not-a-provider"),
             &default_enabled(),
+            false,
         );
         assert_eq!(payload["ok"], false);
         assert!(
@@ -493,7 +530,7 @@ mod tests {
     #[test]
     fn status_prefers_claude_when_present() {
         let snap = sample_snapshot();
-        let payload = status_payload(Some(&snap), None, &default_enabled());
+        let payload = status_payload(Some(&snap), None, &default_enabled(), false);
         assert_eq!(payload["provider"], "claude");
         assert_eq!(payload["remaining_percent"], 58.0);
     }
@@ -527,11 +564,11 @@ mod tests {
     #[test]
     fn status_skips_disabled_snapshot_providers() {
         let snap = sample_snapshot();
-        let payload = status_payload(Some(&snap), None, &[ProviderId::Codex]);
+        let payload = status_payload(Some(&snap), None, &[ProviderId::Codex], false);
         assert!(payload["provider"].is_null(), "payload: {payload}");
         assert!(payload["usage"].is_null(), "payload: {payload}");
 
-        let explicit = status_payload(Some(&snap), Some("claude"), &[ProviderId::Codex]);
+        let explicit = status_payload(Some(&snap), Some("claude"), &[ProviderId::Codex], false);
         assert_eq!(explicit["provider"], "claude");
         assert_eq!(explicit["remaining_percent"], 58.0);
     }
