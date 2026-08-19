@@ -116,7 +116,7 @@ fn match_title_hint(title: &str) -> Option<&'static str> {
     if looks_like_path(prefix) {
         return None;
     }
-    title_tokens(prefix).find_map(provider_for_title_token)
+    title_tokens(prefix).into_iter().find_map(provider_for_title_token)
 }
 
 fn command_prefix(title: &str) -> &str {
@@ -139,10 +139,44 @@ fn looks_like_path(text: &str) -> bool {
             .is_some_and(|bytes| bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
-fn title_tokens(title: &str) -> impl Iterator<Item = &str> {
-    title
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
-        .filter(|token| !token.is_empty())
+fn is_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+}
+
+fn is_path_adjacent(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    let pathish = |c: u8| matches!(c, b'/' | b'\\' | b':' | b'~');
+    start
+        .checked_sub(1)
+        .and_then(|i| bytes.get(i).copied())
+        .is_some_and(pathish)
+        || bytes.get(end).copied().is_some_and(pathish)
+}
+
+/// Command tokens that are not glued to a path separator.
+///
+/// Git Bash (`MINGW64:/c/Users/a/projects/cursor`) and `vim ~/src/cursor`
+/// still contain a provider name, but it is the folder, not the agent.
+fn title_tokens(title: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (idx, ch) in title.char_indices() {
+        if is_token_char(ch) {
+            start.get_or_insert(idx);
+            continue;
+        }
+        if let Some(s) = start.take()
+            && !is_path_adjacent(title, s, idx)
+        {
+            tokens.push(&title[s..idx]);
+        }
+    }
+    if let Some(s) = start
+        && !is_path_adjacent(title, s, title.len())
+    {
+        tokens.push(&title[s..]);
+    }
+    tokens
 }
 
 fn provider_for_title_token(token: &str) -> Option<&'static str> {
@@ -258,6 +292,28 @@ mod tests {
         );
         assert_eq!(
             match_foreground_provider("WindowsTerminal.exe", r"C:\Users\a\cursor\app"),
+            None
+        );
+        assert_eq!(
+            match_foreground_provider(
+                "WindowsTerminal.exe",
+                "MINGW64:/c/Users/a/projects/cursor"
+            ),
+            None
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "a@host: ~/src/claude"),
+            None
+        );
+        assert_eq!(
+            match_foreground_provider(
+                "WindowsTerminal.exe",
+                r"Administrator: C:\Users\a\src\codex"
+            ),
+            None
+        );
+        assert_eq!(
+            match_foreground_provider("WindowsTerminal.exe", "vim ~/src/cursor/main.rs"),
             None
         );
     }
