@@ -1236,10 +1236,25 @@ mod tests {
     /// this path cannot create `./.gemini/oauth_creds.json`.
     #[test]
     fn missing_home_does_not_write_credentials() {
+        let cwd = tempfile::tempdir().expect("temp cwd");
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(cwd.path()).expect("set cwd");
+        struct RestoreCwd(PathBuf);
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _restore = RestoreCwd(previous);
+
         let error = api_without_home()
             .save_credentials(&refreshed_credentials("live-access"))
             .expect_err("no home must not persist tokens");
         assert!(matches!(error, ProviderError::NotInstalled(_)));
+        assert!(
+            !Path::new("./.gemini/oauth_creds.json").exists(),
+            "missing home must not write oauth_creds.json relative to cwd"
+        );
     }
 
     /// Pins SBS-928: at the exact expiry second the access token is already
