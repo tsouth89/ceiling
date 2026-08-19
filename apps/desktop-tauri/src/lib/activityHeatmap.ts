@@ -71,20 +71,30 @@ export function parseLocalDate(date: string): Date | null {
 export function bandThresholds(values: number[]): Bands {
   const active = values.filter((value) => value > 0).sort((left, right) => left - right);
   if (active.length === 0) return [0, 0, 0];
+  const n = active.length;
+  // Inclusive rank: ceil(q*n)-1, not floor(q*n). floor(0.75*n) is n-1 for
+  // n of 2, 3 or 4, so the 75th-percentile cut sat on the maximum and the
+  // busiest cell could never reach the legend's top swatch (SBS-945).
   const at = (quantile: number) =>
-    active[Math.min(active.length - 1, Math.floor(quantile * active.length))];
+    active[Math.min(n - 1, Math.max(0, Math.ceil(quantile * n) - 1))];
   return [at(0.25), at(0.5), at(0.75)];
 }
 
 export function intensityLevel(value: number, bands: Bands): IntensityLevel {
   if (value <= 0) return 0;
   const [low, mid, high] = bands;
-  // A flat distribution has no bands to show. Painting every active cell at the
-  // top would read as "every day was a peak", so hold them mid-scale.
-  if (low === high) return 2;
+  // A genuinely flat distribution has no bands to show. Painting every active
+  // cell at the top would read as "every day was a peak", so hold the mass
+  // mid-scale. The shortcut applies only to values at or below that collapsed
+  // cut: a single outlier above it still reaches the top swatch, which is the
+  // case the quartile bands exist to surface (SBS-945).
+  if (low === high && value <= high) return 2;
   if (value <= low) return 1;
   if (value <= mid) return 2;
-  if (value <= high) return 3;
+  // Exclusive upper bound so a cell at the 75th-percentile value — including
+  // the maximum when the top quartile is all ties at the max — still paints
+  // as the legend's darkest step rather than one below it.
+  if (value < high) return 3;
   return 4;
 }
 

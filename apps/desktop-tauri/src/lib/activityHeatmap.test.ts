@@ -60,13 +60,34 @@ describe("intensity banding", () => {
   it("holds a flat distribution mid-scale instead of all-peak", () => {
     const bands = bandThresholds([7, 7, 7, 7]);
     expect(intensityLevel(7, bands)).toBe(2);
+    // The collapsed-cut shortcut must not also swallow an outlier sitting
+    // above those ties. Before SBS-945, `if (low === high) return 2` painted
+    // 500 the same shade as 7.
+    expect(intensityLevel(500, bands)).toBe(4);
+  });
+
+  /// 29 quiet days and one spike: every quartile element is the quiet value,
+  /// so low === high. The spike must still reach the top swatch.
+  it("does not flatten an outlier to the quiet majority's shade", () => {
+    const values = [...Array.from({ length: 29 }, () => 1), 500];
+    const bands = bandThresholds(values);
+    expect(bands).toEqual([1, 1, 1]);
+    expect(intensityLevel(1, bands)).toBe(2);
+    expect(intensityLevel(500, bands)).toBe(4);
+  });
+
+  it("lets the maximum reach the top swatch with two or three active cells", () => {
+    expect(intensityLevel(100, bandThresholds([1, 100]))).toBe(4);
+    expect(intensityLevel(1, bandThresholds([1, 100]))).toBeLessThan(4);
+    expect(intensityLevel(100, bandThresholds([1, 50, 100]))).toBe(4);
+    expect(intensityLevel(1, bandThresholds([1, 50, 100]))).toBeLessThan(4);
   });
 
   it("ignores empty cells when choosing the bands", () => {
     expect(bandThresholds([0, 0, 0])).toEqual([0, 0, 0]);
     // Only 4 and 8 are active, so the quartiles sit on those two values alone
     // rather than being dragged toward zero by the empty cells.
-    expect(bandThresholds([0, 0, 4, 8])).toEqual([4, 8, 8]);
+    expect(bandThresholds([0, 0, 4, 8])).toEqual([4, 4, 8]);
   });
 });
 
@@ -99,6 +120,23 @@ describe("buildCalendar", () => {
     const hours = [point({ date: "2026-08-10", apiValueUsd: 2, tokens: 900 })];
     expect(buildCalendar(days, hours, "apiValue")[2].value).toBe(2);
     expect(buildCalendar(days, hours, "tokens")[2].value).toBe(900);
+  });
+
+  /// Calendar path of SBS-945: 29 quiet days plus one spike must not share a
+  /// shade. Empty days stay 0 so they are not confused with quiet activity.
+  it("paints a spike day darker than a month of quiet days", () => {
+    const month = Array.from({ length: 30 }, (_, index) => {
+      const day = String(index + 1).padStart(2, "0");
+      return `2026-08-${day}`;
+    });
+    const hours = month.map((date, index) =>
+      point({ date, apiValueUsd: index === 29 ? 500 : 1, tokens: 1, calls: 1 }),
+    );
+    const cells = buildCalendar(month, hours, "apiValue");
+    expect(cells).toHaveLength(30);
+    expect(cells[0].level).toBe(2);
+    expect(cells[28].level).toBe(2);
+    expect(cells[29].level).toBe(4);
   });
 });
 
@@ -137,6 +175,11 @@ describe("buildWeekHourGrid", () => {
       "apiValue",
     );
     expect(grid[0][2].level).toBeLessThan(grid[3][2].level);
+    // Four active cells used to put the 75th-percentile cut on the maximum,
+    // so the busiest cell stopped at level 3 and the legend's top swatch
+    // never appeared. $200 must reach 4 (SBS-945).
+    expect(grid[0][2].level).toBe(1);
+    expect(grid[3][2].level).toBe(4);
   });
 });
 
