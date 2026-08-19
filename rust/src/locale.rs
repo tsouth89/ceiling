@@ -1061,6 +1061,33 @@ locale_keys! {
     FloatBarHide,
     FloatBarHideTitle,
     SettingsWindowTitle,
+
+    // Activity heatmap card (SBS-972)
+    ActivityHeatmapAriaLabel,
+    ActivityHeatmapTitle,
+    ActivityHeatmapSubtitle,
+    ActivityHeatmapLocalTime,
+    ActivityHeatmapReading,
+    ActivityHeatmapReadFailed,
+    ActivityHeatmapMetricGroup,
+    ActivityHeatmapMetricApiValue,
+    ActivityHeatmapMetricTokens,
+    ActivityHeatmapProvidersGroup,
+    ActivityHeatmapProvidersHidden,
+    ActivityHeatmapEmpty,
+    ActivityHeatmapByDay,
+    ActivityHeatmapTotal,
+    ActivityHeatmapDaysAria,
+    ActivityHeatmapCellSummary,
+    ActivityHeatmapByHour,
+    ActivityHeatmapBusiest,
+    ActivityHeatmapNoPeak,
+    ActivityHeatmapHoursAria,
+    ActivityHeatmapHourCell,
+    ActivityHeatmapLess,
+    ActivityHeatmapMore,
+    ActivityHeatmapFooterNote,
+    ActivityHeatmapTokensUnit,
 }
 
 #[cfg(test)]
