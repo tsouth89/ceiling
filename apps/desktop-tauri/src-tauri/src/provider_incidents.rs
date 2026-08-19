@@ -41,7 +41,6 @@ struct CachedIncident {
     loaded_at: Instant,
     /// `None` once a provider reads operational, which is still a fresh answer.
     incident: Option<ProviderIncident>,
-    ok: bool,
 }
 
 impl CachedIncident {
@@ -152,9 +151,8 @@ pub async fn current_incidents(settings: &Settings) -> HashMap<String, ProviderI
         if let Ok(mut guard) = cache().lock() {
             for (provider_id, status) in fetched {
                 // `Unknown` means the page did not parse, which is a failed
-                // read rather than an operational provider. Treating it as
-                // success would still hold a stale answer for the same 15
-                // minutes; we keep `ok: false` so a later poll can replace it.
+                // read rather than an operational provider. Keep the last
+                // good badge and still hold this miss for the full TTL.
                 let readable = status
                     .as_ref()
                     .is_some_and(|status| status.level != StatusLevel::Unknown);
@@ -184,7 +182,6 @@ pub async fn current_incidents(settings: &Settings) -> HashMap<String, ProviderI
                     CachedIncident {
                         loaded_at: Instant::now(),
                         incident,
-                        ok: readable,
                     },
                 );
             }
@@ -294,7 +291,6 @@ mod tests {
                 CachedIncident {
                     loaded_at: Instant::now(),
                     incident: Some(live.clone()),
-                    ok: true,
                 },
             );
         }
@@ -308,14 +304,16 @@ mod tests {
                 CachedIncident {
                     loaded_at: Instant::now(),
                     incident: carried,
-                    ok: false,
                 },
             );
         }
 
         let guard = cache().lock().expect("cache");
         assert_eq!(guard["codex"].incident.as_ref(), Some(&live));
-        assert!(!guard["codex"].ok, "and it is marked for the next refresh");
+        assert!(
+            guard["codex"].is_fresh(),
+            "a failed poll still holds the last good badge for the full TTL"
+        );
     }
 
     #[test]
@@ -323,12 +321,10 @@ mod tests {
         let ok = CachedIncident {
             loaded_at: Instant::now() - Duration::from_secs(6 * 60),
             incident: None,
-            ok: true,
         };
         let failed = CachedIncident {
             loaded_at: Instant::now() - Duration::from_secs(6 * 60),
             incident: None,
-            ok: false,
         };
 
         assert!(ok.is_fresh(), "a good reading is still valid at 6 minutes");
@@ -339,7 +335,6 @@ mod tests {
         let aged = CachedIncident {
             loaded_at: Instant::now() - Duration::from_secs(16 * 60),
             incident: None,
-            ok: false,
         };
         assert!(!aged.is_fresh());
     }
