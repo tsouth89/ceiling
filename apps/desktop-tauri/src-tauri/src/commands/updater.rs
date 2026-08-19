@@ -58,16 +58,12 @@ pub async fn check_for_updates(
 
     let payload = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
-        let staged = if matches!(guard.update_state, UpdateState::Checking) {
-            (guard.update_info.clone(), guard.installer_path.clone())
-        } else {
-            (None, None)
-        };
-        let applied = apply_check_result(result, staged);
-        guard.update_state = applied.state;
-        guard.update_info = applied.info;
-        guard.installer_path = applied.installer_path;
-        guard.last_update_check_ms = Some(chrono::Utc::now().timestamp_millis());
+        // SBS-962: a download that claimed the slot while we were on the
+        // network must keep its own UpdateInfo. Applying here would pair a
+        // different release's digest with the file still being written.
+        if commit_check_result(&mut guard, result) {
+            guard.last_update_check_ms = Some(chrono::Utc::now().timestamp_millis());
+        }
         guard.update_payload()
     };
     events::emit_update_state_changed(&app, &payload);
@@ -125,6 +121,27 @@ fn apply_check_result(
     }
 }
 
+/// Apply a finished check only while this check still owns the slot.
+///
+/// Returns whether the check result was committed. A concurrent download
+/// (SBS-962) or dismiss leaves `update_state` as something other than
+/// Checking; overwriting that would pair a different release's digest with
+/// an in-flight or staged installer.
+fn commit_check_result(
+    guard: &mut AppState,
+    result: Result<Result<Option<UpdateInfo>, UpdateCheckError>, tokio::time::error::Elapsed>,
+) -> bool {
+    if !matches!(guard.update_state, UpdateState::Checking) {
+        return false;
+    }
+    let staged = (guard.update_info.clone(), guard.installer_path.clone());
+    let applied = apply_check_result(result, staged);
+    guard.update_state = applied.state;
+    guard.update_info = applied.info;
+    guard.installer_path = applied.installer_path;
+    true
+}
+
 /// Map a completed check onto Idle / Available / Error.
 ///
 /// Idle is only a successful "no newer release". Timeout, transport, HTTP,
@@ -151,34 +168,48 @@ pub async fn download_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<UpdateStatePayload, String> {
-    let info = match update_info_for_download(&state)? {
-        DownloadStart::Ready(info) => info,
+    let (info, initial_payload) = match begin_download(&state)? {
+        DownloadStart::Ready { info, payload } => (info, payload),
         DownloadStart::AlreadyDownloading(payload) => return Ok(payload),
     };
-
-    if !info.supports_auto_download() {
-        return Err(
-            "This update does not support automatic download. Open the release page instead."
-                .to_string(),
-        );
-    }
-
-    let initial_payload = set_downloading_state(&state)?;
     events::emit_update_state_changed(&app, &initial_payload);
     spawn_download_task(app.clone(), info);
 
     Ok(initial_payload)
 }
 
+#[derive(Debug)]
 enum DownloadStart {
-    Ready(UpdateInfo),
+    Ready {
+        info: UpdateInfo,
+        payload: UpdateStatePayload,
+    },
     AlreadyDownloading(UpdateStatePayload),
 }
 
-fn update_info_for_download(
-    state: &tauri::State<'_, Mutex<AppState>>,
-) -> Result<DownloadStart, String> {
-    let guard = state.lock().map_err(|e| e.to_string())?;
+/// Read `update_info` and enter Downloading under one lock. SBS-962: the
+/// previous split let a check land in the gap, clear `update_info`, then
+/// get stamped over by Downloading and finish by pairing a different
+/// release's digest with this download.
+fn begin_download(state: &Mutex<AppState>) -> Result<DownloadStart, String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    if matches!(
+        guard.update_state,
+        UpdateState::Available(_) | UpdateState::Error(_)
+    ) && guard
+        .update_info
+        .as_ref()
+        .is_some_and(|info| !info.supports_auto_download())
+    {
+        return Err(
+            "This update does not support automatic download. Open the release page instead."
+                .to_string(),
+        );
+    }
+    claim_download_locked(&mut guard)
+}
+
+fn claim_download_locked(guard: &mut AppState) -> Result<DownloadStart, String> {
     match &guard.update_state {
         UpdateState::Available(_) | UpdateState::Error(_) => {}
         UpdateState::Downloading(_) => {
@@ -186,19 +217,15 @@ fn update_info_for_download(
         }
         _ => return Err("No update available to download".to_string()),
     }
-    guard
+    let info = guard
         .update_info
         .clone()
-        .map(DownloadStart::Ready)
-        .ok_or("No update information available".to_string())
-}
-
-fn set_downloading_state(
-    state: &tauri::State<'_, Mutex<AppState>>,
-) -> Result<UpdateStatePayload, String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
+        .ok_or_else(|| "No update information available".to_string())?;
     guard.update_state = UpdateState::Downloading(0.0);
-    Ok(guard.update_payload())
+    Ok(DownloadStart::Ready {
+        payload: guard.update_payload(),
+        info,
+    })
 }
 
 fn spawn_download_task(app_handle: tauri::AppHandle, info: UpdateInfo) {
@@ -241,15 +268,17 @@ async fn run_download_task(
     info: UpdateInfo,
     tx: tokio::sync::watch::Sender<codexbar::updater::UpdateState>,
 ) -> UpdateStatePayload {
+    let staged_info = info.clone();
     let download_handle =
         tokio::spawn(async move { codexbar::updater::download_update(&info, tx).await });
 
     match download_handle.await {
-        Ok(Ok(path)) => finish_download(&app, UpdateState::Ready, Some(path)),
-        Ok(Err(error)) => finish_download(&app, UpdateState::Error(error), None),
+        Ok(Ok(path)) => finish_download(&app, UpdateState::Ready, Some(path), Some(staged_info)),
+        Ok(Err(error)) => finish_download(&app, UpdateState::Error(error), None, None),
         Err(join_err) => finish_download(
             &app,
             UpdateState::Error(format!("Download task failed: {join_err}")),
+            None,
             None,
         ),
     }
@@ -259,12 +288,27 @@ fn finish_download(
     app: &tauri::AppHandle,
     update_state: UpdateState,
     installer_path: Option<std::path::PathBuf>,
+    staged_info: Option<UpdateInfo>,
 ) -> UpdateStatePayload {
     let st = app.state::<Mutex<AppState>>();
     let mut guard = st.lock().unwrap();
+    record_download_finish(&mut guard, update_state, installer_path, staged_info);
+    guard.update_payload()
+}
+
+/// Pair the installer with the UpdateInfo the download started from so
+/// apply-time SHA256 is the digest of the file on disk, not of a later check.
+fn record_download_finish(
+    guard: &mut AppState,
+    update_state: UpdateState,
+    installer_path: Option<PathBuf>,
+    staged_info: Option<UpdateInfo>,
+) {
     guard.update_state = update_state;
     guard.installer_path = installer_path;
-    guard.update_payload()
+    if let Some(info) = staged_info {
+        guard.update_info = Some(info);
+    }
 }
 
 #[tauri::command]
@@ -290,16 +334,7 @@ fn apply_ready_installer(state: &Mutex<AppState>) -> Result<(), String> {
     let result = (|| {
         let (path, expected_sha256) = {
             let guard = state.lock().map_err(|e| e.to_string())?;
-            let path = guard
-                .installer_path
-                .clone()
-                .ok_or("No downloaded update available to apply")?;
-            let expected_sha256 = guard
-                .update_info
-                .as_ref()
-                .and_then(|info| info.expected_sha256.clone())
-                .ok_or("Missing SHA256 digest for downloaded update")?;
-            (path, expected_sha256)
+            staged_apply_target(&guard)?
         };
         codexbar::updater::verify_installer_hash(&path, &expected_sha256)?;
         codexbar::updater::apply_update(&path)
@@ -309,6 +344,19 @@ fn apply_ready_installer(state: &Mutex<AppState>) -> Result<(), String> {
         let _ = record_apply_failure(state, error);
     }
     result
+}
+
+fn staged_apply_target(guard: &AppState) -> Result<(PathBuf, String), String> {
+    let path = guard
+        .installer_path
+        .clone()
+        .ok_or_else(|| "No downloaded update available to apply".to_string())?;
+    let expected_sha256 = guard
+        .update_info
+        .as_ref()
+        .and_then(|info| info.expected_sha256.clone())
+        .ok_or_else(|| "Missing SHA256 digest for downloaded update".to_string())?;
+    Ok((path, expected_sha256))
 }
 
 fn record_apply_failure(
@@ -353,16 +401,18 @@ pub fn open_release_page(state: tauri::State<'_, Mutex<AppState>>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "windows")]
-    use crate::state::AppState;
-    use crate::state::UpdateState;
+    use crate::state::{AppState, UpdateState};
     use codexbar::updater::{UpdateCheckError, UpdateDelivery, UpdateInfo};
 
     fn sample_info(version: &str) -> UpdateInfo {
+        sample_info_with_hash(version, &"a".repeat(64))
+    }
+
+    fn sample_info_with_hash(version: &str, sha256: &str) -> UpdateInfo {
         UpdateInfo {
             version: version.to_string(),
             download_url: "https://example.com/Ceiling-Setup.exe".to_string(),
-            expected_sha256: Some("a".repeat(64)),
+            expected_sha256: Some(sha256.to_string()),
             release_url: "https://example.com/release".to_string(),
             release_notes: String::new(),
             delivery: UpdateDelivery::Installer,
@@ -441,6 +491,183 @@ mod tests {
             applied.installer_path.as_deref(),
             Some(staged_path.as_path())
         );
+    }
+
+    /// SBS-962: claiming a download must enter Downloading in the same
+    /// critical section that reads update_info, so a check cannot see Available.
+    #[test]
+    fn claiming_a_download_sets_downloading_under_the_same_lock() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Available("v1.5.35".to_string());
+        state.update_info = Some(sample_info("v1.5.35"));
+
+        match claim_download_locked(&mut state).expect("claim") {
+            DownloadStart::Ready { info, payload } => {
+                assert_eq!(info.version, "v1.5.35");
+                assert_eq!(payload.status, "downloading");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+        assert!(matches!(state.update_state, UpdateState::Downloading(_)));
+        assert!(should_skip_update_check(&state.update_state));
+        assert_eq!(
+            state.update_info.as_ref().map(|item| item.version.as_str()),
+            Some("v1.5.35")
+        );
+    }
+
+    #[test]
+    fn claiming_a_download_does_not_stamp_over_an_in_flight_check() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Checking;
+        state.update_info = Some(sample_info("v1.5.35"));
+
+        let error = claim_download_locked(&mut state).expect_err("checking");
+        assert!(error.contains("No update available to download"), "{error}");
+        assert_eq!(state.update_state, UpdateState::Checking);
+    }
+
+    #[test]
+    fn claiming_a_download_while_already_downloading_is_a_no_op() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Downloading(0.4);
+        state.update_info = Some(sample_info("v1.5.35"));
+
+        match claim_download_locked(&mut state).expect("claim") {
+            DownloadStart::AlreadyDownloading(payload) => {
+                assert_eq!(payload.status, "downloading");
+            }
+            other => panic!("expected AlreadyDownloading, got {other:?}"),
+        }
+        assert!(matches!(
+            state.update_state,
+            UpdateState::Downloading(progress) if (progress - 0.4).abs() < f32::EPSILON
+        ));
+    }
+
+    /// SBS-962: a check that lost the slot must not replace the digest the
+    /// in-flight download will be verified against.
+    #[test]
+    fn check_result_does_not_replace_an_in_flight_download() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Downloading(0.2);
+        state.update_info = Some(sample_info_with_hash("v1.5.35", &"a".repeat(64)));
+
+        let newer = sample_info_with_hash("v1.5.36", &"b".repeat(64));
+        assert!(!commit_check_result(&mut state, Ok(Ok(Some(newer)))));
+        assert!(matches!(state.update_state, UpdateState::Downloading(_)));
+        assert_eq!(
+            state.update_info.as_ref().map(|item| item.version.as_str()),
+            Some("v1.5.35")
+        );
+        assert_eq!(
+            state
+                .update_info
+                .as_ref()
+                .and_then(|item| item.expected_sha256.clone()),
+            Some("a".repeat(64))
+        );
+    }
+
+    #[test]
+    fn check_result_still_commits_while_the_check_owns_the_slot() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Checking;
+        let newer = sample_info("v1.5.36");
+        assert!(commit_check_result(&mut state, Ok(Ok(Some(newer)))));
+        assert_eq!(
+            state.update_state,
+            UpdateState::Available("v1.5.36".to_string())
+        );
+        assert_eq!(
+            state.update_info.as_ref().map(|item| item.version.as_str()),
+            Some("v1.5.36")
+        );
+    }
+
+    /// SBS-962: finish stores the UpdateInfo the download started from, even
+    /// if a later check wrote a different release into update_info.
+    #[test]
+    fn finish_pairs_the_started_release_with_the_staged_installer() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Downloading(1.0);
+        state.update_info = Some(sample_info_with_hash("v1.5.36", &"b".repeat(64)));
+
+        let started = sample_info_with_hash("v1.5.35", &"a".repeat(64));
+        let path = PathBuf::from("Ceiling-1.5.35-Setup.exe");
+        record_download_finish(
+            &mut state,
+            UpdateState::Ready,
+            Some(path.clone()),
+            Some(started),
+        );
+
+        assert_eq!(state.update_state, UpdateState::Ready);
+        assert_eq!(
+            state.update_info.as_ref().map(|item| item.version.as_str()),
+            Some("v1.5.35")
+        );
+        let (staged_path, digest) = staged_apply_target(&state).expect("staged");
+        assert_eq!(staged_path, path);
+        assert_eq!(digest, "a".repeat(64));
+    }
+
+    /// SBS-962: apply hashes the staged file against the digest captured at
+    /// download start. A swapped later-check digest must not be how a good
+    /// download is verified.
+    #[test]
+    fn apply_uses_the_digest_paired_with_the_staged_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("Ceiling-1.5.35-Setup.exe");
+        std::fs::write(&path, b"installer bytes").expect("write installer");
+        // sha256 of the bytes written on the previous line.
+        let matching =
+            "e34210a6de4f653edf588301431c3d69a633638cbf587345cc50a7fed9f38f4c".to_string();
+        let other = "0".repeat(64);
+
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Downloading(1.0);
+        state.update_info = Some(sample_info_with_hash("v1.5.36", &other));
+
+        record_download_finish(
+            &mut state,
+            UpdateState::Ready,
+            Some(path.clone()),
+            Some(sample_info_with_hash("v1.5.35", &matching)),
+        );
+
+        let (staged_path, digest) = staged_apply_target(&state).expect("staged");
+        assert_eq!(staged_path, path);
+        assert_eq!(digest, matching);
+        codexbar::updater::verify_installer_hash(&path, &digest).expect("matching digest");
+    }
+
+    #[test]
+    fn apply_hash_mismatch_clears_the_staged_installer_without_running_it() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("Ceiling-1.5.35-Setup.exe");
+        std::fs::write(&path, b"installer bytes").expect("write installer");
+
+        let state = Mutex::new(AppState::new());
+        {
+            let mut guard = state.lock().expect("lock");
+            guard.update_state = UpdateState::Ready;
+            guard.installer_path = Some(path.clone());
+            guard.update_info = Some(sample_info_with_hash("v1.5.36", &"0".repeat(64)));
+        }
+
+        let error = apply_ready_installer(&state).unwrap_err();
+        assert!(
+            error.contains("SHA256 mismatch"),
+            "expected hash mismatch, got {error}"
+        );
+        assert!(path.exists(), "a hash mismatch must not delete the file");
+        let guard = state.lock().expect("lock");
+        assert!(guard.installer_path.is_none());
+        match &guard.update_state {
+            UpdateState::Error(message) => assert_eq!(message, &error),
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[cfg(target_os = "windows")]
