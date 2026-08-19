@@ -205,7 +205,7 @@ fn spend_anomaly_toast_body(today_usd: f64, baseline_usd: f64) -> String {
     } else {
         let trigger = spend_anomaly_absolute_trigger_usd();
         format!(
-            "Today's estimated API value is ${today_usd:.2}, well above the ${trigger:.2} absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
+            "Today's estimated API value is ${today_usd:.2}, at or above the ${trigger:.2} absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
         )
     }
 }
@@ -2434,8 +2434,12 @@ mod tests {
             "Today's estimated API value is $9.50, about 4.8x your recent daily median of $2.00. This is an estimate from local Codex and Claude logs, not a bill."
         );
         assert_eq!(
+            spend_anomaly_toast_body(20.0, 0.0),
+            "Today's estimated API value is $20.00, at or above the $20.00 absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
+        );
+        assert_eq!(
             spend_anomaly_toast_body(180.0, 0.0),
-            "Today's estimated API value is $180.00, well above the $20.00 absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
+            "Today's estimated API value is $180.00, at or above the $20.00 absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
         );
     }
 
