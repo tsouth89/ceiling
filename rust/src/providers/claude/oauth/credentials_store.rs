@@ -353,69 +353,128 @@ fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError>
     Ok(crate::core::claude_credentials_path(&dir))
 }
 
-/// Persist refreshed tokens back to the config directory's `.credentials.json`,
-/// updating only the `claudeAiOauth` token fields and leaving everything else
-/// (e.g. `mcpOAuth`) untouched. Written atomically beside the live file.
+/// Persist refreshed tokens back to the store they were loaded from.
 ///
-/// Claude Code owns this file, so the replace preserves its permissions and
-/// follows a symlinked path (dotfile managers, WSL shared targets) instead of
-/// dropping a fresh private file over the link.
+/// Claude Code owns both `.credentials.json` and the `Claude Code-credentials`
+/// keyring entry. Writing the rotated pair back is required: Anthropic retires
+/// the exchanged refresh token, and leaving the old one in the keyring signs
+/// Claude Code out.
 ///
 /// `exchanged_refresh_token` is the token this process actually sent to the
 /// server. Claude rotates the refresh token, so it doubles as a
-/// compare-and-swap: if the file no longer holds it, another refresh already
+/// compare-and-swap: if the store no longer holds it, another refresh already
 /// rotated it away and ours is retired.
 ///
 /// Returns `None` when our tokens were written, or the live credentials when
 /// another process won the race, so the caller can adopt those rather than
 /// cache a token the server has retired.
-///
-/// `config_dir` must be the same account the credentials were loaded from, or a
-/// refresh would be written over a different seat's tokens.
 pub(super) fn persist_refreshed_credentials(
     credentials: &ClaudeOAuthCredentials,
     config_dir: Option<&Path>,
     exchanged_refresh_token: &str,
 ) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
-    let path = credentials_path(config_dir)?;
+    persist_refreshed_for_source(
+        credentials,
+        &CredentialSource::File(credentials_path(config_dir)?),
+        exchanged_refresh_token,
+    )
+}
+
+pub(super) fn persist_refreshed_for_source(
+    credentials: &ClaudeOAuthCredentials,
+    source: &CredentialSource,
+    exchanged_refresh_token: &str,
+) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
+    match source {
+        CredentialSource::Environment => Ok(None),
+        CredentialSource::File(path) => {
+            persist_refreshed_file(credentials, path, exchanged_refresh_token)
+        }
+        CredentialSource::Keyring(account) => {
+            persist_refreshed_keyring(credentials, account, exchanged_refresh_token)
+        }
+    }
+}
+
+fn persist_refreshed_file(
+    credentials: &ClaudeOAuthCredentials,
+    path: &Path,
+    exchanged_refresh_token: &str,
+) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
     if !path.exists() {
-        // Loaded from keyring/env; there is no file to update.
         return Ok(None);
     }
 
     // Lock the resolved target, not the link. A Windows path that links at a
     // WSL file and the WSL path that *is* that file would otherwise take two
     // different locks and still interleave on the one file they share.
-    let lock_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    let lock_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     crate::secure_file::with_file_write_lock(&lock_path, || {
-        // Re-read inside the lock: another process may have rotated the tokens
-        // between our refresh and this write.
-        let content = std::fs::read_to_string(&path)?;
-        // A torn or hand-edited file is not ours to rebuild; leave it alone.
-        let mut root: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        if !disk_still_holds_exchanged_refresh(&root, exchanged_refresh_token) {
-            // Another process refreshed first and rotated the token we
-            // exchanged. Ours is already retired, so writing it would sign
-            // Claude Code out. Hand back what is actually live.
-            //
-            // Deliberately not ordered on `expiresAt`: both processes set it to
-            // `now + server TTL`, so the winner (which finished its HTTP call
-            // first) usually has the *smaller* value. Only the token identity
-            // says who won.
-            return Ok(parse_credentials_json(&content).ok());
+        let content = std::fs::read_to_string(path)?;
+        match merge_refreshed_credentials_json(&content, credentials, exchanged_refresh_token)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+        {
+            Err(live) => Ok(Some(live)),
+            Ok(serialized) => {
+                crate::secure_file::atomic_write_preserving_permissions(
+                    path,
+                    serialized.as_bytes(),
+                )?;
+                Ok(None)
+            }
         }
-
-        apply_refresh_to_credentials_json(&mut root, credentials)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let serialized = serde_json::to_vec_pretty(&root).map_err(std::io::Error::other)?;
-        crate::secure_file::atomic_write_preserving_permissions(&path, &serialized)?;
-        Ok(None)
     })
     .map_err(|e| ProviderError::OAuth(format!("Failed to update Claude credentials: {e}")))
+}
+
+fn persist_refreshed_keyring(
+    credentials: &ClaudeOAuthCredentials,
+    account: &str,
+    exchanged_refresh_token: &str,
+) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, account).map_err(|err| {
+        ProviderError::OAuth(format!(
+            "Failed to open Claude Code credential entry for account {account}: {err}"
+        ))
+    })?;
+    let content = entry.get_password().map_err(|err| {
+        ProviderError::OAuth(format!(
+            "Failed to read Claude Code credential entry for account {account}: {err}"
+        ))
+    })?;
+    match merge_refreshed_credentials_json(&content, credentials, exchanged_refresh_token)? {
+        Err(live) => Ok(Some(live)),
+        Ok(serialized) => {
+            entry.set_password(&serialized).map_err(|err| {
+                ProviderError::OAuth(format!(
+                    "Failed to write Claude Code credential entry for account {account}: {err}"
+                ))
+            })?;
+            Ok(None)
+        }
+    }
+}
+
+/// Merge rotated tokens into a Claude credentials JSON payload.
+///
+/// `Ok(Ok(json))` is the replacement payload. `Ok(Err(live))` means another
+/// refresh already rotated the exchanged token; the caller must adopt `live`.
+fn merge_refreshed_credentials_json(
+    content: &str,
+    credentials: &ClaudeOAuthCredentials,
+    exchanged_refresh_token: &str,
+) -> Result<Result<String, ClaudeOAuthCredentials>, ProviderError> {
+    let mut root: serde_json::Value = serde_json::from_str(content)
+        .map_err(|e| ProviderError::OAuth(format!("Invalid credentials format: {e}")))?;
+    if !disk_still_holds_exchanged_refresh(&root, exchanged_refresh_token) {
+        return Ok(Err(parse_credentials_json(content)?));
+    }
+    apply_refresh_to_credentials_json(&mut root, credentials)?;
+    let serialized = serde_json::to_string_pretty(&root).map_err(|e| {
+        ProviderError::OAuth(format!("Failed to serialize Claude credentials: {e}"))
+    })?;
+    Ok(Ok(serialized))
 }
 
 /// Whether the file still holds the refresh token this process exchanged.
@@ -432,24 +491,39 @@ pub(super) fn persist_refreshed_credentials(
 /// A file with no `refreshToken` (never had one, or hand-edited away) is not
 /// evidence that someone else rotated it, so the write proceeds.
 fn disk_still_holds_exchanged_refresh(root: &serde_json::Value, exchanged: &str) -> bool {
+    refresh_token_in_credentials_json(root).is_none_or(|on_disk| on_disk == exchanged)
+}
+
+fn refresh_token_in_credentials_json(root: &serde_json::Value) -> Option<&str> {
     root.get("claudeAiOauth")
         .and_then(|oauth| oauth.get("refreshToken"))
+        .or_else(|| root.get("refreshToken"))
         .and_then(serde_json::Value::as_str)
-        .is_none_or(|on_disk| on_disk == exchanged)
+}
+
+fn oauth_object_mut(
+    root: &mut serde_json::Value,
+) -> Result<&mut serde_json::Map<String, serde_json::Value>, ProviderError> {
+    if root.get("claudeAiOauth").is_some() {
+        return root
+            .get_mut("claudeAiOauth")
+            .and_then(|value| value.as_object_mut())
+            .ok_or_else(|| {
+                ProviderError::OAuth("credentials file missing claudeAiOauth object".to_string())
+            });
+    }
+    root.as_object_mut()
+        .ok_or_else(|| ProviderError::OAuth("credentials payload is not a JSON object".to_string()))
 }
 
 /// Pure JSON merge used by [`persist_refreshed_credentials`]. Updates only
-/// the token fields inside `claudeAiOauth`.
+/// the token fields inside `claudeAiOauth`, or the root object when the
+/// payload is a bare OAuth blob (Claude Code's keyring format).
 fn apply_refresh_to_credentials_json(
     root: &mut serde_json::Value,
     credentials: &ClaudeOAuthCredentials,
 ) -> Result<(), ProviderError> {
-    let oauth = root
-        .get_mut("claudeAiOauth")
-        .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| {
-            ProviderError::OAuth("credentials file missing claudeAiOauth object".to_string())
-        })?;
+    let oauth = oauth_object_mut(root)?;
 
     oauth.insert(
         "accessToken".to_string(),
@@ -487,7 +561,8 @@ mod tests {
     use super::{
         CredentialSource, ENV_TOKEN_KEY, apply_refresh_to_credentials_json,
         cached_refreshed_if_fresher, credentials_path, disk_still_holds_exchanged_refresh,
-        load_credentials, parse_credentials_json, persist_refreshed_credentials, store_refreshed,
+        load_credentials, merge_refreshed_credentials_json, parse_credentials_json,
+        persist_refreshed_credentials, store_refreshed,
     };
     use crate::providers::claude::oauth::ClaudeOAuthCredentials;
     use std::path::Path;
@@ -641,6 +716,36 @@ mod tests {
         let root = serde_json::json!({ "claudeAiOauth": { "refreshToken": "winner-refresh" } });
 
         assert!(!disk_still_holds_exchanged_refresh(&root, "old-refresh"));
+    }
+
+    #[test]
+    fn merge_writes_rotated_tokens_into_a_bare_keyring_blob() {
+        let original =
+            r#"{"accessToken":"old-access","refreshToken":"old-refresh","subscriptionType":"max"}"#;
+        let written = merge_refreshed_credentials_json(
+            original,
+            &refreshed_credentials("new-access"),
+            "old-refresh",
+        )
+        .expect("merge")
+        .expect("write");
+        let root: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(root["accessToken"], "new-access");
+        assert_eq!(root["refreshToken"], "rotated-refresh");
+        assert_eq!(root["subscriptionType"], "max");
+    }
+
+    #[test]
+    fn merge_adopts_a_keyring_blob_another_process_already_rotated() {
+        let original = r#"{"accessToken":"winner-access","refreshToken":"winner-refresh"}"#;
+        let live = merge_refreshed_credentials_json(
+            original,
+            &refreshed_credentials("loser-access"),
+            "old-refresh",
+        )
+        .expect("merge")
+        .expect_err("adopt");
+        assert_eq!(live.access_token, "winner-access");
     }
 
     /// No timestamp takes part in the decision. Two refreshes of one seat set
