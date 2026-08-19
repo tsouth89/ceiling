@@ -22,10 +22,11 @@ const STATE_LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(2
 /// Every settings and credential store shares one lock so operations spanning
 /// multiple files cannot interleave with a writer for any one of those files.
 ///
-/// Where the lock cannot be enforced at all - a filesystem without `flock`, a
-/// lock file this user can never open - the operation still runs, unserialized,
-/// and a warning names the lock path. Blocking every write would be worse than
-/// the interleaving risk, and the old lock protocol worked on those mounts.
+/// `flock` is preferred because the kernel drops it if the process dies. When
+/// the mount cannot flock (NFS without lockd, some FUSE/SMB), writers serialize
+/// with an exclusive-create sibling and a staleness timeout. A lock file this
+/// user cannot open is repaired when it is stale. Unknown lock errors fail the
+/// write; they are not treated as "no lock needed" (SBS-947).
 pub fn with_state_write_lock<T>(operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     let lock_path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -66,14 +67,30 @@ pub(crate) fn with_file_write_lock<T>(
     with_state_write_lock_at(&parent.join(lock_name), operation)
 }
 
+/// Sibling used when `flock` is unsupported. `create_new` is atomic on NFSv3+,
+/// SMB, and FUSE even when `flock` returns `ENOLCK` / `ENOTSUP`.
+fn exclusive_lock_path(lock_path: &Path) -> PathBuf {
+    let mut name = lock_path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("state-write.lock"))
+        .to_os_string();
+    name.push(".excl");
+    match lock_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
 struct StateWriteLock {
-    /// `None` once the lock was found to be unenforceable; see [`LockAttempt`].
+    /// `None` when this holder used exclusive-create or the test helper.
     #[cfg(windows)]
     handle: Option<windows::Win32::Foundation::HANDLE>,
     /// Open lock file whose exclusive flock is released when this is dropped.
-    /// `None` once the lock was found to be unenforceable; see [`LockAttempt`].
+    /// `None` when this holder used exclusive-create or the test helper.
     #[cfg(not(windows))]
     _file: Option<std::fs::File>,
+    /// Set when this holder created the exclusive-create sibling. Unlinked on drop.
+    exclusive_path: Option<PathBuf>,
 }
 
 /// Outcome of one attempt to take the state-write lock.
@@ -81,12 +98,26 @@ enum LockAttempt {
     Acquired(StateWriteLock),
     /// Another live holder has the lock, so the attempt is worth repeating.
     Contended,
-    /// The lock can never be taken through this path: the filesystem does not
-    /// implement `flock`, or the lock file itself is unopenable (left by a
-    /// privileged run, replaced by a directory, read-only mount). Retrying
-    /// would only stall every write until the timeout and then fail it.
-    Unenforceable(io::Error),
-    /// Something unrelated to locking went wrong; the caller sees the error.
+    /// The mount does not implement `flock`. Exclusive-create is the fallback.
+    FlockUnsupported(io::Error),
+    /// The lock file exists but this process cannot open it.
+    Unopenable(io::Error),
+    /// Something unrelated to locking went wrong, or a lock error we do not
+    /// know how to interpret. The caller sees the error; the write does not
+    /// proceed unserialized.
+    Failed(io::Error),
+}
+
+enum LockFileAge {
+    Missing,
+    Fresh,
+    Stale,
+    Unknown(io::Error),
+}
+
+enum Repair {
+    Done,
+    Wait,
     Failed(io::Error),
 }
 
@@ -103,43 +134,141 @@ impl StateWriteLock {
         loop {
             match attempt(path) {
                 LockAttempt::Acquired(lock) => return Ok(lock),
-                LockAttempt::Unenforceable(error) => {
-                    // Degrade instead of blocking a legitimate write, but say
-                    // so: this write is not serialized against other processes.
-                    tracing::warn!(
-                        lock_path = %path.display(),
-                        %error,
-                        "state write lock cannot be enforced here; writing without cross-process serialization"
-                    );
-                    return Ok(Self::unenforced());
-                }
                 LockAttempt::Failed(error) => return Err(error),
-                LockAttempt::Contended => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "state store is locked",
-                        ));
+                LockAttempt::FlockUnsupported(error) => {
+                    // `attempt` is usually `try_acquire`, which already falls
+                    // back. A custom attempt that reports this still serializes
+                    // rather than writing unserialized.
+                    match Self::try_exclusive_create(path) {
+                        LockAttempt::Acquired(lock) => {
+                            tracing::info!(
+                                lock_path = %path.display(),
+                                %error,
+                                "flock is unsupported here; serializing the write with exclusive-create"
+                            );
+                            return Ok(lock);
+                        }
+                        LockAttempt::Contended => {}
+                        LockAttempt::Failed(fallback) => {
+                            return Err(io::Error::new(
+                                fallback.kind(),
+                                format!(
+                                    "flock is unsupported ({error}) and exclusive-create failed: {fallback}"
+                                ),
+                            ));
+                        }
+                        other => {
+                            return Err(lock_attempt_unexpected(
+                                other,
+                                "exclusive-create fallback",
+                            ));
+                        }
                     }
-                    std::thread::sleep(STATE_LOCK_RETRY);
                 }
+                LockAttempt::Unopenable(error) => match try_repair_unopenable(path, &error) {
+                    Repair::Done => continue,
+                    Repair::Wait => {}
+                    Repair::Failed(repair) => return Err(repair),
+                },
+                LockAttempt::Contended => {}
             }
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "state store is locked",
+                ));
+            }
+            std::thread::sleep(STATE_LOCK_RETRY);
         }
     }
 
-    /// A lock object that owns nothing, for filesystems and lock paths where no
-    /// lock can be taken.
-    fn unenforced() -> Self {
+    /// A lock object that owns nothing, for tests that need an `Acquired` value.
+    #[cfg(test)]
+    fn empty() -> Self {
         Self {
             #[cfg(windows)]
             handle: None,
             #[cfg(not(windows))]
             _file: None,
+            exclusive_path: None,
+        }
+    }
+
+    fn try_acquire(path: &Path) -> LockAttempt {
+        match Self::try_primary(path) {
+            LockAttempt::FlockUnsupported(_) => Self::try_exclusive_create(path),
+            LockAttempt::Unopenable(error) => Self::after_unopenable(path, error),
+            other => other,
+        }
+    }
+
+    fn after_unopenable(path: &Path, error: io::Error) -> LockAttempt {
+        match try_repair_unopenable(path, &error) {
+            Repair::Done => match Self::try_primary(path) {
+                LockAttempt::FlockUnsupported(_) => Self::try_exclusive_create(path),
+                LockAttempt::Unopenable(still) => LockAttempt::Failed(still),
+                other => other,
+            },
+            Repair::Wait => LockAttempt::Contended,
+            Repair::Failed(error) => LockAttempt::Failed(error),
+        }
+    }
+
+    fn try_exclusive_create(path: &Path) -> LockAttempt {
+        let exclusive = exclusive_lock_path(path);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&exclusive) {
+            Ok(file) => {
+                #[cfg(windows)]
+                let _ = file;
+                LockAttempt::Acquired(Self {
+                    #[cfg(windows)]
+                    handle: None,
+                    #[cfg(not(windows))]
+                    _file: Some(file),
+                    exclusive_path: Some(exclusive),
+                })
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                match lock_file_age(&exclusive) {
+                    LockFileAge::Stale | LockFileAge::Missing => {
+                        match std::fs::remove_file(&exclusive) {
+                            Ok(()) => LockAttempt::Contended,
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                                LockAttempt::Contended
+                            }
+                            Err(error) => LockAttempt::Failed(io::Error::new(
+                                error.kind(),
+                                format!(
+                                    "could not remove a stale exclusive-create lock file: {error}"
+                                ),
+                            )),
+                        }
+                    }
+                    LockFileAge::Fresh => LockAttempt::Contended,
+                    LockFileAge::Unknown(error) => LockAttempt::Failed(io::Error::new(
+                        error.kind(),
+                        format!(
+                            "could not tell whether the exclusive-create lock file is stale: {error}"
+                        ),
+                    )),
+                }
+            }
+            Err(error) => LockAttempt::Failed(io::Error::new(
+                error.kind(),
+                format!("could not create the exclusive-create lock file: {error}"),
+            )),
         }
     }
 
     #[cfg(windows)]
-    fn try_acquire(path: &Path) -> LockAttempt {
+    fn try_primary(path: &Path) -> LockAttempt {
         use std::os::windows::ffi::OsStrExt;
         use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
         use windows::Win32::Storage::FileSystem::{
@@ -161,13 +290,14 @@ impl StateWriteLock {
         } {
             Ok(handle) => LockAttempt::Acquired(Self {
                 handle: Some(handle),
+                exclusive_path: None,
             }),
             Err(error) => classify_open_failure(&error),
         }
     }
 
     #[cfg(not(windows))]
-    fn try_acquire(path: &Path) -> LockAttempt {
+    fn try_primary(path: &Path) -> LockAttempt {
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -180,24 +310,98 @@ impl StateWriteLock {
             Err(error) => return classify_open_failure(&error),
         };
         match file.try_lock() {
-            Ok(()) => LockAttempt::Acquired(Self { _file: Some(file) }),
+            Ok(()) => LockAttempt::Acquired(Self {
+                _file: Some(file),
+                exclusive_path: None,
+            }),
             Err(error) => classify_lock_failure(error),
         }
+    }
+}
+
+fn lock_attempt_unexpected(attempt: LockAttempt, context: &str) -> io::Error {
+    let detail = match attempt {
+        LockAttempt::Acquired(_) => "acquired".to_string(),
+        LockAttempt::Contended => "contended".to_string(),
+        LockAttempt::FlockUnsupported(error) => format!("flock-unsupported: {error}"),
+        LockAttempt::Unopenable(error) => format!("unopenable: {error}"),
+        LockAttempt::Failed(error) => format!("failed: {error}"),
+    };
+    io::Error::other(format!(
+        "internal lock state {detail} is not valid during {context}"
+    ))
+}
+
+fn lock_file_age(path: &Path) -> LockFileAge {
+    match std::fs::metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => LockFileAge::Missing,
+        Err(error) => LockFileAge::Unknown(error),
+        Ok(metadata) if metadata.is_dir() => LockFileAge::Unknown(io::Error::new(
+            io::ErrorKind::IsADirectory,
+            format!("state lock path is a directory: {}", path.display()),
+        )),
+        Ok(metadata) => match metadata.modified() {
+            Err(error) => LockFileAge::Unknown(error),
+            Ok(modified) => match std::time::SystemTime::now().duration_since(modified) {
+                Ok(age) if age >= STATE_LOCK_TIMEOUT => LockFileAge::Stale,
+                Ok(_) | Err(_) => LockFileAge::Fresh,
+            },
+        },
+    }
+}
+
+fn try_repair_unopenable(path: &Path, open_error: &io::Error) -> Repair {
+    if path.is_dir() {
+        return Repair::Failed(io::Error::new(
+            io::ErrorKind::IsADirectory,
+            format!("state lock path is a directory: {}", path.display()),
+        ));
+    }
+    if matches!(open_error.kind(), io::ErrorKind::ReadOnlyFilesystem) {
+        return Repair::Failed(io::Error::new(
+            open_error.kind(),
+            format!("could not open the state lock file: {open_error}"),
+        ));
+    }
+    match lock_file_age(path) {
+        LockFileAge::Missing => Repair::Done,
+        LockFileAge::Stale => match std::fs::remove_file(path) {
+            Ok(()) => {
+                tracing::warn!(
+                    lock_path = %path.display(),
+                    %open_error,
+                    "removed a stale unopenable leftover state lock file"
+                );
+                Repair::Done
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Repair::Done,
+            Err(error) => Repair::Failed(io::Error::new(
+                error.kind(),
+                format!(
+                    "could not repair an unopenable state lock file ({}): {error}",
+                    path.display()
+                ),
+            )),
+        },
+        LockFileAge::Fresh => Repair::Wait,
+        LockFileAge::Unknown(error) => Repair::Failed(io::Error::new(
+            error.kind(),
+            format!("could not tell whether the unopenable state lock file is stale: {error}"),
+        )),
     }
 }
 
 /// Classify a Win32 failure to open the lock file.
 ///
 /// A sharing or lock violation is a live holder. `ERROR_ACCESS_DENIED` is not:
-/// the lock file exists but this user can never open it, so treating it as
-/// contention would stall every settings write for the full timeout and then
-/// fail it.
+/// the lock file exists but this user can never open it. That is unopenable,
+/// not "no lock needed".
 #[cfg(windows)]
 fn classify_open_failure(error: &windows::core::Error) -> LockAttempt {
     let io_error = || io::Error::other(format!("could not acquire state lock: {error}"));
     match win32_error_code(error) {
         WIN32_ERROR_SHARING_VIOLATION | WIN32_ERROR_LOCK_VIOLATION => LockAttempt::Contended,
-        WIN32_ERROR_ACCESS_DENIED => LockAttempt::Unenforceable(io_error()),
+        WIN32_ERROR_ACCESS_DENIED => LockAttempt::Unopenable(io_error()),
         _ => LockAttempt::Failed(io_error()),
     }
 }
@@ -205,9 +409,8 @@ fn classify_open_failure(error: &windows::core::Error) -> LockAttempt {
 /// Classify a failure to open the lock file.
 ///
 /// Nothing here means "someone else holds the lock" - `open` does not block on
-/// `flock`. A lock file this process can never open (left behind by a
-/// privileged run, shadowed by a directory, on a read-only mount) would
-/// otherwise stall every settings write for the full timeout and then fail it.
+/// `flock`. A lock file this process can never open is unopenable, not a reason
+/// to write unserialized.
 #[cfg(not(windows))]
 fn classify_open_failure(error: &io::Error) -> LockAttempt {
     let unopenable = matches!(
@@ -221,7 +424,7 @@ fn classify_open_failure(error: &io::Error) -> LockAttempt {
         format!("could not open the state lock file: {error}"),
     );
     if unopenable {
-        LockAttempt::Unenforceable(error)
+        LockAttempt::Unopenable(error)
     } else {
         LockAttempt::Failed(error)
     }
@@ -230,10 +433,9 @@ fn classify_open_failure(error: &io::Error) -> LockAttempt {
 /// Classify a `flock` failure on the opened lock file.
 ///
 /// `WouldBlock` is the only answer that means another live holder has the lock.
-/// A signal is worth another attempt. Every other errno says this filesystem
-/// cannot enforce `flock` at all (NFS without lockd, some FUSE and SMB mounts),
-/// and the old `create_new` protocol used to work there, so the write must not
-/// be blocked by it.
+/// A signal is worth another attempt. `ENOTSUP` / `ENOLCK` mean this filesystem
+/// cannot flock; exclusive-create is the fallback. Every other errno is unknown
+/// and fails the write (SBS-947).
 #[cfg(not(windows))]
 fn classify_lock_failure(error: std::fs::TryLockError) -> LockAttempt {
     match error {
@@ -241,26 +443,49 @@ fn classify_lock_failure(error: std::fs::TryLockError) -> LockAttempt {
         std::fs::TryLockError::Error(error) if error.kind() == io::ErrorKind::Interrupted => {
             LockAttempt::Contended
         }
-        std::fs::TryLockError::Error(error) => LockAttempt::Unenforceable(io::Error::new(
+        std::fs::TryLockError::Error(error) if is_flock_unsupported(&error) => {
+            LockAttempt::FlockUnsupported(io::Error::new(
+                error.kind(),
+                format!("this filesystem cannot lock the state lock file: {error}"),
+            ))
+        }
+        std::fs::TryLockError::Error(error) => LockAttempt::Failed(io::Error::new(
             error.kind(),
-            format!("this filesystem cannot lock the state lock file: {error}"),
+            format!("could not lock the state lock file: {error}"),
         )),
+    }
+}
+
+#[cfg(not(windows))]
+fn is_flock_unsupported(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ENOLCK)
+    }
+    #[cfg(not(unix))]
+    {
+        false
     }
 }
 
 impl Drop for StateWriteLock {
     fn drop(&mut self) {
+        if let Some(path) = self.exclusive_path.take() {
+            let _ = std::fs::remove_file(&path);
+        }
         #[cfg(windows)]
         if let Some(handle) = self.handle.take() {
             unsafe {
                 let _ = windows::Win32::Foundation::CloseHandle(handle);
             }
         }
-        // Non-Windows: closing `_file` releases the flock. Leave the lock file
-        // so a leftover after crash is not treated as a live holder, and so
-        // unlinking cannot create a second lock inode while another holder
-        // still has the original file open. A leftover this process cannot open
-        // no longer blocks writes; see `classify_open_failure`.
+        // Non-Windows flock: closing `_file` releases the lock. Leave the flock
+        // lock file so a leftover after crash is not treated as a live holder,
+        // and so unlinking cannot create a second lock inode while another
+        // holder still has the original file open.
     }
 }
 
@@ -1542,11 +1767,24 @@ mod tests {
         );
     }
 
+    fn make_stale(path: &Path) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(
+            std::time::SystemTime::now() - STATE_LOCK_TIMEOUT - std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+    }
+
     #[cfg(unix)]
     fn take_lock(path: &Path) -> StateWriteLock {
         match StateWriteLock::try_acquire(path) {
             LockAttempt::Acquired(lock) => lock,
-            _ => panic!("the lock must be free"),
+            LockAttempt::Contended => panic!("the lock must be free (contended)"),
+            LockAttempt::FlockUnsupported(error) => {
+                panic!("the lock must be free (flock unsupported: {error})")
+            }
+            LockAttempt::Unopenable(error) => panic!("the lock must be free (unopenable: {error})"),
+            LockAttempt::Failed(error) => panic!("the lock must be free (failed: {error})"),
         }
     }
 
@@ -1623,19 +1861,107 @@ mod tests {
         assert_eq!(result.unwrap(), 42);
     }
 
+    /// Pins SBS-947: an unenforceable report is no longer a success path that
+    /// writes with no cross-process exclusion.
     #[test]
-    fn an_unenforceable_lock_lets_the_write_through_once() {
+    fn an_unenforceable_lock_fails_closed_instead_of_writing_unserialized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        // Make exclusive-create fail too: put a directory on the sibling path.
+        std::fs::create_dir(exclusive_lock_path(&path)).unwrap();
+
         let mut attempts = 0;
         let started = std::time::Instant::now();
-        let lock = StateWriteLock::acquire_with(Path::new("state-write.lock"), |_| {
+        let result = StateWriteLock::acquire_with(&path, |_| {
             attempts += 1;
-            LockAttempt::Unenforceable(io::Error::from(io::ErrorKind::Unsupported))
+            LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported))
+        });
+
+        match result {
+            Ok(_) => panic!("flock-unsupported plus a broken exclusive-create must fail closed"),
+            Err(error) => {
+                let message = error.to_string();
+                assert!(
+                    message.contains("exclusive-create failed")
+                        || message.contains("could not create"),
+                    "the error must name the failed fallback, got {message}"
+                );
+            }
+        }
+        assert_eq!(
+            attempts, 1,
+            "a failed fallback must not be retried as success"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn flock_unsupported_serializes_through_exclusive_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+
+        let lock = StateWriteLock::acquire_with(&path, |_| {
+            LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported))
         })
-        .expect("a lock that cannot be enforced must not block a legitimate write");
+        .expect("flock-unsupported must fall back to exclusive-create, not skip the lock");
+
+        assert!(
+            exclusive_lock_path(&path).exists(),
+            "the exclusive-create sibling must exist while held"
+        );
+
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter_path = path.clone();
+        std::thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let result = StateWriteLock::acquire_with(&waiter_path, |_| {
+                LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported))
+            });
+            let _ = done_tx.send(result.map(|_| ()));
+        });
+        ready_rx.recv().unwrap();
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(80))
+                .is_err(),
+            "exclusive-create must serialize a second flock-unsupported writer"
+        );
 
         drop(lock);
-        assert_eq!(attempts, 1, "an unenforceable lock must not be retried");
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let result = done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("waiter should acquire after the exclusive-create holder drops");
+        result.unwrap();
+        assert!(
+            !exclusive_lock_path(&path).exists(),
+            "dropping the exclusive-create holder must unlink the sibling"
+        );
+    }
+
+    #[test]
+    fn exclusive_create_recovers_a_stale_sibling_after_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        let exclusive = exclusive_lock_path(&path);
+        std::fs::write(&exclusive, b"leftover after SIGKILL").unwrap();
+        make_stale(&exclusive);
+
+        let started = std::time::Instant::now();
+        let lock = StateWriteLock::acquire_with(&path, |_| {
+            LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported))
+        })
+        .expect("a stale exclusive-create leftover must be taken, not waited out");
+        drop(lock);
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "a stale exclusive-create leftover must not wait out the acquire timeout"
+        );
+        assert!(
+            !exclusive.exists(),
+            "the recovered holder must unlink the sibling on drop"
+        );
     }
 
     #[test]
@@ -1646,7 +1972,7 @@ mod tests {
             if attempts < 3 {
                 LockAttempt::Contended
             } else {
-                LockAttempt::Acquired(StateWriteLock::unenforced())
+                LockAttempt::Acquired(StateWriteLock::empty())
             }
         })
         .expect("contention must be retried until the holder releases");
@@ -1663,7 +1989,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_filesystem_without_flock_support_degrades_instead_of_failing() {
+    fn a_filesystem_without_flock_support_is_classified_for_exclusive_create() {
         assert!(
             matches!(
                 classify_lock_failure(std::fs::TryLockError::WouldBlock),
@@ -1681,49 +2007,78 @@ mod tests {
             "a signal must be retried, not treated as a broken filesystem"
         );
 
-        // ENOTSUP / ENOLCK from NFS, SMB or FUSE mounts.
         match classify_lock_failure(std::fs::TryLockError::Error(io::Error::from(
             io::ErrorKind::Unsupported,
         ))) {
-            LockAttempt::Unenforceable(error) => assert!(
+            LockAttempt::FlockUnsupported(error) => assert!(
                 error.to_string().contains("cannot lock"),
-                "the degraded path must name the reason, got {error}"
+                "the flock-unsupported path must name the reason, got {error}"
             ),
-            _ => panic!("an flock-less filesystem must degrade, not fail the write"),
+            _ => panic!("ENOTSUP must be flock-unsupported, not a silent degrade or a hard fail"),
+        }
+
+        match classify_lock_failure(std::fs::TryLockError::Error(io::Error::from_raw_os_error(
+            libc::ENOLCK,
+        ))) {
+            LockAttempt::FlockUnsupported(_) => {}
+            _ => panic!("ENOLCK must be flock-unsupported"),
+        }
+    }
+
+    /// Unknown flock errnos are not "the filesystem cannot lock".
+    #[cfg(unix)]
+    #[test]
+    fn an_unknown_flock_error_fails_the_write() {
+        match classify_lock_failure(std::fs::TryLockError::Error(io::Error::from(
+            io::ErrorKind::InvalidInput,
+        ))) {
+            LockAttempt::Failed(error) => assert!(
+                error.to_string().contains("could not lock"),
+                "unknown must stay unknown, got {error}"
+            ),
+            LockAttempt::FlockUnsupported(_) => {
+                panic!("an unknown errno must not be collapsed into flock-unsupported")
+            }
+            LockAttempt::Contended => panic!("an unknown errno is not contention"),
+            LockAttempt::Unopenable(_) => panic!("an unknown flock errno is not an open failure"),
+            LockAttempt::Acquired(_) => panic!("an unknown errno must not acquire"),
         }
     }
 
     #[test]
-    fn a_lock_path_that_cannot_be_opened_does_not_block_the_write() {
+    fn a_lock_path_that_is_a_directory_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state-write.lock");
-        // A directory in the lock file's place can never be opened as a lock
-        // file, the same dead end as a leftover owned by another user.
         std::fs::create_dir(&path).unwrap();
 
         let started = std::time::Instant::now();
         let mut ran = false;
-        with_state_write_lock_at(&path, || {
+        let error = with_state_write_lock_at(&path, || {
             ran = true;
             Ok(())
         })
-        .expect("an unopenable lock path must not fail a legitimate write");
+        .expect_err("a directory lock path must fail the write, not skip the lock");
 
-        assert!(ran);
+        assert!(!ran, "the write must not run without a lock");
+        assert!(
+            error.to_string().contains("directory"),
+            "the error must name the directory, got {error}"
+        );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(1),
-            "an unopenable lock path must not wait out the acquire timeout"
+            "a directory lock path must not wait out the acquire timeout"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn an_unopenable_leftover_lock_file_does_not_block_the_write() {
+    fn a_stale_unopenable_leftover_lock_file_is_repaired() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state-write.lock");
         std::fs::write(&path, b"leftover from a privileged run").unwrap();
+        make_stale(&path);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::OpenOptions::new()
             .read(true)
@@ -1741,12 +2096,20 @@ mod tests {
             ran = true;
             Ok(())
         })
-        .expect("a leftover lock file this user cannot open must not fail the write");
+        .expect("a stale leftover this user cannot open must be repaired, not skipped");
 
         assert!(ran);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(1),
-            "an unopenable leftover must not wait out the acquire timeout"
+            "a stale leftover must be repaired without waiting out the acquire timeout"
+        );
+        assert!(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .is_ok(),
+            "repair must leave an openable lock file for the next writer"
         );
     }
 }
