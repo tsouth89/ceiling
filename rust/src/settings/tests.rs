@@ -1639,3 +1639,122 @@ fn unparseable_settings_are_moved_aside_instead_of_overwritten() {
         original
     );
 }
+
+/// SBS-964: a privacy-conscious reader who leaves incident badges off still
+/// sees models.dev and GitHub traffic. Claiming the badge is the only
+/// non-provider outbound request is false; the copy has to name those hosts.
+#[test]
+fn incident_badge_copy_does_not_claim_it_is_the_only_non_provider_outbound() {
+    const SURFACES: &[(&str, &str)] = &[
+        ("rust/src/settings.rs", include_str!("../settings.rs")),
+        ("CHANGELOG.md", include_str!("../../../CHANGELOG.md")),
+        (
+            "docs/DATA_SOURCES.md",
+            include_str!("../../../docs/DATA_SOURCES.md"),
+        ),
+        (
+            "apps/desktop-tauri/src-tauri/src/provider_incidents.rs",
+            include_str!("../../../apps/desktop-tauri/src-tauri/src/provider_incidents.rs"),
+        ),
+        (
+            "site/privacy/index.html",
+            include_str!("../../../site/privacy/index.html"),
+        ),
+        (
+            "rust/src/locale/en-US.ftl",
+            include_str!("../locale/en-US.ftl"),
+        ),
+        (
+            "rust/src/locale/zh-CN.ftl",
+            include_str!("../locale/zh-CN.ftl"),
+        ),
+        ("site/index.html", include_str!("../../../site/index.html")),
+        (
+            "docs/SETTINGS_JSON.md",
+            include_str!("../../../docs/SETTINGS_JSON.md"),
+        ),
+    ];
+
+    const EXCLUSIVE: &[&str] = &[
+        "the only outbound request Ceiling makes that is not to a provider",
+        "the only outbound request Ceiling makes that you have not already signed in to",
+        "The only non-provider destination is",
+    ];
+
+    for (name, text) in SURFACES {
+        for phrase in EXCLUSIVE {
+            assert!(
+                !text.contains(phrase),
+                "{name} still claims a unique non-provider outbound that the code does not have"
+            );
+        }
+    }
+
+    let settings = include_str!("../settings.rs");
+    let field = settings
+        .find("pub provider_incident_badges_enabled")
+        .expect("incident badge field");
+    let field_docs = &settings[field.saturating_sub(500)..field];
+    assert!(
+        field_docs.contains("models.dev"),
+        "settings field docs must name models.dev"
+    );
+    assert!(
+        field_docs.contains("GitHub"),
+        "settings field docs must name the GitHub update check"
+    );
+
+    let changelog = include_str!("../../../CHANGELOG.md");
+    let badge_start = changelog
+        .find("**Providers having a public outage get a badge")
+        .expect("1.5.33 incident badge bullet");
+    let after = &changelog[badge_start..];
+    let badge_end = after.find("\n- **").expect("next changelog bullet");
+    let badge_bullet = &after[..badge_end];
+    assert!(
+        badge_bullet.contains("tied to your provider list"),
+        "1.5.33 badge notes must drop the exclusive outbound claim"
+    );
+    assert!(
+        badge_bullet.contains("models.dev"),
+        "1.5.33 badge notes must name models.dev"
+    );
+    assert!(
+        badge_bullet.contains("GitHub"),
+        "1.5.33 badge notes must name the GitHub update check"
+    );
+
+    let incidents = include_str!("../../../apps/desktop-tauri/src-tauri/src/provider_incidents.rs");
+    let module_docs = &incidents[..incidents.find("use std::").expect("module docs")];
+    assert!(
+        module_docs.contains("models.dev"),
+        "incident badge module docs must name models.dev"
+    );
+    assert!(
+        module_docs.contains("GitHub"),
+        "incident badge module docs must name the GitHub update check"
+    );
+
+    let policy = include_str!("../../../docs/DATA_SOURCES.md")
+        .split("## Network policy")
+        .nth(1)
+        .expect("network policy");
+    assert!(
+        policy.contains("models.dev"),
+        "DATA_SOURCES network policy must name models.dev"
+    );
+    assert!(
+        policy.contains("GitHub") || policy.contains("api.github.com"),
+        "DATA_SOURCES network policy must name the GitHub update check"
+    );
+
+    let privacy = include_str!("../../../site/privacy/index.html");
+    assert!(
+        privacy.contains("models.dev"),
+        "privacy page must name models.dev"
+    );
+    assert!(
+        privacy.contains("GitHub"),
+        "privacy page must name the GitHub update check"
+    );
+}

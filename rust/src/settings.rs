@@ -210,7 +210,9 @@ pub struct Settings {
 
     /// Whether to poll public provider status pages and badge providers that
     /// are having an incident. Off by default: it is the only outbound request
-    /// Ceiling makes that is not to a provider the user already signed in to.
+    /// tied to the user's provider list. Ceiling already contacts models.dev
+    /// for public model prices and GitHub for the update check; those are not
+    /// gated by this switch.
     #[serde(default)]
     pub provider_incident_badges_enabled: bool,
 
