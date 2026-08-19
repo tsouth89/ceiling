@@ -52,9 +52,21 @@ const windowMocks = vi.hoisted(() => ({
   PhysicalSize: vi.fn((width: number, height: number) => ({ width, height })),
 }));
 
+const starPromptMocks = vi.hoisted(() => ({
+  reason: null as "firstValue" | "afterUpdate" | null,
+}));
+
 vi.mock("../lib/tauri", () => tauriMocks);
 vi.mock("@tauri-apps/api/event", () => eventMocks);
 vi.mock("@tauri-apps/api/window", () => windowMocks);
+vi.mock("../hooks/useStarPrompt", () => ({
+  useStarPrompt: () => ({
+    reason: starPromptMocks.reason,
+    version: "1.5.34",
+    onStar: () => {},
+    onDismiss: () => {},
+  }),
+}));
 
 import TrayPanel from "./TrayPanel";
 import { LocaleProvider } from "../i18n/LocaleProvider";
@@ -199,6 +211,7 @@ describe("TrayPanel provider grid", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
+    starPromptMocks.reason = null;
     tauriMocks.flyoutStoredSize.mockResolvedValue(null);
     // The star prompt (SOU-311) reads the version on mount. Its settle
     // delay and the cleared localStorage keep it off screen here, but the
@@ -258,6 +271,11 @@ describe("TrayPanel provider grid", () => {
         PanelShowFewerProviders: "Show fewer providers",
         PanelUsedSuffix: "used",
         PanelZoom: "Zoom",
+        StarPromptAriaLabel: "Star Ceiling on GitHub",
+        StarPromptTitleRunning: "Ceiling is up and running",
+        StarPromptBody: "If Ceiling is saving you time, a GitHub star helps others find it.",
+        StarPromptStar: "Star on GitHub",
+        StarPromptLater: "Later",
       }),
     );
     eventMocks.listen.mockImplementation(
@@ -271,6 +289,15 @@ describe("TrayPanel provider grid", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps a counted star ask visible when the tray is empty", async () => {
+    starPromptMocks.reason = "firstValue";
+    renderTrayPanel([]);
+
+    expect(
+      await screen.findByRole("dialog", { name: "Star Ceiling on GitHub" }),
+    ).toBeInTheDocument();
   });
 
   it("reveals regardless of the shared surface-mode snapshot (TrayPanel now runs in its own dedicated window)", async () => {

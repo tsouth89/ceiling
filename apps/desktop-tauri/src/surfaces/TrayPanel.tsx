@@ -436,8 +436,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const handleGestureEnd = useCallback(() => {
     void endFlyoutGesture().catch(() => {});
   }, []);
-  // Asks for a GitHub star, at most twice ever (SOU-311). Gated on a real
-  // reading, so the empty state below never sees it.
+  // Asks for a GitHub star, at most twice ever (SOU-311). Once counted it
+  // must stay visible even if every provider is then disabled.
   const starPrompt = useStarPrompt(sorted);
   const starPromptCard =
     starPrompt.reason !== null ? (
@@ -517,6 +517,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
             onSettings={openSettings}
           />
         </MenuSurface>
+        {starPromptCard}
         <TrayResizeHandles />
       </div>
     );
