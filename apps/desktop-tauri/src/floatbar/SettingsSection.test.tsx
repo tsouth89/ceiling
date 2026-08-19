@@ -158,6 +158,29 @@ describe("FloatBar settings", () => {
     expect(set).toHaveBeenCalledWith({ floatBarProviderIds: [] });
   });
 
+  it("does not uncheck the last remaining strip provider", () => {
+    const set = vi.fn();
+    render(
+      <FloatBarSettingsSection
+        settings={{
+          ...settings,
+          floatBarProviderIds: ["grok"],
+        }}
+        saving={false}
+        set={set}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Show Grok on taskbar strip",
+    });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).toBeDisabled();
+    fireEvent.click(checkbox);
+    expect(set).not.toHaveBeenCalled();
+    expect(screen.getByText("StripKeepAtLeastOne")).toBeInTheDocument();
+  });
+
   it("persists floating-bar provider selection mode", () => {
     const set = vi.fn();
     render(

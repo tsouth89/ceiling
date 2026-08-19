@@ -719,6 +719,7 @@ TaskbarWidgetNoProviders = No enabled providers to show.
 StripProvidersTitle = Providers on the strip
 StripProvidersHelp = Choose up to { "{}" } enabled providers and their order for the taskbar strip and floating bar. Automatic uses your Providers tab order (Codex, Claude, Cursor, Grok, …).
 StripUseAutomaticOrder = Use automatic order
+StripKeepAtLeastOne = Keep at least one provider on the strip, or restore automatic order.
 StripEnableProvidersFirst = Enable providers on the Providers tab first.
 StripShowProvider = Show { "{}" } on taskbar strip
 StripMoveUp = Move { "{}" } up

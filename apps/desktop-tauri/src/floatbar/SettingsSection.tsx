@@ -227,6 +227,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
       commitStripIds([...base, id]);
       return;
     }
+    if (base.length <= 1) return;
     commitStripIds(base.filter((pid) => pid !== id));
   };
 
@@ -339,10 +340,12 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           {enabledOrdered.length === 0 ? (
             <p className="settings-section__hint">{t("StripEnableProvidersFirst")}</p>
           ) : (
+            <>
             <ul className="taskbar-provider-picker__list">
               {enabledOrdered.map((id) => {
                 const checked = selectedStripIds.includes(id);
                 const rank = selectedStripIds.indexOf(id);
+                const lastChecked = checked && selectedStripIds.length === 1;
                 const atCap =
                   !checked && selectedStripIds.length >= MAX_STRIP_PROVIDERS;
                 const multi = multiAccountByProvider.get(id);
@@ -357,6 +360,7 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                           disabled={
                             saving ||
                             !settings.taskbarWidgetEnabled ||
+                            lastChecked ||
                             (atCap && !checked)
                           }
                           aria-label={formatLocale(t("StripShowProvider"), providerLabel(id))}
@@ -431,6 +435,10 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
                 );
               })}
             </ul>
+            {selectedStripIds.length === 1 && (
+              <p className="settings-section__hint">{t("StripKeepAtLeastOne")}</p>
+            )}
+            </>
           )}
           {multiAccountByProvider.size > 0 && (
             <p className="settings-section__hint">
