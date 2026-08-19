@@ -121,13 +121,20 @@ where
             return Ok(cached.value);
         }
 
-        let value = tauri::async_runtime::spawn_blocking(build)
-            .await
-            .map_err(|err| {
-                tracing::warn!("{} scan worker failed: {}", self.file_name, err);
-                error_message.to_string()
-            })?;
-        self.store(key, value.clone());
+        let (started, value) = tauri::async_runtime::spawn_blocking(move || {
+            // Capture before the build, not after: a catalog refresh that
+            // lands during the scan is its own state (SBS-946). Stamping the
+            // new fingerprint on a value priced under the old one would serve
+            // those dollars as current for the full TTL.
+            let started = codexbar::usage_index::pricing_fingerprint();
+            (started, build())
+        })
+        .await
+        .map_err(|err| {
+            tracing::warn!("{} scan worker failed: {}", self.file_name, err);
+            error_message.to_string()
+        })?;
+        self.store(key, value.clone(), started);
         Ok(value)
     }
 
@@ -164,20 +171,26 @@ where
             .is_ok_and(|guard| !guard.entries.is_empty())
     }
 
-    fn store(&'static self, key: String, value: T) {
+    fn store(&'static self, key: String, value: T, started: u64) {
         let Ok(mut guard) = self.entries().lock() else {
             return;
         };
-        guard.version = self.version;
-        guard.fingerprint = codexbar::usage_index::pricing_fingerprint();
-        guard.entries.insert(
-            key.clone(),
-            CachedScan {
-                refreshed_at_ms: now_ms(),
-                value,
-            },
-        );
-        prune(&mut guard, &key);
+        let current = codexbar::usage_index::pricing_fingerprint();
+        if !apply_store(
+            &mut guard,
+            self.version,
+            started,
+            current,
+            key,
+            value,
+            now_ms(),
+        ) {
+            tracing::info!(
+                "model prices changed mid-scan; dropping cached {} write",
+                self.file_name
+            );
+            return;
+        }
         if let Some(path) = self.path() {
             write_cache(&path, &*guard);
         }
@@ -197,9 +210,14 @@ where
         drop(active);
 
         tauri::async_runtime::spawn(async move {
-            match tauri::async_runtime::spawn_blocking(build).await {
-                Ok(value) => {
-                    self.store(key.clone(), value);
+            match tauri::async_runtime::spawn_blocking(move || {
+                let started = codexbar::usage_index::pricing_fingerprint();
+                (started, build())
+            })
+            .await
+            {
+                Ok((started, value)) => {
+                    self.store(key.clone(), value, started);
                     // A card that is already open asked before this ran and got
                     // the stale answer. Without this it would keep showing it
                     // until it was remounted.
@@ -269,6 +287,39 @@ fn prune<T>(cache: &mut PersistedScanCache<T>, keep: &str) {
     for (key, _) in by_age.into_iter().take(cache.entries.len() - MAX_ENTRIES) {
         cache.entries.remove(&key);
     }
+}
+
+/// Persist a built scan only when the prices it started under are still
+/// the prices in force.
+///
+/// A mid-build catalog refresh is its own state: the value was computed
+/// under `started`. Writing it under `current` would label old dollars as
+/// current for every key already in the file, not just this one. The
+/// write is dropped rather than relabelled. Zero is the "never captured"
+/// default, not a hash of today's rates.
+fn apply_store<T>(
+    cache: &mut PersistedScanCache<T>,
+    version: u8,
+    started: u64,
+    current: u64,
+    key: String,
+    value: T,
+    now_ms: i64,
+) -> bool {
+    if started == 0 || started != current {
+        return false;
+    }
+    cache.version = version;
+    cache.fingerprint = started;
+    cache.entries.insert(
+        key.clone(),
+        CachedScan {
+            refreshed_at_ms: now_ms,
+            value,
+        },
+    );
+    prune(cache, &key);
+    true
 }
 
 fn write_cache<T: Serialize>(path: &std::path::Path, cache: &PersistedScanCache<T>) {
@@ -359,6 +410,63 @@ mod tests {
         let now = 1_000_000_000;
 
         assert!(!is_stale(now + 60_000, now, ttl));
+    }
+
+    /// A value priced under F1 must not relabel the whole cache as F2.
+    ///
+    /// `store` used to write `pricing_fingerprint()` at persist time, so a
+    /// build that straddled a catalog refresh stamped old dollars as current
+    /// for every key already in the file (SBS-946).
+    #[test]
+    fn a_mid_build_price_change_is_not_stamped_as_current() {
+        let mut cache = cache_with(&[("today", 1)]);
+        cache.version = 1;
+        cache.fingerprint = 7;
+
+        let stored = apply_store(&mut cache, 1, 7, 8, "tomorrow".to_string(), Row(99), 2);
+
+        assert!(!stored, "a mid-build price change must drop the write");
+        assert_eq!(
+            cache.fingerprint, 7,
+            "existing keys must keep the old stamp"
+        );
+        assert!(cache.entries.contains_key("today"));
+        assert!(
+            !cache.entries.contains_key("tomorrow"),
+            "F1-priced value must not land under an F2 stamp"
+        );
+    }
+
+    #[test]
+    fn a_build_that_finishes_under_the_same_prices_is_stored() {
+        let mut cache = cache_with(&[("today", 1)]);
+        cache.version = 1;
+        cache.fingerprint = 7;
+
+        let stored = apply_store(&mut cache, 1, 7, 7, "tomorrow".to_string(), Row(99), 2);
+
+        assert!(stored);
+        assert_eq!(cache.fingerprint, 7);
+        assert_eq!(
+            cache.entries.get("tomorrow").map(|row| row.value.clone()),
+            Some(Row(99))
+        );
+    }
+
+    #[test]
+    fn an_unknown_price_stamp_is_not_treated_as_current() {
+        let mut cache = PersistedScanCache::<Row>::default();
+        assert!(!apply_store(
+            &mut cache,
+            1,
+            0,
+            0,
+            "today".to_string(),
+            Row(1),
+            1
+        ));
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.fingerprint, 0);
     }
 
     /// A file written under other prices is not read back.

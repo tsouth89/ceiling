@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **A price change that lands mid-scan is no longer stamped as current.** Charts can take tens of seconds over a large corpus. If models.dev refreshes while that walk is still running, the usage index and the Estimated API / heatmap cache used to write the old-price dollars under the new fingerprint, then serve them as current until a file changed or the 14-day TTL expired. Both writes now capture the fingerprint when the scan starts and drop the persist if prices have moved. Unknown (never captured) is its own state, not "current".
+
 ## [Ceiling] 1.5.34 - 2026-08-18
 
 Charts opens in about two seconds instead of about thirty. Each local transcript is now parsed once into a small index beside your settings rather than re-read from the top by every card, every time, and the cards keep their last result so a restart is not a cold start. The numbers are unchanged: an indexed scan is checked against a full re-parse, and the index is discarded outright whenever model prices move.

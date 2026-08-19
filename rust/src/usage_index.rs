@@ -392,6 +392,11 @@ impl<R: IndexedRecord> UsageIndex<R> {
         }
     }
 
+    /// Prices this index's stored dollars were computed under.
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
+    }
+
     /// Records already held for `path`, given what the file looks like now and
     /// how far back the scan needs to see.
     pub fn lookup(&self, path: &Path, facts: &FileFacts, needs_from_ms: i64) -> Lookup<'_, R> {
@@ -595,32 +600,30 @@ impl<R: IndexedRecord> IndexStore<R> {
 
     /// Apply one scan's newly parsed files and write the index back.
     ///
-    /// `touched` are the paths the scan read from the index unchanged; they are
-    /// marked so an idle-but-live transcript does not age out.
-    pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf]) {
+    /// `started` is the pricing fingerprint the scan captured when it began
+    /// reading. `touched` are the paths the scan read from the index unchanged;
+    /// they are marked so an idle-but-live transcript does not age out.
+    ///
+    /// A catalog refresh that lands mid-scan is its own state (SBS-946). The
+    /// records were priced under `started`; stamping them with the new
+    /// fingerprint would serve old dollars as current until the TTL or a file
+    /// rewrite. The write is dropped rather than relabelled.
+    pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf], started: u64) {
         if updates.is_empty() && touched.is_empty() {
             return;
         }
+        let current = pricing_fingerprint();
         let mut guard = self
             .state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // A scan that was all hits still proves those transcripts are in use.
-        // That only has to reach disk before the TTL sweep would drop them:
-        // rewriting the whole index on every scan would cost more than it saves.
-        let stale_touch = touched
-            .iter()
-            .filter_map(|path| guard.entries.get(path))
-            .any(|entry| now_ms().saturating_sub(entry.used_at_ms) > ENTRY_TTL_MS / 2);
-        for path in touched {
-            guard.touch(path);
-        }
-        let changed = !updates.is_empty();
-        for entry in updates {
-            guard.insert(entry);
-        }
-        if !changed && !stale_touch {
-            return;
+        match apply_scan(&mut guard, started, current, updates, touched) {
+            ScanWrite::Drop => {
+                tracing::info!("model prices changed mid-scan; dropping the usage index write");
+                return;
+            }
+            ScanWrite::Skip => return,
+            ScanWrite::Persist => {}
         }
         if let Some(path) = self.path() {
             let bytes = guard.encode();
@@ -675,6 +678,65 @@ pub fn pricing_fingerprint() -> u64 {
         .map(|bytes| fnv1a64(&bytes))
         .unwrap_or(0);
     fnv1a64(env!("CARGO_PKG_VERSION").as_bytes()) ^ catalog.rotate_left(17)
+}
+
+/// Whether a scan started under `started` may write into an index stamped
+/// `index` while the live catalog is `current`.
+///
+/// Three states, not two. Matching prices may persist. A catalog that
+/// moved mid-scan, or an index another thread already reset, is not
+/// "current" and must not be stamped onto the corpus. A fingerprint we
+/// never captured (the zero default) is unknown, not a hash of today's
+/// rates.
+fn scan_may_commit(started: u64, current: u64, index: u64) -> bool {
+    started != 0 && started == current && started == index
+}
+
+/// What `apply_scan` decided to do with a finished scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanWrite {
+    /// Prices moved or were unknown; the index is unchanged.
+    Drop,
+    /// Applied in memory, but nothing needs to reach disk yet.
+    Skip,
+    /// Applied, and the caller should persist.
+    Persist,
+}
+
+/// Fold one scan into `index` when the prices it started under are still
+/// the prices in force.
+///
+/// [`ScanWrite::Drop`] leaves the index unchanged. The other two apply
+/// updates and touches; only [`ScanWrite::Persist`] should be written.
+fn apply_scan<R: IndexedRecord>(
+    index: &mut UsageIndex<R>,
+    started: u64,
+    current: u64,
+    updates: Vec<NewEntry<R>>,
+    touched: &[PathBuf],
+) -> ScanWrite {
+    if !scan_may_commit(started, current, index.fingerprint) {
+        return ScanWrite::Drop;
+    }
+    // A scan that was all hits still proves those transcripts are in use.
+    // That only has to reach disk before the TTL sweep would drop them:
+    // rewriting the whole index on every scan would cost more than it saves.
+    let stale_touch = touched
+        .iter()
+        .filter_map(|path| index.entries.get(path))
+        .any(|entry| now_ms().saturating_sub(entry.used_at_ms) > ENTRY_TTL_MS / 2);
+    for path in touched {
+        index.touch(path);
+    }
+    let changed = !updates.is_empty();
+    for entry in updates {
+        index.insert(entry);
+    }
+    if changed || stale_touch {
+        ScanWrite::Persist
+    } else {
+        ScanWrite::Skip
+    }
 }
 
 pub(crate) static CLAUDE_INDEX: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin");
@@ -956,6 +1018,119 @@ mod tests {
         assert_eq!(plausible_capacity(u32::MAX, 64), 5);
         assert_eq!(plausible_capacity(3, 4096), 3);
         assert_eq!(plausible_capacity(0, 0), 0);
+    }
+
+    /// Old-price dollars must not be persisted under a new fingerprint.
+    ///
+    /// A long scan captures F1, a catalog refresh lands F2, and a concurrent
+    /// read already reset the index to empty-F2. Inserting the F1 records and
+    /// encoding would stamp them as current until the TTL or a file rewrite
+    /// (SBS-946).
+    #[test]
+    fn a_mid_scan_price_change_is_not_stamped_as_current() {
+        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(8);
+        let applied = apply_scan(
+            &mut index,
+            7,
+            8,
+            vec![entry(
+                "/logs/a.jsonl",
+                facts(100, 5),
+                vec![claude_record("claude-opus-4-8", 1.5)],
+            )],
+            &[],
+        );
+
+        assert_eq!(
+            applied,
+            ScanWrite::Drop,
+            "a mid-scan price change must drop the write"
+        );
+        assert_eq!(index.fingerprint(), 8);
+        assert!(
+            matches!(
+                index.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME),
+                Lookup::Miss
+            ),
+            "F1-priced records must not land in an F2-labelled index"
+        );
+        let decoded = UsageIndex::<ClaudeUsageRecord>::decode(&index.encode(), 8).expect("decode");
+        assert!(matches!(
+            decoded.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME),
+            Lookup::Miss
+        ));
+    }
+
+    /// A scan that finishes under the same prices still writes.
+    #[test]
+    fn a_scan_that_finishes_under_the_same_prices_is_committed() {
+        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(7);
+        let applied = apply_scan(
+            &mut index,
+            7,
+            7,
+            vec![entry(
+                "/logs/a.jsonl",
+                facts(100, 5),
+                vec![claude_record("claude-opus-4-8", 1.5)],
+            )],
+            &[],
+        );
+
+        assert_eq!(applied, ScanWrite::Persist);
+        assert_eq!(index.fingerprint(), 7);
+        match index.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME) {
+            Lookup::Hit(records) => assert_eq!(records[0].cost, 1.5),
+            _ => panic!("matching prices must persist the records"),
+        }
+    }
+
+    /// Prices that moved while the index is still on the old stamp must not
+    /// relabel that stamp. The existing F1 entries stay F1; the new F1-priced
+    /// file is not folded in as if F2 were current.
+    #[test]
+    fn a_price_change_does_not_relabel_an_index_still_on_the_old_stamp() {
+        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(7);
+        index.insert(entry(
+            "/logs/old.jsonl",
+            facts(10, 1),
+            vec![claude_record("claude-opus-4-8", 1.0)],
+        ));
+
+        let applied = apply_scan(
+            &mut index,
+            7,
+            8,
+            vec![entry(
+                "/logs/new.jsonl",
+                facts(100, 5),
+                vec![claude_record("claude-haiku-4-5", 0.25)],
+            )],
+            &[],
+        );
+
+        assert_eq!(applied, ScanWrite::Drop);
+        assert_eq!(index.fingerprint(), 7);
+        assert!(matches!(
+            index.lookup(Path::new("/logs/old.jsonl"), &facts(10, 1), ANY_TIME),
+            Lookup::Hit(_)
+        ));
+        assert!(matches!(
+            index.lookup(Path::new("/logs/new.jsonl"), &facts(100, 5), ANY_TIME),
+            Lookup::Miss
+        ));
+    }
+
+    #[test]
+    fn an_unknown_price_stamp_is_not_treated_as_current() {
+        // Zero is the serde / "never captured" default, not a hash of today's
+        // rates. Collapsing it into "current" is how a write with no catalog
+        // would label the whole corpus.
+        assert!(!scan_may_commit(0, 0, 0));
+        assert!(!scan_may_commit(7, 8, 8));
+        assert!(!scan_may_commit(7, 7, 8));
+        assert!(!scan_may_commit(7, 8, 7));
+        assert!(scan_may_commit(7, 7, 7));
     }
 
     #[test]

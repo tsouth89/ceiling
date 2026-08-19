@@ -1159,6 +1159,7 @@ where
     }
 
     let index = crate::usage_index::CODEX_INDEX.read();
+    let started = index.fingerprint();
     let mut updates: Vec<NewEntry<CodexUsageRecord>> = Vec::new();
     let mut touched = Vec::new();
     for_each_parsed_file(
@@ -1217,7 +1218,7 @@ where
         },
     );
     drop(index);
-    crate::usage_index::CODEX_INDEX.commit(updates, &touched);
+    crate::usage_index::CODEX_INDEX.commit(updates, &touched, started);
 }
 
 /// Parse already-deduped rollout paths and fold them into one summary.
@@ -1462,6 +1463,7 @@ fn for_each_claude_file<F>(
     };
 
     let index = crate::usage_index::CLAUDE_INDEX.read();
+    let started = index.fingerprint();
     let mut updates: Vec<NewEntry<ClaudeUsageRecord>> = Vec::new();
     let mut touched = Vec::new();
     for_each_parsed_file(
@@ -1532,7 +1534,7 @@ fn for_each_claude_file<F>(
         },
     );
     drop(index);
-    crate::usage_index::CLAUDE_INDEX.commit(updates, &touched);
+    crate::usage_index::CLAUDE_INDEX.commit(updates, &touched, started);
 }
 
 /// Stream every usage record in one transcript file, starting at byte
