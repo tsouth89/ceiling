@@ -298,12 +298,19 @@ fn finish_download(
 
 /// Pair the installer with the UpdateInfo the download started from so
 /// apply-time SHA256 is the digest of the file on disk, not of a later check.
+///
+/// Apply Ready/Error only while this download still owns the slot. A dismiss
+/// (or any later writer) that ran while spawn_download_task was finishing
+/// must not be replaced by Ready plus the start digest.
 fn record_download_finish(
     guard: &mut AppState,
     update_state: UpdateState,
     installer_path: Option<PathBuf>,
     staged_info: Option<UpdateInfo>,
 ) {
+    if !matches!(guard.update_state, UpdateState::Downloading(_)) {
+        return;
+    }
     guard.update_state = update_state;
     guard.installer_path = installer_path;
     if let Some(info) = staged_info {
@@ -610,6 +617,27 @@ mod tests {
         let (staged_path, digest) = staged_apply_target(&state).expect("staged");
         assert_eq!(staged_path, path);
         assert_eq!(digest, "a".repeat(64));
+    }
+
+    /// A dismiss that wins the slot while the download task is still finishing
+    /// must stay Idle; Ready plus the start digest would make it applyable.
+    #[test]
+    fn finish_does_not_replace_a_later_idle_slot() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Idle;
+        state.update_info = None;
+        state.installer_path = None;
+
+        record_download_finish(
+            &mut state,
+            UpdateState::Ready,
+            Some(PathBuf::from("Ceiling-1.5.35-Setup.exe")),
+            Some(sample_info("v1.5.35")),
+        );
+
+        assert_eq!(state.update_state, UpdateState::Idle);
+        assert!(state.installer_path.is_none());
+        assert!(state.update_info.is_none());
     }
 
     /// SBS-962: apply hashes the staged file against the digest captured at
