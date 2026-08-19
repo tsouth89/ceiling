@@ -23,6 +23,7 @@ use crate::core::{
     ProviderId, RateWindow, WidgetProviderEntry, WidgetSnapshot, WidgetSnapshotStore,
 };
 use crate::cost_scanner::{CostScanner, CostSummary, get_cost_usage_report};
+use crate::settings::Settings;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct McpArgs {
@@ -60,6 +61,7 @@ impl CeilingMcp {
     fn list_providers(&self) -> Result<CallToolResult, McpError> {
         Ok(json_tool_result(list_providers_payload(
             WidgetSnapshotStore::load().as_ref(),
+            &enabled_provider_ids(),
         )))
     }
 
@@ -84,7 +86,10 @@ impl CeilingMcp {
         &self,
         Parameters(ProviderFilter { provider }): Parameters<ProviderFilter>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(spend_payload(provider.as_deref())))
+        Ok(json_tool_result(spend_payload(
+            provider.as_deref(),
+            &enabled_provider_ids(),
+        )))
     }
 
     #[tool(
@@ -97,6 +102,7 @@ impl CeilingMcp {
         Ok(json_tool_result(status_payload(
             WidgetSnapshotStore::load().as_ref(),
             provider.as_deref(),
+            &enabled_provider_ids(),
             self.include_identity,
         )))
     }
@@ -132,12 +138,21 @@ fn json_tool_result(value: serde_json::Value) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(value.to_string())])
 }
 
-fn local_spend_supported(cli: &str) -> bool {
+fn enabled_provider_ids() -> Vec<ProviderId> {
+    Settings::load().get_enabled_provider_ids()
+}
+
+fn can_scan_local_spend(cli: &str) -> bool {
     ProviderId::from_cli_name(cli).is_some_and(CostScanner::supports_local_scan)
 }
 
-fn local_spend_cli_names() -> Vec<&'static str> {
-    ProviderId::all()
+fn local_spend_supported(cli: &str, enabled: &[ProviderId]) -> bool {
+    can_scan_local_spend(cli)
+        && ProviderId::from_cli_name(cli).is_some_and(|id| enabled.contains(&id))
+}
+
+fn local_spend_cli_names(enabled: &[ProviderId]) -> Vec<&'static str> {
+    enabled
         .iter()
         .copied()
         .filter(|&id| CostScanner::supports_local_scan(id))
@@ -145,7 +160,10 @@ fn local_spend_cli_names() -> Vec<&'static str> {
         .collect()
 }
 
-fn list_providers_payload(snapshot: Option<&WidgetSnapshot>) -> serde_json::Value {
+fn list_providers_payload(
+    snapshot: Option<&WidgetSnapshot>,
+    enabled: &[ProviderId],
+) -> serde_json::Value {
     let snapshot_providers: Vec<String> = snapshot
         .map(|s| {
             s.entries
@@ -163,7 +181,7 @@ fn list_providers_payload(snapshot: Option<&WidgetSnapshot>) -> serde_json::Valu
             "id": cli,
             "display_name": id.display_name(),
             "has_quota_snapshot": in_snapshot,
-            "local_spend_supported": local_spend_supported(cli),
+            "local_spend_supported": local_spend_supported(cli, enabled),
         }));
     }
 
@@ -242,13 +260,14 @@ fn window_json(window: Option<&RateWindow>) -> serde_json::Value {
     })
 }
 
-fn spend_payload(provider: Option<&str>) -> serde_json::Value {
+fn spend_payload(provider: Option<&str>, enabled: &[ProviderId]) -> serde_json::Value {
     let targets: Vec<&str> = match provider {
         Some(name) => {
             let cli = ProviderId::from_cli_name(name)
                 .map(|id| id.cli_name())
                 .unwrap_or(name);
-            if !local_spend_supported(cli) {
+            // Explicit `provider=` matches CLI `--provider`: scan even if disabled.
+            if !can_scan_local_spend(cli) {
                 return json!({
                     "ok": false,
                     "error": format!(
@@ -259,7 +278,7 @@ fn spend_payload(provider: Option<&str>) -> serde_json::Value {
             }
             vec![cli]
         }
-        None => local_spend_cli_names(),
+        None => local_spend_cli_names(enabled),
     };
 
     let mut providers = Vec::new();
@@ -312,6 +331,7 @@ fn summary_json(summary: &CostSummary) -> serde_json::Value {
 fn status_payload(
     snapshot: Option<&WidgetSnapshot>,
     provider: Option<&str>,
+    enabled: &[ProviderId],
     include_identity: bool,
 ) -> serde_json::Value {
     if let Some(name) = provider
@@ -323,7 +343,7 @@ fn status_payload(
         });
     }
 
-    let chosen = choose_status_provider(snapshot, provider);
+    let chosen = choose_status_provider(snapshot, provider, enabled);
     let usage = match (&chosen, snapshot) {
         (Some(id), Some(snap)) => snap
             .entry_for(*id)
@@ -333,7 +353,12 @@ fn status_payload(
 
     let spend = chosen.and_then(|id| {
         let cli = id.cli_name();
-        if !local_spend_supported(cli) {
+        let allowed = if provider.is_some() {
+            can_scan_local_spend(cli)
+        } else {
+            local_spend_supported(cli, enabled)
+        };
+        if !allowed {
             return None;
         }
         get_cost_usage_report(cli, 30).map(|report| summary_json(&report.today))
@@ -362,17 +387,22 @@ fn status_payload(
 fn choose_status_provider(
     snapshot: Option<&WidgetSnapshot>,
     provider: Option<&str>,
+    enabled: &[ProviderId],
 ) -> Option<ProviderId> {
     if let Some(name) = provider {
         return ProviderId::from_cli_name(name);
     }
     let snapshot = snapshot?;
     for preferred in [ProviderId::Claude, ProviderId::Codex] {
-        if snapshot.entry_for(preferred).is_some() {
+        if enabled.contains(&preferred) && snapshot.entry_for(preferred).is_some() {
             return Some(preferred);
         }
     }
-    snapshot.entries.first().map(|e| e.provider)
+    snapshot
+        .entries
+        .iter()
+        .find(|e| enabled.contains(&e.provider))
+        .map(|e| e.provider)
 }
 
 #[cfg(test)]
@@ -394,9 +424,13 @@ mod tests {
         WidgetSnapshot::new(vec![entry], Utc::now())
     }
 
+    fn default_enabled() -> Vec<ProviderId> {
+        Settings::default().get_enabled_provider_ids()
+    }
+
     #[test]
     fn list_providers_marks_snapshot_and_spend_support() {
-        let payload = list_providers_payload(Some(&sample_snapshot()));
+        let payload = list_providers_payload(Some(&sample_snapshot()), &default_enabled());
         assert_eq!(payload["snapshot_present"], true);
         let providers = payload["providers"].as_array().unwrap();
         let claude = providers
@@ -446,7 +480,7 @@ mod tests {
 
     #[test]
     fn spend_rejects_unsupported_provider() {
-        let payload = spend_payload(Some("cursor"));
+        let payload = spend_payload(Some("cursor"), &default_enabled());
         assert_eq!(payload["ok"], false);
         assert!(
             payload["error"]
@@ -461,7 +495,7 @@ mod tests {
     /// Codex/Claude only and rejected `provider=grok`.
     #[test]
     fn list_providers_and_spend_include_grok() {
-        let payload = list_providers_payload(None);
+        let payload = list_providers_payload(None, &default_enabled());
         let grok = payload["providers"]
             .as_array()
             .unwrap()
@@ -469,7 +503,7 @@ mod tests {
             .find(|p| p["id"] == "grok")
             .expect("grok");
         assert_eq!(grok["local_spend_supported"], true);
-        let spend = spend_payload(Some("grok"));
+        let spend = spend_payload(Some("grok"), &default_enabled());
         assert_eq!(spend["ok"], true);
         assert_eq!(spend["providers"][0]["provider"], "grok");
         assert_eq!(spend["providers"][0]["supported"], true);
@@ -477,7 +511,12 @@ mod tests {
 
     #[test]
     fn status_rejects_unknown_provider() {
-        let payload = status_payload(Some(&sample_snapshot()), Some("not-a-provider"), false);
+        let payload = status_payload(
+            Some(&sample_snapshot()),
+            Some("not-a-provider"),
+            &default_enabled(),
+            false,
+        );
         assert_eq!(payload["ok"], false);
         assert!(
             payload["error"]
@@ -491,8 +530,46 @@ mod tests {
     #[test]
     fn status_prefers_claude_when_present() {
         let snap = sample_snapshot();
-        let payload = status_payload(Some(&snap), None, false);
+        let payload = status_payload(Some(&snap), None, &default_enabled(), false);
         assert_eq!(payload["provider"], "claude");
         assert_eq!(payload["remaining_percent"], 58.0);
+    }
+
+    #[test]
+    fn spend_and_list_honor_enabled_providers() {
+        let enabled = vec![ProviderId::Claude, ProviderId::Codex];
+        let listed = list_providers_payload(None, &enabled);
+        let grok = listed["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "grok")
+            .expect("grok");
+        assert_eq!(grok["local_spend_supported"], false);
+
+        let spend = spend_payload(None, &enabled);
+        let names: Vec<&str> = spend["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["provider"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["claude", "codex"]);
+
+        let explicit = spend_payload(Some("grok"), &enabled);
+        assert_eq!(explicit["ok"], true);
+        assert_eq!(explicit["providers"][0]["provider"], "grok");
+    }
+
+    #[test]
+    fn status_skips_disabled_snapshot_providers() {
+        let snap = sample_snapshot();
+        let payload = status_payload(Some(&snap), None, &[ProviderId::Codex], false);
+        assert!(payload["provider"].is_null(), "payload: {payload}");
+        assert!(payload["usage"].is_null(), "payload: {payload}");
+
+        let explicit = status_payload(Some(&snap), Some("claude"), &[ProviderId::Codex], false);
+        assert_eq!(explicit["provider"], "claude");
+        assert_eq!(explicit["remaining_percent"], 58.0);
     }
 }
