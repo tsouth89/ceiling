@@ -323,7 +323,7 @@ fn status_payload(
         });
     }
 
-    let chosen = choose_status_provider(snapshot, provider);
+    let chosen = choose_status_provider(snapshot, provider, enabled);
     let usage = match (&chosen, snapshot) {
         (Some(id), Some(snap)) => snap.entry_for(*id).map(entry_usage_json),
         _ => None,
@@ -365,17 +365,22 @@ fn status_payload(
 fn choose_status_provider(
     snapshot: Option<&WidgetSnapshot>,
     provider: Option<&str>,
+    enabled: &[ProviderId],
 ) -> Option<ProviderId> {
     if let Some(name) = provider {
         return ProviderId::from_cli_name(name);
     }
     let snapshot = snapshot?;
     for preferred in [ProviderId::Claude, ProviderId::Codex] {
-        if snapshot.entry_for(preferred).is_some() {
+        if enabled.contains(&preferred) && snapshot.entry_for(preferred).is_some() {
             return Some(preferred);
         }
     }
-    snapshot.entries.first().map(|e| e.provider)
+    snapshot
+        .entries
+        .iter()
+        .find(|e| enabled.contains(&e.provider))
+        .map(|e| e.provider)
 }
 
 #[cfg(test)]
@@ -517,5 +522,17 @@ mod tests {
         let explicit = spend_payload(Some("grok"), &enabled);
         assert_eq!(explicit["ok"], true);
         assert_eq!(explicit["providers"][0]["provider"], "grok");
+    }
+
+    #[test]
+    fn status_skips_disabled_snapshot_providers() {
+        let snap = sample_snapshot();
+        let payload = status_payload(Some(&snap), None, &[ProviderId::Codex]);
+        assert!(payload["provider"].is_null(), "payload: {payload}");
+        assert!(payload["usage"].is_null(), "payload: {payload}");
+
+        let explicit = status_payload(Some(&snap), Some("claude"), &[ProviderId::Codex]);
+        assert_eq!(explicit["provider"], "claude");
+        assert_eq!(explicit["remaining_percent"], 58.0);
     }
 }
