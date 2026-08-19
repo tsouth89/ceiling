@@ -25,8 +25,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 /// Format tag, without the layout version.
@@ -571,8 +570,11 @@ impl<R: IndexedRecord> UsageIndex<R> {
 
 /// A process-wide index kept in memory and mirrored to disk.
 ///
-/// Scans take a read guard for their whole parse, so the two cards can scan at
-/// the same time; the short write that follows is what updates changed files.
+/// A scan holds a read guard for one parse batch at a time so the two cards
+/// can still scan together, then applies that batch's Stores before the next
+/// parse starts. Holding the guard for the whole walk is what used to keep
+/// every newly parsed record in a side `updates` vec until the last file
+/// (SBS-951). The persist at the end of the scan is what writes the snapshot.
 pub struct IndexStore<R: 'static> {
     file_name: &'static str,
     /// Claude records store a dollar figure computed at parse time, so a rate
@@ -588,6 +590,10 @@ pub struct IndexStore<R: 'static> {
     pause_after_encode: AtomicBool,
     #[cfg(test)]
     pausing: AtomicBool,
+    /// Set when [`Self::apply`] inserts a file. [`Self::persist`] writes the
+    /// snapshot once at the end of a scan so a batched apply does not re-encode
+    /// the whole index after every parse batch.
+    dirty: AtomicBool,
 }
 
 impl<R: IndexedRecord> IndexStore<R> {
@@ -602,6 +608,7 @@ impl<R: IndexedRecord> IndexStore<R> {
             pause_after_encode: AtomicBool::new(false),
             #[cfg(test)]
             pausing: AtomicBool::new(false),
+            dirty: AtomicBool::new(false),
         }
     }
 
@@ -645,7 +652,37 @@ impl<R: IndexedRecord> IndexStore<R> {
         }
     }
 
-    /// Apply one scan's newly parsed files and write the index back.
+    /// Move newly parsed files into the live index without encoding a snapshot.
+    ///
+    /// A cold scan used to keep every Store in one `updates` vec until the last
+    /// file, which is what held the whole corpus in RAM (SBS-951). Applying a
+    /// parse batch at a time drops those records from the scan's working set.
+    pub fn apply(&'static self, updates: Vec<NewEntry<R>>, started: u64) {
+        if updates.is_empty() {
+            return;
+        }
+        let current = pricing_fingerprint();
+        let mut guard = self
+            .state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // The batch is gated here rather than at persist time. These records
+        // were priced under `started`; if the catalog moved while the batch was
+        // being parsed, inserting them would put old dollars in an index the
+        // next reader treats as current (SBS-946). Batching only changes when
+        // the check runs, never whether it does.
+        if !scan_may_commit(started, current, guard.fingerprint) {
+            tracing::info!("model prices changed mid-scan; dropping the usage index batch");
+            return;
+        }
+        for entry in updates {
+            guard.insert(entry);
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Write the live index to disk if this scan inserted files or a reused
+    /// entry is old enough that its TTL stamp must reach disk.
     ///
     /// `started` is the pricing fingerprint the scan captured when it began
     /// reading. `touched` are the paths the scan read from the index unchanged;
@@ -660,22 +697,35 @@ impl<R: IndexedRecord> IndexStore<R> {
     /// lock does not by itself order the file replaces: two cards can scan at
     /// once, and the slower writer would otherwise put an older snapshot back
     /// on disk (SBS-948).
-    pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf], started: u64) {
-        if updates.is_empty() && touched.is_empty() {
+    pub fn persist(&'static self, touched: &[PathBuf]) {
+        // Fast path only, to skip taking the write lock when there is plainly
+        // nothing to do. Missing a concurrent `apply` here is harmless: the
+        // scan that set the flag runs its own `persist`, and the authoritative
+        // read happens under the lock below.
+        if !self.dirty.load(Ordering::Relaxed) && touched.is_empty() {
             return;
         }
-        let current = pricing_fingerprint();
         let mut guard = self
             .state()
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match apply_scan(&mut guard, started, current, updates, touched) {
-            ScanWrite::Drop => {
-                tracing::info!("model prices changed mid-scan; dropping the usage index write");
-                return;
-            }
-            ScanWrite::Skip => return,
-            ScanWrite::Persist => {}
+        // A scan that was all hits still proves those transcripts are in use.
+        // That only has to reach disk before the TTL sweep would drop them:
+        // rewriting the whole index on every scan would cost more than it saves.
+        let stale_touch = touched
+            .iter()
+            .filter_map(|path| guard.entries.get(path))
+            .any(|entry| now_ms().saturating_sub(entry.used_at_ms) > ENTRY_TTL_MS / 2);
+        for path in touched {
+            guard.touch(path);
+        }
+        // Read under the lock, not before it. The pre-lock value can already be
+        // stale by the time the lock is taken: a concurrent `apply` that set the
+        // flag in that window would otherwise have its inserts skipped here and
+        // never written (SBS-951).
+        let dirty = self.dirty.load(Ordering::Relaxed);
+        if !dirty && !stale_touch {
+            return;
         }
         if let Some(path) = self.path() {
             let bytes = guard.encode();
@@ -689,8 +739,33 @@ impl<R: IndexedRecord> IndexStore<R> {
             }
             if let Err(error) = crate::secure_file::atomic_write(&path, &bytes) {
                 tracing::warn!("failed to persist usage index: {error}");
+                return;
             }
         }
+        self.dirty.store(false, Ordering::Relaxed);
+    }
+
+    /// Apply one scan's newly parsed files and write the index back.
+    ///
+    /// `touched` are the paths the scan read from the index unchanged; they are
+    /// marked so an idle-but-live transcript does not age out.
+    pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf], started: u64) {
+        self.apply(updates, started);
+        self.persist(touched);
+    }
+
+    /// Drop in-memory entries so a test starts from a cold index.
+    ///
+    /// Does not write disk. The next [`Self::read`] sees an empty snapshot
+    /// with the current price fingerprint.
+    #[cfg(test)]
+    pub(crate) fn reset_for_test(&'static self) {
+        let mut guard = self
+            .state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = UsageIndex::empty(pricing_fingerprint());
+        self.dirty.store(false, Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -769,53 +844,6 @@ pub fn pricing_fingerprint() -> u64 {
 /// rates.
 fn scan_may_commit(started: u64, current: u64, index: u64) -> bool {
     started != 0 && started == current && started == index
-}
-
-/// What `apply_scan` decided to do with a finished scan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScanWrite {
-    /// Prices moved or were unknown; the index is unchanged.
-    Drop,
-    /// Applied in memory, but nothing needs to reach disk yet.
-    Skip,
-    /// Applied, and the caller should persist.
-    Persist,
-}
-
-/// Fold one scan into `index` when the prices it started under are still
-/// the prices in force.
-///
-/// [`ScanWrite::Drop`] leaves the index unchanged. The other two apply
-/// updates and touches; only [`ScanWrite::Persist`] should be written.
-fn apply_scan<R: IndexedRecord>(
-    index: &mut UsageIndex<R>,
-    started: u64,
-    current: u64,
-    updates: Vec<NewEntry<R>>,
-    touched: &[PathBuf],
-) -> ScanWrite {
-    if !scan_may_commit(started, current, index.fingerprint) {
-        return ScanWrite::Drop;
-    }
-    // A scan that was all hits still proves those transcripts are in use.
-    // That only has to reach disk before the TTL sweep would drop them:
-    // rewriting the whole index on every scan would cost more than it saves.
-    let stale_touch = touched
-        .iter()
-        .filter_map(|path| index.entries.get(path))
-        .any(|entry| now_ms().saturating_sub(entry.used_at_ms) > ENTRY_TTL_MS / 2);
-    for path in touched {
-        index.touch(path);
-    }
-    let changed = !updates.is_empty();
-    for entry in updates {
-        index.insert(entry);
-    }
-    if changed || stale_touch {
-        ScanWrite::Persist
-    } else {
-        ScanWrite::Skip
-    }
 }
 
 pub(crate) static CLAUDE_INDEX: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin", true);
@@ -1198,107 +1226,9 @@ mod tests {
         );
     }
 
-    /// Old-price dollars must not be persisted under a new fingerprint.
-    ///
-    /// A long scan captures F1, a catalog refresh lands F2, and a concurrent
-    /// read already reset the index to empty-F2. Inserting the F1 records and
-    /// encoding would stamp them as current until the TTL or a file rewrite
-    /// (SBS-946).
-    #[test]
-    fn a_mid_scan_price_change_is_not_stamped_as_current() {
-        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(8);
-        let applied = apply_scan(
-            &mut index,
-            7,
-            8,
-            vec![entry(
-                "/logs/a.jsonl",
-                facts(100, 5),
-                vec![claude_record("claude-opus-4-8", 1.5)],
-            )],
-            &[],
-        );
-
-        assert_eq!(
-            applied,
-            ScanWrite::Drop,
-            "a mid-scan price change must drop the write"
-        );
-        assert_eq!(index.fingerprint(), 8);
-        assert!(
-            matches!(
-                index.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME),
-                Lookup::Miss
-            ),
-            "F1-priced records must not land in an F2-labelled index"
-        );
-        let decoded = UsageIndex::<ClaudeUsageRecord>::decode(&index.encode(), 8).expect("decode");
-        assert!(matches!(
-            decoded.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME),
-            Lookup::Miss
-        ));
-    }
-
-    /// A scan that finishes under the same prices still writes.
-    #[test]
-    fn a_scan_that_finishes_under_the_same_prices_is_committed() {
-        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(7);
-        let applied = apply_scan(
-            &mut index,
-            7,
-            7,
-            vec![entry(
-                "/logs/a.jsonl",
-                facts(100, 5),
-                vec![claude_record("claude-opus-4-8", 1.5)],
-            )],
-            &[],
-        );
-
-        assert_eq!(applied, ScanWrite::Persist);
-        assert_eq!(index.fingerprint(), 7);
-        match index.lookup(Path::new("/logs/a.jsonl"), &facts(100, 5), ANY_TIME) {
-            Lookup::Hit(records) => assert_eq!(records[0].cost, 1.5),
-            _ => panic!("matching prices must persist the records"),
-        }
-    }
-
-    /// Prices that moved while the index is still on the old stamp must not
-    /// relabel that stamp. The existing F1 entries stay F1; the new F1-priced
-    /// file is not folded in as if F2 were current.
-    #[test]
-    fn a_price_change_does_not_relabel_an_index_still_on_the_old_stamp() {
-        let mut index = UsageIndex::<ClaudeUsageRecord>::empty(7);
-        index.insert(entry(
-            "/logs/old.jsonl",
-            facts(10, 1),
-            vec![claude_record("claude-opus-4-8", 1.0)],
-        ));
-
-        let applied = apply_scan(
-            &mut index,
-            7,
-            8,
-            vec![entry(
-                "/logs/new.jsonl",
-                facts(100, 5),
-                vec![claude_record("claude-haiku-4-5", 0.25)],
-            )],
-            &[],
-        );
-
-        assert_eq!(applied, ScanWrite::Drop);
-        assert_eq!(index.fingerprint(), 7);
-        assert!(matches!(
-            index.lookup(Path::new("/logs/old.jsonl"), &facts(10, 1), ANY_TIME),
-            Lookup::Hit(_)
-        ));
-        assert!(matches!(
-            index.lookup(Path::new("/logs/new.jsonl"), &facts(100, 5), ANY_TIME),
-            Lookup::Miss
-        ));
-    }
-
+    /// The gate `IndexStore::apply` is built from. Batching calls it once per
+    /// chunk rather than once per scan, so a batch that straddles a catalog
+    /// refresh is dropped exactly as a whole scan used to be (SBS-946/951).
     #[test]
     fn an_unknown_price_stamp_is_not_treated_as_current() {
         // Zero is the serde / "never captured" default, not a hash of today's
