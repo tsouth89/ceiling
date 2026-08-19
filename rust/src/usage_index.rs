@@ -970,6 +970,24 @@ mod tests {
         assert_eq!(plausible_capacity(0, 0), 0);
     }
 
+    /// SBS-941: Codex records store tokens only, so a rate change must not
+    /// throw their index away, and the fingerprint a Claude index is keyed by
+    /// has to be the catalog contents rather than the catalog file.
+    #[test]
+    fn only_price_sensitive_indexes_are_keyed_by_the_catalog() {
+        let version = fnv1a64(env!("CARGO_PKG_VERSION").as_bytes());
+
+        let codex: IndexStore<CodexUsageRecord> = IndexStore::new("codex.bin", false);
+        assert_eq!(codex.stored_fingerprint(), version);
+
+        let claude: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin", true);
+        assert_eq!(claude.stored_fingerprint(), pricing_fingerprint());
+        assert_eq!(
+            pricing_fingerprint(),
+            version ^ crate::core::pricing_content_fingerprint().rotate_left(17)
+        );
+    }
+
     #[test]
     fn a_truncated_index_file_is_rejected_rather_than_panicking() {
         let mut index = UsageIndex::<ClaudeUsageRecord>::empty(1);
