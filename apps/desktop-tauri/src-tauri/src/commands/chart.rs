@@ -1406,6 +1406,14 @@ pub struct ActivityHourPoint {
     pub api_value_usd: f64,
     /// Provider-normalized processed tokens.
     pub tokens: u64,
+    /// Model tokens with a canonical price (pricing-coverage numerator).
+    ///
+    /// SBS-952: the heatmap used to ship dollars and tokens only. An hour of
+    /// unknown-price tokens then painted as idle ($0, intensity 0) with no way
+    /// for the card to tell that from a month of no work.
+    pub priced_tokens: u64,
+    /// All model tokens (priced + unpriced) — the pricing-coverage denominator.
+    pub total_tokens: u64,
     /// Usage records in this hour. Dollars can be dominated by one big call,
     /// so this is the honest answer to "when am I actually working".
     pub calls: u64,
@@ -1436,7 +1444,7 @@ const ACTIVITY_HEATMAP_DAYS: u32 = 30;
 const ACTIVITY_HEATMAP_TTL: Duration = Duration::from_secs(5 * 60);
 
 static ACTIVITY_HEATMAP_CACHE: crate::commands::scan_cache::ScanCache<ActivityHeatmap> =
-    crate::commands::scan_cache::ScanCache::new("activity-heatmap-cache.json", 1);
+    crate::commands::scan_cache::ScanCache::new("activity-heatmap-cache.json", 2);
 
 /// Local activity by day and hour across every provider with local logs.
 ///
@@ -1514,12 +1522,15 @@ fn activity_hours_for_provider(
             // An hour that produced no tokens, dollars, or calls is not
             // activity; keeping it would darken the grid for nothing.
             (tokens > 0 || calls > 0 || point.summary.total_cost_usd > 0.0).then(|| {
+                let (priced_tokens, total_tokens) = pricing_coverage_tokens(&point.summary);
                 ActivityHourPoint {
                     provider_id: provider_id.to_string(),
                     date: point.date.format("%Y-%m-%d").to_string(),
                     hour: point.hour,
                     api_value_usd: point.summary.total_cost_usd,
                     tokens,
+                    priced_tokens,
+                    total_tokens,
                     calls,
                 }
             })
@@ -4036,6 +4047,80 @@ mod tests {
         assert!((point.api_value_usd - 1.25).abs() < f64::EPSILON);
         // 200 fresh input + 200 output + 800 cache read, each counted once.
         assert_eq!(point.tokens, 1_200);
+        // The model is not in unknown_models, so every model token is priced.
+        assert_eq!(point.priced_tokens, 1_200);
+        assert_eq!(point.total_tokens, 1_200);
+    }
+
+    /// SBS-952: an hour of unpriced tokens is activity, not an idle cell.
+    ///
+    /// The scanner keeps the row because tokens and calls are non-zero, but
+    /// dollars stay 0. Without priced/total counts the heatmap had to treat
+    /// that $0 the same as a month of no work.
+    #[test]
+    fn activity_hours_report_unknown_prices_separately_from_idle() {
+        let mut unpriced = CostSummary {
+            input_tokens: 800,
+            output_tokens: 200,
+            ..Default::default()
+        };
+        unpriced.by_model_tokens.insert(
+            "gpt-5.x".to_string(),
+            ModelTokenCounts {
+                input_tokens: 800,
+                output_tokens: 200,
+                calls: 4,
+                ..Default::default()
+            },
+        );
+        unpriced.unknown_models.insert("gpt-5.x".to_string());
+
+        let mut mixed = CostSummary {
+            total_cost_usd: 2.0,
+            input_tokens: 150,
+            output_tokens: 50,
+            ..Default::default()
+        };
+        mixed.by_model_tokens.insert(
+            "gpt-5.1-codex".to_string(),
+            ModelTokenCounts {
+                input_tokens: 100,
+                output_tokens: 50,
+                calls: 1,
+                ..Default::default()
+            },
+        );
+        mixed.by_model_tokens.insert(
+            "gpt-mystery".to_string(),
+            ModelTokenCounts {
+                input_tokens: 50,
+                output_tokens: 0,
+                calls: 1,
+                ..Default::default()
+            },
+        );
+        mixed.unknown_models.insert("gpt-mystery".to_string());
+
+        let report = CostUsageReport {
+            hourly_activity: vec![hourly_point(9, unpriced), hourly_point(11, mixed)],
+            ..Default::default()
+        };
+
+        let hours = activity_hours_for_provider("codex", &report);
+
+        assert_eq!(hours.len(), 2, "unpriced hours stay on the grid");
+        let unknown = &hours[0];
+        assert_eq!(unknown.hour, 9);
+        assert_eq!(unknown.api_value_usd, 0.0);
+        assert_eq!(unknown.tokens, 1_000);
+        assert_eq!(unknown.priced_tokens, 0);
+        assert_eq!(unknown.total_tokens, 1_000);
+        assert_eq!(unknown.calls, 4);
+
+        let partial = &hours[1];
+        assert_eq!(partial.priced_tokens, 150);
+        assert_eq!(partial.total_tokens, 200);
+        assert!((partial.api_value_usd - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -4046,6 +4131,8 @@ mod tests {
             hour,
             api_value_usd: 1.0,
             tokens: 10,
+            priced_tokens: 10,
+            total_tokens: 10,
             calls: 1,
         };
 
