@@ -3,6 +3,7 @@
 //! State transitions are mirrored through [`events::emit_update_state_changed`]
 //! so the frontend can react without polling.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tauri::Manager;
@@ -25,17 +26,20 @@ pub async fn check_for_updates(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<UpdateStatePayload, String> {
-    // Guard: skip if already checking, downloading, or ready to install.
-    // Ready keeps installer_path; a second check that found "still latest"
-    // used to map to Idle and hide Install & Restart (SBS-931 leftover).
+    // Skip only in-flight work. Ready still re-checks so About/tray are not a
+    // silent no-op; a "still latest" result restores Ready and the installer.
     {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         if should_skip_update_check(&guard.update_state) {
             return Ok(guard.update_payload());
         }
+        let staged = matches!(guard.update_state, UpdateState::Ready)
+            .then(|| (guard.update_info.clone(), guard.installer_path.clone()));
         guard.update_state = UpdateState::Checking;
-        guard.update_info = None;
-        guard.installer_path = None;
+        if staged.is_none() {
+            guard.update_info = None;
+            guard.installer_path = None;
+        }
     }
 
     let checking_payload = {
@@ -52,12 +56,17 @@ pub async fn check_for_updates(
     )
     .await;
 
-    let (new_state, new_info) = state_from_check_result(result);
-
     let payload = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
-        guard.update_state = new_state;
-        guard.update_info = new_info;
+        let staged = if matches!(guard.update_state, UpdateState::Checking) {
+            (guard.update_info.clone(), guard.installer_path.clone())
+        } else {
+            (None, None)
+        };
+        let applied = apply_check_result(result, staged);
+        guard.update_state = applied.state;
+        guard.update_info = applied.info;
+        guard.installer_path = applied.installer_path;
         guard.last_update_check_ms = Some(chrono::Utc::now().timestamp_millis());
         guard.update_payload()
     };
@@ -67,10 +76,53 @@ pub async fn check_for_updates(
 }
 
 fn should_skip_update_check(state: &UpdateState) -> bool {
-    matches!(
-        state,
-        UpdateState::Checking | UpdateState::Downloading(_) | UpdateState::Ready
-    )
+    matches!(state, UpdateState::Checking | UpdateState::Downloading(_))
+}
+
+struct AppliedCheck {
+    state: UpdateState,
+    info: Option<UpdateInfo>,
+    installer_path: Option<PathBuf>,
+}
+
+fn apply_check_result(
+    result: Result<Result<Option<UpdateInfo>, UpdateCheckError>, tokio::time::error::Elapsed>,
+    staged: (Option<UpdateInfo>, Option<PathBuf>),
+) -> AppliedCheck {
+    let (staged_info, staged_path) = staged;
+    let keep_ready = staged_path.is_some();
+    match &result {
+        Ok(Ok(None)) if keep_ready => AppliedCheck {
+            state: UpdateState::Ready,
+            info: staged_info,
+            installer_path: staged_path,
+        },
+        Ok(Ok(Some(info)))
+            if keep_ready
+                && staged_info
+                    .as_ref()
+                    .is_some_and(|old| old.version == info.version) =>
+        {
+            AppliedCheck {
+                state: UpdateState::Ready,
+                info: staged_info,
+                installer_path: staged_path,
+            }
+        }
+        Ok(Err(_)) | Err(_) if keep_ready => AppliedCheck {
+            state: UpdateState::Ready,
+            info: staged_info,
+            installer_path: staged_path,
+        },
+        _ => {
+            let (state, info) = state_from_check_result(result);
+            AppliedCheck {
+                state,
+                info,
+                installer_path: None,
+            }
+        }
+    }
 }
 
 /// Map a completed check onto Idle / Available / Error.
@@ -361,8 +413,8 @@ mod tests {
     }
 
     #[test]
-    fn ready_check_is_skipped_so_install_affordance_stays() {
-        assert!(should_skip_update_check(&UpdateState::Ready));
+    fn ready_check_is_not_skipped() {
+        assert!(!should_skip_update_check(&UpdateState::Ready));
         assert!(should_skip_update_check(&UpdateState::Checking));
         assert!(should_skip_update_check(&UpdateState::Downloading(0.5)));
         assert!(!should_skip_update_check(&UpdateState::Idle));
@@ -372,6 +424,23 @@ mod tests {
         assert!(!should_skip_update_check(&UpdateState::Available(
             "v99.0.0".to_string()
         )));
+    }
+
+    #[test]
+    fn a_ready_check_that_finds_no_newer_release_keeps_the_installer() {
+        let staged_info = sample_info("v99.0.0");
+        let staged_path = PathBuf::from("Ceiling-99.0.0-Setup.exe");
+        let applied =
+            apply_check_result(Ok(Ok(None)), (Some(staged_info), Some(staged_path.clone())));
+        assert_eq!(applied.state, UpdateState::Ready);
+        assert_eq!(
+            applied.info.as_ref().map(|item| item.version.as_str()),
+            Some("v99.0.0")
+        );
+        assert_eq!(
+            applied.installer_path.as_deref(),
+            Some(staged_path.as_path())
+        );
     }
 
     #[cfg(target_os = "windows")]
