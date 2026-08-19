@@ -26,7 +26,7 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `spend_budget_period` | string | `"daily"` | `"daily"` or `"monthly"`. Safe to edit. |
 | `spend_budget_warning_usd` | number | `5` | Soft alert threshold in USD. Safe to edit. |
 | `spend_budget_limit_usd` | number | `15` | Near-cap alert threshold in USD. Safe to edit. |
-| `spend_anomaly_alerts_enabled` | boolean | `false` | Warn when today's estimated API value runs far above the recent daily median. Needs no budget. Safe to edit. |
+| `spend_anomaly_alerts_enabled` | boolean | `false` | Warn when today's estimated API value runs far above the recent daily median. Needs no budget. Quiet when fewer than three recent days have enough spend to compare against. Safe to edit. |
 | `spend_anomaly_multiplier` | number | `3` | Times the recent daily median that counts as a spike. Clamped to 1.5-20. Safe to edit. |
 | `provider_incident_badges_enabled` | boolean | `false` | Poll public provider status pages and badge providers having an incident. Sends no account data. Safe to edit. |
 | `notification_policy_version` | number | `1` | Internal migration marker. Not a UI preference. |

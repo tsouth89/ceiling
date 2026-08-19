@@ -3871,6 +3871,25 @@ mod tests {
         );
     }
 
+    /// SBS-965: one light day last week is not a median. Treating it as one
+    /// would make an ordinary first day back look like an 8x spike and spend
+    /// the day's only alert.
+    #[test]
+    fn spend_anomaly_reading_needs_three_usable_baseline_days() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+        let mut daily = HashMap::new();
+        daily.insert("2026-08-15".to_string(), 12.0);
+        daily.insert("2026-08-12".to_string(), 1.50);
+
+        let reading = spend_anomaly_reading(today, &daily).expect("a reading");
+
+        assert_eq!(reading.today_usd, 12.0);
+        assert_eq!(
+            reading.baseline_usd, 0.0,
+            "one usable day must not become the recent daily median"
+        );
+    }
+
     #[test]
     fn period_from_daily_series_empty_when_range_misses() {
         let series = daily_series_from_report(&[("2026-06-01".into(), 10.0)]);
