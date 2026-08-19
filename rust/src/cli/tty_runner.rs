@@ -205,22 +205,36 @@ impl TtyCommandRunner {
         }
     }
 
-    #[cfg(windows)]
-    fn select_windows_candidate<I>(candidates: I) -> Option<PathBuf>
+    /// Pick the first candidate the platform can actually launch.
+    ///
+    /// On Windows a native executable wins over a batch shim even when the
+    /// shim comes from an earlier entry, because a shim only runs through the
+    /// command interpreter.
+    fn select_launchable_candidate<I>(candidates: I) -> Option<PathBuf>
     where
         I: IntoIterator<Item = PathBuf>,
     {
-        let mut batch_candidate = None;
-        for candidate in candidates {
-            match Self::windows_launch_kind(&candidate) {
-                Some(WindowsLaunchKind::Direct) => return Some(candidate),
-                Some(WindowsLaunchKind::Batch) if batch_candidate.is_none() => {
-                    batch_candidate = Some(candidate);
+        #[cfg(windows)]
+        {
+            let mut batch_candidate = None;
+            for candidate in candidates {
+                match Self::windows_launch_kind(&candidate) {
+                    Some(WindowsLaunchKind::Direct) => return Some(candidate),
+                    Some(WindowsLaunchKind::Batch) if batch_candidate.is_none() => {
+                        batch_candidate = Some(candidate);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
+            batch_candidate
         }
-        batch_candidate
+
+        #[cfg(not(windows))]
+        {
+            candidates
+                .into_iter()
+                .find(|candidate| Self::is_launchable_binary_path(candidate))
+        }
     }
 
     fn is_launchable_binary_path(path: &Path) -> bool {
@@ -247,6 +261,103 @@ impl TtyCommandRunner {
         (Self::windows_launch_kind(&path) == Some(WindowsLaunchKind::Direct)).then_some(path)
     }
 
+    /// The characters `cmd.exe` treats specially outside of double quotes.
+    #[cfg(windows)]
+    const CMD_METACHARACTERS: &[char] = &['^', '&', '|', '<', '>', '(', ')', '@', '!'];
+
+    /// Report whether `portable_pty` wraps this token in double quotes.
+    ///
+    /// This mirrors the `ArgvQuote` rule the crate applies on Windows: a token
+    /// is quoted only when it is empty or holds whitespace or a quote.
+    #[cfg(windows)]
+    fn windows_token_is_quoted(token: &str) -> bool {
+        token.is_empty() || token.contains([' ', '\t', '\n', '\u{000b}', '"'])
+    }
+
+    /// Caret-escape the `cmd.exe` metacharacters in an unquoted token.
+    #[cfg(windows)]
+    fn escape_cmd_token(token: &str) -> String {
+        let mut escaped = String::with_capacity(token.len());
+        for character in token.chars() {
+            if Self::CMD_METACHARACTERS.contains(&character) {
+                escaped.push('^');
+            }
+            escaped.push(character);
+        }
+        escaped
+    }
+
+    /// Reject a token `cmd.exe` cannot carry through a command tail intact.
+    ///
+    /// `cmd.exe` reads `\"` as a plain quote rather than as an escape, and it
+    /// expands `%NAME%` with no escape available, so neither character can be
+    /// delivered to a batch file.
+    #[cfg(windows)]
+    fn reject_unrepresentable_cmd_token(token: &str, label: &str) -> Result<(), TtyCommandError> {
+        for character in ['"', '%'] {
+            if token.contains(character) {
+                return Err(TtyCommandError::LaunchFailed(format!(
+                    "{label} holds a {character} character that cmd.exe cannot escape: {token}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the `cmd.exe` command tail that runs a batch file.
+    ///
+    /// `portable_pty` serializes arguments with `CreateProcessW` rules, which
+    /// are not the rules `cmd.exe` applies, so each token is prepared for the
+    /// interpreter here. A token `portable_pty` leaves bare is caret-escaped so
+    /// the interpreter passes its metacharacters through; a token
+    /// `portable_pty` wraps in quotes is already literal to the interpreter.
+    ///
+    /// `cmd.exe` keeps the quotes of a tail that starts with a quote only while
+    /// that tail holds exactly one quoted, metacharacter-free token, and it has
+    /// no escape for a quote inside a token, and it expands `%NAME%` with no
+    /// escape available. Everything it cannot carry through intact is rejected
+    /// instead of launched incorrectly.
+    #[cfg(windows)]
+    fn windows_batch_tail(
+        resolved: &Path,
+        extra_args: &[String],
+    ) -> Result<Vec<String>, TtyCommandError> {
+        let batch = resolved.to_string_lossy().into_owned();
+        Self::reject_unrepresentable_cmd_token(&batch, "batch file path")?;
+
+        let batch_is_quoted = Self::windows_token_is_quoted(&batch);
+        if batch_is_quoted && batch.contains(Self::CMD_METACHARACTERS) {
+            return Err(TtyCommandError::LaunchFailed(format!(
+                "batch file path holds whitespace and a cmd.exe metacharacter: {batch}"
+            )));
+        }
+
+        let mut tail = Vec::with_capacity(extra_args.len() + 1);
+        tail.push(if batch_is_quoted {
+            batch.clone()
+        } else {
+            Self::escape_cmd_token(&batch)
+        });
+
+        for argument in extra_args {
+            Self::reject_unrepresentable_cmd_token(argument, "batch file argument")?;
+
+            if !Self::windows_token_is_quoted(argument) {
+                tail.push(Self::escape_cmd_token(argument));
+                continue;
+            }
+
+            if batch_is_quoted {
+                return Err(TtyCommandError::LaunchFailed(format!(
+                    "cmd.exe cannot quote argument {argument:?} together with batch file path {batch}"
+                )));
+            }
+            tail.push(argument.clone());
+        }
+
+        Ok(tail)
+    }
+
     fn command_builder(
         resolved: &Path,
         extra_args: &[String],
@@ -259,11 +370,11 @@ impl TtyCommandRunner {
                         .to_string(),
                 )
             })?;
+            let tail = Self::windows_batch_tail(resolved, extra_args)?;
             let mut cmd = portable_pty::CommandBuilder::new(comspec.as_os_str());
             cmd.arg("/d");
             cmd.arg("/c");
-            cmd.arg(resolved.as_os_str());
-            cmd.args(extra_args);
+            cmd.args(tail);
             return Ok(cmd);
         }
 
@@ -314,10 +425,9 @@ impl TtyCommandRunner {
             dirs::home_dir().map(|h| h.join(".bun").join("bin").join("codex.exe")),
         ];
 
-        for candidate in candidates.into_iter().flatten() {
-            if Self::is_launchable_binary_path(&candidate) {
-                return Some(candidate);
-            }
+        if let Some(candidate) = Self::select_launchable_candidate(candidates.into_iter().flatten())
+        {
+            return Some(candidate);
         }
 
         // Fall back to PATH search
@@ -346,10 +456,9 @@ impl TtyCommandRunner {
             }),
         ];
 
-        for candidate in candidates.into_iter().flatten() {
-            if Self::is_launchable_binary_path(&candidate) {
-                return Some(candidate);
-            }
+        if let Some(candidate) = Self::select_launchable_candidate(candidates.into_iter().flatten())
+        {
+            return Some(candidate);
         }
 
         Self::run_where("claude")
@@ -375,7 +484,7 @@ impl TtyCommandRunner {
             }
 
             let stdout = String::from_utf8_lossy(&output.stdout);
-            Self::select_windows_candidate(
+            Self::select_launchable_candidate(
                 stdout
                     .lines()
                     .map(str::trim)
@@ -838,7 +947,8 @@ mod tests {
         std::fs::write(&shim, "#!/bin/sh\n").expect("write shim");
         std::fs::write(&executable, []).expect("write executable candidate");
 
-        let selected = TtyCommandRunner::select_windows_candidate(vec![shim, executable.clone()]);
+        let selected =
+            TtyCommandRunner::select_launchable_candidate(vec![shim, executable.clone()]);
         assert_eq!(selected, Some(executable));
 
         std::fs::remove_dir_all(dir).expect("remove tty test directory");
@@ -853,7 +963,8 @@ mod tests {
         std::fs::write(&batch, "@echo off\r\n").expect("write batch candidate");
         std::fs::write(&executable, []).expect("write executable candidate");
 
-        let selected = TtyCommandRunner::select_windows_candidate(vec![batch, executable.clone()]);
+        let selected =
+            TtyCommandRunner::select_launchable_candidate(vec![batch, executable.clone()]);
         assert_eq!(selected, Some(executable));
 
         std::fs::remove_dir_all(dir).expect("remove tty test directory");
@@ -866,7 +977,7 @@ mod tests {
         let batch = dir.join("tool.cmd");
         std::fs::write(&batch, "@echo off\r\n").expect("write batch candidate");
 
-        let selected = TtyCommandRunner::select_windows_candidate(vec![batch.clone()]);
+        let selected = TtyCommandRunner::select_launchable_candidate(vec![batch.clone()]);
         assert_eq!(selected, Some(batch));
 
         std::fs::remove_dir_all(dir).expect("remove tty test directory");
@@ -906,6 +1017,139 @@ mod tests {
             .expect("batch file should run through COMSPEC");
         assert!(
             result.text.contains("CEILING_BATCH_OK ARG_OK"),
+            "{}",
+            result.text
+        );
+
+        std::fs::remove_dir_all(dir).expect("remove tty test directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_escapes_bare_metacharacters() {
+        let tail = TtyCommandRunner::windows_batch_tail(
+            Path::new(r"C:\tools\npm\claude.cmd"),
+            &["a&b".to_string(), "a|b".to_string(), "x^y".to_string()],
+        )
+        .expect("bare arguments should be representable");
+
+        assert_eq!(
+            tail,
+            vec![
+                r"C:\tools\npm\claude.cmd".to_string(),
+                "a^&b".to_string(),
+                "a^|b".to_string(),
+                "x^^y".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_escapes_metacharacters_in_the_batch_path() {
+        let tail =
+            TtyCommandRunner::windows_batch_tail(Path::new(r"C:\tools&more\claude.cmd"), &[])
+                .expect("bare path should be representable");
+
+        assert_eq!(tail, vec![r"C:\tools^&more\claude.cmd".to_string()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_keeps_quoted_arguments_literal() {
+        let tail = TtyCommandRunner::windows_batch_tail(
+            Path::new(r"C:\tools\npm\claude.cmd"),
+            &["a & b".to_string()],
+        )
+        .expect("quoted arguments should be representable");
+
+        assert_eq!(tail[1], "a & b");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_rejects_quote_characters() {
+        let error = TtyCommandRunner::windows_batch_tail(
+            Path::new(r"C:\tools\npm\claude.cmd"),
+            &["a\"b".to_string()],
+        )
+        .expect_err("cmd.exe has no escape for a quote inside a token");
+
+        assert!(
+            matches!(error, TtyCommandError::LaunchFailed(_)),
+            "{error:?}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_rejects_percent_expansion() {
+        let error = TtyCommandRunner::windows_batch_tail(
+            Path::new(r"C:\tools\npm\claude.cmd"),
+            &["a%PATH%b".to_string()],
+        )
+        .expect_err("cmd.exe expands %NAME% with no escape available");
+
+        assert!(
+            matches!(error, TtyCommandError::LaunchFailed(_)),
+            "{error:?}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_rejects_quoted_path_with_quoted_argument() {
+        let error = TtyCommandRunner::windows_batch_tail(
+            Path::new(r"C:\Program Files\npm\claude.cmd"),
+            &["a b".to_string()],
+        )
+        .expect_err("cmd.exe strips the quotes of a tail that holds two quoted tokens");
+
+        assert!(
+            matches!(error, TtyCommandError::LaunchFailed(_)),
+            "{error:?}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_tail_allows_one_quoted_path() {
+        let tail = TtyCommandRunner::windows_batch_tail(
+            Path::new(r"C:\Program Files\npm\claude.cmd"),
+            &["--setting-sources".to_string(), "user".to_string()],
+        )
+        .expect("cmd.exe keeps the quotes of a single quoted token");
+
+        assert_eq!(tail[0], r"C:\Program Files\npm\claude.cmd");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_file_receives_metacharacter_arguments() {
+        let dir = windows_test_dir("batch-metacharacters");
+        let batch = dir.join("echo-arg.cmd");
+        std::fs::write(
+            &batch,
+            concat!(
+                "@echo off\r\n",
+                "setlocal enabledelayedexpansion\r\n",
+                "set \"value=%~1\"\r\n",
+                "echo CEILING_ARG [!value!]\r\n"
+            ),
+        )
+        .expect("write batch file");
+
+        let runner = TtyCommandRunner::new();
+        let opts = TtyCommandOptions::new()
+            .with_timeout(10.0)
+            .with_idle_timeout(5.0)
+            .with_initial_delay(0.0)
+            .with_extra_args(vec!["a&b|c>d".to_string()]);
+        let result = runner
+            .run(batch.to_string_lossy().as_ref(), "", opts)
+            .expect("batch file should run through COMSPEC");
+        assert!(
+            result.text.contains("CEILING_ARG [a&b|c>d]"),
             "{}",
             result.text
         );
