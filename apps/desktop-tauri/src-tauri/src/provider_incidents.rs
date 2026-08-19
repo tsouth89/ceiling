@@ -19,12 +19,9 @@ use serde::{Deserialize, Serialize};
 
 /// How long a reading stays good. Status pages move on the order of minutes,
 /// and a badge that is a quarter-hour stale is still far better than none.
+/// Failures use the same window: the settings copy promises at most one check
+/// every 15 minutes, and a 5-minute error backoff tripled the requests.
 const INCIDENT_TTL: Duration = Duration::from_secs(15 * 60);
-
-/// Backoff after a failed poll, so an unreachable page is not retried on every
-/// surface open. Shorter than the success TTL because a failure carries no
-/// information.
-const INCIDENT_ERROR_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// A provider's current public status, as shown on its badge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,12 +46,7 @@ struct CachedIncident {
 
 impl CachedIncident {
     fn is_fresh(&self) -> bool {
-        let ttl = if self.ok {
-            INCIDENT_TTL
-        } else {
-            INCIDENT_ERROR_TTL
-        };
-        self.loaded_at.elapsed() < ttl
+        self.loaded_at.elapsed() < INCIDENT_TTL
     }
 }
 
@@ -161,8 +153,8 @@ pub async fn current_incidents(settings: &Settings) -> HashMap<String, ProviderI
             for (provider_id, status) in fetched {
                 // `Unknown` means the page did not parse, which is a failed
                 // read rather than an operational provider. Treating it as
-                // success would hold a stale answer for the full 15 minutes
-                // instead of retrying on the short backoff.
+                // success would still hold a stale answer for the same 15
+                // minutes; we keep `ok: false` so a later poll can replace it.
                 let readable = status
                     .as_ref()
                     .is_some_and(|status| status.level != StatusLevel::Unknown);
@@ -323,11 +315,11 @@ mod tests {
 
         let guard = cache().lock().expect("cache");
         assert_eq!(guard["codex"].incident.as_ref(), Some(&live));
-        assert!(!guard["codex"].ok, "and it is retried on the short backoff");
+        assert!(!guard["codex"].ok, "and it is marked for the next refresh");
     }
 
     #[test]
-    fn a_failed_poll_backs_off_for_less_time_than_a_good_one() {
+    fn a_failed_poll_uses_the_same_ttl_as_a_good_one() {
         let ok = CachedIncident {
             loaded_at: Instant::now() - Duration::from_secs(6 * 60),
             incident: None,
@@ -340,6 +332,15 @@ mod tests {
         };
 
         assert!(ok.is_fresh(), "a good reading is still valid at 6 minutes");
-        assert!(!failed.is_fresh(), "a failure is retried sooner");
+        assert!(
+            failed.is_fresh(),
+            "a failure must not retry sooner than the promised 15 minutes"
+        );
+        let aged = CachedIncident {
+            loaded_at: Instant::now() - Duration::from_secs(16 * 60),
+            incident: None,
+            ok: false,
+        };
+        assert!(!aged.is_fresh());
     }
 }
