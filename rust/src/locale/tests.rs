@@ -155,3 +155,18 @@ fn format_placeholders(text: &str) -> Vec<&str> {
     placeholders.sort_unstable();
     placeholders
 }
+
+#[test]
+fn test_activity_heatmap_title_is_localized() {
+    // The card shipped with a hardcoded English title (SBS-972). These
+    // lookups pin both bundles so a missing key cannot fall back to the
+    // variant name and still look translated.
+    assert_eq!(
+        get_text(Language::English, LocaleKey::ActivityHeatmapTitle),
+        "When you work"
+    );
+    assert_eq!(
+        get_text(Language::Chinese, LocaleKey::ActivityHeatmapTitle),
+        "工作时段"
+    );
+}
