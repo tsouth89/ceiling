@@ -545,13 +545,17 @@ impl<R: IndexedRecord> UsageIndex<R> {
 /// the same time; the short write that follows is what updates changed files.
 pub struct IndexStore<R: 'static> {
     file_name: &'static str,
+    /// Claude records store a dollar figure computed at parse time, so a rate
+    /// change has to drop them. Codex records store only tokens.
+    price_sensitive: bool,
     state: OnceLock<RwLock<UsageIndex<R>>>,
 }
 
 impl<R: IndexedRecord> IndexStore<R> {
-    pub const fn new(file_name: &'static str) -> Self {
+    pub const fn new(file_name: &'static str, price_sensitive: bool) -> Self {
         Self {
             file_name,
+            price_sensitive,
             state: OnceLock::new(),
         }
     }
@@ -572,6 +576,9 @@ impl<R: IndexedRecord> IndexStore<R> {
     /// Drop everything if the prices the stored numbers were computed under are
     /// no longer the prices in force.
     fn discard_if_prices_moved(&'static self) {
+        if !self.price_sensitive {
+            return;
+        }
         let current = pricing_fingerprint();
         {
             let guard = self
@@ -642,7 +649,7 @@ impl<R: IndexedRecord> IndexStore<R> {
     }
 
     fn load(&self) -> UsageIndex<R> {
-        let fingerprint = pricing_fingerprint();
+        let fingerprint = self.stored_fingerprint();
         let Some(path) = self.path() else {
             return UsageIndex::empty(fingerprint);
         };
@@ -658,27 +665,32 @@ impl<R: IndexedRecord> IndexStore<R> {
                 .map(|parent| parent.join("usage-index").join(self.file_name))
         })
     }
+
+    fn stored_fingerprint(&self) -> u64 {
+        if self.price_sensitive {
+            pricing_fingerprint()
+        } else {
+            fnv1a64(env!("CARGO_PKG_VERSION").as_bytes())
+        }
+    }
 }
 
 /// Fingerprint of everything outside the transcripts that the stored numbers
 /// depend on.
 ///
 /// Claude records carry the dollar figure computed when they were parsed, so a
-/// price change has to invalidate them. The catalog's *contents* are hashed
-/// rather than its file time: it is refetched on a daily cadence and rewritten
-/// even when no price moved, and an mtime would throw the index away every day
-/// for nothing. The app version rides along because the built-in rate card
-/// ships with the binary.
+/// price change has to invalidate them. Only the price-bearing catalog fields
+/// are hashed: the artifact is refetched on a daily cadence and rewritten even
+/// when no rate moved, and hashing those bytes would throw the index away
+/// every day for nothing. The app version rides along because the built-in
+/// rate card ships with the binary.
 pub fn pricing_fingerprint() -> u64 {
-    let catalog = crate::core::pricing_catalog_path()
-        .and_then(|path| fs::read(path).ok())
-        .map(|bytes| fnv1a64(&bytes))
-        .unwrap_or(0);
+    let catalog = crate::core::pricing_content_fingerprint();
     fnv1a64(env!("CARGO_PKG_VERSION").as_bytes()) ^ catalog.rotate_left(17)
 }
 
-pub(crate) static CLAUDE_INDEX: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin");
-pub(crate) static CODEX_INDEX: IndexStore<CodexUsageRecord> = IndexStore::new("codex.bin");
+pub(crate) static CLAUDE_INDEX: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin", true);
+pub(crate) static CODEX_INDEX: IndexStore<CodexUsageRecord> = IndexStore::new("codex.bin", false);
 
 #[cfg(test)]
 mod tests {

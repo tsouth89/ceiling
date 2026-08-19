@@ -2,6 +2,7 @@
 mod tests {
     use super::{
         ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog, ModelsDevRefreshCoordinator,
+        fingerprint_catalog_prices,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -53,6 +54,51 @@ mod tests {
             2.5e-6
         );
         assert_eq!(on_disk.version, ModelsDevCache::ARTIFACT_VERSION);
+    }
+
+    /// SBS-941: a daily refetch rewrites `fetched_at` and reshuffles HashMap
+    /// keys. The fingerprint that invalidates dollar caches must ignore both.
+    #[test]
+    fn price_fingerprint_ignores_fetch_time_and_key_order() {
+        let first = catalog_priced_at(2.5);
+        let second = catalog_priced_at(2.5);
+        assert_eq!(
+            fingerprint_catalog_prices(&first),
+            fingerprint_catalog_prices(&second)
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let early = UNIX_EPOCH + Duration::from_secs(1_000);
+        let later = UNIX_EPOCH + Duration::from_secs(1_000 + 24 * 60 * 60);
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            early,
+            Some(dir.path())
+        ));
+        let first_bytes = std::fs::read(ModelsDevCache::cache_path(Some(dir.path()))).unwrap();
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            later,
+            Some(dir.path())
+        ));
+        let second_bytes = std::fs::read(ModelsDevCache::cache_path(Some(dir.path()))).unwrap();
+        assert_ne!(
+            first_bytes, second_bytes,
+            "a refetch must actually rewrite the artifact"
+        );
+
+        let first_artifact: ModelsDevCacheArtifact =
+            serde_json::from_slice(&first_bytes).expect("first artifact");
+        let second_artifact: ModelsDevCacheArtifact =
+            serde_json::from_slice(&second_bytes).expect("second artifact");
+        assert_eq!(
+            fingerprint_catalog_prices(&first_artifact.catalog),
+            fingerprint_catalog_prices(&second_artifact.catalog)
+        );
+        assert_ne!(
+            fingerprint_catalog_prices(&catalog_priced_at(2.5)),
+            fingerprint_catalog_prices(&catalog_priced_at(3.0))
+        );
     }
 
     /// SBS-870: `File::create` truncated the live cache to zero bytes before
@@ -652,6 +698,78 @@ static CACHE_MEMO: LazyLock<Mutex<HashMap<PathBuf, ModelsDevCacheMemoEntry>>> =
 pub fn pricing_catalog_path() -> Option<PathBuf> {
     let path = ModelsDevCache::cache_path(None);
     (!path.as_os_str().is_empty()).then_some(path)
+}
+
+/// Stable hash of the price-bearing catalog contents.
+///
+/// The on-disk artifact is rewritten on a daily cadence even when no rate
+/// moved: `fetched_at_unix_ms` changes, and `HashMap` provider keys shuffle.
+/// Hashing those bytes would throw away every derived cache for nothing.
+/// Decode first and fold only `(provider, model, cost fields)` in sorted order.
+pub fn pricing_content_fingerprint() -> u64 {
+    pricing_catalog_path()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<ModelsDevCacheArtifact>(&bytes).ok())
+        .filter(|artifact| artifact.version == ModelsDevCache::ARTIFACT_VERSION)
+        .map(|artifact| fingerprint_catalog_prices(&artifact.catalog))
+        .unwrap_or(0)
+}
+
+fn fingerprint_catalog_prices(catalog: &ModelsDevCatalog) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut providers: Vec<_> = catalog.providers.iter().collect();
+    providers.sort_by(|left, right| left.0.cmp(right.0));
+    for (provider_id, provider) in providers {
+        mix_fingerprint(&mut hash, provider_id.as_bytes());
+        let mut models: Vec<_> = provider.models.iter().collect();
+        models.sort_by(|left, right| left.0.cmp(right.0).then(left.1.id.cmp(&right.1.id)));
+        for (model_key, model) in models {
+            mix_fingerprint(&mut hash, model_key.as_bytes());
+            mix_fingerprint(&mut hash, model.id.as_bytes());
+            mix_cost_fields(&mut hash, model.cost.as_ref());
+        }
+    }
+    hash
+}
+
+fn mix_cost_fields(hash: &mut u64, cost: Option<&ModelsDevCost>) {
+    let Some(cost) = cost else {
+        mix_fingerprint(hash, &[0]);
+        return;
+    };
+    mix_fingerprint(hash, &[1]);
+    mix_opt_f64(hash, cost.input);
+    mix_opt_f64(hash, cost.output);
+    mix_opt_f64(hash, cost.cache_read);
+    mix_opt_f64(hash, cost.cache_write);
+    match &cost.context_over_200k {
+        Some(above) => {
+            mix_fingerprint(hash, &[1]);
+            mix_opt_f64(hash, above.input);
+            mix_opt_f64(hash, above.output);
+            mix_opt_f64(hash, above.cache_read);
+            mix_opt_f64(hash, above.cache_write);
+        }
+        None => mix_fingerprint(hash, &[0]),
+    }
+}
+
+fn mix_opt_f64(hash: &mut u64, value: Option<f64>) {
+    match value {
+        Some(number) if number.is_finite() => {
+            mix_fingerprint(hash, &[1]);
+            mix_fingerprint(hash, &number.to_le_bytes());
+        }
+        Some(_) => mix_fingerprint(hash, &[2]),
+        None => mix_fingerprint(hash, &[0]),
+    }
+}
+
+fn mix_fingerprint(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
 }
 
 struct ModelsDevCache;
