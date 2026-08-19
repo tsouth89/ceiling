@@ -13,6 +13,9 @@
 //! What is *not* stored here is any aggregation: no day buckets, no windows, no
 //! summaries. Reset windows land on arbitrary instants, so anything coarser
 //! than a record would quietly round the numbers this app exists to report.
+//! Codex also does not store a local `day_key` (SBS-944): the fold derives the
+//! calendar day from the UTC timestamp under the current offset, so a DST
+//! shift or timezone change cannot leave indexed records on the wrong day.
 //! Callers keep their own folds, unchanged, and only the reading gets cheaper.
 
 use crate::core::CodexUsageRecord;
@@ -28,7 +31,7 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 /// Format tag. The trailing byte is the layout version: bump it and every
 /// existing index is discarded instead of being read with the wrong shape.
-const MAGIC: &[u8; 8] = b"CBUIDX\x00\x02";
+const MAGIC: &[u8; 8] = b"CBUIDX\x00\x03";
 /// Sentinel for an absent interned string.
 const NONE_ID: u32 = u32::MAX;
 /// Sentinel for a record with no timestamp.
@@ -103,7 +106,7 @@ pub fn file_facts(path: &Path) -> Option<FileFacts> {
 
 /// Interned strings shared by every record in one index.
 ///
-/// Model names, projects, plans, and Codex day keys repeat across hundreds of
+/// Model names, projects, and plans repeat across hundreds of
 /// thousands of records; storing each one inline would dwarf the numbers.
 #[derive(Default)]
 pub struct StringTable {
@@ -301,12 +304,12 @@ impl IndexedRecord for CodexUsageRecord {
     const RESUMABLE: bool = false;
 
     fn encode(&self, strings: &mut StringTable, out: &mut Vec<u8>) {
-        let day_key = strings.intern(&self.day_key);
+        // day_key is derived at fold time from timestamp (SBS-944); persist
+        // only the UTC instant so a later DST / timezone change rebuckets.
         let model = strings.intern(&self.model);
         let effort = strings.intern_opt(self.effort.as_deref());
         let project = strings.intern_opt(self.project.as_deref());
         let plan = strings.intern_opt(self.plan.as_deref());
-        push_u32(out, day_key);
         push_u32(out, model);
         push_u32(out, effort);
         push_u32(out, project);
@@ -318,13 +321,11 @@ impl IndexedRecord for CodexUsageRecord {
     }
 
     fn decode(cursor: &mut Cursor<'_>, strings: &StringTable) -> Option<Self> {
-        let day_key = strings.required(cursor.u32()?)?;
         let model = strings.required(cursor.u32()?)?;
         let effort = strings.optional(cursor.u32()?);
         let project = strings.optional(cursor.u32()?);
         let plan = strings.optional(cursor.u32()?);
         Some(Self {
-            day_key,
             model,
             effort,
             project,
@@ -804,6 +805,7 @@ pub(crate) static CODEX_INDEX: IndexStore<CodexUsageRecord> = IndexStore::new("c
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
     use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
@@ -833,10 +835,18 @@ mod tests {
         }
     }
 
+    fn timestamp_on_local_day(day: &str) -> Option<DateTime<Utc>> {
+        let date = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
+        let noon = date.and_hms_opt(12, 0, 0)?;
+        chrono::Local
+            .from_local_datetime(&noon)
+            .earliest()
+            .map(|local| local.with_timezone(&Utc))
+    }
+
     fn codex_record(day: &str) -> CodexUsageRecord {
         CodexUsageRecord {
-            day_key: day.to_string(),
-            timestamp: Utc.timestamp_millis_opt(1_700_000_000_000).single(),
+            timestamp: timestamp_on_local_day(day),
             model: "gpt-5".to_string(),
             effort: Some("high".to_string()),
             project: None,
@@ -897,10 +907,47 @@ mod tests {
 
         match decoded.lookup(Path::new("/logs/rollout.jsonl"), &facts(10, 1), ANY_TIME) {
             Lookup::Hit(records) => {
-                assert_eq!(records[0].day_key, "2026-08-17");
+                assert_eq!(records[0].day_key().as_deref(), Some("2026-08-17"));
                 assert_eq!(records[0].plan.as_deref(), Some("plus"));
                 assert_eq!(records[0].project, None);
                 assert_eq!(records[0].cached, 2);
+            }
+            _ => panic!("expected a hit for an unchanged file"),
+        }
+    }
+
+    /// SBS-944: the layout version must move when day_key is dropped, and a
+    /// round-trip must recompute the local day from the stored timestamp.
+    #[test]
+    fn a_codex_index_round_trip_does_not_freeze_the_local_day() {
+        assert_eq!(
+            MAGIC[7], 3,
+            "bump MAGIC when the Codex record layout changes"
+        );
+        let timestamp = Utc::now();
+        let mut index = UsageIndex::<CodexUsageRecord>::empty(1);
+        index.insert(entry(
+            "/logs/rollout.jsonl",
+            facts(10, 1),
+            vec![CodexUsageRecord {
+                timestamp: Some(timestamp),
+                model: "gpt-5".to_string(),
+                effort: None,
+                project: None,
+                plan: None,
+                input: 1,
+                cached: 0,
+                output: 3,
+            }],
+        ));
+
+        let decoded = UsageIndex::<CodexUsageRecord>::decode(&index.encode(), 1).expect("decode");
+        match decoded.lookup(Path::new("/logs/rollout.jsonl"), &facts(10, 1), ANY_TIME) {
+            Lookup::Hit(records) => {
+                assert_eq!(
+                    records[0].day_key(),
+                    Some(crate::core::local_day_key(timestamp))
+                );
             }
             _ => panic!("expected a hit for an unchanged file"),
         }
