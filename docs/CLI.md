@@ -173,6 +173,10 @@ Expose usage and spend over MCP stdio. Local-first, no network.
 codexbar mcp [OPTIONS]
 ```
 
+Useful options:
+
+- `--include-identity` - include account email and login method in tool output. Those fields are omitted by default, like `serve`.
+
 Example:
 
 ```sh
