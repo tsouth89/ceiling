@@ -341,103 +341,103 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             <p className="settings-section__hint">{t("StripEnableProvidersFirst")}</p>
           ) : (
             <>
-            <ul className="taskbar-provider-picker__list">
-              {enabledOrdered.map((id) => {
-                const checked = selectedStripIds.includes(id);
-                const rank = selectedStripIds.indexOf(id);
-                const lastChecked = checked && selectedStripIds.length === 1;
-                const atCap =
-                  !checked && selectedStripIds.length >= MAX_STRIP_PROVIDERS;
-                const multi = multiAccountByProvider.get(id);
-                return (
-                  <li key={id} className="taskbar-provider-picker__row">
-                    <div className="taskbar-provider-picker__main">
-                      <label className="taskbar-provider-picker__label">
-                        <input
-                          type="checkbox"
-                          className="toggle"
-                          checked={checked}
-                          disabled={
-                            saving ||
-                            !settings.taskbarWidgetEnabled ||
-                            lastChecked ||
-                            (atCap && !checked)
-                          }
-                          aria-label={formatLocale(t("StripShowProvider"), providerLabel(id))}
-                          onChange={(e) =>
-                            toggleStripProvider(id, e.target.checked)
-                          }
-                        />
-                        <ProviderIcon
-                          providerId={id}
-                          size={16}
-                          title={providerLabel(id)}
-                        />
-                        <span>{providerLabel(id)}</span>
-                        {checked && rank >= 0 && (
-                          <span className="taskbar-provider-picker__rank">
-                            {rank + 1}
-                          </span>
-                        )}
-                      </label>
-                      <span className="providers-sidebar__reorder-controls">
-                        <button
-                          type="button"
-                          className="providers-sidebar__reorder-button"
-                          aria-label={formatLocale(t("StripMoveUp"), providerLabel(id))}
-                          disabled={saving || !checked || rank <= 0}
-                          onClick={() => moveStripProvider(id, -1)}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="providers-sidebar__reorder-button"
-                          aria-label={formatLocale(t("StripMoveDown"), providerLabel(id))}
-                          disabled={
-                            saving ||
-                            !checked ||
-                            rank < 0 ||
-                            rank >= selectedStripIds.length - 1
-                          }
-                          onClick={() => moveStripProvider(id, 1)}
-                        >
-                          ↓
-                        </button>
-                      </span>
-                    </div>
-                    {multi && checked && (
-                      <label className="taskbar-provider-picker__account">
-                        <span className="taskbar-provider-picker__account-label">
-                          {t("StripTaskbarShows")}
+              <ul className="taskbar-provider-picker__list">
+                {enabledOrdered.map((id) => {
+                  const checked = selectedStripIds.includes(id);
+                  const rank = selectedStripIds.indexOf(id);
+                  const lastChecked = checked && selectedStripIds.length === 1;
+                  const atCap =
+                    !checked && selectedStripIds.length >= MAX_STRIP_PROVIDERS;
+                  const multi = multiAccountByProvider.get(id);
+                  return (
+                    <li key={id} className="taskbar-provider-picker__row">
+                      <div className="taskbar-provider-picker__main">
+                        <label className="taskbar-provider-picker__label">
+                          <input
+                            type="checkbox"
+                            className="toggle"
+                            checked={checked}
+                            disabled={
+                              saving ||
+                              !settings.taskbarWidgetEnabled ||
+                              lastChecked ||
+                              (atCap && !checked)
+                            }
+                            aria-label={formatLocale(t("StripShowProvider"), providerLabel(id))}
+                            onChange={(e) =>
+                              toggleStripProvider(id, e.target.checked)
+                            }
+                          />
+                          <ProviderIcon
+                            providerId={id}
+                            size={16}
+                            title={providerLabel(id)}
+                          />
+                          <span>{providerLabel(id)}</span>
+                          {checked && rank >= 0 && (
+                            <span className="taskbar-provider-picker__rank">
+                              {rank + 1}
+                            </span>
+                          )}
+                        </label>
+                        <span className="providers-sidebar__reorder-controls">
+                          <button
+                            type="button"
+                            className="providers-sidebar__reorder-button"
+                            aria-label={formatLocale(t("StripMoveUp"), providerLabel(id))}
+                            disabled={saving || !checked || rank <= 0}
+                            onClick={() => moveStripProvider(id, -1)}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            className="providers-sidebar__reorder-button"
+                            aria-label={formatLocale(t("StripMoveDown"), providerLabel(id))}
+                            disabled={
+                              saving ||
+                              !checked ||
+                              rank < 0 ||
+                              rank >= selectedStripIds.length - 1
+                            }
+                            onClick={() => moveStripProvider(id, 1)}
+                          >
+                            ↓
+                          </button>
                         </span>
-                        <select
-                          className="select"
-                          aria-label={formatLocale(t("StripTaskbarAccount"), providerLabel(id))}
-                          disabled={saving || !settings.taskbarWidgetEnabled}
-                          value={pinnedAccounts[id] ?? ""}
-                          onChange={(e) =>
-                            setPinnedAccount(id, e.target.value)
-                          }
-                        >
-                          <option value="">
-                            {t("StripAutoClosest")}
-                          </option>
-                          {multi.accounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {accountOptionLabel(account)}
+                      </div>
+                      {multi && checked && (
+                        <label className="taskbar-provider-picker__account">
+                          <span className="taskbar-provider-picker__account-label">
+                            {t("StripTaskbarShows")}
+                          </span>
+                          <select
+                            className="select"
+                            aria-label={formatLocale(t("StripTaskbarAccount"), providerLabel(id))}
+                            disabled={saving || !settings.taskbarWidgetEnabled}
+                            value={pinnedAccounts[id] ?? ""}
+                            onChange={(e) =>
+                              setPinnedAccount(id, e.target.value)
+                            }
+                          >
+                            <option value="">
+                              {t("StripAutoClosest")}
                             </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            {selectedStripIds.length === 1 && (
-              <p className="settings-section__hint">{t("StripKeepAtLeastOne")}</p>
-            )}
+                            {multi.accounts.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {accountOptionLabel(account)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {selectedStripIds.length === 1 && (
+                <p className="settings-section__hint">{t("StripKeepAtLeastOne")}</p>
+              )}
             </>
           )}
           {multiAccountByProvider.size > 0 && (
