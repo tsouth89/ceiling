@@ -116,7 +116,9 @@ fn match_title_hint(title: &str) -> Option<&'static str> {
     if looks_like_path(prefix) {
         return None;
     }
-    title_tokens(prefix).into_iter().find_map(provider_for_title_token)
+    title_tokens(prefix)
+        .into_iter()
+        .find_map(provider_for_title_token)
 }
 
 fn command_prefix(title: &str) -> &str {
@@ -295,10 +297,7 @@ mod tests {
             None
         );
         assert_eq!(
-            match_foreground_provider(
-                "WindowsTerminal.exe",
-                "MINGW64:/c/Users/a/projects/cursor"
-            ),
+            match_foreground_provider("WindowsTerminal.exe", "MINGW64:/c/Users/a/projects/cursor"),
             None
         );
         assert_eq!(
