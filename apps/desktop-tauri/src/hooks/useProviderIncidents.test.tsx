@@ -82,12 +82,10 @@ describe("useProviderIncidents", () => {
     expect(getProviderIncidents).toHaveBeenCalledTimes(2);
   });
 
-  /// An empty map usually means "nothing is wrong", but it is also what comes
-  /// back on a cold start where every status page failed its first read and
-  /// there was no earlier answer to carry forward. Holding that for the full
-  /// quarter hour sits on the miss long past the backend's own five-minute
-  /// backoff.
-  it("re-asks after five minutes when the answer was empty", async () => {
+  /// An empty map usually means "nothing is wrong". Hold it for the same
+  /// 15-minute window as a live badge so a failed status page is not retried
+  /// three times more often than the settings copy promises.
+  it("holds an empty answer for the full refresh window", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-15T12:00:00Z"));
     getProviderIncidents.mockResolvedValueOnce({});
@@ -98,10 +96,9 @@ describe("useProviderIncidents", () => {
 
     vi.setSystemTime(new Date("2026-08-15T12:06:00Z"));
     getProviderIncidents.mockResolvedValueOnce({ codex: incident() });
-    const second = renderHook(() => useProviderIncidents(true));
+    renderHook(() => useProviderIncidents(true));
 
-    await waitFor(() => expect(second.result.current.codex).toBeDefined());
-    expect(getProviderIncidents).toHaveBeenCalledTimes(2);
+    expect(getProviderIncidents).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 
