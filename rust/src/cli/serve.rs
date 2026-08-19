@@ -13,6 +13,7 @@ use crate::core::{
     ConfiguredAccounts, FetchContext, ProviderId, SourceMode, UsageSnapshot, instantiate_provider,
 };
 use crate::cost_scanner::CostScanner;
+use crate::settings::Settings;
 
 const UNAUTHENTICATED_ERROR: &str = "unauthorized";
 const PROVIDER_FAILURE: &str = "provider request failed";
@@ -121,6 +122,11 @@ async fn usage_response(provider: Option<&str>, include_identity: bool) -> Strin
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
+    let settings = Settings::load();
+    let providers = match selection.resolved_ids(&settings) {
+        Ok(providers) => providers,
+        Err(error) => return no_enabled_providers_response(error.to_string()),
+    };
     let ctx = FetchContext {
         source_mode: SourceMode::Auto,
         include_credits: true,
@@ -136,7 +142,7 @@ async fn usage_response(provider: Option<&str>, include_identity: bool) -> Strin
     let accounts = ConfiguredAccounts::load();
 
     let mut results = Vec::new();
-    for provider_id in selection.as_list() {
+    for provider_id in providers {
         let provider = instantiate_provider(provider_id);
         match provider
             .fetch_usage(&ctx.clone().for_account(provider_id, &accounts))
@@ -164,10 +170,25 @@ async fn cost_response(provider: Option<&str>) -> String {
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
+    let settings = Settings::load();
+    let providers = match selection.resolved_ids(&settings) {
+        Ok(providers) => providers,
+        Err(error) => return no_enabled_providers_response(error.to_string()),
+    };
     let scanner = CostScanner::new(30);
     json_response(
         200,
-        serde_json::Value::Array(cost_payloads(&scanner, &selection.as_list())),
+        serde_json::Value::Array(cost_payloads(&scanner, &providers)),
+    )
+}
+
+fn no_enabled_providers_response(error: String) -> String {
+    json_response(
+        409,
+        serde_json::json!({
+            "error": error,
+            "code": "no_enabled_providers",
+        }),
     )
 }
 
@@ -447,6 +468,18 @@ fn load_or_create_serve_token_at(path: PathBuf) -> io::Result<ServeToken> {
 }
 
 fn read_existing_serve_token(path: PathBuf) -> io::Result<ServeToken> {
+    // Stat before chmod. A token that was world-readable is already leaked;
+    // tightening the mode cannot un-expose it, so treat it as invalid and let
+    // the caller mint a replacement.
+    #[cfg(unix)]
+    {
+        if serve_token_mode_is_too_open(&path)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "serve token file is readable by other users",
+            ));
+        }
+    }
     let token = std::fs::read_to_string(&path)?;
     let token = token.trim();
     if token.is_empty() {
@@ -492,9 +525,7 @@ fn create_new_serve_token(path: &Path) -> io::Result<String> {
 fn validate_existing_token_file(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
+        if serve_token_mode_is_too_open(path)? {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "serve token file is readable by other users",
@@ -503,6 +534,13 @@ fn validate_existing_token_file(path: &Path) -> io::Result<()> {
     }
     let _ = path;
     Ok(())
+}
+
+#[cfg(unix)]
+fn serve_token_mode_is_too_open(path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+    Ok(mode & 0o077 != 0)
 }
 
 fn protect_token_file(path: &std::path::Path) -> io::Result<()> {
@@ -531,6 +569,7 @@ fn json_response(status: u16, payload: serde_json::Value) -> String {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         _ => "Internal Server Error",
     };
     format!(
@@ -645,6 +684,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rotates_a_world_readable_serve_token_instead_of_reusing_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "ceiling-serve-token-open-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("serve.token");
+        std::fs::write(&path, "leaked-token\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let loaded = load_or_create_serve_token_at(path.clone()).unwrap();
+        assert!(loaded.created);
+        assert_ne!(loaded.token, "leaked-token");
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), loaded.token);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn headers_complete_requires_the_terminator() {
         assert!(!headers_complete(b"GET /usage HTTP/1.1\r\nHost: localhost"));
@@ -664,6 +725,23 @@ mod tests {
         assert!(payloads[0].get("error").is_none());
         assert_eq!(payloads[1]["provider"], "cursor");
         assert_eq!(payloads[1]["supported"], false);
+    }
+
+    #[test]
+    fn empty_enabled_providers_are_a_conflict_not_an_empty_array() {
+        let body = no_enabled_providers_response(
+            super::super::usage::NO_ENABLED_PROVIDERS_ERROR.to_string(),
+        );
+        assert!(
+            body.starts_with("HTTP/1.1 409 Conflict"),
+            "status must be distinguishable from 200 []: {body}"
+        );
+        assert!(body.contains("\"code\":\"no_enabled_providers\""));
+        let payload_start = body.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+        assert!(
+            !body[payload_start..].starts_with('['),
+            "must not look like a successful empty list: {body}"
+        );
     }
 
     #[tokio::test]

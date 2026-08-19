@@ -218,9 +218,9 @@ impl ClaudeOAuthFetcher {
                 // Persist before caching. If another process rotated the token
                 // we exchanged, ours is already retired, and caching it would
                 // authenticate this poll with a token the server rejects.
-                match credentials_store::persist_refreshed_credentials(
+                match credentials_store::persist_refreshed_for_source(
                     &refreshed,
-                    self.config_dir(),
+                    &source,
                     &refresh_token,
                 ) {
                     Ok(Some(live)) => {
