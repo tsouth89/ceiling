@@ -13,6 +13,7 @@ use crate::core::{
     ConfiguredAccounts, FetchContext, ProviderId, SourceMode, UsageSnapshot, instantiate_provider,
 };
 use crate::cost_scanner::CostScanner;
+use crate::settings::Settings;
 
 const UNAUTHENTICATED_ERROR: &str = "unauthorized";
 const PROVIDER_FAILURE: &str = "provider request failed";
@@ -121,6 +122,11 @@ async fn usage_response(provider: Option<&str>, include_identity: bool) -> Strin
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
+    let settings = Settings::load();
+    let providers = match selection.resolved_ids(&settings) {
+        Ok(providers) => providers,
+        Err(error) => return no_enabled_providers_response(error.to_string()),
+    };
     let ctx = FetchContext {
         source_mode: SourceMode::Auto,
         include_credits: true,
@@ -136,7 +142,7 @@ async fn usage_response(provider: Option<&str>, include_identity: bool) -> Strin
     let accounts = ConfiguredAccounts::load();
 
     let mut results = Vec::new();
-    for provider_id in selection.as_list() {
+    for provider_id in providers {
         let provider = instantiate_provider(provider_id);
         match provider
             .fetch_usage(&ctx.clone().for_account(provider_id, &accounts))
@@ -164,10 +170,25 @@ async fn cost_response(provider: Option<&str>) -> String {
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
+    let settings = Settings::load();
+    let providers = match selection.resolved_ids(&settings) {
+        Ok(providers) => providers,
+        Err(error) => return no_enabled_providers_response(error.to_string()),
+    };
     let scanner = CostScanner::new(30);
     json_response(
         200,
-        serde_json::Value::Array(cost_payloads(&scanner, &selection.as_list())),
+        serde_json::Value::Array(cost_payloads(&scanner, &providers)),
+    )
+}
+
+fn no_enabled_providers_response(error: String) -> String {
+    json_response(
+        409,
+        serde_json::json!({
+            "error": error,
+            "code": "no_enabled_providers",
+        }),
     )
 }
 
@@ -548,6 +569,7 @@ fn json_response(status: u16, payload: serde_json::Value) -> String {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         _ => "Internal Server Error",
     };
     format!(
@@ -703,6 +725,23 @@ mod tests {
         assert!(payloads[0].get("error").is_none());
         assert_eq!(payloads[1]["provider"], "cursor");
         assert_eq!(payloads[1]["supported"], false);
+    }
+
+    #[test]
+    fn empty_enabled_providers_are_a_conflict_not_an_empty_array() {
+        let body = no_enabled_providers_response(
+            super::super::usage::NO_ENABLED_PROVIDERS_ERROR.to_string(),
+        );
+        assert!(
+            body.starts_with("HTTP/1.1 409 Conflict"),
+            "status must be distinguishable from 200 []: {body}"
+        );
+        assert!(body.contains("\"code\":\"no_enabled_providers\""));
+        let payload_start = body.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+        assert!(
+            !body[payload_start..].starts_with('['),
+            "must not look like a successful empty list: {body}"
+        );
     }
 
     #[tokio::test]
