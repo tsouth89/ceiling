@@ -175,7 +175,7 @@ describe("ProviderDetailView", () => {
       // inside a Cursor view, which is exactly what provider siloing forbids.
       planName: "Ultra",
       primary: rate(0),
-      primaryLabel: "Plan",
+      primaryLabel: "Plan ",
       extraRateWindows: [],
       inactiveRateWindows: [
         {
