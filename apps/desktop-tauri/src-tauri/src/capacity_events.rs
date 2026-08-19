@@ -783,7 +783,19 @@ fn observed_windows(
             extra_window_ids.insert(id);
         }
     }
+    let unavailable = unavailable_window_ids(snapshot);
+    windows.retain(|id, _| !unavailable.contains(id));
+    extra_window_ids.retain(|id| windows.contains_key(id));
     (windows, extra_window_ids)
+}
+
+fn unavailable_window_ids(snapshot: &ProviderUsageSnapshot) -> HashSet<String> {
+    snapshot
+        .inactive_rate_windows
+        .iter()
+        .filter(|window| window.state == "unavailable")
+        .map(|window| semantic_inactive_window_id(&snapshot.provider_id, &window.id, &window.title))
+        .collect()
 }
 
 fn inactive_windows(snapshot: &ProviderUsageSnapshot) -> HashMap<String, String> {
@@ -1666,10 +1678,8 @@ mod tests {
         later.updated_at = (start + Duration::minutes(10)).to_rfc3339();
         let events = observer.observe(&later);
         assert!(
-            events
-                .iter()
-                .all(|event| event.kind != CapacityEventKind::WindowLifted),
-            "a missing Plan reading must not confirm as a lifted limit"
+            events.is_empty(),
+            "a missing Plan reading must not confirm a reset or lifted limit: {events:?}"
         );
     }
 
