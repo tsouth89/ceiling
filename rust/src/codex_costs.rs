@@ -36,7 +36,9 @@ pub(crate) fn add_codex_records_to_summary(
     let mut has_tokens = false;
 
     for record in records.iter().filter(|record| {
-        CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
+        record.day_key().is_some_and(|day| {
+            CostUsageDayRange::is_in_range(&day, &range.since_key, &range.until_key)
+        })
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
         if let Some(cost) = add_codex_tokens_to_summary(
@@ -204,7 +206,9 @@ fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -
     let mut total_cost = 0.0;
 
     for record in records.iter().filter(|record| {
-        CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
+        record.day_key().is_some_and(|day| {
+            CostUsageDayRange::is_in_range(&day, &range.since_key, &range.until_key)
+        })
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
         if tokens.is_empty() {
@@ -247,6 +251,29 @@ pub(crate) fn project_bucket(project: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::core::CodexUsageRecord;
+    use chrono::{Local, TimeZone, Utc};
+
+    fn timestamp_on_local_day(day: &str) -> Option<chrono::DateTime<Utc>> {
+        let date = NaiveDate::parse_from_str(day, "%Y-%m-%d").expect("test day");
+        let noon = date.and_hms_opt(12, 0, 0).expect("noon");
+        Local
+            .from_local_datetime(&noon)
+            .earliest()
+            .map(|local| local.with_timezone(&Utc))
+    }
+
+    fn usage_on(day: &str) -> CodexUsageRecord {
+        CodexUsageRecord {
+            timestamp: timestamp_on_local_day(day),
+            model: "gpt-5.6-sol".to_string(),
+            effort: Some("high".to_string()),
+            project: None,
+            plan: None,
+            input: 200_000,
+            cached: 0,
+            output: 0,
+        }
+    }
 
     #[test]
     fn summary_prices_known_model_and_leaves_unknown_model_unpriced() {
@@ -254,21 +281,10 @@ mod tests {
         let range = CostUsageDayRange::new(target, target);
         let records = vec![
             // Canonical model: priced normally.
-            CodexUsageRecord {
-                day_key: "2026-05-31".to_string(),
-                timestamp: None,
-                model: "gpt-5.6-sol".to_string(),
-                effort: Some("high".to_string()),
-                project: None,
-                plan: None,
-                input: 200_000,
-                cached: 0,
-                output: 0,
-            },
+            usage_on("2026-05-31"),
             // Unknown model: tokens kept, but no fabricated dollars.
             CodexUsageRecord {
-                day_key: "2026-05-31".to_string(),
-                timestamp: None,
+                timestamp: timestamp_on_local_day("2026-05-31"),
                 model: "gpt-4o".to_string(),
                 effort: Some("medium".to_string()),
                 project: None,
@@ -305,8 +321,7 @@ mod tests {
         let input = i32::MAX as u64 + 1_000;
         let cached = i32::MAX as u64 + 500;
         let records = vec![CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            timestamp: None,
+            timestamp: timestamp_on_local_day("2026-05-31"),
             model: "gpt-5.6-sol".to_string(),
             effort: Some("high".to_string()),
             project: Some("ceiling".to_string()),
@@ -334,39 +349,9 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let records = vec![
-            CodexUsageRecord {
-                day_key: "2026-05-31".to_string(),
-                timestamp: None,
-                model: "gpt-5.6-sol".to_string(),
-                effort: Some("high".to_string()),
-                project: None,
-                plan: None,
-                input: 200_000,
-                cached: 0,
-                output: 0,
-            },
-            CodexUsageRecord {
-                day_key: "2026-05-31".to_string(),
-                timestamp: None,
-                model: "gpt-5.6-sol".to_string(),
-                effort: Some("high".to_string()),
-                project: None,
-                plan: None,
-                input: 200_000,
-                cached: 0,
-                output: 0,
-            },
-            CodexUsageRecord {
-                day_key: "2026-05-30".to_string(),
-                timestamp: None,
-                model: "gpt-5.6-sol".to_string(),
-                effort: Some("high".to_string()),
-                project: None,
-                plan: None,
-                input: 200_000,
-                cached: 0,
-                output: 0,
-            },
+            usage_on("2026-05-31"),
+            usage_on("2026-05-31"),
+            usage_on("2026-05-30"),
         ];
         let mut summary = CostSummary::default();
 
@@ -384,8 +369,7 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let records = vec![CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            timestamp: None,
+            timestamp: timestamp_on_local_day("2026-05-31"),
             model: "gpt-mystery".to_string(),
             effort: None,
             project: None,
@@ -423,8 +407,7 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let record = |plan: Option<&str>| CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            timestamp: None,
+            timestamp: timestamp_on_local_day("2026-05-31"),
             model: "gpt-5.6-sol".to_string(),
             effort: None,
             project: None,
@@ -462,8 +445,7 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let record = |project: Option<&str>| CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            timestamp: None,
+            timestamp: timestamp_on_local_day("2026-05-31"),
             model: "gpt-5.6-sol".to_string(),
             effort: None,
             project: project.map(str::to_string),
@@ -496,8 +478,7 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let records = vec![CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            timestamp: None,
+            timestamp: timestamp_on_local_day("2026-05-31"),
             model: "gpt-mystery".to_string(),
             effort: None,
             project: None,
@@ -513,5 +494,28 @@ mod tests {
         // No dollars for the unknown model, but the effort tier keeps tokens.
         assert!(summary.by_effort.is_empty());
         assert!(summary.by_effort_tokens.contains_key("unknown"));
+    }
+
+    /// SBS-944: a record with no timestamp cannot be dated, so it must not
+    /// enter a day range even when the caller would have liked a stored key.
+    #[test]
+    fn summary_excludes_codex_records_without_a_timestamp() {
+        let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let records = vec![CodexUsageRecord {
+            timestamp: None,
+            model: "gpt-5.6-sol".to_string(),
+            effort: Some("high".to_string()),
+            project: None,
+            plan: None,
+            input: 200_000,
+            cached: 0,
+            output: 0,
+        }];
+        let mut summary = CostSummary::default();
+        let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
+        assert!(!has_tokens);
+        assert_eq!(cost, 0.0);
+        assert_eq!(summary.input_tokens, 0);
     }
 }
