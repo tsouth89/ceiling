@@ -690,7 +690,9 @@ mod tests {
 
     #[test]
     fn empty_enabled_providers_are_a_conflict_not_an_empty_array() {
-        let body = no_enabled_providers_response(super::super::usage::NO_ENABLED_PROVIDERS_ERROR.to_string());
+        let body = no_enabled_providers_response(
+            super::super::usage::NO_ENABLED_PROVIDERS_ERROR.to_string(),
+        );
         assert!(
             body.starts_with("HTTP/1.1 409 Conflict"),
             "status must be distinguishable from 200 []: {body}"
