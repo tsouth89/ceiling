@@ -2,11 +2,13 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::usage::ProviderSelection;
 use crate::core::{
@@ -19,6 +21,9 @@ const UNAUTHENTICATED_ERROR: &str = "unauthorized";
 const PROVIDER_FAILURE: &str = "provider request failed";
 const MAX_HEADER_BYTES: usize = 8192;
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// Same numeric cap as the desktop refresh fetch gate. A local polling
+/// script otherwise multiplies into one live provider request per connection.
+const MAX_CONCURRENT_CONNECTIONS: usize = 8;
 
 #[derive(Args, Debug, Clone)]
 pub struct ServeArgs {
@@ -40,6 +45,13 @@ pub struct ServeArgs {
     pub include_identity: bool,
 }
 
+struct ServeState {
+    expected_token: Option<String>,
+    include_identity: bool,
+    settings: Settings,
+    accounts: ConfiguredAccounts,
+}
+
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let expected_token = if args.allow_unauthenticated {
         None
@@ -51,31 +63,64 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         }
         Some(loaded.token)
     };
-    let include_identity = args.include_identity;
+    let state = Arc::new(ServeState {
+        expected_token,
+        include_identity: args.include_identity,
+        settings: Settings::load(),
+        accounts: ConfiguredAccounts::load(),
+    });
     let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
     eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
+    let limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+    serve_connections(listener, limiter, state).await
+}
 
+async fn serve_connections(
+    listener: TcpListener,
+    limiter: Arc<Semaphore>,
+    state: Arc<ServeState>,
+) -> anyhow::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
-        let expected_token = expected_token.clone();
-        tokio::spawn(async move {
-            if let Err(error) =
-                handle_client(stream, expected_token.as_deref(), include_identity).await
-            {
+        let state = Arc::clone(&state);
+        spawn_bounded_client(Arc::clone(&limiter), &listener, move |stream| async move {
+            if let Err(error) = handle_client(stream, &state).await {
                 tracing::debug!("serve client error: {error}");
             }
-        });
+        })
+        .await?;
     }
 }
 
-async fn handle_client(
-    mut stream: TcpStream,
-    expected_token: Option<&str>,
-    include_identity: bool,
-) -> anyhow::Result<()> {
+/// Take a connection slot, then accept. The permit lives until the spawned
+/// handler returns, which is what caps in-flight `/usage` fetches (SBS-959).
+async fn spawn_bounded_client<F, Fut>(
+    limiter: Arc<Semaphore>,
+    listener: &TcpListener,
+    work: F,
+) -> io::Result<tokio::task::JoinHandle<()>>
+where
+    F: FnOnce(TcpStream) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let permit = acquire_connection_slot(limiter).await;
+    let (stream, _) = listener.accept().await?;
+    Ok(tokio::spawn(async move {
+        let _permit = permit;
+        work(stream).await;
+    }))
+}
+
+async fn acquire_connection_slot(limiter: Arc<Semaphore>) -> OwnedSemaphorePermit {
+    limiter
+        .acquire_owned()
+        .await
+        .expect("connection limiter is never closed")
+}
+
+async fn handle_client(mut stream: TcpStream, state: &ServeState) -> anyhow::Result<()> {
     let request = read_http_headers(&mut stream).await?;
     let response = match parse_request(&request) {
-        Ok(request) => route_request(&request, expected_token, include_identity).await,
+        Ok(request) => route_request(&request, state).await,
         Err(status) => json_response(status, serde_json::json!({ "error": "bad request" })),
     };
     stream.write_all(response.as_bytes()).await?;
@@ -83,18 +128,15 @@ async fn handle_client(
     Ok(())
 }
 
-async fn route_request(
-    request: &ServeRequest,
-    expected_token: Option<&str>,
-    include_identity: bool,
-) -> String {
+async fn route_request(request: &ServeRequest, state: &ServeState) -> String {
     if request.method != "GET" {
         return json_response(405, serde_json::json!({ "error": "method not allowed" }));
     }
     if !allowed_host(&request.host) {
         return json_response(403, serde_json::json!({ "error": "forbidden host" }));
     }
-    if request.path != "/health" && !request_is_authorized(request, expected_token) {
+    if request.path != "/health" && !request_is_authorized(request, state.expected_token.as_deref())
+    {
         return json_response(401, serde_json::json!({ "error": UNAUTHENTICATED_ERROR }));
     }
 
@@ -106,24 +148,36 @@ async fn route_request(
         "/usage" => {
             usage_response(
                 request.query.get("provider").map(String::as_str),
-                include_identity,
+                state.include_identity,
+                &state.settings,
+                &state.accounts,
             )
             .await
         }
-        "/cost" => cost_response(request.query.get("provider").map(String::as_str)).await,
+        "/cost" => {
+            cost_response(
+                request.query.get("provider").map(String::as_str),
+                &state.settings,
+            )
+            .await
+        }
         _ => json_response(404, serde_json::json!({ "error": "not found" })),
     }
 }
 
-async fn usage_response(provider: Option<&str>, include_identity: bool) -> String {
+async fn usage_response(
+    provider: Option<&str>,
+    include_identity: bool,
+    settings: &Settings,
+    accounts: &ConfiguredAccounts,
+) -> String {
     let selection = match ProviderSelection::from_arg(provider) {
         Ok(selection) => selection,
         Err(error) => {
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
-    let settings = Settings::load();
-    let providers = match selection.resolved_ids(&settings) {
+    let providers = match selection.resolved_ids(settings) {
         Ok(providers) => providers,
         Err(error) => return no_enabled_providers_response(error.to_string()),
     };
@@ -139,13 +193,12 @@ async fn usage_response(provider: Option<&str>, include_identity: bool) -> Strin
         gateway_url: None,
         account_config_dir: None,
     };
-    let accounts = ConfiguredAccounts::load();
 
     let mut results = Vec::new();
     for provider_id in providers {
         let provider = instantiate_provider(provider_id);
         match provider
-            .fetch_usage(&ctx.clone().for_account(provider_id, &accounts))
+            .fetch_usage(&ctx.clone().for_account(provider_id, accounts))
             .await
         {
             Ok(result) => results.push(serde_json::json!({
@@ -163,15 +216,14 @@ async fn usage_response(provider: Option<&str>, include_identity: bool) -> Strin
     json_response(200, serde_json::Value::Array(results))
 }
 
-async fn cost_response(provider: Option<&str>) -> String {
+async fn cost_response(provider: Option<&str>, settings: &Settings) -> String {
     let selection = match ProviderSelection::from_arg(provider) {
         Ok(selection) => selection,
         Err(error) => {
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
-    let settings = Settings::load();
-    let providers = match selection.resolved_ids(&settings) {
+    let providers = match selection.resolved_ids(settings) {
         Ok(providers) => providers,
         Err(error) => return no_enabled_providers_response(error.to_string()),
     };
@@ -744,21 +796,145 @@ mod tests {
         );
     }
 
+    fn serve_state(token: Option<&str>) -> ServeState {
+        ServeState {
+            expected_token: token.map(str::to_string),
+            include_identity: false,
+            settings: Settings::default(),
+            accounts: ConfiguredAccounts::default(),
+        }
+    }
+
+    fn settings_with_no_enabled_providers() -> Settings {
+        let mut settings = Settings::default();
+        settings.enabled_providers.clear();
+        settings
+    }
+
     #[tokio::test]
     async fn health_bypasses_auth_and_other_paths_require_token() {
+        let state = serve_state(Some("secret-token"));
         let request =
             parse_request("GET /health HTTP/1.1\r\nHost: localhost:8080\r\n\r\n").unwrap();
         assert!(
-            route_request(&request, Some("secret-token"), false)
+            route_request(&request, &state)
                 .await
                 .starts_with("HTTP/1.1 200")
         );
 
         let denied = parse_request("GET /cost HTTP/1.1\r\nHost: localhost:8080\r\n\r\n").unwrap();
         assert!(
-            route_request(&denied, Some("secret-token"), false)
+            route_request(&denied, &state)
                 .await
                 .starts_with("HTTP/1.1 401")
         );
+    }
+
+    /// SBS-959: /usage and /cost must honor the Settings snapshot from `run`.
+    /// Reloading settings.json per request would ignore this empty snapshot
+    /// and use disk defaults (claude/codex/cursor/grok), and can take the
+    /// state write lock when the file still carries legacy credentials.
+    #[tokio::test]
+    async fn usage_and_cost_use_preloaded_settings_not_disk() {
+        let settings = settings_with_no_enabled_providers();
+        let accounts = ConfiguredAccounts::default();
+        let usage = usage_response(None, false, &settings, &accounts).await;
+        assert!(
+            usage.starts_with("HTTP/1.1 409 Conflict"),
+            "empty snapshot must not fall through to Settings::load(): {usage}"
+        );
+        let cost = cost_response(None, &settings).await;
+        assert!(
+            cost.starts_with("HTTP/1.1 409 Conflict"),
+            "empty snapshot must not fall through to Settings::load(): {cost}"
+        );
+    }
+
+    /// SBS-959: a grok-only snapshot must not grow into the disk default set.
+    #[tokio::test]
+    async fn cost_response_lists_only_the_preloaded_enabled_provider() {
+        let mut settings = Settings::default();
+        settings.enabled_providers.clear();
+        settings.enabled_providers.insert("grok".into());
+        let response = cost_response(None, &settings).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let payload_start = response.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+        let payload: serde_json::Value =
+            serde_json::from_str(&response[payload_start..]).expect("json body");
+        let rows = payload.as_array().expect("array");
+        assert_eq!(rows.len(), 1, "{payload}");
+        assert_eq!(rows[0]["provider"], "grok");
+    }
+
+    /// SBS-959: extra clients wait for a permit instead of each spawning a
+    /// handler (and therefore a provider fetch).
+    #[tokio::test]
+    async fn spawn_bounded_client_runs_at_most_one_handler_per_permit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let limiter = Arc::new(Semaphore::new(1));
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let server = tokio::spawn({
+            let current = Arc::clone(&current);
+            let peak = Arc::clone(&peak);
+            let release = Arc::clone(&release);
+            let limiter = Arc::clone(&limiter);
+            async move {
+                loop {
+                    let current = Arc::clone(&current);
+                    let peak = Arc::clone(&peak);
+                    let release = Arc::clone(&release);
+                    if spawn_bounded_client(
+                        Arc::clone(&limiter),
+                        &listener,
+                        move |_stream| async move {
+                            let n = current.fetch_add(1, Ordering::SeqCst) + 1;
+                            peak.fetch_max(n, Ordering::SeqCst);
+                            release.notified().await;
+                            current.fetch_sub(1, Ordering::SeqCst);
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut clients = Vec::new();
+        for _ in 0..3 {
+            clients.push(TcpStream::connect(addr).await.unwrap());
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while peak.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first handler should start");
+        // After three completed connects, an unbounded accept loop would
+        // already have spawned three handlers.
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            1,
+            "second and third clients must wait for a permit"
+        );
+        assert_eq!(current.load(Ordering::SeqCst), 1);
+
+        release.notify_waiters();
+        server.abort();
+        let _ = server.await;
+        drop(clients);
     }
 }
