@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use crate::core::{CostUsagePricing, ProviderId};
-use chrono::{DateTime, Local, NaiveDate};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -85,7 +85,6 @@ pub struct CodexParseResult {
 /// A billable Codex token-count delta.
 #[derive(Debug, Clone)]
 pub struct CodexUsageRecord {
-    pub day_key: String,
     pub timestamp: Option<DateTime<chrono::Utc>>,
     pub model: String,
     /// Reasoning effort in force when this delta was billed (from the enclosing
@@ -104,6 +103,28 @@ pub struct CodexUsageRecord {
     pub input: u64,
     pub cached: u64,
     pub output: u64,
+}
+
+impl CodexUsageRecord {
+    /// Local calendar day under the *current* offset.
+    ///
+    /// Derived at the call site, never stored. SBS-944: a string baked at
+    /// parse time would keep the offset that was in force then, so a DST
+    /// shift or timezone change would leave indexed records on the wrong
+    /// day. `None` when the log line had no parseable RFC3339 timestamp —
+    /// those records are excluded from every bucket, not half of them.
+    pub fn day_key(&self) -> Option<String> {
+        self.timestamp.map(local_day_key)
+    }
+}
+
+/// Local calendar day of `timestamp` under the current offset.
+pub fn local_day_key(timestamp: DateTime<Utc>) -> String {
+    timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 /// Day range for scanning
@@ -420,20 +441,23 @@ impl CodexParserState {
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
             return;
         }
-        let Some(day_key) = codex_line_day_key(obj, range) else {
-            return;
-        };
-
-        let info = payload.get("info");
-        let model = self.token_model(info, payload, obj);
-        let timestamp = obj
+        let Some(timestamp) = obj
             .get("timestamp")
             .and_then(|value| value.as_str())
             .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&chrono::Utc));
+            .map(|value| value.with_timezone(&Utc))
+        else {
+            return;
+        };
+        let day_key = local_day_key(timestamp);
+        if !CostUsageDayRange::is_in_range(&day_key, &range.scan_since_key, &range.scan_until_key) {
+            return;
+        }
+
+        let info = payload.get("info");
+        let model = self.token_model(info, payload, obj);
         self.record_usage(
-            day_key,
-            timestamp,
+            Some(timestamp),
             &model,
             delta_input,
             delta_cached,
@@ -468,9 +492,13 @@ impl CodexParserState {
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
             return;
         }
-        let Some(day_key) = codex_timestamp_day_key(timestamp) else {
+        let Some(timestamp) = DateTime::parse_from_rfc3339(timestamp)
+            .ok()
+            .map(|value| value.with_timezone(&Utc))
+        else {
             return;
         };
+        let day_key = local_day_key(timestamp);
         if !CostUsageDayRange::is_in_range(&day_key, &range.scan_since_key, &range.scan_until_key) {
             return;
         }
@@ -483,12 +511,8 @@ impl CodexParserState {
             .or(self.current_model.as_deref())
             .unwrap_or("gpt-5")
             .to_string();
-        let timestamp = DateTime::parse_from_rfc3339(timestamp)
-            .ok()
-            .map(|value| value.with_timezone(&chrono::Utc));
         self.record_usage(
-            day_key,
-            timestamp,
+            Some(timestamp),
             &model,
             delta_input,
             delta_cached,
@@ -498,7 +522,6 @@ impl CodexParserState {
 
     fn record_usage(
         &mut self,
-        day_key: String,
         timestamp: Option<DateTime<chrono::Utc>>,
         model: &str,
         input: u64,
@@ -506,7 +529,6 @@ impl CodexParserState {
         output: u64,
     ) {
         self.records.push(CodexUsageRecord {
-            day_key,
             timestamp,
             model: CostUsagePricing::normalize_codex_model(model),
             effort: self.current_effort.clone(),
@@ -698,24 +720,11 @@ fn is_candidate_codex_line(line: &str) -> bool {
     true
 }
 
-fn codex_line_day_key(obj: &Value, range: &CostUsageDayRange) -> Option<String> {
-    let ts = obj.get("timestamp").and_then(|v| v.as_str())?;
-    let day_key = codex_timestamp_day_key(ts)?;
-
-    CostUsageDayRange::is_in_range(&day_key, &range.scan_since_key, &range.scan_until_key)
-        .then_some(day_key)
-}
-
+#[cfg(test)]
 fn codex_timestamp_day_key(timestamp: &str) -> Option<String> {
     DateTime::parse_from_rfc3339(timestamp)
         .ok()
-        .map(|ts| {
-            ts.with_timezone(&Local)
-                .date_naive()
-                .format("%Y-%m-%d")
-                .to_string()
-        })
-        .or_else(|| timestamp.get(..10).map(str::to_string))
+        .map(|ts| local_day_key(ts.with_timezone(&Utc)))
 }
 
 fn token_count_payload(obj: &Value) -> Option<&Value> {
@@ -1004,6 +1013,63 @@ mod tests {
         );
     }
 
+    /// SBS-944 break 2: an offset-less timestamp is not RFC3339. The old
+    /// fallback took the first ten characters as `day_key` and left
+    /// `timestamp = None`, so the daily strip got the dollars and the
+    /// heatmap / reset windows did not.
+    #[test]
+    fn offsetless_codex_timestamp_does_not_produce_a_record() {
+        let range = CostUsageDayRange::new(
+            NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 8, 31).unwrap(),
+        );
+        let mut parser = CodexParserState::new(Some("gpt-5.6-sol".to_string()), None);
+        parser.process_line(
+            r#"{"timestamp":"2026-08-15T09:30:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200000,"cached_input_tokens":0,"output_tokens":0}}}}"#,
+            &range,
+        );
+        assert!(
+            parser.records.is_empty(),
+            "a non-RFC3339 timestamp must not be billed"
+        );
+        assert_eq!(codex_timestamp_day_key("2026-08-15T09:30:00"), None);
+    }
+
+    /// SBS-944 break 1: 2026-11-01T04:30:00Z is 00:30 at UTC-4 and 23:30
+    /// the previous local day at UTC-5. The day must come from the
+    /// timestamp under the current offset, not a string frozen earlier.
+    #[test]
+    fn codex_day_key_follows_the_current_offset() {
+        let timestamp = Utc.with_ymd_and_hms(2026, 11, 1, 4, 30, 0).unwrap();
+        let record = CodexUsageRecord {
+            timestamp: Some(timestamp),
+            model: "gpt-5".to_string(),
+            effort: None,
+            project: None,
+            plan: None,
+            input: 1,
+            cached: 0,
+            output: 0,
+        };
+        assert_eq!(record.day_key(), Some(local_day_key(timestamp)));
+        assert_eq!(
+            chrono::FixedOffset::west_opt(4 * 3600)
+                .unwrap()
+                .from_utc_datetime(&timestamp.naive_utc())
+                .date_naive()
+                .to_string(),
+            "2026-11-01"
+        );
+        assert_eq!(
+            chrono::FixedOffset::west_opt(5 * 3600)
+                .unwrap()
+                .from_utc_datetime(&timestamp.naive_utc())
+                .date_naive()
+                .to_string(),
+            "2026-10-31"
+        );
+    }
+
     #[test]
     fn test_fast_codex_parser_reads_last_usage_from_payload() {
         let range = CostUsageDayRange::new(
@@ -1023,7 +1089,10 @@ mod tests {
 
         assert_eq!(parser.records.len(), 1);
         let record = &parser.records[0];
-        assert_eq!(record.day_key, "2026-05-31");
+        assert_eq!(
+            record.day_key(),
+            Some(local_day_key(record.timestamp.unwrap()))
+        );
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (120, 40, 9));
         assert_eq!(
@@ -1532,7 +1601,10 @@ mod tests {
         assert_eq!(parsed.last_model.as_deref(), Some("gpt-5.5"));
         assert_eq!(parsed.records.len(), 1);
         let record = &parsed.records[0];
-        assert_eq!(record.day_key, "2026-05-31");
+        assert_eq!(
+            record.day_key(),
+            Some(local_day_key(record.timestamp.unwrap()))
+        );
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (45, 12, 8));
     }
