@@ -14,6 +14,9 @@ import {
   formatHourLabel,
   peakHour,
   peakWeekday,
+  priceState,
+  pricingCoverage,
+  pricingCoverageNote,
   selectProviders,
   totalValue,
   type ActivityMetric,
@@ -124,6 +127,8 @@ export function ActivityHeatmapCard() {
   const busiestHour = useMemo(() => peakHour(rows, metric), [rows, metric]);
   const busiestWeekday = useMemo(() => peakWeekday(rows, metric), [rows, metric]);
   const total = useMemo(() => totalValue(rows, metric), [rows, metric]);
+  const coverage = useMemo(() => pricingCoverage(rows), [rows]);
+  const coverageNote = pricingCoverageNote(coverage);
 
   const showTooltip = (event: React.MouseEvent<HTMLElement>, text: string) => {
     const host = hostRef.current;
@@ -178,6 +183,12 @@ export function ActivityHeatmapCard() {
         </div>
       </header>
 
+      {coverageNote && (
+        <p className="activity-card__coverage" role="status">
+          {coverageNote}.
+        </p>
+      )}
+
       {providerIds.length > 1 && (
         <div className="activity-card__providers" role="group" aria-label="Providers">
           {providerIds.map((id) => {
@@ -221,6 +232,7 @@ export function ActivityHeatmapCard() {
             <span className="activity-card__section-title">By day</span>
             <span className="activity-card__section-note">
               {formatMetric(total, metric)} total
+              {coverageNote ? ` · ${coverageNote}` : ""}
             </span>
           </div>
           <div
@@ -229,12 +241,16 @@ export function ActivityHeatmapCard() {
             aria-label={`Daily activity for the last ${calendar.length} days`}
           >
             {calendar.map((cell) => {
-              const label = `${shortDate(cell.date)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls`;
+              const state = priceState(cell);
+              const label = `${shortDate(cell.date)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls${
+                state === "unpriced" ? ", unpriced" : ""
+              }`;
               return (
                 <div
                   key={cell.date}
                   className="activity-card__cell activity-card__cell--day"
                   data-level={cell.level}
+                  data-price-state={state}
                   title={label}
                   onMouseMove={(event) => showTooltip(event, label)}
                   onMouseLeave={hideTooltip}
@@ -256,7 +272,9 @@ export function ActivityHeatmapCard() {
             <span className="activity-card__section-note">
               {busiestHour && busiestWeekday
                 ? `Busiest ${WEEKDAY_LABELS[busiestWeekday.weekday]}, around ${formatHourLabel(busiestHour.hour)}`
-                : "No peak yet"}
+                : coverage.totalTokens > 0 && coverage.pricedTokens === 0 && metric === "apiValue"
+                  ? "No priced dollars to rank"
+                  : "No peak yet"}
             </span>
           </div>
           <div className="activity-card__grid-wrap">
@@ -278,12 +296,16 @@ export function ActivityHeatmapCard() {
                     {WEEKDAY_LABELS[weekday]}
                   </span>
                   {row.map((cell) => {
-                    const label = `${WEEKDAY_LABELS[weekday]} ${formatHourLabel(cell.hour)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls`;
+                    const state = priceState(cell);
+                    const label = `${WEEKDAY_LABELS[weekday]} ${formatHourLabel(cell.hour)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls${
+                      state === "unpriced" ? ", unpriced" : ""
+                    }`;
                     return (
                       <div
                         key={cell.hour}
                         className="activity-card__cell activity-card__cell--hour"
                         data-level={cell.level}
+                        data-price-state={state}
                         title={label}
                         onMouseMove={(event) => showTooltip(event, label)}
                         onMouseLeave={hideTooltip}

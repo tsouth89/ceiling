@@ -9099,6 +9099,20 @@ body:has(.dashboard-shell) #root {
 .activity-card__cell[data-level="4"] {
   background: var(--heatmap-4);
 }
+.activity-card__cell[data-price-state="unpriced"] {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--heatmap-1) 0 1.5px,
+    var(--heatmap-0) 1.5px 5px
+  );
+}
+.activity-card__coverage {
+  margin: -4px 0 10px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
 .activity-card__days {
   display: grid;
   grid-auto-flow: column;

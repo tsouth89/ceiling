@@ -17,6 +17,22 @@ export type IntensityLevel = 0 | 1 | 2 | 3 | 4;
 export type CellTotals = {
   value: number;
   calls: number;
+  /** Model tokens with a canonical price, summed into this cell. */
+  pricedTokens: number;
+  /** All model tokens (priced + unpriced) summed into this cell. */
+  totalTokens: number;
+};
+
+/** How a cell's prices relate to its tokens. Unknown is not idle. */
+export type PriceState = "idle" | "unpriced" | "priced";
+
+export type PricingCoverage = {
+  pricedTokens: number;
+  totalTokens: number;
+  /** pricedTokens / totalTokens, or null when there are no model tokens. */
+  coverage: number | null;
+  /** Providers that contributed unpriced tokens, sorted. */
+  unpricedProviderIds: string[];
 };
 
 export type CalendarCell = CellTotals & {
@@ -37,7 +53,7 @@ export type HourCell = CellTotals & {
 /** Quartile cuts plus the peak: `[low, mid, high, peak]`. */
 export type Bands = [number, number, number, number];
 
-const EMPTY: CellTotals = { value: 0, calls: 0 };
+const EMPTY: CellTotals = { value: 0, calls: 0, pricedTokens: 0, totalTokens: 0 };
 
 export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -107,9 +123,21 @@ export function intensityLevel(value: number, bands: Bands): IntensityLevel {
   return 3;
 }
 
-function addTotals(target: Map<string, CellTotals>, key: string, value: number, calls: number) {
-  const current = target.get(key) ?? { value: 0, calls: 0 };
-  target.set(key, { value: current.value + value, calls: current.calls + calls });
+function addTotals(
+  target: Map<string, CellTotals>,
+  key: string,
+  value: number,
+  calls: number,
+  pricedTokens: number,
+  totalTokens: number,
+) {
+  const current = target.get(key) ?? EMPTY;
+  target.set(key, {
+    value: current.value + value,
+    calls: current.calls + calls,
+    pricedTokens: current.pricedTokens + pricedTokens,
+    totalTokens: current.totalTokens + totalTokens,
+  });
 }
 
 /**
@@ -140,7 +168,14 @@ export function buildCalendar(
 ): CalendarCell[] {
   const totals = new Map<string, CellTotals>();
   for (const point of hours) {
-    addTotals(totals, point.date, metricValue(point, metric), point.calls);
+    addTotals(
+      totals,
+      point.date,
+      metricValue(point, metric),
+      point.calls,
+      point.pricedTokens,
+      point.totalTokens,
+    );
   }
   const bands = bandThresholds(days.map((date) => totals.get(date)?.value ?? 0));
   return days.map((date) => {
@@ -169,6 +204,8 @@ export function buildWeekHourGrid(
       `${date.getDay()}:${point.hour}`,
       metricValue(point, metric),
       point.calls,
+      point.pricedTokens,
+      point.totalTokens,
     );
   }
   const bands = bandThresholds([...totals.values()].map((cell) => cell.value));
@@ -234,6 +271,58 @@ export function formatHourLabel(hour: number): string {
   const suffix = hour < 12 ? "AM" : "PM";
   const display = hour % 12 === 0 ? 12 : hour % 12;
   return `${display} ${suffix}`;
+}
+
+/**
+ * Priced vs total model tokens across the visible hours.
+ *
+ * Coverage is independent of the selected metric, same as the Estimated API
+ * value card: switching to Tokens must not hide that some of those tokens
+ * have no price.
+ */
+export function pricingCoverage(hours: ActivityHourPoint[]): PricingCoverage {
+  let pricedTokens = 0;
+  let totalTokens = 0;
+  const unpriced = new Set<string>();
+  for (const point of hours) {
+    pricedTokens += point.pricedTokens;
+    totalTokens += point.totalTokens;
+    if (point.totalTokens > point.pricedTokens) unpriced.add(point.providerId);
+  }
+  return {
+    pricedTokens,
+    totalTokens,
+    coverage: totalTokens > 0 ? pricedTokens / totalTokens : null,
+    unpricedProviderIds: [...unpriced].sort(),
+  };
+}
+
+/**
+ * Same wording as the Estimated API value card. `null` when every token is
+ * priced, or when there are no model tokens to talk about.
+ */
+export function pricingCoverageNote(coverage: PricingCoverage): string | null {
+  if (coverage.totalTokens <= 0 || coverage.pricedTokens >= coverage.totalTokens) {
+    return null;
+  }
+  const percent = Math.round((coverage.pricedTokens / coverage.totalTokens) * 100);
+  const providers = coverage.unpricedProviderIds.map(
+    (id) => id.charAt(0).toUpperCase() + id.slice(1),
+  );
+  if (providers.length === 0) return `${percent}% of tokens priced`;
+  return `${percent}% of tokens priced (unpriced models in ${providers.join(", ")})`;
+}
+
+/**
+ * A cell with tokens but no priced tokens is unknown-price, not idle.
+ *
+ * Mixed cells (some priced, some not) count as priced for the shade: their
+ * dollar intensity is real. The coverage note carries the partial.
+ */
+export function priceState(cell: Pick<CellTotals, "pricedTokens" | "totalTokens">): PriceState {
+  if (cell.totalTokens <= 0) return "idle";
+  if (cell.pricedTokens <= 0) return "unpriced";
+  return "priced";
 }
 
 /** True when the payload has nothing worth drawing. */

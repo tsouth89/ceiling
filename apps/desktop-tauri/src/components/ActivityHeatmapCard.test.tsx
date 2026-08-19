@@ -34,6 +34,8 @@ const hour = (over: Partial<ActivityHourPoint> = {}): ActivityHourPoint => ({
   hour: 9,
   apiValueUsd: 4,
   tokens: 1000,
+  pricedTokens: 1000,
+  totalTokens: 1000,
   calls: 2,
   ...over,
 });
@@ -152,5 +154,31 @@ describe("ActivityHeatmapCard", () => {
     expect(levels[0]).toBe("2");
     expect(levels[28]).toBe("2");
     expect(levels[29]).toBe("4");
+  });
+
+  it("names unknown prices instead of looking idle (SBS-952)", async () => {
+    getLocalActivityHeatmap.mockResolvedValue(
+      heatmap({
+        providerIds: ["codex"],
+        hours: [
+          hour({
+            apiValueUsd: 0,
+            tokens: 8000,
+            pricedTokens: 0,
+            totalTokens: 8000,
+            calls: 12,
+          }),
+        ],
+      }),
+    );
+    render(<ActivityHeatmapCard />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("0% of tokens priced (unpriced models in Codex)."),
+    );
+    expect(screen.getByText(/No priced dollars to rank/)).toBeInTheDocument();
+    expect(screen.queryByText(/No local activity in this window yet/)).not.toBeInTheDocument();
+    const unpriced = document.querySelectorAll('[data-price-state="unpriced"]');
+    expect(unpriced.length).toBeGreaterThan(0);
   });
 });
