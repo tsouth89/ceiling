@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 /// Format tag. The trailing byte is the layout version: bump it and every
@@ -541,11 +542,18 @@ impl<R: IndexedRecord> UsageIndex<R> {
 
 /// A process-wide index kept in memory and mirrored to disk.
 ///
-/// Scans take a read guard for their whole parse, so the two cards can scan at
-/// the same time; the short write that follows is what updates changed files.
+/// A scan holds a read guard for one parse batch at a time so the two cards
+/// can still scan together, then applies that batch's Stores before the next
+/// parse starts. Holding the guard for the whole walk is what used to keep
+/// every newly parsed record in a side `updates` vec until the last file
+/// (SBS-951). The persist at the end of the scan is what writes the snapshot.
 pub struct IndexStore<R: 'static> {
     file_name: &'static str,
     state: OnceLock<RwLock<UsageIndex<R>>>,
+    /// Set when [`Self::apply`] inserts a file. [`Self::persist`] writes the
+    /// snapshot once at the end of a scan so a batched apply does not re-encode
+    /// the whole index after every parse batch.
+    dirty: AtomicBool,
 }
 
 impl<R: IndexedRecord> IndexStore<R> {
@@ -553,6 +561,7 @@ impl<R: IndexedRecord> IndexStore<R> {
         Self {
             file_name,
             state: OnceLock::new(),
+            dirty: AtomicBool::new(false),
         }
     }
 
@@ -593,12 +602,33 @@ impl<R: IndexedRecord> IndexStore<R> {
         }
     }
 
-    /// Apply one scan's newly parsed files and write the index back.
+    /// Move newly parsed files into the live index without encoding a snapshot.
+    ///
+    /// A cold scan used to keep every Store in one `updates` vec until the last
+    /// file, which is what held the whole corpus in RAM (SBS-951). Applying a
+    /// parse batch at a time drops those records from the scan's working set.
+    pub fn apply(&'static self, updates: Vec<NewEntry<R>>) {
+        if updates.is_empty() {
+            return;
+        }
+        let mut guard = self
+            .state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for entry in updates {
+            guard.insert(entry);
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Write the live index to disk if this scan inserted files or a reused
+    /// entry is old enough that its TTL stamp must reach disk.
     ///
     /// `touched` are the paths the scan read from the index unchanged; they are
     /// marked so an idle-but-live transcript does not age out.
-    pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf]) {
-        if updates.is_empty() && touched.is_empty() {
+    pub fn persist(&'static self, touched: &[PathBuf]) {
+        let dirty = self.dirty.load(Ordering::Relaxed);
+        if !dirty && touched.is_empty() {
             return;
         }
         let mut guard = self
@@ -615,11 +645,7 @@ impl<R: IndexedRecord> IndexStore<R> {
         for path in touched {
             guard.touch(path);
         }
-        let changed = !updates.is_empty();
-        for entry in updates {
-            guard.insert(entry);
-        }
-        if !changed && !stale_touch {
+        if !dirty && !stale_touch {
             return;
         }
         if let Some(path) = self.path() {
@@ -633,8 +659,33 @@ impl<R: IndexedRecord> IndexStore<R> {
             }
             if let Err(error) = crate::secure_file::atomic_write(&path, &bytes) {
                 tracing::warn!("failed to persist usage index: {error}");
+                return;
             }
         }
+        self.dirty.store(false, Ordering::Relaxed);
+    }
+
+    /// Apply one scan's newly parsed files and write the index back.
+    ///
+    /// `touched` are the paths the scan read from the index unchanged; they are
+    /// marked so an idle-but-live transcript does not age out.
+    pub fn commit(&'static self, updates: Vec<NewEntry<R>>, touched: &[PathBuf]) {
+        self.apply(updates);
+        self.persist(touched);
+    }
+
+    /// Drop in-memory entries so a test starts from a cold index.
+    ///
+    /// Does not write disk. The next [`Self::read`] sees an empty snapshot
+    /// with the current price fingerprint.
+    #[cfg(test)]
+    pub(crate) fn reset_for_test(&'static self) {
+        let mut guard = self
+            .state()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = UsageIndex::empty(pricing_fingerprint());
+        self.dirty.store(false, Ordering::Relaxed);
     }
 
     fn state(&'static self) -> &'static RwLock<UsageIndex<R>> {
@@ -653,6 +704,18 @@ impl<R: IndexedRecord> IndexStore<R> {
     }
 
     fn path(&self) -> Option<PathBuf> {
+        // Tests must not write the developer's real snapshot. The thread-local
+        // stays None so persist is a no-op; joining file_name keeps the store's
+        // identity live under cfg(test).
+        #[cfg(test)]
+        {
+            TEST_INDEX_DIR.with(|dir| {
+                dir.borrow()
+                    .as_ref()
+                    .map(|parent| parent.join(self.file_name))
+            })
+        }
+        #[cfg(not(test))]
         crate::settings::Settings::settings_path().and_then(|path| {
             path.parent()
                 .map(|parent| parent.join("usage-index").join(self.file_name))
@@ -675,6 +738,12 @@ pub fn pricing_fingerprint() -> u64 {
         .map(|bytes| fnv1a64(&bytes))
         .unwrap_or(0);
     fnv1a64(env!("CARGO_PKG_VERSION").as_bytes()) ^ catalog.rotate_left(17)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_INDEX_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 pub(crate) static CLAUDE_INDEX: IndexStore<ClaudeUsageRecord> = IndexStore::new("claude.bin");

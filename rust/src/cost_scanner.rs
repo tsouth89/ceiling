@@ -31,7 +31,7 @@ use crate::grok_costs::{
     parse_grok_updates_file, should_count_grok_record,
 };
 use crate::settings::Settings;
-use crate::usage_index::{FileFacts, Lookup, NewEntry, file_facts};
+use crate::usage_index::{FileFacts, IndexStore, Lookup, NewEntry, file_facts};
 
 /// Config directories for every directory-backed account of `provider`.
 ///
@@ -1158,13 +1158,11 @@ where
         return;
     }
 
-    let index = crate::usage_index::CODEX_INDEX.read();
-    let mut updates: Vec<NewEntry<CodexUsageRecord>> = Vec::new();
-    let mut touched = Vec::new();
-    for_each_parsed_file(
+    for_each_indexed_file(
         files,
+        &crate::usage_index::CODEX_INDEX,
         cancel,
-        |path| -> IndexedFile<'_, CodexUsageRecord> {
+        |index, path| -> IndexedFile<'_, CodexUsageRecord> {
             let Some(facts) = file_facts(path) else {
                 return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
             };
@@ -1192,32 +1190,8 @@ where
                 }
             }
         },
-        |path, (records, outcome)| {
-            fold(path, records.as_slice());
-            match (outcome, records) {
-                (
-                    IndexOutcome::Store {
-                        facts,
-                        parsed_bytes,
-                        covers_from_ms,
-                    },
-                    FileRecords::Parsed(records),
-                ) => updates.push(NewEntry {
-                    path: path.to_path_buf(),
-                    facts,
-                    parsed_bytes,
-                    covers_from_ms,
-                    records,
-                }),
-                (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
-                // Incomplete, or a shape that cannot occur: leave the index
-                // exactly as it was.
-                _ => {}
-            }
-        },
+        |path, records| fold(path, records),
     );
-    drop(index);
-    crate::usage_index::CODEX_INDEX.commit(updates, &touched);
 }
 
 /// Parse already-deduped rollout paths and fold them into one summary.
@@ -1401,10 +1375,109 @@ fn read_outcome(
 
 /// Whether scans consult the on-disk record index.
 ///
-/// Off under `cfg(test)`: the suite scans throwaway fixture directories, and it
-/// must neither read nor write the developer's real index to do it.
+/// Off under `cfg(test)` unless a test opts in: the suite scans throwaway
+/// fixture directories, and it must neither read nor write the developer's
+/// real index to do it.
 fn index_enabled() -> bool {
-    !cfg!(test)
+    #[cfg(test)]
+    {
+        TEST_INDEX_ENABLED.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_INDEX_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// File counts handed to [`IndexStore::apply`] during one scan. A cold
+    /// scan that still buffers every Store until the end records a single
+    /// value equal to the corpus (SBS-951).
+    static INDEX_APPLY_SIZES: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn note_index_apply(file_count: usize) {
+    if file_count > 0 {
+        INDEX_APPLY_SIZES.with(|sizes| sizes.borrow_mut().push(file_count));
+    }
+}
+
+/// How many newly-parsed files may sit in RAM before they are handed to the
+/// index. Matches one parse batch so the live set is the same size the
+/// parser already keeps (SBS-951).
+fn index_flush_file_limit(file_count: usize) -> usize {
+    parse_workers(file_count)
+        .saturating_mul(PARSE_BATCH_PER_WORKER)
+        .max(1)
+}
+
+/// Stream files through the index in parse-sized batches, applying each
+/// batch's Stores before the next parse starts.
+///
+/// A cold scan used to collect every `Store` into one `updates` vec and
+/// `commit` after the last file. That put the whole corpus in RAM twice:
+/// once in `updates`, once in the index. Applying at the same batch
+/// boundary the parser already uses keeps only one batch of new records
+/// live outside the index (SBS-951).
+fn for_each_indexed_file<R, P, F>(
+    files: &[PathBuf],
+    store: &'static IndexStore<R>,
+    cancel: Option<&AtomicBool>,
+    parse: P,
+    mut fold: F,
+) where
+    R: crate::usage_index::IndexedRecord,
+    P: for<'idx> Fn(&'idx crate::usage_index::UsageIndex<R>, &Path) -> IndexedFile<'idx, R> + Sync,
+    F: FnMut(&Path, &[R]),
+{
+    if files.is_empty() {
+        return;
+    }
+    let workers = parse_workers(files.len());
+    let batch = index_flush_file_limit(files.len());
+    let mut touched = Vec::new();
+    for chunk in files.chunks(batch) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let mut updates = Vec::new();
+        {
+            let index = store.read();
+            for (path, (records, outcome)) in
+                parse_batch(chunk, workers, &|path| parse(&index, path), cancel)
+            {
+                fold(path, records.as_slice());
+                match (outcome, records) {
+                    (
+                        IndexOutcome::Store {
+                            facts,
+                            parsed_bytes,
+                            covers_from_ms,
+                        },
+                        FileRecords::Parsed(records),
+                    ) => updates.push(NewEntry {
+                        path: path.to_path_buf(),
+                        facts,
+                        parsed_bytes,
+                        covers_from_ms,
+                        records,
+                    }),
+                    (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
+                    // Incomplete, or a shape that cannot occur: leave the
+                    // index exactly as it was.
+                    _ => {}
+                }
+            }
+        }
+        #[cfg(test)]
+        note_index_apply(updates.len());
+        store.apply(updates);
+    }
+    store.persist(&touched);
 }
 
 /// How far back a transcript is indexed.
@@ -1461,13 +1534,11 @@ fn for_each_claude_file<F>(
         record.timestamp.is_none_or(|at| at >= horizon)
     };
 
-    let index = crate::usage_index::CLAUDE_INDEX.read();
-    let mut updates: Vec<NewEntry<ClaudeUsageRecord>> = Vec::new();
-    let mut touched = Vec::new();
-    for_each_parsed_file(
+    for_each_indexed_file(
         files,
+        &crate::usage_index::CLAUDE_INDEX,
         cancel,
-        |path| -> IndexedFile<'_, ClaudeUsageRecord> {
+        |index, path| -> IndexedFile<'_, ClaudeUsageRecord> {
             let Some(facts) = file_facts(path) else {
                 return (FileRecords::Parsed(Vec::new()), IndexOutcome::Incomplete);
             };
@@ -1505,34 +1576,8 @@ fn for_each_claude_file<F>(
                 }
             }
         },
-        |path, (records, outcome)| {
-            fold(path, records.as_slice());
-            // The records move straight into the index entry, so a file that
-            // was read is never held twice.
-            match (outcome, records) {
-                (
-                    IndexOutcome::Store {
-                        facts,
-                        parsed_bytes,
-                        covers_from_ms,
-                    },
-                    FileRecords::Parsed(records),
-                ) => updates.push(NewEntry {
-                    path: path.to_path_buf(),
-                    facts,
-                    parsed_bytes,
-                    covers_from_ms,
-                    records,
-                }),
-                (IndexOutcome::Reused, _) => touched.push(path.to_path_buf()),
-                // Incomplete, or a shape that cannot occur: leave the index
-                // exactly as it was.
-                _ => {}
-            }
-        },
+        |path, records| fold(path, records),
     );
-    drop(index);
-    crate::usage_index::CLAUDE_INDEX.commit(updates, &touched);
 }
 
 /// Stream every usage record in one transcript file, starting at byte
@@ -3521,6 +3566,103 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, ["a-first.jsonl", "m-middle.jsonl", "z-last.jsonl"]);
+    }
+
+    /// Opt a test into the index path and reset both stores afterwards.
+    ///
+    /// The suite keeps the index off so it cannot write the developer's real
+    /// snapshot. Tests that pin SBS-951 turn it on for one thread and wipe
+    /// the process-wide stores on drop.
+    struct TestIndexGuard;
+
+    impl TestIndexGuard {
+        fn enter() -> Self {
+            INDEX_APPLY_SIZES.with(|sizes| sizes.borrow_mut().clear());
+            crate::usage_index::CLAUDE_INDEX.reset_for_test();
+            crate::usage_index::CODEX_INDEX.reset_for_test();
+            TEST_INDEX_ENABLED.with(|enabled| enabled.set(true));
+            Self
+        }
+    }
+
+    impl Drop for TestIndexGuard {
+        fn drop(&mut self) {
+            TEST_INDEX_ENABLED.with(|enabled| enabled.set(false));
+            crate::usage_index::CLAUDE_INDEX.reset_for_test();
+            crate::usage_index::CODEX_INDEX.reset_for_test();
+            INDEX_APPLY_SIZES.with(|sizes| sizes.borrow_mut().clear());
+        }
+    }
+
+    /// SBS-951: a cold scan that Stores every file must not keep every
+    /// record vector in one `updates` buf until the last file.
+    #[test]
+    fn a_cold_claude_index_scan_flushes_stores_per_parse_batch() {
+        let _guard = TestIndexGuard::enter();
+        let n: usize = 40;
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        for i in 0..n {
+            let path = dir.path().join(format!("t{i}.jsonl"));
+            std::fs::write(&path, claude_event_line(i as u32, 100) + "\n").unwrap();
+            files.push(path);
+        }
+
+        let cutoff = Utc::now() - Duration::days(30);
+        let mut folded = 0usize;
+        for_each_claude_file(&files, &cutoff, None, |_, records| folded += records.len());
+
+        let sizes = INDEX_APPLY_SIZES.with(|s| s.borrow().clone());
+        let limit = index_flush_file_limit(n);
+        assert_eq!(folded, n, "every transcript still reaches the fold");
+        assert!(
+            sizes.len() >= 2,
+            "cold scan of {n} files flushed {sizes:?}; holding every Store until the end is SBS-951"
+        );
+        assert!(
+            sizes.iter().all(|&s| s <= limit),
+            "a flush held {sizes:?} files; one parse batch is {limit}"
+        );
+        assert_eq!(sizes.iter().sum::<usize>(), n);
+    }
+
+    /// The Codex index path had the same accumulate-then-commit shape.
+    #[test]
+    fn a_cold_codex_index_scan_flushes_stores_per_parse_batch() {
+        let _guard = TestIndexGuard::enter();
+        let n: usize = 40;
+        let today = Local::now().date_naive();
+        let ts = format!("{}T10:00:00.000Z", today.format("%Y-%m-%d"));
+        let line = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":10,"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        for i in 0..n {
+            let path = dir.path().join(format!(
+                "rollout-{}-{:08}-3333-3333-3333-333333333333.jsonl",
+                today.format("%Y-%m-%d"),
+                i
+            ));
+            std::fs::write(&path, format!("{line}\n")).unwrap();
+            files.push(path);
+        }
+
+        let mut folded = 0usize;
+        for_each_codex_file(&files, None, |_, records| folded += records.len());
+
+        let sizes = INDEX_APPLY_SIZES.with(|s| s.borrow().clone());
+        let limit = index_flush_file_limit(n);
+        assert!(folded > 0, "rollouts still reach the fold");
+        assert!(
+            sizes.len() >= 2,
+            "cold scan of {n} files flushed {sizes:?}; holding every Store until the end is SBS-951"
+        );
+        assert!(
+            sizes.iter().all(|&s| s <= limit),
+            "a flush held {sizes:?} files; one parse batch is {limit}"
+        );
+        assert_eq!(sizes.iter().sum::<usize>(), n);
     }
 
     #[test]
