@@ -1616,3 +1616,26 @@ fn a_successful_revoke_clears_preferences_after_the_hook() {
     let after = ApiKeys::try_load_from(&keys_path).expect("reload api keys");
     assert!(!after.has_key(ProviderId::StepFun.cli_name()));
 }
+
+#[test]
+fn unparseable_settings_are_moved_aside_instead_of_overwritten() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    let original = "{\"refresh_interval_secs\":\"60\"";
+    std::fs::write(&path, original).expect("write corrupt settings");
+
+    let loaded = Settings::parse_or_quarantine(&path, original);
+    assert_eq!(
+        loaded.refresh_interval_secs,
+        Settings::default().refresh_interval_secs
+    );
+    assert!(
+        !path.exists(),
+        "the live path must be vacated so a later save cannot clobber the original"
+    );
+    let backup = Settings::backup_path(&path);
+    assert_eq!(
+        std::fs::read_to_string(&backup).expect("read backup"),
+        original
+    );
+}

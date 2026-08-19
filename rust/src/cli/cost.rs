@@ -52,18 +52,20 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     };
 
     let providers = ProviderSelection::from_arg(args.provider.as_deref())?;
+    let settings = crate::settings::Settings::load();
+    let provider_ids = providers.resolved_ids(&settings)?;
     let use_color = !args.no_color && is_terminal();
     let scanner = CostScanner::with_codex_speed(args.days, Some(args.codex_speed.as_str()));
 
     tracing::debug!(
         "Running cost command: providers={:?}, format={:?}, days={}, codex_speed={:?}",
-        providers.as_list(),
+        provider_ids,
         format,
         args.days,
         scanner.codex_speed()
     );
 
-    let results = collect_results(&scanner, &providers.as_list());
+    let results = collect_results(&scanner, &provider_ids);
 
     match format {
         OutputFormat::Text => {

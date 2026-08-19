@@ -802,6 +802,10 @@ impl Settings {
         dirs::config_dir().map(|p| p.join("Ceiling").join("settings.json"))
     }
 
+    pub(crate) fn backup_path(path: &std::path::Path) -> PathBuf {
+        path.with_extension("json.bak")
+    }
+
     /// Load settings from disk
     pub fn load() -> Self {
         let settings = Self::load_from_disk();
@@ -844,23 +848,7 @@ impl Settings {
         #[allow(unused_mut)]
         let mut settings = match Self::settings_path() {
             Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
-                Ok(content) => {
-                    match serde_json::from_str(content.trim_start_matches('\u{feff}')) {
-                        Ok(settings) => settings,
-                        Err(error) => {
-                            // Falling back to defaults means the next save
-                            // rewrites the user's file as defaults, so a parse
-                            // failure must at least be diagnosable rather than
-                            // silent. Unknown provider ids no longer land here
-                            // (see `RawSettings::provider_configs`).
-                            tracing::warn!(
-                                %error,
-                                "settings.json could not be parsed; falling back to defaults"
-                            );
-                            Self::default()
-                        }
-                    }
-                }
+                Ok(content) => Self::parse_or_quarantine(&path, &content),
                 Err(error) => {
                     tracing::warn!(%error, "settings.json could not be read; using defaults");
                     Self::default()
@@ -876,6 +864,30 @@ impl Settings {
         }
 
         settings
+    }
+
+    /// Parse `settings.json`, or move a corrupt file aside so the next save
+    /// cannot overwrite the user's last known contents.
+    pub(crate) fn parse_or_quarantine(path: &std::path::Path, content: &str) -> Self {
+        match serde_json::from_str(content.trim_start_matches('\u{feff}')) {
+            Ok(settings) => settings,
+            Err(error) => {
+                let backup = Self::backup_path(path);
+                match std::fs::rename(path, &backup) {
+                    Ok(()) => tracing::warn!(
+                        %error,
+                        backup = %backup.display(),
+                        "settings.json could not be parsed; original moved aside and defaults loaded"
+                    ),
+                    Err(rename_error) => tracing::warn!(
+                        %error,
+                        %rename_error,
+                        "settings.json could not be parsed; falling back to defaults without a backup"
+                    ),
+                }
+                Self::default()
+            }
+        }
     }
 
     /// Save settings to disk

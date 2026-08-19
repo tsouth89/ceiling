@@ -2,11 +2,53 @@
 mod tests {
     use super::{
         ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog, ModelsDevRefreshCoordinator,
+        fingerprint_catalog_at, fingerprint_catalog_prices,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, UNIX_EPOCH};
+
+    /// Two providers with two models each, written in a caller-chosen key
+    /// order. `ModelsDevCatalog` stores both levels in `HashMap`s, so the
+    /// order the JSON arrives in is the order the maps iterate in.
+    fn catalog_two_providers(input_per_million: f64, reversed: bool) -> ModelsDevCatalog {
+        let openai = format!(
+            r#""openai": {{
+                "id": "openai",
+                "models": {{
+                    "openai/gpt-fresh": {{
+                        "id": "openai/gpt-fresh",
+                        "cost": {{ "input": {input_per_million}, "output": 10 }}
+                    }},
+                    "openai/gpt-mini": {{
+                        "id": "openai/gpt-mini",
+                        "cost": {{ "input": 0.25, "output": 2 }}
+                    }}
+                }}
+            }}"#
+        );
+        let anthropic = r#""anthropic": {
+                "id": "anthropic",
+                "models": {
+                    "anthropic/claude-sonnet": {
+                        "id": "anthropic/claude-sonnet",
+                        "cost": { "input": 3, "output": 15 }
+                    },
+                    "anthropic/claude-haiku": {
+                        "id": "anthropic/claude-haiku",
+                        "cost": { "input": 1, "output": 5 }
+                    }
+                }
+            }"#
+        .to_string();
+        let ordered = if reversed {
+            format!("{{{anthropic}, {openai}}}")
+        } else {
+            format!("{{{openai}, {anthropic}}}")
+        };
+        ModelsDevCatalog::decode(&ordered).expect("catalog")
+    }
 
     /// A one-model catalog, enough to tell two saves apart by lookup.
     fn catalog_priced_at(input_per_million: f64) -> ModelsDevCatalog {
@@ -53,6 +95,131 @@ mod tests {
             2.5e-6
         );
         assert_eq!(on_disk.version, ModelsDevCache::ARTIFACT_VERSION);
+    }
+
+    /// SBS-941: a daily refetch rewrites `fetched_at` and reshuffles HashMap
+    /// keys. The fingerprint that invalidates dollar caches must ignore both.
+    #[test]
+    fn price_fingerprint_ignores_fetch_time_and_key_order() {
+        let first = catalog_priced_at(2.5);
+        let second = catalog_priced_at(2.5);
+        assert_eq!(
+            fingerprint_catalog_prices(&first),
+            fingerprint_catalog_prices(&second)
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let early = UNIX_EPOCH + Duration::from_secs(1_000);
+        let later = UNIX_EPOCH + Duration::from_secs(1_000 + 24 * 60 * 60);
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            early,
+            Some(dir.path())
+        ));
+        let first_bytes = std::fs::read(ModelsDevCache::cache_path(Some(dir.path()))).unwrap();
+        assert!(ModelsDevCache::save(
+            catalog_priced_at(2.5),
+            later,
+            Some(dir.path())
+        ));
+        let second_bytes = std::fs::read(ModelsDevCache::cache_path(Some(dir.path()))).unwrap();
+        assert_ne!(
+            first_bytes, second_bytes,
+            "a refetch must actually rewrite the artifact"
+        );
+
+        let first_artifact: ModelsDevCacheArtifact =
+            serde_json::from_slice(&first_bytes).expect("first artifact");
+        let second_artifact: ModelsDevCacheArtifact =
+            serde_json::from_slice(&second_bytes).expect("second artifact");
+        assert_eq!(
+            fingerprint_catalog_prices(&first_artifact.catalog),
+            fingerprint_catalog_prices(&second_artifact.catalog)
+        );
+        assert_ne!(
+            fingerprint_catalog_prices(&catalog_priced_at(2.5)),
+            fingerprint_catalog_prices(&catalog_priced_at(3.0))
+        );
+    }
+
+    /// The sort inside the fingerprint is the only thing standing between a
+    /// reshuffled `HashMap` and a daily cache wipe, so exercise both levels
+    /// with more than one key.
+    #[test]
+    fn price_fingerprint_ignores_provider_and_model_key_order() {
+        assert_eq!(
+            fingerprint_catalog_prices(&catalog_two_providers(2.5, false)),
+            fingerprint_catalog_prices(&catalog_two_providers(2.5, true))
+        );
+        assert_ne!(
+            fingerprint_catalog_prices(&catalog_two_providers(2.5, false)),
+            fingerprint_catalog_prices(&catalog_two_providers(3.0, true)),
+            "a rate change still has to move the fingerprint"
+        );
+    }
+
+    /// Identifiers are folded in one after another. Without a length frame,
+    /// `("ab", "c")` and `("a", "bc")` hash the same, so a rename between two
+    /// models could hide a rate change.
+    #[test]
+    fn price_fingerprint_frames_identifiers() {
+        let split = |first: &str, second: &str| {
+            ModelsDevCatalog::decode(&format!(
+                r#"{{
+                    "openai": {{
+                        "id": "openai",
+                        "models": {{
+                            "{first}": {{
+                                "id": "{second}",
+                                "cost": {{ "input": 1, "output": 2 }}
+                            }}
+                        }}
+                    }}
+                }}"#
+            ))
+            .expect("catalog")
+        };
+        assert_ne!(
+            fingerprint_catalog_prices(&split("ab", "c")),
+            fingerprint_catalog_prices(&split("a", "bc"))
+        );
+    }
+
+    /// SBS-941: `lookup` refuses a catalog past `CACHE_TTL`, so anything priced
+    /// while it was stale used the built-in rate card. Hashing the stale file
+    /// would make the refresh that revives the same rates a no-op, and the
+    /// fallback dollars would survive the rescan that is supposed to fix them.
+    #[test]
+    fn price_fingerprint_treats_a_stale_catalog_as_no_catalog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Some(dir.path());
+        let fetched = UNIX_EPOCH + Duration::from_secs(1_000);
+        let fresh = fetched + Duration::from_secs(60 * 60);
+        let expired = fetched + Duration::from_secs(25 * 60 * 60);
+
+        assert_eq!(
+            fingerprint_catalog_at(fresh, root),
+            0,
+            "no catalog on disk hashes as no catalog"
+        );
+
+        assert!(ModelsDevCache::save(catalog_priced_at(2.5), fetched, root));
+        let priced = fingerprint_catalog_at(fresh, root);
+        assert_ne!(priced, 0, "a usable catalog has to hash to something");
+        assert_eq!(
+            fingerprint_catalog_at(expired, root),
+            0,
+            "a catalog `lookup` refuses must hash as no catalog"
+        );
+
+        // The daily refetch that finds the same rates: new `fetched_at`, same
+        // prices. It must revive the fingerprint the fresh catalog had, so the
+        // fallback-priced records written while it was stale get dropped.
+        assert!(ModelsDevCache::save(catalog_priced_at(2.5), expired, root));
+        assert_eq!(fingerprint_catalog_at(expired, root), priced);
+
+        assert!(ModelsDevCache::save(catalog_priced_at(3.0), expired, root));
+        assert_ne!(fingerprint_catalog_at(expired, root), priced);
     }
 
     /// SBS-870: `File::create` truncated the live cache to zero bytes before
@@ -645,13 +812,93 @@ struct ModelsDevCacheMemoEntry {
 static CACHE_MEMO: LazyLock<Mutex<HashMap<PathBuf, ModelsDevCacheMemoEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Where the fetched pricing catalog is cached on this machine.
+/// Stable hash of the prices that are actually in force.
 ///
-/// Exposed so caches that store numbers *derived* from these prices can notice
-/// when the catalog changes, without having to know how the path is built.
-pub fn pricing_catalog_path() -> Option<PathBuf> {
-    let path = ModelsDevCache::cache_path(None);
-    (!path.as_os_str().is_empty()).then_some(path)
+/// The on-disk artifact is rewritten on a daily cadence even when no rate
+/// moved: `fetched_at_unix_ms` changes, and `HashMap` provider keys shuffle.
+/// Hashing those bytes would throw away every derived cache for nothing.
+/// Decode first and fold only `(provider, model, cost fields)` in sorted order.
+///
+/// A stale catalog hashes as *no* catalog, because `lookup` refuses it: numbers
+/// derived while it was stale were priced off the built-in rate card, and the
+/// refresh that makes the same rates usable again has to invalidate them.
+/// `ModelsDevCache::load` memoizes the decode by file identity, so the probes
+/// that run on every index read and every cache hit do not re-parse the JSON.
+pub fn pricing_content_fingerprint() -> u64 {
+    fingerprint_catalog_at(SystemTime::now(), None)
+}
+
+fn fingerprint_catalog_at(now: SystemTime, cache_root: Option<&Path>) -> u64 {
+    let load = ModelsDevCache::load(now, cache_root);
+    if load.is_stale {
+        return 0;
+    }
+    load.artifact
+        .map(|artifact| fingerprint_catalog_prices(&artifact.catalog))
+        .unwrap_or(0)
+}
+
+fn fingerprint_catalog_prices(catalog: &ModelsDevCatalog) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut providers: Vec<_> = catalog.providers.iter().collect();
+    providers.sort_by(|left, right| left.0.cmp(right.0));
+    for (provider_id, provider) in providers {
+        mix_framed(&mut hash, provider_id.as_bytes());
+        let mut models: Vec<_> = provider.models.iter().collect();
+        models.sort_by(|left, right| left.0.cmp(right.0).then(left.1.id.cmp(&right.1.id)));
+        for (model_key, model) in models {
+            mix_framed(&mut hash, model_key.as_bytes());
+            mix_framed(&mut hash, model.id.as_bytes());
+            mix_cost_fields(&mut hash, model.cost.as_ref());
+        }
+    }
+    hash
+}
+
+fn mix_cost_fields(hash: &mut u64, cost: Option<&ModelsDevCost>) {
+    let Some(cost) = cost else {
+        mix_fingerprint(hash, &[0]);
+        return;
+    };
+    mix_fingerprint(hash, &[1]);
+    mix_opt_f64(hash, cost.input);
+    mix_opt_f64(hash, cost.output);
+    mix_opt_f64(hash, cost.cache_read);
+    mix_opt_f64(hash, cost.cache_write);
+    match &cost.context_over_200k {
+        Some(above) => {
+            mix_fingerprint(hash, &[1]);
+            mix_opt_f64(hash, above.input);
+            mix_opt_f64(hash, above.output);
+            mix_opt_f64(hash, above.cache_read);
+            mix_opt_f64(hash, above.cache_write);
+        }
+        None => mix_fingerprint(hash, &[0]),
+    }
+}
+
+fn mix_opt_f64(hash: &mut u64, value: Option<f64>) {
+    match value {
+        Some(number) if number.is_finite() => {
+            mix_fingerprint(hash, &[1]);
+            mix_fingerprint(hash, &number.to_le_bytes());
+        }
+        Some(_) => mix_fingerprint(hash, &[2]),
+        None => mix_fingerprint(hash, &[0]),
+    }
+}
+
+/// Length-prefixed, so `("ab", "c")` cannot hash the same as `("a", "bc")`.
+fn mix_framed(hash: &mut u64, bytes: &[u8]) {
+    mix_fingerprint(hash, &(bytes.len() as u64).to_le_bytes());
+    mix_fingerprint(hash, bytes);
+}
+
+fn mix_fingerprint(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
 }
 
 struct ModelsDevCache;

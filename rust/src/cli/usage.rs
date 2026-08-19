@@ -129,7 +129,20 @@ impl ProviderSelection {
             ProviderSelection::Enabled => settings.get_enabled_provider_ids(),
         }
     }
+
+    /// Like [`Self::as_list_from`], but the default (enabled) selection fails
+    /// instead of resolving to an empty list that looks like success.
+    pub fn resolved_ids(&self, settings: &Settings) -> anyhow::Result<Vec<ProviderId>> {
+        let ids = self.as_list_from(settings);
+        if matches!(self, Self::Enabled) && ids.is_empty() {
+            anyhow::bail!(NO_ENABLED_PROVIDERS_ERROR);
+        }
+        Ok(ids)
+    }
 }
+
+pub const NO_ENABLED_PROVIDERS_ERROR: &str =
+    "No providers are enabled. Enable a provider in Preferences, or pass --provider.";
 
 /// JSON output payload
 #[derive(Debug, Serialize)]
@@ -174,7 +187,7 @@ impl UsageCommand {
         let source_mode = SourceMode::parse(&args.source).unwrap_or(SourceMode::Auto);
         let settings = Settings::load();
         let providers =
-            ProviderSelection::from_arg(args.provider.as_deref())?.as_list_from(&settings);
+            ProviderSelection::from_arg(args.provider.as_deref())?.resolved_ids(&settings)?;
 
         Ok(Self {
             format,
@@ -721,5 +734,21 @@ mod tests {
             .as_list_from(&settings);
 
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn empty_enabled_providers_is_an_error_for_the_default_selection() {
+        let settings = settings_with_enabled(&[]);
+        let err = ProviderSelection::from_arg(None)
+            .unwrap()
+            .resolved_ids(&settings)
+            .expect_err("empty enabled set must not look like success");
+        assert!(err.to_string().contains("No providers are enabled"));
+
+        let still_ok = ProviderSelection::from_arg(Some("claude"))
+            .unwrap()
+            .resolved_ids(&settings)
+            .unwrap();
+        assert_eq!(still_ok, vec![ProviderId::Claude]);
     }
 }
