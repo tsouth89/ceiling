@@ -63,14 +63,18 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         }
         Some(loaded.token)
     };
+    let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
+    eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
+    let (settings, accounts) =
+        tokio::task::spawn_blocking(|| (Settings::load(), ConfiguredAccounts::load()))
+            .await
+            .map_err(|error| anyhow::anyhow!("settings load task failed: {error}"))?;
     let state = Arc::new(ServeState {
         expected_token,
         include_identity: args.include_identity,
-        settings: Settings::load(),
-        accounts: ConfiguredAccounts::load(),
+        settings,
+        accounts,
     });
-    let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
-    eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
     let limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
     serve_connections(listener, limiter, state).await
 }
@@ -91,8 +95,10 @@ async fn serve_connections(
     }
 }
 
-/// Take a connection slot, then accept. The permit lives until the spawned
-/// handler returns, which is what caps in-flight `/usage` fetches (SBS-959).
+/// Accept first, then take a slot. Holding a permit across `accept` would
+/// idle-consume a slot and stop the accept loop when handlers are saturated.
+/// The permit lives until the spawned handler returns, which caps in-flight
+/// `/usage` fetches (SBS-959). A connection that arrives while full gets 503.
 async fn spawn_bounded_client<F, Fut>(
     limiter: Arc<Semaphore>,
     listener: &TcpListener,
@@ -102,19 +108,25 @@ where
     F: FnOnce(TcpStream) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
-    let permit = acquire_connection_slot(limiter).await;
     let (stream, _) = listener.accept().await?;
     Ok(tokio::spawn(async move {
+        let Some(permit) = try_acquire_connection_slot(limiter) else {
+            reject_when_busy(stream).await;
+            return;
+        };
         let _permit = permit;
         work(stream).await;
     }))
 }
 
-async fn acquire_connection_slot(limiter: Arc<Semaphore>) -> OwnedSemaphorePermit {
-    limiter
-        .acquire_owned()
-        .await
-        .expect("connection limiter is never closed")
+fn try_acquire_connection_slot(limiter: Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+    limiter.try_acquire_owned().ok()
+}
+
+async fn reject_when_busy(mut stream: TcpStream) {
+    let response = json_response(503, serde_json::json!({ "error": "too many connections" }));
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
 }
 
 async fn handle_client(mut stream: TcpStream, state: &ServeState) -> anyhow::Result<()> {
@@ -622,6 +634,7 @@ fn json_response(status: u16, payload: serde_json::Value) -> String {
         404 => "Not Found",
         405 => "Method Not Allowed",
         409 => "Conflict",
+        503 => "Service Unavailable",
         _ => "Internal Server Error",
     };
     format!(
@@ -936,5 +949,77 @@ mod tests {
         server.abort();
         let _ = server.await;
         drop(clients);
+    }
+
+    /// SBS-959: eight clients that never finish headers must not stop the
+    /// accept loop. The ninth still gets an HTTP response (503) instead of
+    /// hanging on connect or waiting out HEADER_READ_TIMEOUT.
+    #[tokio::test]
+    async fn ninth_client_gets_a_response_when_slots_are_full() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+        let started = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let server = tokio::spawn({
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            let limiter = Arc::clone(&limiter);
+            async move {
+                loop {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    if spawn_bounded_client(
+                        Arc::clone(&limiter),
+                        &listener,
+                        move |_stream| async move {
+                            started.fetch_add(1, Ordering::SeqCst);
+                            release.notified().await;
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut slow = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CONNECTIONS {
+            slow.push(TcpStream::connect(addr).await.unwrap());
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while started.load(Ordering::SeqCst) < MAX_CONCURRENT_CONNECTIONS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all slots should be occupied by slow clients");
+
+        let mut ninth = TcpStream::connect(addr).await.unwrap();
+        ninth
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = vec![0_u8; 512];
+        let n = tokio::time::timeout(Duration::from_secs(2), ninth.read(&mut buf))
+            .await
+            .expect("ninth client must get a response while slow clients hold slots")
+            .unwrap();
+        let response = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            response.starts_with("HTTP/1.1 503 Service Unavailable"),
+            "expected 503 while slots are full, got: {response}"
+        );
+
+        release.notify_waiters();
+        server.abort();
+        let _ = server.await;
+        drop(slow);
     }
 }
