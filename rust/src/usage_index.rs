@@ -1350,11 +1350,14 @@ mod tests {
         let workers: Vec<_> = (0..4)
             .map(|n| {
                 thread::spawn(move || {
-                    store.apply(vec![entry(
-                        &format!("/logs/batch-{n}.jsonl"),
-                        facts(100 + n as u64, 5),
-                        vec![claude_record("claude-opus-4-8", 1.0)],
-                    )]);
+                    store.apply(
+                        vec![entry(
+                            &format!("/logs/batch-{n}.jsonl"),
+                            facts(100 + n as u64, 5),
+                            vec![claude_record("claude-opus-4-8", 1.0)],
+                        )],
+                        pricing_fingerprint(),
+                    );
                     store.persist(&[]);
                 })
             })
