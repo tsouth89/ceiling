@@ -14,8 +14,18 @@ const WINDOWS_DPAPI_USER: &str = "windows-dpapi-user";
 const WINDOWS_DPAPI_MACHINE: &str = "windows-dpapi-machine";
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// How long an acquirer waits for a live holder before giving up.
 const STATE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const STATE_LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
+/// How old an exclusive-create sibling must be before it is treated as a crash
+/// leftover rather than a live holder.
+///
+/// Deliberately much longer than `STATE_LOCK_TIMEOUT`: the sibling has no
+/// kernel-backed release, so staleness is the only crash recovery there is, but
+/// a holder that is merely slow must never be mistaken for a dead one. Because
+/// this exceeds the acquire timeout, a waiter that arrives while a holder is
+/// working can never outlast it and steal the lock (SBS-947).
+const STATE_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Serialize read-modify-write transactions across Ceiling processes.
 ///
@@ -91,6 +101,10 @@ struct StateWriteLock {
     _file: Option<std::fs::File>,
     /// Set when this holder created the exclusive-create sibling. Unlinked on drop.
     exclusive_path: Option<PathBuf>,
+    /// Identity of the sibling this holder created, so drop can tell its own
+    /// file from a replacement made after a stale takeover.
+    #[cfg(unix)]
+    exclusive_id: Option<(u64, u64)>,
 }
 
 /// Outcome of one attempt to take the state-write lock.
@@ -99,6 +113,10 @@ enum LockAttempt {
     /// Another live holder has the lock, so the attempt is worth repeating.
     Contended,
     /// The mount does not implement `flock`. Exclusive-create is the fallback.
+    ///
+    /// Only `classify_lock_failure` builds this, and Windows locks through
+    /// `CreateFileW` instead, so there it is matched but never constructed.
+    #[cfg_attr(windows, allow(dead_code))]
     FlockUnsupported(io::Error),
     /// The lock file exists but this process cannot open it.
     Unopenable(io::Error),
@@ -116,8 +134,8 @@ enum LockFileAge {
 }
 
 enum Repair {
+    /// The lock file is gone, so the open failure was transient. Try again.
     Done,
-    Wait,
     Failed(io::Error),
 }
 
@@ -167,7 +185,6 @@ impl StateWriteLock {
                 }
                 LockAttempt::Unopenable(error) => match try_repair_unopenable(path, &error) {
                     Repair::Done => continue,
-                    Repair::Wait => {}
                     Repair::Failed(repair) => return Err(repair),
                 },
                 LockAttempt::Contended => {}
@@ -191,6 +208,8 @@ impl StateWriteLock {
             #[cfg(not(windows))]
             _file: None,
             exclusive_path: None,
+            #[cfg(unix)]
+            exclusive_id: None,
         }
     }
 
@@ -209,7 +228,6 @@ impl StateWriteLock {
                 LockAttempt::Unopenable(still) => LockAttempt::Failed(still),
                 other => other,
             },
-            Repair::Wait => LockAttempt::Contended,
             Repair::Failed(error) => LockAttempt::Failed(error),
         }
     }
@@ -225,6 +243,8 @@ impl StateWriteLock {
         }
         match options.open(&exclusive) {
             Ok(file) => {
+                #[cfg(unix)]
+                let exclusive_id = file_identity(&file);
                 #[cfg(windows)]
                 let _ = file;
                 LockAttempt::Acquired(Self {
@@ -233,6 +253,8 @@ impl StateWriteLock {
                     #[cfg(not(windows))]
                     _file: Some(file),
                     exclusive_path: Some(exclusive),
+                    #[cfg(unix)]
+                    exclusive_id,
                 })
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -291,6 +313,8 @@ impl StateWriteLock {
             Ok(handle) => LockAttempt::Acquired(Self {
                 handle: Some(handle),
                 exclusive_path: None,
+                #[cfg(unix)]
+                exclusive_id: None,
             }),
             Err(error) => classify_open_failure(&error),
         }
@@ -313,6 +337,8 @@ impl StateWriteLock {
             Ok(()) => LockAttempt::Acquired(Self {
                 _file: Some(file),
                 exclusive_path: None,
+                #[cfg(unix)]
+                exclusive_id: None,
             }),
             Err(error) => classify_lock_failure(error),
         }
@@ -332,6 +358,22 @@ fn lock_attempt_unexpected(attempt: LockAttempt, context: &str) -> io::Error {
     ))
 }
 
+/// `(device, inode)` of an open file, so a later `stat` of the same path can
+/// tell whether it is still the same file.
+#[cfg(unix)]
+fn file_identity(file: &std::fs::File) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata().ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(unix)]
+fn path_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
 fn lock_file_age(path: &Path) -> LockFileAge {
     match std::fs::metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => LockFileAge::Missing,
@@ -343,13 +385,34 @@ fn lock_file_age(path: &Path) -> LockFileAge {
         Ok(metadata) => match metadata.modified() {
             Err(error) => LockFileAge::Unknown(error),
             Ok(modified) => match std::time::SystemTime::now().duration_since(modified) {
-                Ok(age) if age >= STATE_LOCK_TIMEOUT => LockFileAge::Stale,
-                Ok(_) | Err(_) => LockFileAge::Fresh,
+                Ok(age) if age >= STATE_LOCK_STALE => LockFileAge::Stale,
+                Ok(_) => LockFileAge::Fresh,
+                // The mtime is in the future, so the age is not measurable:
+                // NFS server skew, a restored VM, or a clock set forward. Stay
+                // on the safe side and treat it as a live holder, but say so,
+                // because until the clock catches up this never ages out.
+                Err(error) => {
+                    tracing::warn!(
+                        lock_path = %path.display(),
+                        %error,
+                        "state lock file is stamped in the future; treating it as held until the clock catches up"
+                    );
+                    LockFileAge::Fresh
+                }
             },
         },
     }
 }
 
+/// Decide what to do about a lock file this process cannot open.
+///
+/// Unlinking is never one of the options. `Drop` deliberately leaves the flock
+/// lock file in place, so a live holder still has this inode open; removing it
+/// and creating a replacement would put two writers on two different inodes and
+/// let both writes run. The flock file's mtime is stamped at first create and
+/// never refreshed, so age cannot distinguish a dead leftover from a running
+/// holder either. A file this user cannot open is a leftover from a privileged
+/// or different-user run, so fail the write and name the path (SBS-947).
 fn try_repair_unopenable(path: &Path, open_error: &io::Error) -> Repair {
     if path.is_dir() {
         return Repair::Failed(io::Error::new(
@@ -357,36 +420,16 @@ fn try_repair_unopenable(path: &Path, open_error: &io::Error) -> Repair {
             format!("state lock path is a directory: {}", path.display()),
         ));
     }
-    if matches!(open_error.kind(), io::ErrorKind::ReadOnlyFilesystem) {
-        return Repair::Failed(io::Error::new(
-            open_error.kind(),
-            format!("could not open the state lock file: {open_error}"),
-        ));
-    }
     match lock_file_age(path) {
+        // Gone between the failed open and now, so nothing is holding it.
         LockFileAge::Missing => Repair::Done,
-        LockFileAge::Stale => match std::fs::remove_file(path) {
-            Ok(()) => {
-                tracing::warn!(
-                    lock_path = %path.display(),
-                    %open_error,
-                    "removed a stale unopenable leftover state lock file"
-                );
-                Repair::Done
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Repair::Done,
-            Err(error) => Repair::Failed(io::Error::new(
-                error.kind(),
-                format!(
-                    "could not repair an unopenable state lock file ({}): {error}",
-                    path.display()
-                ),
-            )),
-        },
-        LockFileAge::Fresh => Repair::Wait,
-        LockFileAge::Unknown(error) => Repair::Failed(io::Error::new(
-            error.kind(),
-            format!("could not tell whether the unopenable state lock file is stale: {error}"),
+        _ => Repair::Failed(io::Error::new(
+            open_error.kind(),
+            format!(
+                "could not open the state lock file ({}): {open_error}. \
+                 Remove it if no other Ceiling process is running.",
+                path.display()
+            ),
         )),
     }
 }
@@ -433,9 +476,15 @@ fn classify_open_failure(error: &io::Error) -> LockAttempt {
 /// Classify a `flock` failure on the opened lock file.
 ///
 /// `WouldBlock` is the only answer that means another live holder has the lock.
-/// A signal is worth another attempt. `ENOTSUP` / `ENOLCK` mean this filesystem
-/// cannot flock; exclusive-create is the fallback. Every other errno is unknown
+/// A signal is worth another attempt. `ENOTSUP` means this filesystem cannot
+/// flock at all; exclusive-create is the fallback. Every other errno is unknown
 /// and fails the write (SBS-947).
+///
+/// `ENOLCK` is deliberately not a fallback trigger. It also means the kernel
+/// lock table is full or `lockd` failed for this one call, and in that case
+/// another process can still hold a real flock on the lock file. Falling back
+/// would serialize on the sibling instead, which flock holders never take, so
+/// both writers would proceed and last-write-wins the credential files.
 #[cfg(not(windows))]
 fn classify_lock_failure(error: std::fs::TryLockError) -> LockAttempt {
     match error {
@@ -458,23 +507,27 @@ fn classify_lock_failure(error: std::fs::TryLockError) -> LockAttempt {
 
 #[cfg(not(windows))]
 fn is_flock_unsupported(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::Unsupported {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        error.raw_os_error() == Some(libc::ENOLCK)
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
+    error.kind() == io::ErrorKind::Unsupported
 }
 
 impl Drop for StateWriteLock {
     fn drop(&mut self) {
         if let Some(path) = self.exclusive_path.take() {
-            let _ = std::fs::remove_file(&path);
+            // Unlink the sibling only while it is still the file this holder
+            // created. If a stale takeover replaced it, the path now belongs to
+            // another live writer and removing it would hand the lock to a
+            // third (SBS-947).
+            #[cfg(unix)]
+            let ours = match (self.exclusive_id.take(), path_identity(&path)) {
+                (Some(created), Some(current)) => created == current,
+                // No identity to compare: a plain unlink is the old behaviour.
+                _ => true,
+            };
+            #[cfg(not(unix))]
+            let ours = true;
+            if ours {
+                let _ = std::fs::remove_file(&path);
+            }
         }
         #[cfg(windows)]
         if let Some(handle) = self.handle.take() {
@@ -1768,11 +1821,12 @@ mod tests {
     }
 
     fn make_stale(path: &Path) {
+        set_age(path, STATE_LOCK_STALE + std::time::Duration::from_secs(1));
+    }
+
+    fn set_age(path: &Path, age: std::time::Duration) {
         let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-        file.set_modified(
-            std::time::SystemTime::now() - STATE_LOCK_TIMEOUT - std::time::Duration::from_secs(1),
-        )
-        .unwrap();
+        file.set_modified(std::time::SystemTime::now() - age).unwrap();
     }
 
     #[cfg(unix)]
@@ -2020,8 +2074,16 @@ mod tests {
         match classify_lock_failure(std::fs::TryLockError::Error(io::Error::from_raw_os_error(
             libc::ENOLCK,
         ))) {
-            LockAttempt::FlockUnsupported(_) => {}
-            _ => panic!("ENOLCK must be flock-unsupported"),
+            LockAttempt::Failed(error) => assert!(
+                error.to_string().contains("could not lock"),
+                "ENOLCK must fail the write, got {error}"
+            ),
+            LockAttempt::FlockUnsupported(_) => panic!(
+                "ENOLCK also means the lock table is full or lockd failed for this call, while \
+                 another process still holds a real flock. Falling back to the sibling would let \
+                 both writers run."
+            ),
+            _ => panic!("ENOLCK must fail closed"),
         }
     }
 
@@ -2070,15 +2132,19 @@ mod tests {
         );
     }
 
+    /// Pins SBS-947: unlinking an unopenable lock file used to "repair" it, but
+    /// a live holder still has that inode open, so the replacement put two
+    /// writers on two different inodes.
     #[cfg(unix)]
     #[test]
-    fn a_stale_unopenable_leftover_lock_file_is_repaired() {
+    fn an_unopenable_lock_file_fails_closed_instead_of_being_unlinked() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state-write.lock");
         std::fs::write(&path, b"leftover from a privileged run").unwrap();
         make_stale(&path);
+        let before = path_identity(&path).expect("the leftover must exist");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::OpenOptions::new()
             .read(true)
@@ -2092,24 +2158,113 @@ mod tests {
 
         let started = std::time::Instant::now();
         let mut ran = false;
-        with_state_write_lock_at(&path, || {
+        let error = with_state_write_lock_at(&path, || {
             ran = true;
             Ok(())
         })
-        .expect("a stale leftover this user cannot open must be repaired, not skipped");
+        .expect_err("an unopenable lock file must fail the write, not be unlinked");
 
-        assert!(ran);
+        assert!(!ran, "the write must not run without a lock");
+        let message = error.to_string();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "a stale leftover must be repaired without waiting out the acquire timeout"
+            message.contains(&path.display().to_string()),
+            "the error must name the lock file so the user can remove it, got {message}"
+        );
+        assert_eq!(
+            path_identity(&path),
+            Some(before),
+            "the lock file must not be unlinked and recreated under a live holder"
         );
         assert!(
-            std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&path)
-                .is_ok(),
-            "repair must leave an openable lock file for the next writer"
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "an unopenable lock file must fail fast, not be masked by the acquire timeout"
+        );
+    }
+
+    /// Pins SBS-947: a holder that is merely slow is not a crash leftover. The
+    /// stale threshold is longer than the acquire timeout precisely so a waiter
+    /// can never outlast a live holder and steal the sibling.
+    #[test]
+    fn an_exclusive_create_sibling_is_not_stolen_before_the_stale_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        let exclusive = exclusive_lock_path(&path);
+
+        let held = StateWriteLock::acquire_with(&path, |_| {
+            LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported))
+        })
+        .expect("the first holder must take the sibling");
+
+        // Older than any waiter's acquire timeout, but still short of the
+        // crash-recovery threshold.
+        set_age(&exclusive, STATE_LOCK_TIMEOUT + std::time::Duration::from_secs(5));
+
+        assert!(
+            matches!(
+                StateWriteLock::try_exclusive_create(&path),
+                LockAttempt::Contended
+            ),
+            "a holder older than the acquire timeout must still read as live"
+        );
+        assert!(
+            exclusive.exists(),
+            "a live holder's sibling must not be removed"
+        );
+
+        drop(held);
+        assert!(
+            matches!(
+                StateWriteLock::try_exclusive_create(&path),
+                LockAttempt::Acquired(_)
+            ),
+            "the sibling must be free once the holder drops"
+        );
+    }
+
+    /// Pins SBS-947: after a stale takeover replaced the sibling, the original
+    /// holder's drop must not delete the new holder's file.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_holder_does_not_unlink_a_sibling_it_did_not_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        let exclusive = exclusive_lock_path(&path);
+
+        let first = StateWriteLock::acquire_with(&path, |_| {
+            LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported))
+        })
+        .expect("the first holder must take the sibling");
+
+        // Stand in for a takeover: the sibling at this path is now a different
+        // file belonging to somebody else.
+        std::fs::remove_file(&exclusive).unwrap();
+        std::fs::write(&exclusive, b"a later holder's sibling").unwrap();
+        let replacement = path_identity(&exclusive).unwrap();
+
+        drop(first);
+
+        assert_eq!(
+            path_identity(&exclusive),
+            Some(replacement),
+            "the first holder must not unlink a sibling it did not create"
+        );
+    }
+
+    /// Pins SBS-947: a lock file stamped in the future has no measurable age.
+    /// Treating that as stale would hand a live holder's lock away on nothing
+    /// worse than NFS clock skew.
+    #[test]
+    fn a_lock_file_stamped_in_the_future_is_not_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        std::fs::write(&path, b"held").unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .unwrap();
+
+        assert!(
+            matches!(lock_file_age(&path), LockFileAge::Fresh),
+            "a future mtime must read as a live holder, not as a stale leftover"
         );
     }
 }
