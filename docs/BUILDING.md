@@ -4,7 +4,15 @@
 
 - **Rust** stable with the `x86_64-pc-windows-msvc` target
 - **Microsoft Visual Studio Build Tools** with the **Desktop development with C++** workload
-- **Node.js** 20+ and pnpm
+- **Node.js** 20-24 and pnpm. Pinned to 22 in `.node-version`, which is what
+  CI builds and tests against.
+
+  Node 25 and newer cannot run the frontend tests. Node added a built-in
+  `localStorage` global there, and it stays `undefined` unless the process is
+  started with `--localstorage-file`. Vitest's jsdom environment skips any
+  window key Node already defines, so jsdom's real `localStorage` never gets
+  installed and every test that touches it fails with
+  `Cannot read properties of undefined (reading 'clear')`.
 
 Install the tools manually with rustup/winget/corepack, or use a tool manager
 such as mise. There is no automatic Windows bootstrap script in this port.

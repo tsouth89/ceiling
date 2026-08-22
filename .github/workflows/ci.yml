@@ -28,7 +28,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
       - run: node --test worker.test.mjs
