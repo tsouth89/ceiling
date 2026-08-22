@@ -301,24 +301,30 @@ mod tests {
     #[test]
     fn non_remembered_mode_save_is_noop() {
         // Call should not panic or error for ineligible modes.
-        save(SurfaceMode::Hidden, StoredGeometry {
-            x: 1,
-            y: 2,
-            width: Some(420),
-            height: Some(560),
-        });
+        save(
+            SurfaceMode::Hidden,
+            StoredGeometry {
+                x: 1,
+                y: 2,
+                width: Some(420),
+                height: Some(560),
+            },
+        );
         assert!(load(SurfaceMode::Hidden).is_none());
     }
 
     #[test]
     fn geometry_file_round_trip() {
         let mut f = GeometryFile::default();
-        f.entries.insert("settings".into(), StoredGeometry {
-            x: 100,
-            y: 200,
-            width: Some(520),
-            height: Some(600),
-        });
+        f.entries.insert(
+            "settings".into(),
+            StoredGeometry {
+                x: 100,
+                y: 200,
+                width: Some(520),
+                height: Some(600),
+            },
+        );
         let json = serde_json::to_string(&f).unwrap();
         let parsed: GeometryFile = serde_json::from_str(&json).unwrap();
         let entry = parsed.entries.get("settings").unwrap();
@@ -370,10 +376,13 @@ mod tests {
     #[test]
     fn stored_size_round_trips_without_position_fields() {
         let mut f = GeometryFile::default();
-        f.size_entries.insert("flyout".into(), StoredSize {
-            width: 400,
-            height: 820,
-        });
+        f.size_entries.insert(
+            "flyout".into(),
+            StoredSize {
+                width: 400,
+                height: 820,
+            },
+        );
         let json = serde_json::to_string(&f).unwrap();
         // The size-only entry must never carry x/y — that's the whole point
         // of keeping it out of `entries: BTreeMap<String, StoredGeometry>`.
@@ -388,17 +397,22 @@ mod tests {
     #[test]
     fn resolve_size_prefers_new_key_over_legacy() {
         let mut file = GeometryFile::default();
-        file.size_entries.insert("flyout".into(), StoredSize {
-            width: 500,
-            height: 900,
-        });
-        file.entries
-            .insert(LEGACY_FLYOUT_SIZE_KEY.into(), StoredGeometry {
+        file.size_entries.insert(
+            "flyout".into(),
+            StoredSize {
+                width: 500,
+                height: 900,
+            },
+        );
+        file.entries.insert(
+            LEGACY_FLYOUT_SIZE_KEY.into(),
+            StoredGeometry {
                 x: 0,
                 y: 0,
                 width: Some(640),
                 height: Some(720),
-            });
+            },
+        );
 
         let resolved = resolve_size(&file, "flyout").expect("size present");
         assert_eq!(resolved.width, 500);
@@ -410,13 +424,15 @@ mod tests {
         // Simulates an upgrading user: pre-refactor size lived under the
         // `SurfaceMode::TrayPanel` shared-window geometry key.
         let mut file = GeometryFile::default();
-        file.entries
-            .insert(LEGACY_FLYOUT_SIZE_KEY.into(), StoredGeometry {
+        file.entries.insert(
+            LEGACY_FLYOUT_SIZE_KEY.into(),
+            StoredGeometry {
                 x: 0,
                 y: 0,
                 width: Some(640),
                 height: Some(720),
-            });
+            },
+        );
 
         let resolved = resolve_size(&file, "flyout").expect("legacy size migrates");
         assert_eq!(resolved.width, 640);
@@ -426,13 +442,15 @@ mod tests {
     #[test]
     fn resolve_size_ignores_legacy_entry_missing_width_or_height() {
         let mut file = GeometryFile::default();
-        file.entries
-            .insert(LEGACY_FLYOUT_SIZE_KEY.into(), StoredGeometry {
+        file.entries.insert(
+            LEGACY_FLYOUT_SIZE_KEY.into(),
+            StoredGeometry {
                 x: 0,
                 y: 0,
                 width: Some(640),
                 height: None,
-            });
+            },
+        );
 
         assert!(resolve_size(&file, "flyout").is_none());
     }
