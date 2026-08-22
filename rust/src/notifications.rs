@@ -166,19 +166,58 @@ const SPEND_ANOMALY_FLOOR_USD: f64 = 1.00;
 /// median of themselves and a first ordinary day back reads as a spike.
 const SPEND_ANOMALY_MIN_USABLE_DAYS: usize = 3;
 
+/// When every recent day is under the floor, there is no median. Going silent
+/// hid a $180 loop from a $0.60/day user (SBS-967). This is the largest spike
+/// factor the setting will accept, applied to the floor: high enough that an
+/// ordinary first day, or the one-usable-day $12 case SBS-965 guards, does not
+/// toast, and low enough that the $180 failure still does.
+const SPEND_ANOMALY_ABSOLUTE_MULTIPLIER: f64 = 20.0;
+
+fn spend_anomaly_absolute_trigger_usd() -> f64 {
+    SPEND_ANOMALY_FLOOR_USD * SPEND_ANOMALY_ABSOLUTE_MULTIPLIER
+}
+
 /// How far today runs above the recent daily median.
 ///
-/// `None` when the baseline is zero. A multiple of nothing is not a multiple:
-/// a fresh install and a genuinely idle week look identical from the dollars
-/// alone, so neither raises a spike. A runaway loop on such a machine is the
-/// budget alert's job, which does not need history to fire.
+/// `None` when the baseline is zero. A multiple of nothing is not a multiple,
+/// so the ratio path stays off. `is_spend_spike` then falls back to an
+/// absolute multiple of the floor: the budget alert is a separate opt-in and
+/// cannot be this feature's only answer for a light user (SBS-967).
 fn spend_spike_ratio(today_usd: f64, baseline_usd: f64) -> Option<f64> {
     (baseline_usd > 0.0).then(|| today_usd / baseline_usd)
 }
 
 fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
-    today_usd >= SPEND_ANOMALY_FLOOR_USD
-        && spend_spike_ratio(today_usd, baseline_usd).is_some_and(|ratio| ratio >= multiplier)
+    if today_usd < SPEND_ANOMALY_FLOOR_USD {
+        return false;
+    }
+    if let Some(ratio) = spend_spike_ratio(today_usd, baseline_usd) {
+        return ratio >= multiplier;
+    }
+    at_least_cents(today_usd, spend_anomaly_absolute_trigger_usd())
+}
+
+/// `value >= threshold`, compared at cent precision.
+///
+/// `today_usd` is a sum of f64 per-model estimates, so a day genuinely worth
+/// $20.00 can land at 19.999999998 and miss a bare `>=` — while the toast
+/// would have printed it as "$20.00" and the user would be looking at a
+/// message that contradicts the threshold it claims to have crossed.
+fn at_least_cents(value: f64, threshold: f64) -> bool {
+    (value * 100.0).round() >= (threshold * 100.0).round()
+}
+
+fn spend_anomaly_toast_body(today_usd: f64, baseline_usd: f64) -> String {
+    if let Some(ratio) = spend_spike_ratio(today_usd, baseline_usd) {
+        format!(
+            "Today's estimated API value is ${today_usd:.2}, about {ratio:.1}x your recent daily median of ${baseline_usd:.2}. This is an estimate from local Codex and Claude logs, not a bill."
+        )
+    } else {
+        let trigger = spend_anomaly_absolute_trigger_usd();
+        format!(
+            "Today's estimated API value is ${today_usd:.2}, at or above the ${trigger:.2} absolute trigger used when there is no usable recent median. This is an estimate from local Codex and Claude logs, not a bill."
+        )
+    }
 }
 
 /// Median of the baseline days, which is what the spike is measured against.
@@ -189,10 +228,11 @@ fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
 ///
 /// Days with no spend are left out entirely rather than counted as zero. A
 /// normal three-day working week is `[0, 0, 0, 0, 20, 20, 20]`, whose median
-/// including the zeros is 0 — and a zero baseline switches the detector off, so
-/// the most ordinary schedule there is would have silently disabled it. An
-/// all-quiet week still has no positive days and still yields 0, which is the
-/// genuine "nothing to compare against" case.
+/// including the zeros is 0 — and a zero baseline has no ratio to fire on, so
+/// the most ordinary schedule there is would have had nothing to compare
+/// against. An all-quiet week still has no positive days and still yields 0,
+/// which is the genuine "no median" case; the absolute fallback in
+/// `is_spend_spike` is what still hears a runaway then (SBS-967).
 /// Baseline days must clear the same floor today does. A leftover five-cent day
 /// beside one real $20 day would otherwise put the median at $10.02, turning an
 /// ordinary $31 day into a 3x "spike" — and that false alarm also marks the day
@@ -785,10 +825,7 @@ impl NotificationManager {
             return;
         }
 
-        let ratio = spend_spike_ratio(today_usd, baseline_usd).unwrap_or_default();
-        let body = format!(
-            "Today's estimated API value is ${today_usd:.2}, about {ratio:.1}x your recent daily median of ${baseline_usd:.2}. This is an estimate from local Codex and Claude logs, not a bill."
-        );
+        let body = spend_anomaly_toast_body(today_usd, baseline_usd);
         // Marked sent only once a toast actually went out. `emit_toast` also
         // returns false for the per-refresh cap, the burst limit, and the
         // startup gate, and enrichment runs inside the same refresh that just
@@ -2305,8 +2342,9 @@ mod tests {
     }
 
     /// A three-day working week is four zeros and three real days. Counting the
-    /// zeros puts the median at 0, and a zero baseline switches the detector
-    /// off — so the most ordinary schedule there is would have disabled it.
+    /// zeros puts the median at 0, and a zero baseline has no ratio to fire on
+    /// — so the most ordinary schedule there is would have had nothing to
+    /// compare against.
     #[test]
     fn quiet_days_do_not_drag_the_baseline_to_zero() {
         let working_week = vec![0.0, 0.0, 0.0, 0.0, 20.0, 20.0, 20.0];
@@ -2353,14 +2391,84 @@ mod tests {
     #[test]
     fn a_spike_needs_both_the_ratio_and_a_meaningful_total() {
         // Cents times a big multiplier are still cents.
+        // SBS-967: today_usd is a sum of f64 estimates, so a day worth exactly
+        // the trigger can arrive a hair under it. The toast prints "$20.00"
+        // either way, so the comparison is made at the same cent precision.
+        let trigger = spend_anomaly_absolute_trigger_usd();
+        let a_hair_under = trigger - 1e-9;
+        assert!(
+            a_hair_under < trigger,
+            "the fixture must actually be below the trigger in raw f64"
+        );
+        assert!(
+            is_spend_spike(a_hair_under, 0.0, 3.0),
+            "a day that rounds to the trigger must fire, not miss by a float hair"
+        );
+        assert!(
+            !is_spend_spike(trigger - 0.01, 0.0, 3.0),
+            "a cent under the trigger is a real shortfall and must not fire"
+        );
+
         assert!(!is_spend_spike(0.30, 0.01, 3.0));
         assert!(is_spend_spike(30.0, 2.0, 3.0));
         assert!(!is_spend_spike(5.0, 2.0, 3.0));
         // Exactly at the factor counts.
         assert!(is_spend_spike(6.0, 2.0, 3.0));
-        // A zero baseline is no comparison, so it never fires on its own.
-        assert!(!is_spend_spike(500.0, 0.0, 3.0));
+        // The ratio of a zero baseline is still nothing — a multiple of
+        // nothing is not a multiple. The detector then uses the absolute
+        // fallback rather than staying silent (SBS-967). The old assertion
+        // `!is_spend_spike(500.0, 0.0, 3.0)` was the bug: it pinned the
+        // light-user mute that this ticket removes.
         assert_eq!(spend_spike_ratio(10.0, 0.0), None);
+        assert!(!is_spend_spike(12.0, 0.0, 3.0));
+        assert!(!is_spend_spike(19.99, 0.0, 3.0));
+        assert!(is_spend_spike(20.0, 0.0, 3.0));
+        assert!(is_spend_spike(180.0, 0.0, 3.0));
+        // The user's ratio does not lower the absolute fallback. 3x $1 is
+        // $3, which would toast an ordinary first day and the $12
+        // one-usable-day case SBS-965 is guarding.
+        assert!(!is_spend_spike(19.99, 0.0, 1.5));
+        assert!(is_spend_spike(20.0, 0.0, 1.5));
+    }
+
+    /// A light user whose every day is under $1 has no median. They still
+    /// have to hear about a $180 loop; an ordinary $12 day must not burn
+    /// the day's only alert (the SBS-965 neighbor).
+    #[test]
+    fn a_light_user_still_hears_about_a_runaway_when_the_baseline_is_unusable() {
+        let mut manager = NotificationManager::new_armed();
+        let settings = anomaly_settings();
+        let baseline = spend_baseline_usd(vec![0.60, 0.40, 0.80, 0.55, 0.70, 0.50, 0.90]);
+        assert_eq!(baseline, 0.0);
+
+        manager.check_spend_anomaly("2026-08-19", 1.0, baseline, &settings);
+        manager.check_spend_anomaly("2026-08-19", 12.0, baseline, &settings);
+        manager.check_spend_anomaly("2026-08-19", 12.0, baseline, &settings);
+        assert_eq!(
+            manager.toasts_shown, 0,
+            "an ordinary day with no median must not toast"
+        );
+
+        manager.check_spend_anomaly("2026-08-19", 180.0, baseline, &settings);
+        assert_eq!(manager.toasts_shown, 0, "one high scan is not enough");
+        manager.check_spend_anomaly("2026-08-19", 180.0, baseline, &settings);
+        assert_eq!(manager.toasts_shown, 1);
+    }
+
+    #[test]
+    fn spend_anomaly_toast_explains_the_absolute_fallback() {
+        assert_eq!(
+            spend_anomaly_toast_body(9.5, 2.0),
+            "Today's estimated API value is $9.50, about 4.8x your recent daily median of $2.00. This is an estimate from local Codex and Claude logs, not a bill."
+        );
+        assert_eq!(
+            spend_anomaly_toast_body(20.0, 0.0),
+            "Today's estimated API value is $20.00, at or above the $20.00 absolute trigger used when there is no usable recent median. This is an estimate from local Codex and Claude logs, not a bill."
+        );
+        assert_eq!(
+            spend_anomaly_toast_body(180.0, 0.0),
+            "Today's estimated API value is $180.00, at or above the $20.00 absolute trigger used when there is no usable recent median. This is an estimate from local Codex and Claude logs, not a bill."
+        );
     }
 
     #[test]

@@ -3834,8 +3834,9 @@ mod tests {
     }
 
     /// Days the scan never saw are quiet days, not missing data: a machine that
-    /// was off all week has a zero baseline, which the detector treats as "no
-    /// comparison" rather than an infinite spike.
+    /// was off all week has a zero baseline. The ratio path treats that as no
+    /// comparison rather than an infinite spike; a large absolute spend can
+    /// still alert (SBS-967).
     #[test]
     fn spend_anomaly_reading_treats_absent_days_as_zero() {
         let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
@@ -3847,8 +3848,8 @@ mod tests {
 
     /// A three-day working week is four quiet days and three real ones. Those
     /// quiet days must not drag the median to zero, because a zero baseline
-    /// switches the detector off — the most ordinary schedule there is would
-    /// otherwise have disabled the alert entirely.
+    /// has no ratio to fire on — the most ordinary schedule there is would
+    /// otherwise have had nothing to compare against.
     #[test]
     fn spend_anomaly_reading_ignores_quiet_days_in_the_baseline() {
         let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
