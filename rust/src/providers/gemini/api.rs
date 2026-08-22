@@ -1224,8 +1224,36 @@ mod tests {
 
     /// Pins SBS-950: no home is NotInstalled before any credentials path
     /// is joined, so cwd is never probed for `oauth_creds.json`.
+    ///
+    /// The same fixture is loaded through a real home first. Without that,
+    /// the refusal below would also hold for a build that still probed the
+    /// working directory and simply found nothing there.
     #[test]
     fn missing_home_does_not_load_credentials() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_gemini_home(
+            dir.path(),
+            "live-access",
+            Some("live-refresh"),
+            1_800_000_000_000.0,
+        );
+
+        let with_home = GeminiApi::for_test(
+            dir.path().to_path_buf(),
+            "http://127.0.0.1/quota",
+            "http://127.0.0.1/codeassist",
+            "http://127.0.0.1/token",
+        );
+        assert_eq!(
+            with_home
+                .load_credentials()
+                .expect("a real home must load the fixture")
+                .access_token
+                .as_deref(),
+            Some("live-access"),
+            "the fixture must be loadable, or the refusal below proves nothing"
+        );
+
         let error = api_without_home()
             .load_credentials()
             .expect_err("no home is not logged in");
@@ -1234,27 +1262,25 @@ mod tests {
 
     /// Pins SBS-950: no home refuses persist before a path is chosen, so
     /// this path cannot create `./.gemini/oauth_creds.json`.
+    ///
+    /// Deliberately does not move the process into a temp directory to prove
+    /// it. `set_current_dir` is process-global and these tests run on several
+    /// threads, so it would race every other test that touches a relative
+    /// path. `gemini_dir_is_absent_when_there_is_no_home` pins the path
+    /// choice itself, which is what the working-directory probe hung off.
     #[test]
     fn missing_home_does_not_write_credentials() {
-        let cwd = tempfile::tempdir().expect("temp cwd");
-        let previous = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(cwd.path()).expect("set cwd");
-        struct RestoreCwd(PathBuf);
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-        let _restore = RestoreCwd(previous);
+        let api = api_without_home();
+        assert_eq!(
+            api.gemini_dir(),
+            None,
+            "there must be no directory to persist into"
+        );
 
-        let error = api_without_home()
+        let error = api
             .save_credentials(&refreshed_credentials("live-access"))
             .expect_err("no home must not persist tokens");
         assert!(matches!(error, ProviderError::NotInstalled(_)));
-        assert!(
-            !Path::new("./.gemini/oauth_creds.json").exists(),
-            "missing home must not write oauth_creds.json relative to cwd"
-        );
     }
 
     /// Pins SBS-928: at the exact expiry second the access token is already
