@@ -812,18 +812,19 @@ impl Settings {
 
     /// Load settings from disk
     pub fn load() -> Self {
-        let settings = Self::load_from_disk();
-        if !settings.has_legacy_credentials() {
+        let (settings, pending_quarantine) = Self::load_from_disk(false);
+        if !pending_quarantine && !settings.has_legacy_credentials() {
             return settings;
         }
 
-        // Loading can become a write when an older settings file still embeds
-        // credentials. Re-read after taking the lock so two processes cannot
-        // migrate stale snapshots over newer secure-store contents.
+        // Loading can become a write: an older file may still embed
+        // credentials, and SBS-954's quarantine rename is a write too.
+        // Re-read after taking the lock so those writes cannot move a
+        // concurrent try_update repair to settings.json.bak (SBS-1029).
         match crate::secure_file::with_state_write_lock(|| Ok(Self::load_unlocked())) {
             Ok(settings) => settings,
             Err(error) => {
-                tracing::warn!(%error, "Failed to lock legacy settings credential migration");
+                tracing::warn!(%error, "Failed to lock settings load that may write");
                 settings
             }
         }
@@ -831,7 +832,7 @@ impl Settings {
 
     /// Load and migrate settings while the caller holds the state write lock.
     fn load_unlocked() -> Self {
-        let mut settings = Self::load_from_disk();
+        let (mut settings, _) = Self::load_from_disk(true);
 
         if let Some(sanitized) = settings.migrate_legacy_credentials() {
             match sanitized.and_then(|sanitized| {
@@ -848,16 +849,19 @@ impl Settings {
         settings
     }
 
-    fn load_from_disk() -> Self {
+    /// Read `settings.json`. `allow_quarantine` is the rename from SBS-954;
+    /// only the locked path may set it. The second value is `true` when the
+    /// file existed, failed to parse, and was left in place so `load` can
+    /// retry under the state lock (SBS-1029).
+    fn load_from_disk(allow_quarantine: bool) -> (Self, bool) {
+        let mut pending_quarantine = false;
         #[allow(unused_mut)]
         let mut settings = match Self::settings_path() {
-            Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
-                Ok(content) => Self::parse_or_quarantine(&path, &content),
-                Err(error) => {
-                    tracing::warn!(%error, "settings.json could not be read; using defaults");
-                    Self::default()
-                }
-            },
+            Some(path) if path.exists() => {
+                let (settings, pending) = Self::read_path(&path, allow_quarantine);
+                pending_quarantine = pending;
+                settings
+            }
             _ => Self::default(),
         };
 
@@ -867,30 +871,58 @@ impl Settings {
             settings.start_at_login = Self::sync_start_at_login_registry();
         }
 
-        settings
+        (settings, pending_quarantine)
+    }
+
+    fn read_path(path: &std::path::Path, allow_quarantine: bool) -> (Self, bool) {
+        match crate::secure_file::read_string(path) {
+            Ok(content) => match Self::parse_settings_json(&content) {
+                Ok(settings) => (settings, false),
+                Err(error) if allow_quarantine => {
+                    Self::quarantine_unparseable(path, &error);
+                    (Self::default(), false)
+                }
+                Err(_) => (Self::default(), true),
+            },
+            Err(error) => {
+                tracing::warn!(%error, "settings.json could not be read; using defaults");
+                (Self::default(), false)
+            }
+        }
+    }
+
+    fn parse_settings_json(content: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(content.trim_start_matches('\u{feff}'))
     }
 
     /// Parse `settings.json`, or move a corrupt file aside so the next save
     /// cannot overwrite the user's last known contents.
+    ///
+    /// The caller must hold the state write lock. Renaming without it can
+    /// move a concurrent [`Self::try_update`] repair to `.bak` (SBS-1029).
     pub(crate) fn parse_or_quarantine(path: &std::path::Path, content: &str) -> Self {
-        match serde_json::from_str(content.trim_start_matches('\u{feff}')) {
+        match Self::parse_settings_json(content) {
             Ok(settings) => settings,
             Err(error) => {
-                let backup = Self::backup_path(path);
-                match std::fs::rename(path, &backup) {
-                    Ok(()) => tracing::warn!(
-                        %error,
-                        backup = %backup.display(),
-                        "settings.json could not be parsed; original moved aside and defaults loaded"
-                    ),
-                    Err(rename_error) => tracing::warn!(
-                        %error,
-                        %rename_error,
-                        "settings.json could not be parsed; falling back to defaults without a backup"
-                    ),
-                }
+                Self::quarantine_unparseable(path, &error);
                 Self::default()
             }
+        }
+    }
+
+    fn quarantine_unparseable(path: &std::path::Path, error: &serde_json::Error) {
+        let backup = Self::backup_path(path);
+        match std::fs::rename(path, &backup) {
+            Ok(()) => tracing::warn!(
+                %error,
+                backup = %backup.display(),
+                "settings.json could not be parsed; original moved aside and defaults loaded"
+            ),
+            Err(rename_error) => tracing::warn!(
+                %error,
+                %rename_error,
+                "settings.json could not be parsed; falling back to defaults without a backup"
+            ),
         }
     }
 
