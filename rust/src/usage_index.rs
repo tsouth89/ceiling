@@ -1334,6 +1334,53 @@ mod tests {
         }
     }
 
+    /// SBS-951: `apply` marks the index dirty and `persist` writes it, so two
+    /// scans batching in parallel must not lose each other's inserts. The flag
+    /// was read before the write lock was taken and reused for the decision
+    /// after it, so an `apply` landing in that window could have its files
+    /// skipped and never written.
+    #[test]
+    fn parallel_apply_and_persist_keep_every_insert() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let index_path = dir.path().join("usage-index").join("sbs-951.bin");
+        let store: &'static IndexStore<ClaudeUsageRecord> =
+            Box::leak(Box::new(IndexStore::new("sbs-951.bin", true)));
+        store.override_path(index_path.clone());
+
+        let workers: Vec<_> = (0..4)
+            .map(|n| {
+                thread::spawn(move || {
+                    store.apply(vec![entry(
+                        &format!("/logs/batch-{n}.jsonl"),
+                        facts(100 + n as u64, 5),
+                        vec![claude_record("claude-opus-4-8", 1.0)],
+                    )]);
+                    store.persist(&[]);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("worker");
+        }
+
+        let bytes = fs::read(&index_path).expect("index was written");
+        let decoded = UsageIndex::<ClaudeUsageRecord>::decode(&bytes, pricing_fingerprint())
+            .expect("reload the snapshot a restart would load");
+        for n in 0..4u64 {
+            assert!(
+                matches!(
+                    decoded.lookup(
+                        Path::new(&format!("/logs/batch-{n}.jsonl")),
+                        &facts(100 + n, 5),
+                        ANY_TIME
+                    ),
+                    Lookup::Hit(_)
+                ),
+                "batch {n} must survive to disk"
+            );
+        }
+    }
+
     /// SBS-948: encoding under the write lock does not order the file
     /// replaces. If the lock is dropped before `atomic_write`, the first
     /// encoder can put its older snapshot over a later one and those files
