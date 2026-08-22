@@ -1,8 +1,10 @@
 //! Provider incident badges (SBS-280).
 //!
 //! Reads public provider status pages so a "0 tokens left" moment can be told
-//! apart from an outage. This is the only outbound request tied to the user's
-//! provider list, so it is opt-in and cached hard: at most one request per
+//! apart from an outage. It adds a set of outbound hosts derived from the
+//! user's enabled providers - each provider's public status page - on top of
+//! the usage requests those providers already receive, so it is opt-in and
+//! cached hard: at most one request per
 //! provider per [`INCIDENT_TTL`], and only while a surface is actually asking.
 //!
 //! Ceiling already contacts models.dev for public model prices and GitHub for

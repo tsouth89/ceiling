@@ -1675,10 +1675,16 @@ fn incident_badge_copy_does_not_claim_it_is_the_only_non_provider_outbound() {
         ),
     ];
 
+    // Every one of these is false. Enabling a provider already schedules usage
+    // HTTP to that provider with badges off, so "tied to your provider list"
+    // is no more exclusive than "not to a provider" was - it just moves the
+    // false claim rather than dropping it (SBS-964).
     const EXCLUSIVE: &[&str] = &[
         "the only outbound request Ceiling makes that is not to a provider",
         "the only outbound request Ceiling makes that you have not already signed in to",
         "The only non-provider destination is",
+        "the only outbound request tied to",
+        "is the only outbound request",
     ];
 
     for (name, text) in SURFACES {
@@ -1712,8 +1718,8 @@ fn incident_badge_copy_does_not_claim_it_is_the_only_non_provider_outbound() {
     let badge_end = after.find("\n- **").expect("next changelog bullet");
     let badge_bullet = &after[..badge_end];
     assert!(
-        badge_bullet.contains("tied to your provider list"),
-        "1.5.33 badge notes must drop the exclusive outbound claim"
+        badge_bullet.contains("public status page"),
+        "1.5.33 badge notes must say what the badge actually adds"
     );
     assert!(
         badge_bullet.contains("models.dev"),
@@ -1753,8 +1759,11 @@ fn incident_badge_copy_does_not_claim_it_is_the_only_non_provider_outbound() {
         privacy.contains("models.dev"),
         "privacy page must name models.dev"
     );
+    // Not a bare "GitHub": that word already appears in the analytics
+    // paragraph, the third-party paragraph, the issue-tracker link, and the
+    // footer, so the disclosure could be deleted with this test still green.
     assert!(
-        privacy.contains("GitHub"),
-        "privacy page must name the GitHub update check"
+        privacy.contains("GitHub for update checks"),
+        "privacy page must name GitHub as the update-check host, in those words"
     );
 }

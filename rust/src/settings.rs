@@ -209,10 +209,12 @@ pub struct Settings {
     pub spend_anomaly_multiplier: f64,
 
     /// Whether to poll public provider status pages and badge providers that
-    /// are having an incident. Off by default: it is the only outbound request
-    /// tied to the user's provider list. Ceiling already contacts models.dev
-    /// for public model prices and GitHub for the update check; those are not
-    /// gated by this switch.
+    /// are having an incident. Off by default: it adds a set of outbound hosts
+    /// derived from the user's enabled providers - each provider's public
+    /// status page - on top of the usage requests those providers already
+    /// receive. Ceiling also contacts models.dev for public model prices and
+    /// GitHub for the update check; those are fixed hosts and are not gated by
+    /// this switch.
     #[serde(default)]
     pub provider_incident_badges_enabled: bool,
 
