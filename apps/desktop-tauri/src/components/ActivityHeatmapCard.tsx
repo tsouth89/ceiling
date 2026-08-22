@@ -31,19 +31,27 @@ const HOUR_TICKS = [0, 6, 12, 18];
 /**
  * Map the Settings language to an Intl locale tag (SBS-972).
  *
- * Chinese is the only shipped non-English bundle. Other Language values
- * fall back to English copy, so they also fall back here. `undefined`
- * lets the runtime pick when there is no mapping.
+ * Chinese is the only shipped non-English bundle, and `locale.rs` resolves
+ * every other language to the English one. They resolve to `en-US` here for
+ * the same reason: `undefined` hands Intl the operating system's locale, so a
+ * Japanese or Spanish selection rendered English copy alongside German dates
+ * and separators on a German machine.
  */
-export function activityIntlLocale(language: Language): string | undefined {
-  switch (language) {
-    case "chinese":
-      return "zh-CN";
-    case "english":
-      return "en-US";
-    default:
-      return undefined;
-  }
+export function activityIntlLocale(language: Language): string {
+  return language === "chinese" ? "zh-CN" : "en-US";
+}
+
+/**
+ * The English sentinel `get_local_activity_heatmap` returns when the worker
+ * fails. Tauri hands it back as an ordinary error string, so a bare
+ * `tauriErrorMessage(err) || t(...)` never reached the localized copy - the
+ * sentinel is not empty, so it always won and a Chinese UI read English.
+ */
+const SCAN_FAILED_SENTINEL = "Unable to read local activity.";
+
+/** Translate the sentinel and the empty rejection; pass real detail through. */
+export function localizedScanError(message: string, readFailed: string): string {
+  return message === "" || message === SCAN_FAILED_SENTINEL ? readFailed : message;
 }
 
 export function formatActivityUsd(value: number, locale: string | undefined): string {
@@ -122,7 +130,7 @@ export function ActivityHeatmapCard() {
         if (live) setHeatmap(data);
       })
       .catch((err: unknown) => {
-        if (live) setError(tauriErrorMessage(err) || t("ActivityHeatmapReadFailed"));
+        if (live) setError(tauriErrorMessage(err));
       })
       .finally(() => {
         if (live) setLoading(false);
@@ -130,7 +138,12 @@ export function ActivityHeatmapCard() {
     return () => {
       live = false;
     };
-  }, [refreshes, t]);
+    // Deliberately not keyed on `t`. LocaleProvider rebuilds it whenever the
+    // bundle changes, so listing it here re-ran the fetch on every language
+    // switch: the grid was replaced by the Reading spinner, and a cold cache
+    // repeated the whole transcript scan the card had just finished. The
+    // failure text is translated at render instead.
+  }, [refreshes]);
 
   const providerIds = heatmap?.providerIds ?? [];
   // Chips toggle providers off, so a provider that appears after a rescan is
@@ -174,10 +187,10 @@ export function ActivityHeatmapCard() {
     );
   }
 
-  if (error) {
+  if (error !== null) {
     return (
       <section className="activity-card" aria-label={t("ActivityHeatmapAriaLabel")}>
-        <p className="activity-card__status">{error}</p>
+        <p className="activity-card__status">{localizedScanError(error, t("ActivityHeatmapReadFailed"))}</p>
       </section>
     );
   }

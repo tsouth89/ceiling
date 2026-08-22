@@ -32,7 +32,8 @@ const eventMocks = vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: eventMocks.listen }));
 
-const { ActivityHeatmapCard, formatActivityUsd, activityIntlLocale } = await import(
+const { ActivityHeatmapCard, formatActivityUsd, activityIntlLocale, localizedScanError } =
+  await import(
   "./ActivityHeatmapCard"
 );
 
@@ -223,10 +224,57 @@ describe("ActivityHeatmapCard", () => {
   it("formats dollars with the resolved locale, not a hardcoded en-US", () => {
     expect(activityIntlLocale("chinese")).toBe("zh-CN");
     expect(activityIntlLocale("english")).toBe("en-US");
+    // SBS-972: anything without its own bundle renders English copy, so it
+    // must format in English too. undefined handed Intl the OS locale, so a
+    // Japanese selection on a German machine showed English words with
+    // German dates and separators.
+    for (const language of ["japanese", "spanish", "korean"] as const) {
+      expect(activityIntlLocale(language as never)).toBe("en-US");
+    }
     expect(formatActivityUsd(1234.5, "en-US")).toBe("$1,234.50");
     expect(formatActivityUsd(1234.5, "zh-CN")).toMatch(/US\$/);
     expect(formatActivityUsd(1234.5, "zh-CN")).not.toBe(
       formatActivityUsd(1234.5, "en-US"),
     );
   });
+
+  /// SBS-972: the backend hands the failure back as an ordinary error string,
+  /// so `tauriErrorMessage(err) || t(...)` never reached the localized copy —
+  /// the sentinel is not empty, so it always won and a Chinese UI read English.
+  it("translates the scan-failure sentinel but keeps real detail", () => {
+    const readFailed = "无法读取本地活动。";
+    expect(localizedScanError("Unable to read local activity.", readFailed)).toBe(readFailed);
+    expect(localizedScanError("", readFailed)).toBe(readFailed);
+    // A real error carries detail worth showing, so it passes through.
+    expect(localizedScanError("permission denied: C:\\logs", readFailed)).toBe(
+      "permission denied: C:\\logs",
+    );
+  });
+
+  /// SBS-972: `t` was a dependency of the fetch effect, so every language
+  /// switch re-ran the scan — the painted grid was replaced by the Reading
+  /// spinner, and a cold cache repeated the whole transcript walk.
+  it("does not refetch the heatmap when the language changes", async () => {
+    getLocalActivityHeatmap.mockResolvedValue(heatmap({ providerIds: ["codex"] }));
+    renderCard();
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(".activity-card__cell--day").length).toBeGreaterThan(0),
+    );
+    expect(getLocalActivityHeatmap).toHaveBeenCalledTimes(1);
+
+    getLocaleStrings.mockResolvedValue(
+      buildBundle({ ActivityHeatmapTitle: "工作时段" }, "chinese"),
+    );
+    await act(async () => {
+      eventMocks.handlers["locale-changed"]?.({ payload: { language: "chinese" } });
+    });
+
+    expect(
+      getLocalActivityHeatmap,
+      "a language switch must not re-run the transcript scan",
+    ).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll(".activity-card__cell--day").length).toBeGreaterThan(0);
+  });
+
 });
