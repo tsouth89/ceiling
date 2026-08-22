@@ -1060,6 +1060,23 @@ fn test_per_provider_defaults_applied() {
     assert!(!settings.avoid_keychain_prompts(ProviderId::Claude));
 }
 
+/// SBS-1023: the stored flags must actually decide whether keyring I/O runs.
+#[test]
+fn keychain_access_flags_gate_reads_and_claude_writes() {
+    let mut settings = Settings::default();
+    assert!(settings.keychain_access_allowed());
+    assert!(settings.claude_keychain_access_allowed());
+
+    settings.set_claude_avoid_keychain_prompts(true);
+    assert!(settings.keychain_access_allowed());
+    assert!(!settings.claude_keychain_access_allowed());
+
+    settings.disable_keychain_access = true;
+    settings.set_claude_avoid_keychain_prompts(false);
+    assert!(!settings.keychain_access_allowed());
+    assert!(!settings.claude_keychain_access_allowed());
+}
+
 #[test]
 fn codex_spark_usage_visibility_defaults_to_visible_and_roundtrips() {
     let mut settings = Settings::default();

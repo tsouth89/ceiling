@@ -665,9 +665,8 @@ fn resolve_api_key(
     {
         return Ok(key.trim().to_string());
     }
-    if let Ok(entry) = keyring::Entry::new(credential_target, "api_key")
-        && let Ok(key) = entry.get_password()
-        && !key.trim().is_empty()
+    if let Some(key) =
+        crate::keychain::get_secret(crate::keychain::Scope::Any, credential_target, "api_key")
     {
         return Ok(key);
     }

@@ -279,7 +279,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub unrecognized_provider_configs: HashMap<String, ProviderConfig>,
 
-    /// Disable credential/keychain-style reads where supported
+    /// Disable OS keychain reads and writes (SBS-1023).
     #[serde(default)]
     pub disable_keychain_access: bool,
 
@@ -1393,6 +1393,16 @@ impl Settings {
 
     pub fn set_historical_tracking(&mut self, id: ProviderId, value: bool) {
         self.provider_config_mut(id).historical_tracking = value;
+    }
+
+    /// SBS-1023: master switch. When false, no keyring read or write runs.
+    pub fn keychain_access_allowed(&self) -> bool {
+        !self.disable_keychain_access
+    }
+
+    /// SBS-1023: Claude keyring reads and token writes.
+    pub fn claude_keychain_access_allowed(&self) -> bool {
+        self.keychain_access_allowed() && !self.claude_avoid_keychain_prompts()
     }
 
     /// Per-provider "avoid keychain prompts" toggle (currently claude-only).

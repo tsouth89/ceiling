@@ -499,25 +499,24 @@ struct OsTokenSecretStore;
 
 impl TokenSecretStore for OsTokenSecretStore {
     fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
-        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
-        match entry.get_password() {
+        match crate::keychain::get_password(crate::keychain::Scope::Any, service, user) {
             Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
             Ok(_) => Ok(None),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(crate::keychain::Error::Disabled | crate::keychain::Error::NotFound) => Ok(None),
             Err(error) => Err(error.to_string()),
         }
     }
 
     fn set(&self, service: &str, user: &str, value: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
-        entry.set_password(value).map_err(|error| error.to_string())
+        crate::keychain::set_password(crate::keychain::Scope::Any, service, user, value)
+            .map_err(|error| error.to_string())
     }
 
     fn delete(&self, service: &str, user: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
+        match crate::keychain::delete_credential(crate::keychain::Scope::Any, service, user) {
+            Ok(()) | Err(crate::keychain::Error::Disabled | crate::keychain::Error::NotFound) => {
+                Ok(())
+            }
             Err(error) => Err(error.to_string()),
         }
     }

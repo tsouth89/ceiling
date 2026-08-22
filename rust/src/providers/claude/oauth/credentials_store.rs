@@ -114,6 +114,7 @@ pub(super) fn load_credentials(
     }
 
     // Current Claude Code builds store the same JSON payload in the OS credential store.
+    // SBS-1023: skip when the user opted out of keychain reads.
     if let Some((creds, source)) = load_from_keyring()? {
         return Ok((creds, source));
     }
@@ -182,23 +183,25 @@ pub(super) fn credentials_file_available(config_dir: Option<&Path>) -> bool {
 /// Load credentials from Claude Code's OS keychain / credential manager entry.
 fn load_from_keyring() -> Result<Option<(ClaudeOAuthCredentials, CredentialSource)>, ProviderError>
 {
-    for account in keyring_account_candidates() {
-        let entry = match keyring::Entry::new(KEYRING_SERVICE, &account) {
-            Ok(entry) => entry,
-            Err(err) => {
-                tracing::debug!(
-                    "Failed to open Claude Code credential entry for account {}: {}",
-                    account,
-                    err
-                );
-                continue;
-            }
-        };
+    if !crate::keychain::allowed(crate::keychain::Scope::Claude) {
+        tracing::debug!("Skipping Claude keyring read; keychain access disabled (SBS-1023)");
+        return Ok(None);
+    }
 
-        let content = match entry.get_password() {
+    for account in keyring_account_candidates() {
+        let content = match crate::keychain::get_password(
+            crate::keychain::Scope::Claude,
+            KEYRING_SERVICE,
+            &account,
+        ) {
             Ok(content) => content,
-            Err(keyring::Error::NoEntry) => continue,
-            Err(keyring::Error::Ambiguous(_)) => continue,
+            Err(crate::keychain::Error::Disabled) => {
+                tracing::debug!(
+                    "Skipping Claude keyring read; keychain access disabled (SBS-1023)"
+                );
+                return Ok(None);
+            }
+            Err(crate::keychain::Error::NotFound) => continue,
             Err(err) => {
                 tracing::debug!(
                     "Failed to read Claude Code credential entry for account {}: {}",
@@ -433,20 +436,30 @@ fn persist_refreshed_keyring(
     account: &str,
     exchanged_refresh_token: &str,
 ) -> Result<Option<ClaudeOAuthCredentials>, ProviderError> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, account).map_err(|err| {
-        ProviderError::OAuth(format!(
-            "Failed to open Claude Code credential entry for account {account}: {err}"
-        ))
-    })?;
-    let content = entry.get_password().map_err(|err| {
-        ProviderError::OAuth(format!(
-            "Failed to read Claude Code credential entry for account {account}: {err}"
-        ))
-    })?;
+    if !crate::keychain::allowed(crate::keychain::Scope::Claude) {
+        return Err(ProviderError::OAuth(
+            "Claude keychain writes are disabled (SBS-1023). The refreshed token was not stored."
+                .to_string(),
+        ));
+    }
+
+    let content =
+        crate::keychain::get_password(crate::keychain::Scope::Claude, KEYRING_SERVICE, account)
+            .map_err(|err| {
+                ProviderError::OAuth(format!(
+                    "Failed to read Claude Code credential entry for account {account}: {err}"
+                ))
+            })?;
     match merge_refreshed_credentials_json(&content, credentials, exchanged_refresh_token)? {
         Err(live) => Ok(Some(live)),
         Ok(serialized) => {
-            entry.set_password(&serialized).map_err(|err| {
+            crate::keychain::set_password(
+                crate::keychain::Scope::Claude,
+                KEYRING_SERVICE,
+                account,
+                &serialized,
+            )
+            .map_err(|err| {
                 ProviderError::OAuth(format!(
                     "Failed to write Claude Code credential entry for account {account}: {err}"
                 ))
@@ -559,10 +572,10 @@ fn apply_refresh_to_credentials_json(
 #[cfg(test)]
 mod tests {
     use super::{
-        CredentialSource, ENV_TOKEN_KEY, apply_refresh_to_credentials_json,
+        CredentialSource, ENV_TOKEN_KEY, KEYRING_SERVICE, apply_refresh_to_credentials_json,
         cached_refreshed_if_fresher, credentials_path, disk_still_holds_exchanged_refresh,
         load_credentials, merge_refreshed_credentials_json, parse_credentials_json,
-        persist_refreshed_credentials, store_refreshed,
+        persist_refreshed_credentials, persist_refreshed_for_source, store_refreshed,
     };
     use crate::providers::claude::oauth::ClaudeOAuthCredentials;
     use std::path::Path;
@@ -1324,6 +1337,66 @@ mod tests {
         assert_eq!(
             same_source_result.map(|c| c.access_token),
             Some("file-refreshed-token".to_string())
+        );
+    }
+
+    /// SBS-1023: a keyring-resident Claude token must not be read when the
+    /// user opted out. Without the gate this returns `from-keyring`.
+    #[test]
+    fn keychain_flags_skip_claude_keyring_reads() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _config = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let _token = EnvGuard::unset(ENV_TOKEN_KEY);
+        let _user = EnvGuard::set_str("USER", "sbs-1023-user");
+        let _username = EnvGuard::unset("USERNAME");
+        let payload =
+            r#"{"accessToken":"from-keyring","refreshToken":"r","scopes":["user:profile"]}"#;
+        let _keychain =
+            crate::keychain::with_mock_store(false, &[(KEYRING_SERVICE, "sbs-1023-user", payload)]);
+
+        let error = load_credentials(None).expect_err("disabled keychain must not use the keyring");
+        assert!(
+            error.to_string().contains("credentials not found"),
+            "expected a file-miss error, got {error}"
+        );
+    }
+
+    /// SBS-1023: the same mock secret is used when access is allowed, so the
+    /// skip test above is not a missing-entry false pass.
+    #[test]
+    fn keychain_flags_still_read_claude_keyring_when_allowed() {
+        let _guard = env_lock().lock().expect("env lock");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        let _config = EnvGuard::set("CLAUDE_CONFIG_DIR", ambient.path());
+        let _token = EnvGuard::unset(ENV_TOKEN_KEY);
+        let _user = EnvGuard::set_str("USER", "sbs-1023-user");
+        let _username = EnvGuard::unset("USERNAME");
+        let payload =
+            r#"{"accessToken":"from-keyring","refreshToken":"r","scopes":["user:profile"]}"#;
+        let _keychain =
+            crate::keychain::with_mock_store(true, &[(KEYRING_SERVICE, "sbs-1023-user", payload)]);
+
+        let (credentials, source) = load_credentials(None).expect("keyring credentials");
+        assert_eq!(credentials.access_token, "from-keyring");
+        assert_eq!(source, CredentialSource::Keyring("sbs-1023-user".into()));
+    }
+
+    /// SBS-1023: a refreshed Claude token must not be written back to the
+    /// keyring when the user opted out. Without the gate this opens the OS
+    /// entry instead of returning the opt-out error.
+    #[test]
+    fn keychain_flags_skip_claude_token_writes() {
+        let _keychain = crate::keychain::with_claude_allowed(false);
+        let error = persist_refreshed_for_source(
+            &refreshed_credentials("new-access"),
+            &CredentialSource::Keyring("sbs-1023-user".into()),
+            "old-refresh",
+        )
+        .expect_err("disabled keychain must not write");
+        assert!(
+            error.to_string().contains("SBS-1023"),
+            "expected the opt-out error, got {error}"
         );
     }
 }

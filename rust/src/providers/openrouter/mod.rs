@@ -103,21 +103,18 @@ impl OpenRouterProvider {
             return Ok(key.to_string());
         }
 
-        match keyring::Entry::new(OPENROUTER_CREDENTIAL_TARGET, "api_token") {
-            Ok(entry) => match entry.get_password() {
-                Ok(token) => Ok(token),
-                Err(_) => std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                    ProviderError::NotInstalled(
-                        "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
-                    )
-                }),
-            },
-            Err(_) => std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                ProviderError::NotInstalled(
-                    "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
-                )
-            }),
+        if let Some(token) = crate::keychain::get_secret(
+            crate::keychain::Scope::Any,
+            OPENROUTER_CREDENTIAL_TARGET,
+            "api_token",
+        ) {
+            return Ok(token);
         }
+        std::env::var("OPENROUTER_API_KEY").map_err(|_| {
+            ProviderError::NotInstalled(
+                "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
+            )
+        })
     }
 
     /// Fetch usage from OpenRouter API

@@ -149,10 +149,11 @@ impl DeepSeekProvider {
             return Ok(key.trim().to_string());
         }
 
-        if let Ok(entry) = keyring::Entry::new(DEEPSEEK_CREDENTIAL_TARGET, "api_key")
-            && let Ok(token) = entry.get_password()
-            && !token.trim().is_empty()
-        {
+        if let Some(token) = crate::keychain::get_secret(
+            crate::keychain::Scope::Any,
+            DEEPSEEK_CREDENTIAL_TARGET,
+            "api_key",
+        ) {
             return Ok(token);
         }
 
