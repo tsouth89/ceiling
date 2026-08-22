@@ -148,9 +148,7 @@ mod test_backend {
     ) -> Option<Result<String, Error>> {
         STORE.with(|store| {
             let mut store = store.borrow_mut();
-            let Some(map) = store.as_mut() else {
-                return None;
-            };
+            let map = store.as_mut()?;
             let key = (service.to_string(), user.to_string());
             Some(match operation {
                 Operation::Get => map.get(&key).cloned().ok_or(Error::NotFound),
@@ -233,8 +231,10 @@ mod tests {
     use crate::core::ProviderId;
 
     fn settings_with(disable: bool, avoid_claude: bool) -> Settings {
-        let mut settings = Settings::default();
-        settings.disable_keychain_access = disable;
+        let mut settings = Settings {
+            disable_keychain_access: disable,
+            ..Default::default()
+        };
         settings.set_avoid_keychain_prompts(ProviderId::Claude, avoid_claude);
         settings
     }
