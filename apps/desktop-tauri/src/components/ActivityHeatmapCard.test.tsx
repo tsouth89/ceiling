@@ -121,4 +121,36 @@ describe("ActivityHeatmapCard", () => {
     await waitFor(() => expect(screen.getByText("scan died")).toBeInTheDocument());
     expect(document.querySelectorAll(".activity-card__cell--day")).toHaveLength(0);
   });
+
+  /// SBS-945: 29 quiet days and one spike used to share data-level 2, so the
+  /// calendar painted the busiest day the same shade as the quietest.
+  it("paints the spike day at the legend's top swatch", async () => {
+    const days = Array.from({ length: 30 }, (_, index) => {
+      const day = String(index + 1).padStart(2, "0");
+      return `2026-08-${day}`;
+    });
+    const hours = days.map((date, index) =>
+      hour({
+        date,
+        apiValueUsd: index === 29 ? 500 : 1,
+        tokens: 1,
+        calls: 1,
+        providerId: "codex",
+      }),
+    );
+    getLocalActivityHeatmap.mockResolvedValue(
+      heatmap({ days, hours, providerIds: ["codex"] }),
+    );
+    render(<ActivityHeatmapCard />);
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(".activity-card__cell--day")).toHaveLength(30),
+    );
+    const levels = [...document.querySelectorAll(".activity-card__cell--day")].map((cell) =>
+      cell.getAttribute("data-level"),
+    );
+    expect(levels[0]).toBe("2");
+    expect(levels[28]).toBe("2");
+    expect(levels[29]).toBe("4");
+  });
 });

@@ -34,7 +34,8 @@ export type HourCell = CellTotals & {
 };
 
 /** Quartile cut points over the active cells, low to high. */
-export type Bands = [number, number, number];
+/** Quartile cuts plus the peak: `[low, mid, high, peak]`. */
+export type Bands = [number, number, number, number];
 
 const EMPTY: CellTotals = { value: 0, calls: 0 };
 
@@ -70,22 +71,40 @@ export function parseLocalDate(date: string): Date | null {
  */
 export function bandThresholds(values: number[]): Bands {
   const active = values.filter((value) => value > 0).sort((left, right) => left - right);
-  if (active.length === 0) return [0, 0, 0];
+  if (active.length === 0) return [0, 0, 0, 0];
+  const n = active.length;
+  // Inclusive rank: ceil(q*n)-1, not floor(q*n). floor(0.75*n) is n-1 for
+  // n of 2, 3 or 4, so the 75th-percentile cut sat on the maximum and the
+  // busiest cell could never reach the legend's top swatch (SBS-945).
   const at = (quantile: number) =>
-    active[Math.min(active.length - 1, Math.floor(quantile * active.length))];
-  return [at(0.25), at(0.5), at(0.75)];
+    active[Math.min(n - 1, Math.max(0, Math.ceil(quantile * n) - 1))];
+  // The peak is carried alongside the cuts because the top swatch is defined
+  // by it, not by the 75th-percentile cut. With few cells those two are often
+  // the same number, and with four distinct cells they are not (SBS-945).
+  return [at(0.25), at(0.5), at(0.75), active[n - 1]];
 }
 
 export function intensityLevel(value: number, bands: Bands): IntensityLevel {
   if (value <= 0) return 0;
-  const [low, mid, high] = bands;
-  // A flat distribution has no bands to show. Painting every active cell at the
-  // top would read as "every day was a peak", so hold them mid-scale.
-  if (low === high) return 2;
+  const [low, mid, high, peak] = bands;
+  // A genuinely flat distribution has no bands to show. Painting every active
+  // cell at the top would read as "every day was a peak", so hold the mass
+  // mid-scale. The shortcut applies only to values at or below that collapsed
+  // cut: a single outlier above it still reaches the top swatch, which is the
+  // case the quartile bands exist to surface (SBS-945).
+  if (low === high && value <= high) return 2;
+  // The top swatch belongs to the busiest cells, and only to them. Testing
+  // against the 75th-percentile cut instead got this wrong in both
+  // directions: `value <= mid` caught the maximum whenever the upper half
+  // tied (active [1, 50, 50] gives cuts [1, 50, 50], so the busiest cell
+  // painted mid-scale), while `value < high` handed level 4 to everything
+  // from the cut upwards (active [1, 50, 100, 200] cuts at 100, so the
+  // second-busiest cell matched the busiest). Ties at the peak all reach the
+  // top together; a distinct runner-up stays a step below it.
+  if (value >= peak) return 4;
   if (value <= low) return 1;
   if (value <= mid) return 2;
-  if (value <= high) return 3;
-  return 4;
+  return 3;
 }
 
 function addTotals(target: Map<string, CellTotals>, key: string, value: number, calls: number) {
