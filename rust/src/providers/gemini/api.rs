@@ -20,11 +20,11 @@ pub struct GeminiApi {
     client: reqwest::Client,
     /// The user's home, or `None` on a machine that reports none.
     ///
-    /// Kept as an `Option` rather than resolved to a fallback at construction:
-    /// reading `~/.gemini/oauth_creds.json` from the working directory is a
-    /// long-standing behaviour that costs nothing when it misses, but doing the
-    /// same for `client_config.json` would pick up a checked-in fixture in a
-    /// container or CI and try to refresh with the wrong client id.
+    /// Kept as an `Option` rather than resolved to a fallback at construction.
+    /// A missing home is not configured: probing the working directory would
+    /// load a checked-in `.gemini/oauth_creds.json` fixture and write live
+    /// access tokens back into it (SBS-950). `client_config.json` has the same
+    /// rule for the same reason.
     home_dir: Option<PathBuf>,
     quota_endpoint: String,
     code_assist_endpoint: String,
@@ -44,9 +44,19 @@ impl GeminiApi {
 
     #[cfg(test)]
     fn for_test(home_dir: PathBuf, quota: &str, code_assist: &str, token_refresh: &str) -> Self {
+        Self::for_test_home(Some(home_dir), quota, code_assist, token_refresh)
+    }
+
+    #[cfg(test)]
+    fn for_test_home(
+        home_dir: Option<PathBuf>,
+        quota: &str,
+        code_assist: &str,
+        token_refresh: &str,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
-            home_dir: Some(home_dir),
+            home_dir,
             quota_endpoint: quota.to_string(),
             code_assist_endpoint: code_assist.to_string(),
             token_refresh_endpoint: token_refresh.to_string(),
@@ -201,12 +211,13 @@ impl GeminiApi {
     }
 
     fn load_credentials(&self) -> Result<OAuthCredentials, ProviderError> {
-        let creds_path = self.gemini_dir().join("oauth_creds.json");
+        let creds_path = self
+            .gemini_dir()
+            .ok_or_else(Self::not_logged_in)?
+            .join("oauth_creds.json");
 
         if !creds_path.exists() {
-            return Err(ProviderError::NotInstalled(
-                "Not logged in to Gemini. Run 'gemini' in Terminal to authenticate.".to_string(),
-            ));
+            return Err(Self::not_logged_in());
         }
 
         let content = std::fs::read_to_string(&creds_path).map_err(|e| {
@@ -277,7 +288,10 @@ impl GeminiApi {
     }
 
     fn save_credentials(&self, creds: &OAuthCredentials) -> Result<(), ProviderError> {
-        let creds_path = self.gemini_dir().join("oauth_creds.json");
+        let creds_path = self
+            .gemini_dir()
+            .ok_or_else(Self::not_logged_in)?
+            .join("oauth_creds.json");
         persist_refreshed_credentials(&creds_path, creds)
     }
 
@@ -290,28 +304,24 @@ impl GeminiApi {
             .unwrap_or_else(Self::oauth_credentials_from_env)
     }
 
-    /// The `.gemini` directory to read the credentials file from.
+    /// The `.gemini` directory under the user's home, if this machine has one.
     ///
-    /// Falls back to the working directory when the machine reports no home,
-    /// which is what this has always done: a miss there costs a "not logged in"
-    /// message, nothing more.
-    fn gemini_dir(&self) -> PathBuf {
-        self.home_dir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".gemini")
+    /// No home means no user Gemini config. The working directory is not a
+    /// substitute: a service or container started in a checkout that contains
+    /// `.gemini/oauth_creds.json` would otherwise refresh against that fixture
+    /// and write live tokens back into the tree (SBS-950).
+    fn gemini_dir(&self) -> Option<PathBuf> {
+        Some(self.home_dir.as_ref()?.join(".gemini"))
+    }
+
+    fn not_logged_in() -> ProviderError {
+        ProviderError::NotInstalled(
+            "Not logged in to Gemini. Run 'gemini' in Terminal to authenticate.".to_string(),
+        )
     }
 
     fn user_client_config_credentials(&self) -> Option<OAuthClientCredentials> {
-        // No home means no user config to read. Probing the working directory
-        // here would load whatever `./.gemini/client_config.json` happened to
-        // contain and refresh against the wrong client id.
-        let cli_config = self
-            .home_dir
-            .as_ref()?
-            .join(".gemini")
-            .join("client_config.json");
-        Self::try_read_client_config(&cli_config)
+        Self::try_read_client_config(&self.gemini_dir()?.join("client_config.json"))
     }
 
     fn gemini_binary_oauth_credentials(&self) -> Option<OAuthClientCredentials> {
@@ -1183,6 +1193,96 @@ mod tests {
         );
     }
 
+    fn api_without_home() -> GeminiApi {
+        GeminiApi::for_test_home(
+            None,
+            "http://127.0.0.1/quota",
+            "http://127.0.0.1/codeassist",
+            "http://127.0.0.1/token",
+        )
+    }
+
+    /// Pins SBS-950: a missing home is not the working directory. Returning
+    /// `Some("./.gemini")` here is what loaded a checkout fixture and wrote
+    /// live Google tokens back into it.
+    #[test]
+    fn gemini_dir_is_absent_when_there_is_no_home() {
+        assert_eq!(api_without_home().gemini_dir(), None);
+    }
+
+    #[test]
+    fn gemini_dir_joins_the_home_when_one_is_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let api = GeminiApi::for_test(
+            dir.path().to_path_buf(),
+            "http://127.0.0.1/quota",
+            "http://127.0.0.1/codeassist",
+            "http://127.0.0.1/token",
+        );
+        assert_eq!(api.gemini_dir(), Some(dir.path().join(".gemini")));
+    }
+
+    /// Pins SBS-950: no home is NotInstalled before any credentials path
+    /// is joined, so cwd is never probed for `oauth_creds.json`.
+    ///
+    /// The same fixture is loaded through a real home first. Without that,
+    /// the refusal below would also hold for a build that still probed the
+    /// working directory and simply found nothing there.
+    #[test]
+    fn missing_home_does_not_load_credentials() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_gemini_home(
+            dir.path(),
+            "live-access",
+            Some("live-refresh"),
+            1_800_000_000_000.0,
+        );
+
+        let with_home = GeminiApi::for_test(
+            dir.path().to_path_buf(),
+            "http://127.0.0.1/quota",
+            "http://127.0.0.1/codeassist",
+            "http://127.0.0.1/token",
+        );
+        assert_eq!(
+            with_home
+                .load_credentials()
+                .expect("a real home must load the fixture")
+                .access_token
+                .as_deref(),
+            Some("live-access"),
+            "the fixture must be loadable, or the refusal below proves nothing"
+        );
+
+        let error = api_without_home()
+            .load_credentials()
+            .expect_err("no home is not logged in");
+        assert!(matches!(error, ProviderError::NotInstalled(_)));
+    }
+
+    /// Pins SBS-950: no home refuses persist before a path is chosen, so
+    /// this path cannot create `./.gemini/oauth_creds.json`.
+    ///
+    /// Deliberately does not move the process into a temp directory to prove
+    /// it. `set_current_dir` is process-global and these tests run on several
+    /// threads, so it would race every other test that touches a relative
+    /// path. `gemini_dir_is_absent_when_there_is_no_home` pins the path
+    /// choice itself, which is what the working-directory probe hung off.
+    #[test]
+    fn missing_home_does_not_write_credentials() {
+        let api = api_without_home();
+        assert_eq!(
+            api.gemini_dir(),
+            None,
+            "there must be no directory to persist into"
+        );
+
+        let error = api
+            .save_credentials(&refreshed_credentials("live-access"))
+            .expect_err("no home must not persist tokens");
+        assert!(matches!(error, ProviderError::NotInstalled(_)));
+    }
+
     /// Pins SBS-928: at the exact expiry second the access token is already
     /// treated as expired, and the 5-minute skew matches the auto-refresh interval.
     #[test]
@@ -1472,6 +1572,17 @@ mod tests {
         stale_quota.assert_async().await;
         refresh.assert_async().await;
         assert!(matches!(error, ProviderError::AuthRequired));
+    }
+
+    /// Pins SBS-950: the quota poll is NotInstalled when there is no home,
+    /// so it never reaches Google or persist.
+    #[tokio::test]
+    async fn fetch_quota_without_home_is_not_logged_in() {
+        let error = api_without_home()
+            .fetch_quota(&FetchContext::default())
+            .await
+            .expect_err("no home is not logged in");
+        assert!(matches!(error, ProviderError::NotInstalled(_)));
     }
 
     #[tokio::test]
