@@ -1826,7 +1826,8 @@ mod tests {
 
     fn set_age(path: &Path, age: std::time::Duration) {
         let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-        file.set_modified(std::time::SystemTime::now() - age).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
     }
 
     #[cfg(unix)]
@@ -2197,7 +2198,10 @@ mod tests {
 
         // Older than any waiter's acquire timeout, but still short of the
         // crash-recovery threshold.
-        set_age(&exclusive, STATE_LOCK_TIMEOUT + std::time::Duration::from_secs(5));
+        set_age(
+            &exclusive,
+            STATE_LOCK_TIMEOUT + std::time::Duration::from_secs(5),
+        );
 
         assert!(
             matches!(
