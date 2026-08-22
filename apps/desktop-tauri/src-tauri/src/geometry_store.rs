@@ -10,7 +10,8 @@
 //! carry fabricated `x`/`y` coordinates.
 
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -86,7 +87,11 @@ fn load_file() -> GeometryFile {
     let Some(path) = geometry_path() else {
         return GeometryFile::default();
     };
-    let Ok(raw) = fs::read_to_string(&path) else {
+    load_file_from(&path)
+}
+
+fn load_file_from(path: &Path) -> GeometryFile {
+    let Ok(raw) = fs::read_to_string(path) else {
         return GeometryFile::default();
     };
     let mut file: GeometryFile = serde_json::from_str(&raw).unwrap_or_default();
@@ -109,15 +114,39 @@ fn migrate(file: &mut GeometryFile) {
     }
 }
 
-fn save_file(file: &GeometryFile) -> Result<(), String> {
+fn save_file_to(path: &Path, file: &GeometryFile) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
+    codexbar::secure_file::atomic_write(path, json.as_bytes())
+}
+
+/// Load, mutate, and atomically replace the geometry file while holding the
+/// same cross-process lock as settings and credentials (SBS-1024).
+///
+/// Each persist is a full-file rewrite. Without the lock, two surfaces that
+/// move at once can each load a snapshot that lacks the other's key and the
+/// later write drops that sibling position.
+fn persist(mutate: impl FnOnce(&mut GeometryFile)) -> Result<(), String> {
     let Some(path) = geometry_path() else {
         return Err("No config directory available".into());
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
-    codexbar::secure_file::atomic_write(&path, json.as_bytes()).map_err(|e| e.to_string())
+    persist_at(&path, mutate)
+}
+
+fn persist_at(path: &Path, mutate: impl FnOnce(&mut GeometryFile)) -> Result<(), String> {
+    persist_locked(path, mutate).map_err(|e| e.to_string())
+}
+
+fn persist_locked(path: &Path, mutate: impl FnOnce(&mut GeometryFile)) -> io::Result<()> {
+    codexbar::secure_file::with_state_write_lock(|| {
+        let mut file = load_file_from(path);
+        mutate(&mut file);
+        #[cfg(test)]
+        linger_after_load_for_tests();
+        save_file_to(path, &file)
+    })
 }
 
 /// Look up remembered geometry for a surface mode. Returns `None` when the
@@ -146,10 +175,10 @@ pub fn load_entry(key: &str) -> Option<StoredGeometry> {
 
 /// Persist geometry under an arbitrary key.
 pub fn save_entry(key: &str, geometry: StoredGeometry) {
-    let mut file = load_file();
-    file.version = GEOMETRY_VERSION;
-    file.entries.insert(key.to_string(), geometry);
-    if let Err(err) = save_file(&file) {
+    if let Err(err) = persist(|file| {
+        file.version = GEOMETRY_VERSION;
+        file.entries.insert(key.to_string(), geometry);
+    }) {
         tracing::warn!(target: "codexbar::geometry", %err, "failed to persist geometry");
     }
 }
@@ -194,17 +223,63 @@ pub fn load_size(key: &str) -> Option<StoredSize> {
 
 /// Persist a size-only entry under an arbitrary key.
 pub fn save_size(key: &str, size: StoredSize) {
-    let mut file = load_file();
-    file.version = GEOMETRY_VERSION;
-    file.size_entries.insert(key.to_string(), size);
-    if let Err(err) = save_file(&file) {
+    if let Err(err) = persist(|file| {
+        file.version = GEOMETRY_VERSION;
+        file.size_entries.insert(key.to_string(), size);
+    }) {
         tracing::warn!(target: "codexbar::geometry", %err, "failed to persist size");
+    }
+}
+
+#[cfg(test)]
+static LINGER_AFTER_LOAD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Widen the unlocked RMW window so the sibling-key race is not a flake.
+/// Held lock + linger only delays the other writer; that is the SBS-1024 window.
+#[cfg(test)]
+fn linger_after_load_for_tests() {
+    if LINGER_AFTER_LOAD.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+    }
+}
+
+#[cfg(test)]
+struct LingerOn;
+
+#[cfg(test)]
+impl LingerOn {
+    fn arm() -> Self {
+        LINGER_AFTER_LOAD.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for LingerOn {
+    fn drop(&mut self) {
+        LINGER_AFTER_LOAD.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn save_entry_at(path: &Path, key: &str, geometry: StoredGeometry) {
+        persist_at(path, |file| {
+            file.version = GEOMETRY_VERSION;
+            file.entries.insert(key.to_string(), geometry);
+        })
+        .expect("persist geometry");
+    }
+
+    fn save_size_at(path: &Path, key: &str, size: StoredSize) {
+        persist_at(path, |file| {
+            file.version = GEOMETRY_VERSION;
+            file.size_entries.insert(key.to_string(), size);
+        })
+        .expect("persist size");
+    }
 
     #[test]
     fn pop_out_and_settings_are_remembered() {
@@ -226,30 +301,24 @@ mod tests {
     #[test]
     fn non_remembered_mode_save_is_noop() {
         // Call should not panic or error for ineligible modes.
-        save(
-            SurfaceMode::Hidden,
-            StoredGeometry {
-                x: 1,
-                y: 2,
-                width: Some(420),
-                height: Some(560),
-            },
-        );
+        save(SurfaceMode::Hidden, StoredGeometry {
+            x: 1,
+            y: 2,
+            width: Some(420),
+            height: Some(560),
+        });
         assert!(load(SurfaceMode::Hidden).is_none());
     }
 
     #[test]
     fn geometry_file_round_trip() {
         let mut f = GeometryFile::default();
-        f.entries.insert(
-            "settings".into(),
-            StoredGeometry {
-                x: 100,
-                y: 200,
-                width: Some(520),
-                height: Some(600),
-            },
-        );
+        f.entries.insert("settings".into(), StoredGeometry {
+            x: 100,
+            y: 200,
+            width: Some(520),
+            height: Some(600),
+        });
         let json = serde_json::to_string(&f).unwrap();
         let parsed: GeometryFile = serde_json::from_str(&json).unwrap();
         let entry = parsed.entries.get("settings").unwrap();
@@ -301,13 +370,10 @@ mod tests {
     #[test]
     fn stored_size_round_trips_without_position_fields() {
         let mut f = GeometryFile::default();
-        f.size_entries.insert(
-            "flyout".into(),
-            StoredSize {
-                width: 400,
-                height: 820,
-            },
-        );
+        f.size_entries.insert("flyout".into(), StoredSize {
+            width: 400,
+            height: 820,
+        });
         let json = serde_json::to_string(&f).unwrap();
         // The size-only entry must never carry x/y — that's the whole point
         // of keeping it out of `entries: BTreeMap<String, StoredGeometry>`.
@@ -322,22 +388,17 @@ mod tests {
     #[test]
     fn resolve_size_prefers_new_key_over_legacy() {
         let mut file = GeometryFile::default();
-        file.size_entries.insert(
-            "flyout".into(),
-            StoredSize {
-                width: 500,
-                height: 900,
-            },
-        );
-        file.entries.insert(
-            LEGACY_FLYOUT_SIZE_KEY.into(),
-            StoredGeometry {
+        file.size_entries.insert("flyout".into(), StoredSize {
+            width: 500,
+            height: 900,
+        });
+        file.entries
+            .insert(LEGACY_FLYOUT_SIZE_KEY.into(), StoredGeometry {
                 x: 0,
                 y: 0,
                 width: Some(640),
                 height: Some(720),
-            },
-        );
+            });
 
         let resolved = resolve_size(&file, "flyout").expect("size present");
         assert_eq!(resolved.width, 500);
@@ -349,15 +410,13 @@ mod tests {
         // Simulates an upgrading user: pre-refactor size lived under the
         // `SurfaceMode::TrayPanel` shared-window geometry key.
         let mut file = GeometryFile::default();
-        file.entries.insert(
-            LEGACY_FLYOUT_SIZE_KEY.into(),
-            StoredGeometry {
+        file.entries
+            .insert(LEGACY_FLYOUT_SIZE_KEY.into(), StoredGeometry {
                 x: 0,
                 y: 0,
                 width: Some(640),
                 height: Some(720),
-            },
-        );
+            });
 
         let resolved = resolve_size(&file, "flyout").expect("legacy size migrates");
         assert_eq!(resolved.width, 640);
@@ -367,15 +426,13 @@ mod tests {
     #[test]
     fn resolve_size_ignores_legacy_entry_missing_width_or_height() {
         let mut file = GeometryFile::default();
-        file.entries.insert(
-            LEGACY_FLYOUT_SIZE_KEY.into(),
-            StoredGeometry {
+        file.entries
+            .insert(LEGACY_FLYOUT_SIZE_KEY.into(), StoredGeometry {
                 x: 0,
                 y: 0,
                 width: Some(640),
                 height: None,
-            },
-        );
+            });
 
         assert!(resolve_size(&file, "flyout").is_none());
     }
@@ -393,5 +450,98 @@ mod tests {
         // infinite fallback to itself.
         let file = GeometryFile::default();
         assert!(resolve_size(&file, LEGACY_FLYOUT_SIZE_KEY).is_none());
+    }
+
+    /// SBS-1024: two surfaces writing at once must not drop each other's
+    /// remembered position. The linger after load makes an unlocked RMW lose
+    /// one key; the shared state lock is what keeps both.
+    #[test]
+    fn concurrent_entry_saves_keep_sibling_positions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = std::sync::Arc::new(dir.path().join("window_geometry.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let _linger = LingerOn::arm();
+
+        let settings = StoredGeometry {
+            x: 10,
+            y: 20,
+            width: Some(520),
+            height: Some(600),
+        };
+        let floatbar = StoredGeometry {
+            x: 30,
+            y: 40,
+            width: None,
+            height: None,
+        };
+
+        let writers: Vec<_> = [("settings", settings), ("floatbar", floatbar)]
+            .into_iter()
+            .map(|(key, geometry)| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    save_entry_at(&path, key, geometry);
+                })
+            })
+            .collect();
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let file = load_file_from(&path);
+        assert_eq!(
+            file.entries.get("settings").copied(),
+            Some(settings),
+            "settings geometry must survive a concurrent floatbar persist"
+        );
+        assert_eq!(
+            file.entries.get("floatbar").copied(),
+            Some(floatbar),
+            "floatbar geometry must survive a concurrent settings persist"
+        );
+    }
+
+    /// A size-only persist is the same full-file rewrite, so a flyout resize
+    /// racing a window move used to wipe the moved window (SBS-1024).
+    #[test]
+    fn concurrent_entry_and_size_saves_keep_both_maps() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = std::sync::Arc::new(dir.path().join("window_geometry.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let _linger = LingerOn::arm();
+
+        let settings = StoredGeometry {
+            x: 100,
+            y: 200,
+            width: Some(520),
+            height: Some(600),
+        };
+        let flyout = StoredSize {
+            width: 400,
+            height: 820,
+        };
+
+        let path_entry = path.clone();
+        let barrier_entry = barrier.clone();
+        let entry_writer = std::thread::spawn(move || {
+            barrier_entry.wait();
+            save_entry_at(&path_entry, "settings", settings);
+        });
+        let path_size = path.clone();
+        let barrier_size = barrier.clone();
+        let size_writer = std::thread::spawn(move || {
+            barrier_size.wait();
+            save_size_at(&path_size, "flyout", flyout);
+        });
+        barrier.wait();
+        entry_writer.join().expect("entry writer");
+        size_writer.join().expect("size writer");
+
+        let file = load_file_from(&path);
+        assert_eq!(file.entries.get("settings").copied(), Some(settings));
+        assert_eq!(file.size_entries.get("flyout").copied(), Some(flyout));
     }
 }
