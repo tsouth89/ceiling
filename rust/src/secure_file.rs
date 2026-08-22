@@ -26,6 +26,18 @@ const STATE_LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(2
 /// this exceeds the acquire timeout, a waiter that arrives while a holder is
 /// working can never outlast it and steal the lock (SBS-947).
 const STATE_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(120);
+/// How long to keep retrying a name whose deletion has begun.
+///
+/// Windows reports a file that is unlinked but still has a handle closing as
+/// `ERROR_ACCESS_DENIED`, not `ERROR_FILE_EXISTS`, so a waiter that races the
+/// holder's release sees a name that is neither takeable nor gone. That clears
+/// in well under a millisecond. A real permission problem does not, so the
+/// spin is bounded and the original error is reported after it.
+///
+/// Unix unlinks by name and never reports this state, so the retry is compiled
+/// in everywhere but only enabled where it can happen.
+const DELETE_PENDING_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+const RETRIES_DELETE_PENDING: bool = cfg!(windows);
 
 /// Serialize read-modify-write transactions across Ceiling processes.
 ///
@@ -239,6 +251,23 @@ impl StateWriteLock {
 
     fn try_exclusive_create(path: &Path) -> LockAttempt {
         let exclusive = exclusive_lock_path(path);
+        let deadline = std::time::Instant::now() + DELETE_PENDING_GRACE;
+        loop {
+            let attempt = Self::try_exclusive_create_once(&exclusive);
+            if !RETRIES_DELETE_PENDING {
+                return attempt;
+            }
+            let denied = matches!(&attempt, LockAttempt::Failed(error)
+                if error.kind() == io::ErrorKind::PermissionDenied);
+            if !denied || std::time::Instant::now() >= deadline {
+                return attempt;
+            }
+            std::thread::sleep(STATE_LOCK_RETRY);
+        }
+    }
+
+    fn try_exclusive_create_once(exclusive: &Path) -> LockAttempt {
+        let exclusive = exclusive.to_path_buf();
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -2016,6 +2045,44 @@ mod tests {
             !exclusive_lock_path(&path).exists(),
             "dropping the exclusive-create holder must unlink the sibling"
         );
+    }
+
+    /// Regression for a Windows-only flake in CI: the waiter's `create_new`
+    /// raced the holder's unlink and got `ERROR_ACCESS_DENIED` rather than
+    /// `ERROR_FILE_EXISTS`, because the name was mid-delete. That surfaced as
+    /// a hard "Access is denied. (os error 5)" instead of one more retry, so a
+    /// release could hand the next writer a failure rather than the lock.
+    ///
+    /// Runs the handoff repeatedly to widen the window.
+    #[test]
+    fn releasing_the_sibling_hands_the_lock_to_the_next_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state-write.lock");
+        let unsupported =
+            |_: &Path| LockAttempt::FlockUnsupported(io::Error::from(io::ErrorKind::Unsupported));
+
+        for round in 0..25 {
+            let held = StateWriteLock::acquire_with(&path, unsupported)
+                .unwrap_or_else(|error| panic!("round {round} could not take the lock: {error}"));
+
+            let waiter_path = path.clone();
+            let waiter = std::thread::spawn(move || {
+                StateWriteLock::acquire_with(&waiter_path, unsupported).map(|_| ())
+            });
+
+            // Release into the waiter's retry loop rather than before it.
+            drop(held);
+            waiter
+                .join()
+                .expect("waiter thread")
+                .unwrap_or_else(|error| {
+                    panic!("round {round} waiter did not get the released lock: {error}")
+                });
+            assert!(
+                !exclusive_lock_path(&path).exists(),
+                "round {round} left the sibling behind"
+            );
+        }
     }
 
     #[test]
