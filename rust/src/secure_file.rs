@@ -35,8 +35,10 @@ const STATE_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(120
 /// `flock` is preferred because the kernel drops it if the process dies. When
 /// the mount cannot flock (NFS without lockd, some FUSE/SMB), writers serialize
 /// with an exclusive-create sibling and a staleness timeout. A lock file this
-/// user cannot open is repaired when it is stale. Unknown lock errors fail the
-/// write; they are not treated as "no lock needed" (SBS-947).
+/// user cannot open fails the write and names the path: a live holder still has
+/// that inode open, so unlinking it would put two writers on two inodes.
+/// Unknown lock errors fail the write too; they are not treated as "no lock
+/// needed" (SBS-947).
 pub fn with_state_write_lock<T>(operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     let lock_path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -183,8 +185,11 @@ impl StateWriteLock {
                         }
                     }
                 }
+                // Falls through to the deadline check and the sleep rather
+                // than retrying straight away: a lock file that keeps
+                // appearing and vanishing must still time out.
                 LockAttempt::Unopenable(error) => match try_repair_unopenable(path, &error) {
-                    Repair::Done => continue,
+                    Repair::Done => {}
                     Repair::Failed(repair) => return Err(repair),
                 },
                 LockAttempt::Contended => {}
@@ -507,7 +512,22 @@ fn classify_lock_failure(error: std::fs::TryLockError) -> LockAttempt {
 
 #[cfg(not(windows))]
 fn is_flock_unsupported(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::Unsupported
+    if error.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    // `ENOTSUP` and `EOPNOTSUPP` are one value on Linux but distinct on macOS
+    // and the BSDs, where `ENOTSUP` decoded as `Uncategorized` until a recent
+    // std change. Read the errno directly so which toolchain built this does
+    // not decide whether a mount gets the fallback.
+    #[cfg(unix)]
+    {
+        let raw = error.raw_os_error();
+        raw == Some(libc::ENOTSUP) || raw == Some(libc::EOPNOTSUPP)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 impl Drop for StateWriteLock {
@@ -518,10 +538,14 @@ impl Drop for StateWriteLock {
             // another live writer and removing it would hand the lock to a
             // third (SBS-947).
             #[cfg(unix)]
-            let ours = match (self.exclusive_id.take(), path_identity(&path)) {
-                (Some(created), Some(current)) => created == current,
-                // No identity to compare: a plain unlink is the old behaviour.
-                _ => true,
+            let ours = match self.exclusive_id.take() {
+                // Anything other than the exact file this holder created is
+                // somebody else's lock, including a path that no longer
+                // resolves: a takeover may have removed the original and be
+                // about to create its own.
+                Some(created) => path_identity(&path) == Some(created),
+                // Nothing was recorded, so there is nothing to compare against.
+                None => true,
             };
             #[cfg(not(unix))]
             let ours = true;
@@ -2070,6 +2094,16 @@ mod tests {
                 "the flock-unsupported path must name the reason, got {error}"
             ),
             _ => panic!("ENOTSUP must be flock-unsupported, not a silent degrade or a hard fail"),
+        }
+
+        // On macOS and the BSDs this errno is distinct from EOPNOTSUPP and
+        // older toolchains decoded it as Uncategorized, so the classification
+        // must not rest on `kind()` alone.
+        match classify_lock_failure(std::fs::TryLockError::Error(io::Error::from_raw_os_error(
+            libc::ENOTSUP,
+        ))) {
+            LockAttempt::FlockUnsupported(_) => {}
+            _ => panic!("ENOTSUP must be flock-unsupported whatever std decodes it as"),
         }
 
         match classify_lock_failure(std::fs::TryLockError::Error(io::Error::from_raw_os_error(
