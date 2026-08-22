@@ -620,10 +620,10 @@ mod tests {
         data.accounts.push(account("b", "/dirs/shared/"));
         data.accounts.push(account("c", "/dirs/other"));
 
-        assert_eq!(data.all_dirs(), vec![
-            PathBuf::from("/dirs/shared"),
-            PathBuf::from("/dirs/other")
-        ]);
+        assert_eq!(
+            data.all_dirs(),
+            vec![PathBuf::from("/dirs/shared"), PathBuf::from("/dirs/other")]
+        );
     }
 
     #[test]
