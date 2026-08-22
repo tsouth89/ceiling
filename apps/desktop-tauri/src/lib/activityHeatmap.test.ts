@@ -44,7 +44,7 @@ describe("intensity banding", () => {
     // A linear scale against the 1000 peak would put all eight ordinary values
     // in the bottom band and show nothing about the ordinary days.
     const bands = bandThresholds([1, 2, 3, 4, 5, 6, 7, 8, 1000]);
-    expect(bands).toEqual([3, 5, 7]);
+    expect(bands).toEqual([3, 5, 7, 1000]);
     expect(intensityLevel(1, bands)).toBe(1);
     expect(intensityLevel(4, bands)).toBe(2);
     expect(intensityLevel(6, bands)).toBe(3);
@@ -71,7 +71,7 @@ describe("intensity banding", () => {
   it("does not flatten an outlier to the quiet majority's shade", () => {
     const values = [...Array.from({ length: 29 }, () => 1), 500];
     const bands = bandThresholds(values);
-    expect(bands).toEqual([1, 1, 1]);
+    expect(bands).toEqual([1, 1, 1, 500]);
     expect(intensityLevel(1, bands)).toBe(2);
     expect(intensityLevel(500, bands)).toBe(4);
   });
@@ -83,11 +83,41 @@ describe("intensity banding", () => {
     expect(intensityLevel(1, bandThresholds([1, 50, 100]))).toBeLessThan(4);
   });
 
+  /// SBS-945: the top swatch is the busiest cell, in both directions. Deciding
+  /// it from the 75th-percentile cut painted a tied maximum mid-scale, and
+  /// handed the same shade to a distinct runner-up.
+  it("gives the top swatch to tied peaks but not to a distinct runner-up", () => {
+    // Upper half ties: cuts land at [1, 50, 50], so `value <= mid` used to
+    // catch the busiest cell and paint it level 2.
+    const tied = bandThresholds([1, 50, 50]);
+    expect(tied).toEqual([1, 50, 50, 50]);
+    expect(intensityLevel(50, tied)).toBe(4);
+    expect(intensityLevel(1, tied)).toBe(1);
+
+    // Median equal to Q3, the same shape with a larger peak.
+    const tiedHigh = bandThresholds([1, 100, 100]);
+    expect(intensityLevel(100, tiedHigh)).toBe(4);
+
+    // Three of five tied at the top.
+    const tiedRun = bandThresholds([1, 1, 10, 10, 10]);
+    expect(intensityLevel(10, tiedRun)).toBe(4);
+    expect(intensityLevel(1, tiedRun)).toBe(1);
+
+    // Four distinct cells: Q3 is 100, so `value < high` used to give 100 and
+    // 200 the same shade. Only the busiest is the peak.
+    const distinct = bandThresholds([1, 50, 100, 200]);
+    expect(distinct).toEqual([1, 50, 100, 200]);
+    expect(intensityLevel(200, distinct)).toBe(4);
+    expect(intensityLevel(100, distinct)).toBe(3);
+    expect(intensityLevel(50, distinct)).toBe(2);
+    expect(intensityLevel(1, distinct)).toBe(1);
+  });
+
   it("ignores empty cells when choosing the bands", () => {
-    expect(bandThresholds([0, 0, 0])).toEqual([0, 0, 0]);
+    expect(bandThresholds([0, 0, 0])).toEqual([0, 0, 0, 0]);
     // Only 4 and 8 are active, so the quartiles sit on those two values alone
     // rather than being dragged toward zero by the empty cells.
-    expect(bandThresholds([0, 0, 4, 8])).toEqual([4, 4, 8]);
+    expect(bandThresholds([0, 0, 4, 8])).toEqual([4, 4, 8, 8]);
   });
 });
 
