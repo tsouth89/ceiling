@@ -49,19 +49,38 @@ pub(crate) fn default_wsl_roots() -> Vec<PathBuf> {
     vec![PathBuf::from(r"\\wsl$")]
 }
 
+/// Final segment of a path string, treating `\\` as a separator on every host.
+///
+/// These strings arrive from configuration and session logs written by other
+/// machines, so a Windows path can be read on Linux or inside WSL. There,
+/// `Path::file_name` does not treat `\\` as a separator and hands back the whole
+/// string, which is how a `cwd` of `C:\\projects\\ceiling` became a "project name".
+pub(crate) fn last_path_segment(value: &str) -> Option<&str> {
+    value
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.trim().is_empty())
+}
+
 fn normalize_codex_sessions_dir(path: impl AsRef<str>) -> Option<PathBuf> {
     let trimmed = path.as_ref().trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    let path = PathBuf::from(trimmed);
-    let file_name = path.file_name().and_then(|name| name.to_str());
-    if file_name.is_some_and(|name| name.eq_ignore_ascii_case("sessions")) {
-        Some(path)
-    } else {
-        Some(path.join("sessions"))
+    if last_path_segment(trimmed).is_some_and(|name| name.eq_ignore_ascii_case("sessions")) {
+        return Some(PathBuf::from(trimmed));
     }
+    // Keep the separator the caller wrote, so a Windows path stays a Windows
+    // path on a host whose own separator is `/`. On Windows the two agree.
+    let separator = if trimmed.contains('\\') {
+        '\\'
+    } else {
+        std::path::MAIN_SEPARATOR
+    };
+    Some(PathBuf::from(format!(
+        "{}{separator}sessions",
+        trimmed.trim_end_matches(['/', '\\'])
+    )))
 }
 
 fn discover_wsl_codex_sessions_dirs(wsl_roots: &[PathBuf]) -> Vec<PathBuf> {
@@ -122,6 +141,56 @@ mod tests {
             Some(PathBuf::from(r"C:\Users\me\.codex\sessions"))
         );
         assert_eq!(normalize_codex_sessions_dir("  "), None);
+    }
+
+    /// Pins the cross-host part: these strings come from other machines, so a
+    /// Windows path has to split the same way whatever host is reading it.
+    /// `Path::file_name` only honours `\` on Windows, which is what made a
+    /// `cwd` of `C:\projects\ceiling` read as a project called
+    /// `C:\projects\ceiling`.
+    #[test]
+    fn a_windows_path_splits_the_same_on_every_host() {
+        assert_eq!(
+            last_path_segment(r"C:\projects\personal\ceiling"),
+            Some("ceiling")
+        );
+        assert_eq!(
+            last_path_segment(r"\\wsl.localhost\archlinux\home\kk\.codex"),
+            Some(".codex")
+        );
+        assert_eq!(
+            last_path_segment("/home/kk/projects/ceiling"),
+            Some("ceiling")
+        );
+        // Mixed, and trailing separators, both of which appear in the wild.
+        assert_eq!(
+            last_path_segment(r"C:\projects/personal\ceiling\"),
+            Some("ceiling")
+        );
+        assert_eq!(last_path_segment(""), None);
+        assert_eq!(last_path_segment(r"\\"), None);
+    }
+
+    /// A Windows path keeps its own separator rather than picking up the
+    /// host's, so the joined result is still a usable Windows path.
+    #[test]
+    fn joining_sessions_keeps_the_callers_separator() {
+        assert_eq!(
+            normalize_codex_sessions_dir(r"C:\Users\me\.codex"),
+            Some(PathBuf::from(r"C:\Users\me\.codex\sessions"))
+        );
+        assert_eq!(
+            normalize_codex_sessions_dir("/home/kk/.codex"),
+            Some(PathBuf::from(format!(
+                "/home/kk/.codex{}sessions",
+                std::path::MAIN_SEPARATOR
+            )))
+        );
+        // Already a sessions dir, in either style.
+        assert_eq!(
+            normalize_codex_sessions_dir(r"C:\Users\me\.codex\SESSIONS"),
+            Some(PathBuf::from(r"C:\Users\me\.codex\SESSIONS"))
+        );
     }
 
     #[test]
