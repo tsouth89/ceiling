@@ -2,8 +2,10 @@
 //!
 //! Speaks Model Context Protocol over stdio so Claude Code / Codex can query
 //! remaining quota and estimated spend mid-conversation. Quota comes from the
-//! desktop widget snapshot (cache-only, no network). Spend comes from local
-//! Codex, Claude, and Grok session logs via [`crate::cost_scanner`].
+//! desktop widget snapshot (cache-only, no network). `get_spend` walks local
+//! Codex, Claude, and Grok session logs via [`crate::cost_scanner`] for today,
+//! 7 days, and 30 days. `get_status` reuses the snapshot and a 1-day spend
+//! scan so a cap check does not pay for that 30-day walk.
 
 use clap::Args;
 use rmcp::{
@@ -93,7 +95,7 @@ impl CeilingMcp {
     }
 
     #[tool(
-        description = "Compact status: remaining quota + today's estimated spend for one provider (or the best available). Good for 'am I about to hit my cap?' checks."
+        description = "Cheap compact status: remaining quota from the desktop snapshot plus today's estimated spend from a 1-day local log scan (not the 30-day get_spend walk). Good for 'am I about to hit my cap?' checks. Use get_spend for 7/30-day totals."
     )]
     fn get_status(
         &self,
@@ -116,10 +118,11 @@ impl ServerHandler for CeilingMcp {
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_instructions(
                 "Ceiling local usage/spend tools. get_usage reads the desktop widget snapshot \
-(cache-only). get_spend scans local Codex/Claude/Grok logs. Prefer get_status for a quick \
-remaining-quota + today-$ check before starting a large job. Values are estimated API \
-value, never a billed invoice. Account email and login method are omitted unless the \
-server was started with --include-identity."
+(cache-only). get_spend scans local Codex/Claude/Grok logs for today, 7 days, and 30 days. \
+Prefer get_status for a cheap remaining-quota + today-$ check before starting a large job; \
+it does not run the 30-day spend scan. Values are estimated API value, never a billed \
+invoice. Account email and login method are omitted unless the server was started with \
+--include-identity."
                     .to_string(),
             )
     }
@@ -260,6 +263,17 @@ fn window_json(window: Option<&RateWindow>) -> serde_json::Value {
     })
 }
 
+/// Inclusive local calendar days `get_spend` walks for today / 7-day / 30-day totals.
+const GET_SPEND_DAYS: u32 = 30;
+
+/// Inclusive local calendar days `get_status` walks for `today_spend`.
+///
+/// SBS-1033: agents treat get_status as a cheap cap check. Filling today's
+/// dollars with the 30-day chart scan made that entry point as expensive as
+/// get_spend. One day is enough for `today` and matches Codex/Claude
+/// `--days 1` (plus the scanner's usual one-day timezone padding).
+const STATUS_TODAY_SPEND_DAYS: u32 = 1;
+
 fn spend_payload(provider: Option<&str>, enabled: &[ProviderId]) -> serde_json::Value {
     let targets: Vec<&str> = match provider {
         Some(name) => {
@@ -283,7 +297,7 @@ fn spend_payload(provider: Option<&str>, enabled: &[ProviderId]) -> serde_json::
 
     let mut providers = Vec::new();
     for cli in targets {
-        match get_cost_usage_report(cli, 30) {
+        match get_cost_usage_report(cli, GET_SPEND_DAYS) {
             Some(report) => providers.push(json!({
                 "provider": cli,
                 "supported": true,
@@ -334,6 +348,22 @@ fn status_payload(
     enabled: &[ProviderId],
     include_identity: bool,
 ) -> serde_json::Value {
+    status_payload_with_spend(
+        snapshot,
+        provider,
+        enabled,
+        include_identity,
+        today_spend_summary,
+    )
+}
+
+fn status_payload_with_spend(
+    snapshot: Option<&WidgetSnapshot>,
+    provider: Option<&str>,
+    enabled: &[ProviderId],
+    include_identity: bool,
+    spend_for: impl Fn(&str) -> Option<serde_json::Value>,
+) -> serde_json::Value {
     if let Some(name) = provider
         && ProviderId::from_cli_name(name).is_none()
     {
@@ -361,7 +391,7 @@ fn status_payload(
         if !allowed {
             return None;
         }
-        get_cost_usage_report(cli, 30).map(|report| summary_json(&report.today))
+        spend_for(cli)
     });
 
     let remaining = usage
@@ -382,6 +412,10 @@ fn status_payload(
             None
         },
     })
+}
+
+fn today_spend_summary(cli: &str) -> Option<serde_json::Value> {
+    get_cost_usage_report(cli, STATUS_TODAY_SPEND_DAYS).map(|report| summary_json(&report.today))
 }
 
 fn choose_status_provider(
@@ -509,13 +543,20 @@ mod tests {
         assert_eq!(spend["providers"][0]["supported"], true);
     }
 
+    fn status_without_spend_scan(
+        snapshot: Option<&WidgetSnapshot>,
+        provider: Option<&str>,
+        enabled: &[ProviderId],
+    ) -> serde_json::Value {
+        status_payload_with_spend(snapshot, provider, enabled, false, |_| None)
+    }
+
     #[test]
     fn status_rejects_unknown_provider() {
-        let payload = status_payload(
+        let payload = status_without_spend_scan(
             Some(&sample_snapshot()),
             Some("not-a-provider"),
             &default_enabled(),
-            false,
         );
         assert_eq!(payload["ok"], false);
         assert!(
@@ -530,7 +571,7 @@ mod tests {
     #[test]
     fn status_prefers_claude_when_present() {
         let snap = sample_snapshot();
-        let payload = status_payload(Some(&snap), None, &default_enabled(), false);
+        let payload = status_without_spend_scan(Some(&snap), None, &default_enabled());
         assert_eq!(payload["provider"], "claude");
         assert_eq!(payload["remaining_percent"], 58.0);
     }
@@ -564,12 +605,66 @@ mod tests {
     #[test]
     fn status_skips_disabled_snapshot_providers() {
         let snap = sample_snapshot();
-        let payload = status_payload(Some(&snap), None, &[ProviderId::Codex], false);
+        let payload = status_without_spend_scan(Some(&snap), None, &[ProviderId::Codex]);
         assert!(payload["provider"].is_null(), "payload: {payload}");
         assert!(payload["usage"].is_null(), "payload: {payload}");
 
-        let explicit = status_payload(Some(&snap), Some("claude"), &[ProviderId::Codex], false);
+        let explicit = status_without_spend_scan(Some(&snap), Some("claude"), &[ProviderId::Codex]);
         assert_eq!(explicit["provider"], "claude");
         assert_eq!(explicit["remaining_percent"], 58.0);
+    }
+
+    /// SBS-1033: get_status is advertised as a cheap cap check. A 30-day
+    /// local-log walk just to fill `today_spend` made it as expensive as
+    /// get_spend. Today's dollars only need one inclusive local day.
+    #[test]
+    fn status_today_spend_uses_one_day_window_not_thirty() {
+        assert_eq!(STATUS_TODAY_SPEND_DAYS, 1);
+        assert_eq!(GET_SPEND_DAYS, 30);
+        assert_ne!(
+            STATUS_TODAY_SPEND_DAYS, GET_SPEND_DAYS,
+            "get_status must not reuse get_spend's 30-day scan window"
+        );
+    }
+
+    #[test]
+    fn status_includes_today_spend_from_one_day_lookup() {
+        let snap = sample_snapshot();
+        let mut scanned = Vec::new();
+        let payload = status_payload_with_spend(
+            Some(&snap),
+            Some("claude"),
+            &default_enabled(),
+            false,
+            |cli| {
+                scanned.push(cli.to_string());
+                Some(json!({
+                    "total_usd": 1.25,
+                    "has_data": true,
+                }))
+            },
+        );
+        assert_eq!(scanned, vec!["claude"]);
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["today_spend"]["total_usd"], 1.25);
+        assert_eq!(payload["today_spend"]["has_data"], true);
+    }
+
+    #[test]
+    fn status_skips_today_spend_for_providers_without_local_logs() {
+        let snap = sample_snapshot();
+        let mut scanned = 0u32;
+        let payload = status_payload_with_spend(
+            Some(&snap),
+            Some("cursor"),
+            &default_enabled(),
+            false,
+            |_| {
+                scanned += 1;
+                Some(json!({ "total_usd": 9.99 }))
+            },
+        );
+        assert_eq!(scanned, 0);
+        assert!(payload["today_spend"].is_null(), "payload: {payload}");
     }
 }
