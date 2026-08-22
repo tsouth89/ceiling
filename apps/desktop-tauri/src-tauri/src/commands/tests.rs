@@ -603,6 +603,91 @@ fn fetch_context_copilot_token_account_uses_oauth_api_key() {
 }
 
 #[test]
+fn configured_claude_accounts_do_not_inherit_the_global_session_cookie() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Claude, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("claude", "sessionKey=sk-ant-global");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let base_ctx = super::build_fetch_context(
+        ProviderId::Claude,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+    assert_eq!(base_ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        base_ctx.manual_cookie_header.as_deref(),
+        Some("sessionKey=sk-ant-global")
+    );
+
+    let mut accounts = ConfiguredAccounts::default();
+    accounts
+        .claude
+        .add_account(codexbar::core::DirectoryAccount::<
+            codexbar::core::ClaudeIdentity,
+        >::new(
+            Some("personal".into()),
+            std::path::PathBuf::from("/dirs/personal"),
+        ));
+    accounts
+        .claude
+        .add_account(codexbar::core::DirectoryAccount::<
+            codexbar::core::ClaudeIdentity,
+        >::new(
+            Some("work".into()),
+            std::path::PathBuf::from("/dirs/work"),
+        ));
+
+    let fetches = super::account_fetches(ProviderId::Claude, base_ctx, &accounts);
+    assert_eq!(fetches.len(), 2);
+    for (ctx, badge) in &fetches {
+        assert!(
+            ctx.manual_cookie_header.is_none(),
+            "account {} inherited the global sessionKey",
+            badge.label.as_deref().unwrap_or("?")
+        );
+        assert!(ctx.account_config_dir.is_some());
+    }
+    let dirs: Vec<_> = fetches
+        .iter()
+        .filter_map(|(ctx, _)| ctx.account_config_dir.clone())
+        .collect();
+    assert!(dirs.contains(&std::path::PathBuf::from("/dirs/personal")));
+    assert!(dirs.contains(&std::path::PathBuf::from("/dirs/work")));
+}
+
+#[test]
+fn ambient_claude_fetch_keeps_the_manual_session_cookie() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Claude, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("claude", "sessionKey=sk-ant-global");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let base_ctx = super::build_fetch_context(
+        ProviderId::Claude,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+    let fetches =
+        super::account_fetches(ProviderId::Claude, base_ctx, &ConfiguredAccounts::default());
+
+    assert_eq!(fetches.len(), 1);
+    assert_eq!(
+        fetches[0].0.manual_cookie_header.as_deref(),
+        Some("sessionKey=sk-ant-global")
+    );
+    assert!(fetches[0].0.account_config_dir.is_none());
+}
+
+#[test]
 fn fetch_context_claude_session_token_account_uses_web_cookie() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();

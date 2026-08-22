@@ -329,26 +329,7 @@ fn spawn_provider_refreshes(
         // One fetch per configured account, so several accounts on one provider
         // are read side by side rather than replacing each other. With none
         // configured this is a single ambient fetch, exactly as before.
-        let targets = inputs.account_dirs.targets_for(id);
-        let fetches: Vec<(FetchContext, AccountBadge)> = if targets.is_empty() {
-            vec![(base_ctx, AccountBadge::default())]
-        } else {
-            targets
-                .into_iter()
-                .map(|target| {
-                    let mut ctx = base_ctx.clone();
-                    ctx.account_config_dir = Some(target.config_dir);
-                    // Carried alongside the reading so every surface can say
-                    // which account it shows, rather than re-reading the store.
-                    let badge = AccountBadge {
-                        id: Some(target.id),
-                        label: Some(target.label),
-                        tint: target.tint,
-                    };
-                    (ctx, badge)
-                })
-                .collect()
-        };
+        let fetches = account_fetches(id, base_ctx, &inputs.account_dirs);
 
         for (ctx, account) in fetches {
             let app_handle = app.clone();
@@ -363,6 +344,37 @@ fn spawn_provider_refreshes(
     }
 
     handles
+}
+
+/// One fetch context per configured account, or a single ambient fetch.
+///
+/// Claude directory accounts drop the global session cookie/key here so Web
+/// mode cannot paint every card from one `sessionKey` (SBS-1034 / SBS-695).
+pub(crate) fn account_fetches(
+    id: ProviderId,
+    base_ctx: FetchContext,
+    account_dirs: &ConfiguredAccounts,
+) -> Vec<(FetchContext, AccountBadge)> {
+    let targets = account_dirs.targets_for(id);
+    if targets.is_empty() {
+        return vec![(base_ctx, AccountBadge::default())];
+    }
+    targets
+        .into_iter()
+        .map(|target| {
+            // Carried alongside the reading so every surface can say
+            // which account it shows, rather than re-reading the store.
+            let badge = AccountBadge {
+                id: Some(target.id),
+                label: Some(target.label),
+                tint: target.tint,
+            };
+            let ctx = base_ctx
+                .clone()
+                .pinned_to_account_dir(id, target.config_dir);
+            (ctx, badge)
+        })
+        .collect()
 }
 
 /// The active account's display identity, attached to each reading.

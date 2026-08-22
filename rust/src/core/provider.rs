@@ -536,12 +536,27 @@ impl Default for FetchContext {
 impl FetchContext {
     /// Aim this context at whichever account is configured for `provider`,
     /// leaving it following the CLI when none is.
-    pub fn for_account(
+    pub fn for_account(self, provider: ProviderId, accounts: &super::ConfiguredAccounts) -> Self {
+        match accounts.active_dir_for(provider) {
+            Some(dir) => self.pinned_to_account_dir(provider, dir),
+            None => self,
+        }
+    }
+
+    /// Pin this fetch to one configured account directory.
+    ///
+    /// A global session cookie or key has no account identity. Cloning it onto
+    /// every `account_config_dir` fetch paints every configured Claude card
+    /// from one seat (SBS-1034 / SBS-695).
+    pub fn pinned_to_account_dir(
         mut self,
         provider: ProviderId,
-        accounts: &super::ConfiguredAccounts,
+        config_dir: std::path::PathBuf,
     ) -> Self {
-        self.account_config_dir = accounts.active_dir_for(provider);
+        self.account_config_dir = Some(config_dir);
+        if provider == ProviderId::Claude {
+            self.manual_cookie_header = None;
+        }
         self
     }
 }
@@ -768,6 +783,86 @@ mod tests {
         assert!(!ctx.verbose);
         assert!(ctx.manual_cookie_header.is_none());
         assert!(ctx.api_key.is_none());
+    }
+
+    #[test]
+    fn pinning_a_claude_account_drops_the_global_session_cookie() {
+        let ctx = FetchContext {
+            source_mode: SourceMode::Web,
+            manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
+            api_key: Some("sk-ant-oat01-ambient".to_string()),
+            ..FetchContext::default()
+        };
+
+        let work = ctx
+            .clone()
+            .pinned_to_account_dir(ProviderId::Claude, std::path::PathBuf::from("/dirs/work"));
+        let personal = ctx.pinned_to_account_dir(
+            ProviderId::Claude,
+            std::path::PathBuf::from("/dirs/personal"),
+        );
+
+        assert_eq!(
+            work.account_config_dir.as_deref(),
+            Some(std::path::Path::new("/dirs/work"))
+        );
+        assert_eq!(
+            personal.account_config_dir.as_deref(),
+            Some(std::path::Path::new("/dirs/personal"))
+        );
+        assert!(work.manual_cookie_header.is_none());
+        assert!(personal.manual_cookie_header.is_none());
+        assert_eq!(work.api_key.as_deref(), Some("sk-ant-oat01-ambient"));
+        assert_ne!(work.account_config_dir, personal.account_config_dir);
+    }
+
+    #[test]
+    fn pinning_a_codex_account_keeps_unrelated_context_fields() {
+        let ctx = FetchContext {
+            manual_cookie_header: Some("session=abc".to_string()),
+            ..FetchContext::default()
+        };
+        let pinned =
+            ctx.pinned_to_account_dir(ProviderId::Codex, std::path::PathBuf::from("/homes/work"));
+        assert_eq!(pinned.manual_cookie_header.as_deref(), Some("session=abc"));
+    }
+
+    #[test]
+    fn for_account_strips_claude_session_cookie_when_a_directory_is_configured() {
+        let mut accounts = super::ConfiguredAccounts::default();
+        accounts
+            .claude
+            .add_account(super::DirectoryAccount::<super::ClaudeIdentity>::new(
+                Some("work".to_string()),
+                std::path::PathBuf::from("/dirs/work"),
+            ));
+
+        let ctx = FetchContext {
+            manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
+            ..FetchContext::default()
+        }
+        .for_account(ProviderId::Claude, &accounts);
+
+        assert_eq!(
+            ctx.account_config_dir.as_deref(),
+            Some(std::path::Path::new("/dirs/work"))
+        );
+        assert!(ctx.manual_cookie_header.is_none());
+    }
+
+    #[test]
+    fn for_account_keeps_the_session_cookie_when_following_the_cli() {
+        let ctx = FetchContext {
+            manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
+            ..FetchContext::default()
+        }
+        .for_account(ProviderId::Claude, &super::ConfiguredAccounts::default());
+
+        assert!(ctx.account_config_dir.is_none());
+        assert_eq!(
+            ctx.manual_cookie_header.as_deref(),
+            Some("sessionKey=sk-ant-global")
+        );
     }
 
     #[test]

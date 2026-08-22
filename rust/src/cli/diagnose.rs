@@ -180,10 +180,14 @@ async fn collect_provider_diagnostic(
         api_region: settings
             .provider_config(provider_id)
             .and_then(|config| config.api_region.clone()),
-        account_config_dir: ConfiguredAccounts::load().active_dir_for(provider_id),
+        account_config_dir: None,
         gateway_url: settings
             .provider_config(provider_id)
             .and_then(|config| config.gateway_url.clone()),
+    };
+    let ctx = match ConfiguredAccounts::load().active_dir_for(provider_id) {
+        Some(dir) => ctx.pinned_to_account_dir(provider_id, dir),
+        None => ctx,
     };
 
     let fetch_result = provider.fetch_usage(&ctx).await;

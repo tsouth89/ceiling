@@ -81,6 +81,56 @@ fn claude_oauth_source(ctx: &FetchContext) -> ClaudeOAuthSource<'_> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ClaudeWebSource<'a> {
+    /// Pasted / token-account cookie. Ambient fetches only: a configured
+    /// directory account must not inherit this global session (SBS-1034).
+    ManualCookie(&'a str),
+    /// Env session key or Claude Desktop cookies. Same global-session rule.
+    Ambient,
+    /// Configured `CLAUDE_CONFIG_DIR`: use that directory's OAuth only.
+    ScopedOAuthOnly,
+}
+
+fn claude_web_source(ctx: &FetchContext) -> ClaudeWebSource<'_> {
+    if ctx.account_config_dir.is_some() {
+        return ClaudeWebSource::ScopedOAuthOnly;
+    }
+    match ctx
+        .manual_cookie_header
+        .as_deref()
+        .filter(|header| !header.trim().is_empty())
+    {
+        Some(header) => ClaudeWebSource::ManualCookie(header),
+        None => ClaudeWebSource::Ambient,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ClaudeCliSource<'a> {
+    Scoped(&'a std::path::Path),
+    Ambient,
+}
+
+fn claude_cli_source(ctx: &FetchContext) -> ClaudeCliSource<'_> {
+    match ctx.account_config_dir.as_deref() {
+        Some(dir) => ClaudeCliSource::Scoped(dir),
+        None => ClaudeCliSource::Ambient,
+    }
+}
+
+fn apply_claude_cli_config_dir(
+    env: &mut std::collections::HashMap<String, String>,
+    config_dir: Option<&std::path::Path>,
+) {
+    if let Some(dir) = config_dir {
+        env.insert(
+            "CLAUDE_CONFIG_DIR".to_string(),
+            dir.to_string_lossy().into_owned(),
+        );
+    }
+}
+
 impl ClaudeProvider {
     pub fn new() -> Self {
         Self {
@@ -259,11 +309,13 @@ struct ClaudePtyProbeOptions {
     script_char_delay_secs: f64,
     script_line_delay_secs: f64,
     send_on_substring: Option<(&'static str, &'static str)>,
+    config_dir: Option<std::path::PathBuf>,
 }
 
 async fn run_claude_usage_pty_probe(
     claude_path: std::path::PathBuf,
     working_directory: std::path::PathBuf,
+    config_dir: Option<std::path::PathBuf>,
 ) -> Result<String, ProviderError> {
     run_claude_pty_probe(
         claude_path,
@@ -276,6 +328,7 @@ async fn run_claude_usage_pty_probe(
             script_char_delay_secs: 0.04,
             script_line_delay_secs: 0.0,
             send_on_substring: None,
+            config_dir,
         },
     )
     .await
@@ -284,6 +337,7 @@ async fn run_claude_usage_pty_probe(
 async fn run_claude_trust_preflight(
     claude_path: std::path::PathBuf,
     working_directory: std::path::PathBuf,
+    config_dir: Option<std::path::PathBuf>,
 ) -> Result<String, ProviderError> {
     run_claude_pty_probe(
         claude_path,
@@ -296,6 +350,7 @@ async fn run_claude_trust_preflight(
             script_char_delay_secs: 0.0,
             script_line_delay_secs: 0.0,
             send_on_substring: Some(("Enter", "\n/exit\n")),
+            config_dir,
         },
     )
     .await
@@ -311,24 +366,29 @@ fn resolve_claude_cli_path() -> Result<std::path::PathBuf, ProviderError> {
 
 async fn fetch_claude_cli_usage_text(
     claude_path: std::path::PathBuf,
+    config_dir: Option<&std::path::Path>,
 ) -> Result<String, ProviderError> {
     let probe_dir = claude_usage_probe_dir()?;
-    let combined = run_claude_usage_pty_probe(claude_path.clone(), probe_dir.clone()).await?;
+    let config_dir = config_dir.map(std::path::Path::to_path_buf);
+    let combined =
+        run_claude_usage_pty_probe(claude_path.clone(), probe_dir.clone(), config_dir.clone())
+            .await?;
 
-    rerun_claude_usage_after_trust_prompt(claude_path, probe_dir, combined).await
+    rerun_claude_usage_after_trust_prompt(claude_path, probe_dir, config_dir, combined).await
 }
 
 async fn rerun_claude_usage_after_trust_prompt(
     claude_path: std::path::PathBuf,
     probe_dir: std::path::PathBuf,
+    config_dir: Option<std::path::PathBuf>,
     combined: String,
 ) -> Result<String, ProviderError> {
     if !is_workspace_trust_prompt(&strip_ansi(&combined).to_lowercase()) {
         return Ok(combined);
     }
 
-    run_claude_trust_preflight(claude_path.clone(), probe_dir.clone()).await?;
-    run_claude_usage_pty_probe(claude_path, probe_dir).await
+    run_claude_trust_preflight(claude_path.clone(), probe_dir.clone(), config_dir.clone()).await?;
+    run_claude_usage_pty_probe(claude_path, probe_dir, config_dir).await
 }
 
 fn claude_cli_error_from_output(output: &str) -> Option<ProviderError> {
@@ -392,6 +452,7 @@ async fn run_claude_pty_probe(
     tokio::task::spawn_blocking(move || {
         let mut env = TtyCommandRunner::enriched_environment();
         env.insert("NO_COLOR".to_string(), "1".to_string());
+        apply_claude_cli_config_dir(&mut env, probe.config_dir.as_deref());
 
         let mut options = TtyCommandOptions::new()
             .with_timeout(probe.timeout_secs)
@@ -566,27 +627,40 @@ impl ClaudeProvider {
     ) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Attempting Web API fetch for Claude");
 
-        // Check for manual cookie header first
-        if let Some(ref cookie_header) = ctx.manual_cookie_header {
-            tracing::debug!("Using manual cookie header");
-            return self
-                .web_fetcher
-                .fetch_with_cookie_header(cookie_header)
-                .await;
+        match claude_web_source(ctx) {
+            ClaudeWebSource::ScopedOAuthOnly => {
+                // A configured account is a promise that this reading belongs
+                // to one CLAUDE_CONFIG_DIR. The pasted sessionKey, env key,
+                // and Claude Desktop cookie are one global session, so using
+                // them here clones that seat onto every configured card.
+                tracing::debug!(
+                    config_dir = ?ctx.account_config_dir,
+                    "refusing global Claude session cookie for configured account"
+                );
+                self.fetch_via_oauth(ctx).await
+            }
+            ClaudeWebSource::ManualCookie(cookie_header) => {
+                tracing::debug!("Using manual cookie header");
+                self.web_fetcher
+                    .fetch_with_cookie_header(cookie_header)
+                    .await
+            }
+            ClaudeWebSource::Ambient => self.web_fetcher.fetch_with_cookies().await,
         }
-
-        // Otherwise, try to extract cookies from browser
-        self.web_fetcher.fetch_with_cookies().await
     }
 
     async fn fetch_via_cli(
         &self,
-        _ctx: &FetchContext,
+        ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Attempting CLI probe for Claude");
 
         let claude_path = resolve_claude_cli_path()?;
-        let combined = fetch_claude_cli_usage_text(claude_path).await?;
+        let config_dir = match claude_cli_source(ctx) {
+            ClaudeCliSource::Scoped(dir) => Some(dir),
+            ClaudeCliSource::Ambient => None,
+        };
+        let combined = fetch_claude_cli_usage_text(claude_path, config_dir).await?;
 
         if let Some(error) = claude_cli_error_from_output(&combined) {
             return Err(error);
@@ -1102,6 +1176,78 @@ mod tests {
         assert_eq!(
             claude_auto_policy(&ambient),
             ClaudeAutoPolicy::FallbackChain
+        );
+    }
+
+    #[test]
+    fn configured_account_web_refuses_global_session_cookie() {
+        let configured = FetchContext {
+            account_config_dir: Some(std::path::PathBuf::from(r"C:\Users\person\.claude-work")),
+            manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            claude_web_source(&configured),
+            ClaudeWebSource::ScopedOAuthOnly
+        );
+
+        let configured_without_cookie = FetchContext {
+            account_config_dir: Some(std::path::PathBuf::from(r"C:\Users\person\.claude-work")),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            claude_web_source(&configured_without_cookie),
+            ClaudeWebSource::ScopedOAuthOnly,
+            "env / Claude Desktop cookies are also a global session"
+        );
+
+        let ambient = FetchContext {
+            manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            claude_web_source(&ambient),
+            ClaudeWebSource::ManualCookie("sessionKey=sk-ant-global")
+        );
+
+        assert_eq!(
+            claude_web_source(&FetchContext::default()),
+            ClaudeWebSource::Ambient
+        );
+    }
+
+    #[test]
+    fn configured_account_cli_is_directory_scoped() {
+        let dir = std::path::PathBuf::from(r"C:\Users\person\.claude-work");
+        let configured = FetchContext {
+            account_config_dir: Some(dir.clone()),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            claude_cli_source(&configured),
+            ClaudeCliSource::Scoped(std::path::Path::new(r"C:\Users\person\.claude-work"))
+        );
+        assert_eq!(
+            claude_cli_source(&FetchContext::default()),
+            ClaudeCliSource::Ambient
+        );
+
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "CLAUDE_CONFIG_DIR".to_string(),
+            r"C:\Users\person\.claude".to_string(),
+        );
+        apply_claude_cli_config_dir(&mut env, Some(dir.as_path()));
+        assert_eq!(
+            env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some(r"C:\Users\person\.claude-work")
+        );
+
+        let mut ambient_env = std::collections::HashMap::new();
+        apply_claude_cli_config_dir(&mut ambient_env, None);
+        assert!(
+            !ambient_env.contains_key("CLAUDE_CONFIG_DIR"),
+            "ambient CLI must not invent a config dir"
         );
     }
 
