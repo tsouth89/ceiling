@@ -2167,13 +2167,20 @@ impl<'a> CodexReportRollups<'a> {
         let mut file_summary = CostSummary::default();
         let mut contributed_today = false;
         let mut contributed_seven_days = false;
-        for record in records.iter().filter(|record| {
-            CostUsageDayRange::is_in_range(
-                &record.day_key,
+        for record in records {
+            // SBS-944: derive the local day at fold time. A frozen string
+            // would keep the offset from the first parse; a missing
+            // timestamp would land in the daily strip but not hourly/windows.
+            let Some(day_key) = record.day_key() else {
+                continue;
+            };
+            if !CostUsageDayRange::is_in_range(
+                &day_key,
                 &self.range.since_key,
                 &self.range.until_key,
-            )
-        }) {
+            ) {
+                continue;
+            }
             // Always credit caller windows first. A missing daily bucket must not
             // drop custom/reset-window totals (that is what broke Estimated API
             // value custom ranges when a day key was absent from the map).
@@ -2190,7 +2197,7 @@ impl<'a> CodexReportRollups<'a> {
                     }
                 },
             );
-            let Some(day_summary) = self.daily.get_mut(&record.day_key) else {
+            let Some(day_summary) = self.daily.get_mut(&day_key) else {
                 continue;
             };
             if let Some(cost) = add_codex_record_to_summary(day_summary, record) {
@@ -2206,7 +2213,7 @@ impl<'a> CodexReportRollups<'a> {
                     }
                 },
             );
-            if let Some(date) = CostUsageDayRange::parse_day_key(&record.day_key) {
+            if let Some(date) = CostUsageDayRange::parse_day_key(&day_key) {
                 contributed_today |= date == self.today;
                 contributed_seven_days |= date >= self.seven_day_start;
             }
@@ -3887,5 +3894,80 @@ mod tests {
             (hourly_cost - daily_cost).abs() < 1e-9,
             "hourly {hourly_cost} vs daily {daily_cost}"
         );
+    }
+
+    /// SBS-944 break 2: a Codex record with no parseable timestamp must not
+    /// land in the daily strip, the hourly heatmap, or a reset window.
+    #[test]
+    fn ingest_parsed_excludes_codex_records_without_a_timestamp() {
+        let today = Local::now().date_naive();
+        let range = CostUsageDayRange::new(today, today);
+        let windows = [CurrentUsageWindow {
+            id: "thirty".to_string(),
+            starts_at: Utc::now() - Duration::days(30),
+            ends_at: Utc::now() + Duration::hours(1),
+        }];
+        let mut rollups = CodexReportRollups::new(1, &range, &windows, today, true);
+        let record = CodexUsageRecord {
+            timestamp: None,
+            model: "gpt-5.6-sol".to_string(),
+            effort: None,
+            project: None,
+            plan: None,
+            input: 200_000,
+            cached: 0,
+            output: 0,
+        };
+        rollups.ingest_parsed(Path::new("/tmp/rollout.jsonl"), &[record]);
+        let report = rollups.finish(1);
+        assert_eq!(
+            report
+                .daily_costs
+                .iter()
+                .map(|(_, cost)| *cost)
+                .sum::<f64>(),
+            0.0
+        );
+        assert!(report.hourly_activity.is_empty());
+        assert_eq!(report.current_windows["thirty"].input_tokens, 0);
+        assert_eq!(report.thirty_days.input_tokens, 0);
+    }
+
+    /// SBS-944 break 1: the fold buckets by the current local day of the UTC
+    /// timestamp, not a string stored at parse time.
+    #[test]
+    fn ingest_parsed_buckets_codex_by_current_local_day() {
+        // One clock read, converted twice. Taking Utc::now() and then
+        // Local::now() separately let local midnight fall between them, which
+        // put the record on one day and the scan range on the other, and
+        // ingest_parsed then filtered it out.
+        let timestamp = Utc::now();
+        let day = crate::core::local_day_key(timestamp);
+        let today = timestamp.with_timezone(&Local).date_naive();
+        assert_eq!(
+            day,
+            today.format("%F").to_string(),
+            "the record's day and the scan range must come from one instant"
+        );
+        let range = CostUsageDayRange::new(today, today);
+        let mut rollups = CodexReportRollups::new(1, &range, &[], today, true);
+        let record = CodexUsageRecord {
+            timestamp: Some(timestamp),
+            model: "gpt-5.6-sol".to_string(),
+            effort: None,
+            project: None,
+            plan: None,
+            input: 200_000,
+            cached: 0,
+            output: 0,
+        };
+        rollups.ingest_parsed(Path::new("/tmp/rollout.jsonl"), &[record]);
+        let report = rollups.finish(1);
+        let daily: std::collections::HashMap<_, _> = report.daily_costs.into_iter().collect();
+        assert!(
+            daily.get(&day).copied().unwrap_or(0.0) > 0.0,
+            "derived local day {day} must receive the record"
+        );
+        assert_eq!(report.hourly_activity.len(), 1);
     }
 }
