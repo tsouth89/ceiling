@@ -257,10 +257,27 @@ fn emit_download_progress(app: &tauri::AppHandle, progress: f32) {
     let st = app.state::<Mutex<AppState>>();
     let payload = {
         let mut guard = st.lock().unwrap();
-        guard.update_state = UpdateState::Downloading(progress);
+        if !record_download_progress(&mut guard, progress) {
+            return;
+        }
         guard.update_payload()
     };
     events::emit_update_state_changed(app, &payload);
+}
+
+/// Report progress only while this download still owns the slot.
+///
+/// The Available banner offers Download and Dismiss together, so both can be
+/// clicked. Dismiss sets Idle, but every later chunk used to write Downloading
+/// back unconditionally, which re-armed the slot and let `record_download_finish`
+/// pass its own guard and resurrect Install & Restart after the user had
+/// dismissed the update (SBS-962).
+fn record_download_progress(guard: &mut AppState, progress: f32) -> bool {
+    if !matches!(guard.update_state, UpdateState::Downloading(_)) {
+        return false;
+    }
+    guard.update_state = UpdateState::Downloading(progress);
+    true
 }
 
 async fn run_download_task(
@@ -309,6 +326,12 @@ fn record_download_finish(
     staged_info: Option<UpdateInfo>,
 ) {
     if !matches!(guard.update_state, UpdateState::Downloading(_)) {
+        // Somebody else owns the slot now - a dismiss, most likely. Nothing
+        // will ever apply this file, and the staging directory would keep one
+        // installer per dismissed download, so remove it on the way out.
+        if let Some(path) = installer_path {
+            let _ = std::fs::remove_file(&path);
+        }
         return;
     }
     guard.update_state = update_state;
@@ -638,6 +661,66 @@ mod tests {
         assert_eq!(state.update_state, UpdateState::Idle);
         assert!(state.installer_path.is_none());
         assert!(state.update_info.is_none());
+    }
+
+    /// SBS-962: the finish guard is only as good as what may re-arm the slot.
+    /// A progress chunk arriving after Dismiss used to write Downloading back,
+    /// which let the finish store Ready and bring Install & Restart back.
+    #[test]
+    fn progress_after_a_dismiss_does_not_re_arm_the_slot() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Idle;
+
+        assert!(
+            !record_download_progress(&mut state, 0.5),
+            "a dismissed download must not report progress"
+        );
+        assert_eq!(state.update_state, UpdateState::Idle);
+
+        // The finish that follows must therefore still be discarded.
+        record_download_finish(
+            &mut state,
+            UpdateState::Ready,
+            None,
+            Some(sample_info("v1.5.35")),
+        );
+        assert_eq!(state.update_state, UpdateState::Idle);
+        assert!(state.update_info.is_none());
+    }
+
+    /// Progress still lands while the download does own the slot.
+    #[test]
+    fn progress_is_recorded_while_the_download_owns_the_slot() {
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Downloading(0.0);
+
+        assert!(record_download_progress(&mut state, 0.25));
+        assert_eq!(state.update_state, UpdateState::Downloading(0.25));
+    }
+
+    /// SBS-962: a download that lands after the slot was given up has nothing
+    /// that will ever apply it, so its file must not be left in staging.
+    #[test]
+    fn a_discarded_finish_removes_the_downloaded_installer() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("Ceiling-1.5.35-Setup.exe");
+        std::fs::write(&path, b"installer bytes").expect("write installer");
+
+        let mut state = AppState::new();
+        state.update_state = UpdateState::Idle;
+
+        record_download_finish(
+            &mut state,
+            UpdateState::Ready,
+            Some(path.clone()),
+            Some(sample_info("v1.5.35")),
+        );
+
+        assert_eq!(state.update_state, UpdateState::Idle);
+        assert!(
+            !path.exists(),
+            "a discarded download must not leave an installer behind"
+        );
     }
 
     /// SBS-962: apply hashes the staged file against the digest captured at
