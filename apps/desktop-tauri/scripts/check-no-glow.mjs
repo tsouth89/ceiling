@@ -358,11 +358,17 @@ function isGlow(layer) {
 }
 
 function layerGlows(layer, props) {
-  // Substitution can leave leading space (a var() fallback is everything
-  // after the comma, including the space CSS requires). isGlow splits on
-  // whitespace and treats a leading empty token as "not a length", so it
-  // would miss `var(--missing, 0 0 8px red)` without the trim.
-  return allResolutions(layer, props).some((resolved) => isGlow(resolved.trim()));
+  // Re-split after substituting. A custom property can hold several
+  // comma-separated layers of its own, so `--card: 0 1px 3px red, 0 0 8px red`
+  // resolves to a string whose leading lengths are the drop shadow's; judging
+  // it whole reads the glow in the second layer as clean.
+  //
+  // shadowLayers also trims, which substitution needs: a var() fallback is
+  // everything after the comma including the space CSS requires, and isGlow
+  // treats a leading empty token as "not a length".
+  return allResolutions(layer, props).some((resolved) =>
+    shadowLayers(resolved).some((sub) => isGlow(sub)),
+  );
 }
 
 function glowLayersInCss(css) {
@@ -482,6 +488,23 @@ function assertDetectorWorks() {
       ":root { --halo: 0 1px 3px red; --halo: 0 0 8px red; } .a { box-shadow: var(--halo); }",
       1,
       "glow on one of several declarations of the same name",
+    ],
+    // The custom property holds two layers; the glow is the second one, so
+    // reading the substituted value whole stops at the drop shadow's lengths.
+    [
+      ":root { --card: 0 1px 3px red, 0 0 8px red; } .a { box-shadow: var(--card); }",
+      1,
+      "glow in a later layer of a multi-layer custom property",
+    ],
+    [
+      ".a { box-shadow: var(--missing, 0 1px 3px red, 0 0 8px red); }",
+      1,
+      "glow in a later layer of a var() fallback",
+    ],
+    [
+      ":root { --card: 0 1px 3px red, 0 2px 6px red; } .a { box-shadow: var(--card); }",
+      0,
+      "multi-layer custom property of drop shadows only",
     ],
   ];
   for (const [css, expected, label] of scanCssCases) {
