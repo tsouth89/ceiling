@@ -161,6 +161,11 @@ enum SpendBudgetAlertLevel {
 /// times a large multiplier are still cents, and an alert about them is noise.
 const SPEND_ANOMALY_FLOOR_USD: f64 = 1.00;
 
+/// Fewest floor-clearing days that can stand in as "the recent daily median".
+/// One or two qualifying days are a sample, not a schedule: they become the
+/// median of themselves and a first ordinary day back reads as a spike.
+const SPEND_ANOMALY_MIN_USABLE_DAYS: usize = 3;
+
 /// How far today runs above the recent daily median.
 ///
 /// `None` when the baseline is zero. A multiple of nothing is not a multiple:
@@ -192,13 +197,19 @@ fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
 /// beside one real $20 day would otherwise put the median at $10.02, turning an
 /// ordinary $31 day into a 3x "spike" — and that false alarm also marks the day
 /// sent, so the real runaway a few hours later says nothing.
+///
+/// Fewer than three surviving days is also nothing to compare against. One
+/// light $1.50 day in an otherwise idle week becomes "the recent daily median",
+/// so the first ordinary $12 day back reads as 8x and burns the day's only
+/// alert. The existing zero-baseline path already treats that as no comparison
+/// (SBS-965).
 pub fn spend_baseline_usd(mut daily_usd: Vec<f64>) -> f64 {
     let usable: Vec<f64> = {
         daily_usd.retain(|value| value.is_finite() && *value >= SPEND_ANOMALY_FLOOR_USD);
         daily_usd.sort_by(|left, right| left.total_cmp(right));
         daily_usd
     };
-    if usable.is_empty() {
+    if usable.len() < SPEND_ANOMALY_MIN_USABLE_DAYS {
         return 0.0;
     }
     let middle = usable.len() / 2;
@@ -2253,22 +2264,44 @@ mod tests {
         assert_eq!(spend_baseline_usd(vec![2.0, 4.0, 6.0, 8.0]), 5.0);
         assert_eq!(spend_baseline_usd(Vec::new()), 0.0);
         // Junk readings are dropped rather than poisoning the baseline.
-        assert_eq!(spend_baseline_usd(vec![f64::NAN, -3.0, 4.0]), 4.0);
+        assert_eq!(spend_baseline_usd(vec![f64::NAN, -3.0, 4.0, 4.0, 6.0]), 4.0);
     }
 
-    /// A five-cent leftover day beside one real $20 day put the median at
-    /// $10.02, so an ordinary $31 day read as a 3x spike — and that false alarm
-    /// marks the day sent, silencing the real runaway hours later.
+    /// Three leftover five-cent days beside three real $20 days put the median
+    /// at $10.02 when the leftovers counted, so an ordinary $31 day read as a
+    /// 3x spike — and that false alarm marks the day sent, silencing the real
+    /// runaway hours later. Three $20 days satisfy the usable-day minimum so
+    /// this still pins the floor filter rather than the new day-count rule.
     #[test]
     fn sub_dollar_days_do_not_count_toward_the_baseline() {
-        assert_eq!(spend_baseline_usd(vec![0.05, 20.0]), 20.0);
-        assert!(!is_spend_spike(
-            31.0,
-            spend_baseline_usd(vec![0.05, 20.0]),
-            3.0
-        ));
+        let days = vec![0.05, 0.05, 0.05, 20.0, 20.0, 20.0];
+        assert_eq!(spend_baseline_usd(days.clone()), 20.0);
+        assert!(!is_spend_spike(31.0, spend_baseline_usd(days), 3.0));
         // Nothing but noise is still nothing to compare against.
         assert_eq!(spend_baseline_usd(vec![0.05, 0.20, 0.90]), 0.0);
+    }
+
+    /// One usable day is not a median. A user away for a week who does one
+    /// light $1.50 session would otherwise get a $1.50 baseline, so their first
+    /// ordinary $12 day back reads as 8x and burns the day's only alert
+    /// (SBS-965).
+    #[test]
+    fn a_single_usable_day_is_not_a_baseline() {
+        // Six silent days and one light session: the ticket's away-week.
+        assert_eq!(
+            spend_baseline_usd(vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.50]),
+            0.0
+        );
+        assert!(!is_spend_spike(12.0, spend_baseline_usd(vec![1.50]), 3.0));
+        // Two qualifying days is still a pair, not a recent median.
+        assert_eq!(spend_baseline_usd(vec![1.50, 2.00]), 0.0);
+        // Three is the smallest schedule the detector will compare against.
+        assert_eq!(spend_baseline_usd(vec![1.50, 1.50, 1.50]), 1.50);
+        assert!(is_spend_spike(
+            12.0,
+            spend_baseline_usd(vec![1.50, 1.50, 1.50]),
+            3.0
+        ));
     }
 
     /// A three-day working week is four zeros and three real days. Counting the
