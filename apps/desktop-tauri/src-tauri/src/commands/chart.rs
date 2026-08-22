@@ -3888,6 +3888,35 @@ mod tests {
             reading.baseline_usd, 0.0,
             "one usable day must not become the recent daily median"
         );
+
+        // Two priors plus today. If today were counted toward the minimum
+        // this would reach three and produce a median of $6.00, so the
+        // previous case alone does not pin the exclusion.
+        let mut two_priors = HashMap::new();
+        two_priors.insert("2026-08-15".to_string(), 12.0);
+        two_priors.insert("2026-08-13".to_string(), 5.0);
+        two_priors.insert("2026-08-14".to_string(), 6.0);
+
+        let reading = spend_anomaly_reading(today, &two_priors).expect("a reading");
+        assert_eq!(reading.today_usd, 12.0);
+        assert_eq!(
+            reading.baseline_usd, 0.0,
+            "today must not count toward the three-day minimum"
+        );
+
+        // Three priors is the first case that should produce a baseline.
+        let mut three_priors = HashMap::new();
+        three_priors.insert("2026-08-15".to_string(), 12.0);
+        three_priors.insert("2026-08-12".to_string(), 4.0);
+        three_priors.insert("2026-08-13".to_string(), 5.0);
+        three_priors.insert("2026-08-14".to_string(), 6.0);
+
+        let reading = spend_anomaly_reading(today, &three_priors).expect("a reading");
+        assert_eq!(reading.today_usd, 12.0);
+        assert_eq!(
+            reading.baseline_usd, 5.0,
+            "three usable priors is a median, and today is not one of them"
+        );
     }
 
     #[test]
