@@ -14,9 +14,17 @@ use std::path::PathBuf;
 /// Token usage summary for a provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenUsageSummary {
-    /// Session cost in USD
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_cost_usd: Option<f64>,
+    /// Billed / current-period cost in USD (`CostSnapshot.used`).
+    /// Not a single conversation's spend. Older snapshots used `session_cost_usd`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "session_cost_usd"
+    )]
+    pub period_cost_usd: Option<f64>,
+    /// Provider period label for `period_cost_usd` (e.g. "Monthly", "Last 30 days").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_period: Option<String>,
     /// Session token count
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_tokens: Option<i64>,
@@ -31,15 +39,22 @@ pub struct TokenUsageSummary {
 impl TokenUsageSummary {
     pub fn new() -> Self {
         Self {
-            session_cost_usd: None,
+            period_cost_usd: None,
+            cost_period: None,
             session_tokens: None,
             last_30_days_cost_usd: None,
             last_30_days_tokens: None,
         }
     }
 
+    pub fn with_period(mut self, cost_usd: f64, period: impl Into<String>) -> Self {
+        self.period_cost_usd = Some(cost_usd);
+        self.cost_period = Some(period.into());
+        self
+    }
+
     pub fn with_session(mut self, cost_usd: f64, tokens: i64) -> Self {
-        self.session_cost_usd = Some(cost_usd);
+        self.period_cost_usd = Some(cost_usd);
         self.session_tokens = Some(tokens);
         self
     }
@@ -330,10 +345,20 @@ mod tests {
             .with_session(1.50, 10000)
             .with_last_30_days(45.00, 300000);
 
-        assert_eq!(summary.session_cost_usd, Some(1.50));
+        assert_eq!(summary.period_cost_usd, Some(1.50));
         assert_eq!(summary.session_tokens, Some(10000));
         assert_eq!(summary.last_30_days_cost_usd, Some(45.00));
         assert_eq!(summary.last_30_days_tokens, Some(300000));
+    }
+
+    #[test]
+    fn period_cost_reads_legacy_session_cost_alias() {
+        let summary: TokenUsageSummary =
+            serde_json::from_str(r#"{"session_cost_usd": 3.25}"#).unwrap();
+        assert_eq!(summary.period_cost_usd, Some(3.25));
+        let encoded = serde_json::to_value(&summary).unwrap();
+        assert_eq!(encoded["period_cost_usd"], 3.25);
+        assert!(encoded.get("session_cost_usd").is_none());
     }
 
     #[test]

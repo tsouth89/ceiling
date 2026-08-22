@@ -68,7 +68,7 @@ impl CeilingMcp {
     }
 
     #[tool(
-        description = "Get remaining quota windows from the desktop widget snapshot (cache-only, no network). Requires Ceiling desktop to have refreshed recently."
+        description = "Get remaining quota windows from the desktop widget snapshot (cache-only, no network). Requires Ceiling desktop to have refreshed recently. period_cost_usd is the provider's billed/current-period CostSnapshot.used (plus cost_period), not a single conversation's spend. Use get_spend / get_status today_spend for local estimated log spend."
     )]
     fn get_usage(
         &self,
@@ -95,7 +95,7 @@ impl CeilingMcp {
     }
 
     #[tool(
-        description = "Cheap compact status: remaining quota from the desktop snapshot plus today's estimated spend from a 1-day local log scan (not the 30-day get_spend walk). Good for 'am I about to hit my cap?' checks. Use get_spend for 7/30-day totals."
+        description = "Cheap compact status: remaining quota from the desktop snapshot plus today's estimated spend from a 1-day local log scan (not the 30-day get_spend walk). Good for 'am I about to hit my cap?' checks. usage.period_cost_usd is billed/current-period cost, not session spend; today_spend is local estimated log spend for today. Use get_spend for 7/30-day totals."
     )]
     fn get_status(
         &self,
@@ -120,8 +120,10 @@ impl ServerHandler for CeilingMcp {
                 "Ceiling local usage/spend tools. get_usage reads the desktop widget snapshot \
 (cache-only). get_spend scans local Codex/Claude/Grok logs for today, 7 days, and 30 days. \
 Prefer get_status for a cheap remaining-quota + today-$ check before starting a large job; \
-it does not run the 30-day spend scan. Values are estimated API value, never a billed \
-invoice. Account email and login method are omitted unless the server was started with \
+it does not run the 30-day spend scan. usage.period_cost_usd is the \
+provider billed/current-period figure (CostSnapshot.used), not this conversation's spend; \
+today_spend / get_spend are estimated API value from local logs, never a billed invoice. \
+Account email and login method are omitted unless the server was started with \
 --include-identity."
                     .to_string(),
             )
@@ -245,7 +247,8 @@ fn entry_usage_json(entry: &WidgetProviderEntry, include_identity: bool) -> serd
         "primary": window_json(entry.primary.as_ref()),
         "secondary": window_json(entry.secondary.as_ref()),
         "tertiary": window_json(entry.tertiary.as_ref()),
-        "session_cost_usd": entry.token_usage.as_ref().and_then(|t| t.session_cost_usd),
+        "period_cost_usd": entry.token_usage.as_ref().and_then(|t| t.period_cost_usd),
+        "cost_period": entry.token_usage.as_ref().and_then(|t| t.cost_period.clone()),
     })
 }
 
@@ -442,7 +445,7 @@ fn choose_status_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::RateWindow;
+    use crate::core::{RateWindow, TokenUsageSummary};
     use chrono::Utc;
 
     fn sample_snapshot() -> WidgetSnapshot {
@@ -454,7 +457,8 @@ mod tests {
                 Some("in 3h".into()),
             ))
             .with_login_method("Claude Pro")
-            .with_account_email("user@example.com");
+            .with_account_email("user@example.com")
+            .with_token_usage(TokenUsageSummary::new().with_period(12.5, "Monthly"));
         WidgetSnapshot::new(vec![entry], Utc::now())
     }
 
@@ -510,6 +514,29 @@ mod tests {
         let full = usage_payload(Some(&snap), Some("claude"), true);
         assert_eq!(full["providers"][0]["account_email"], "user@example.com");
         assert_eq!(full["providers"][0]["login_method"], "Claude Pro");
+    }
+
+    /// SBS-1031: billed/period CostSnapshot.used must not be labeled session spend.
+    #[test]
+    fn usage_and_status_name_period_cost_not_session() {
+        let snap = sample_snapshot();
+        let usage = usage_payload(Some(&snap), Some("claude"), false);
+        let provider = &usage["providers"][0];
+        assert_eq!(provider["period_cost_usd"], 12.5);
+        assert_eq!(provider["cost_period"], "Monthly");
+        assert!(
+            provider.get("session_cost_usd").is_none(),
+            "legacy session_cost_usd must not appear: {provider}"
+        );
+
+        let status = status_payload(Some(&snap), Some("claude"), &default_enabled(), false);
+        assert_eq!(status["usage"]["period_cost_usd"], 12.5);
+        assert_eq!(status["usage"]["cost_period"], "Monthly");
+        assert!(
+            status["usage"].get("session_cost_usd").is_none(),
+            "legacy session_cost_usd must not appear: {}",
+            status["usage"]
+        );
     }
 
     #[test]
