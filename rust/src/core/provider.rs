@@ -829,13 +829,13 @@ mod tests {
 
     #[test]
     fn for_account_strips_claude_session_cookie_when_a_directory_is_configured() {
-        let mut accounts = super::ConfiguredAccounts::default();
-        accounts
-            .claude
-            .add_account(super::DirectoryAccount::<super::ClaudeIdentity>::new(
+        let mut accounts = crate::core::ConfiguredAccounts::default();
+        accounts.claude.add_account(
+            crate::core::DirectoryAccount::<crate::core::ClaudeIdentity>::new(
                 Some("work".to_string()),
                 std::path::PathBuf::from("/dirs/work"),
-            ));
+            ),
+        );
 
         let ctx = FetchContext {
             manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
@@ -856,7 +856,10 @@ mod tests {
             manual_cookie_header: Some("sessionKey=sk-ant-global".to_string()),
             ..FetchContext::default()
         }
-        .for_account(ProviderId::Claude, &super::ConfiguredAccounts::default());
+        .for_account(
+            ProviderId::Claude,
+            &crate::core::ConfiguredAccounts::default(),
+        );
 
         assert!(ctx.account_config_dir.is_none());
         assert_eq!(
