@@ -44,7 +44,10 @@ const eventMocks = vi.hoisted(() => ({
   // (reading 'then')" and failed whichever test was on screen. Restoring to a
   // resolved promise keeps that harmless; beforeEach still installs the
   // listener-capturing version the tests drive.
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: vi.fn(
+    (_event: string, _handler: (event: { payload: unknown }) => void) =>
+      Promise.resolve(() => {}),
+  ),
   listeners: new Map<string, Array<(event: { payload: unknown }) => void>>(),
 }));
 
