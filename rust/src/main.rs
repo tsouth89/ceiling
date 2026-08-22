@@ -245,11 +245,58 @@ fn append_launch_log(log_path: &Path, message: &str) {
 /// What one sweep pass did.
 struct SweepOutcome {
     removed: usize,
-    /// Launch logs still on disk when the pass ended, including the ones the
-    /// age bound spared.
+    /// Launch logs this user can still finish: still inside the age bound, or
+    /// stale but the unlink failed for a reason this process should retry.
+    /// Entries we will never remove — another account's sticky-`/tmp` file, a
+    /// planted symlink, a directory that happens to match the name — are not
+    /// counted, so they cannot keep the one-shot marker from being written.
     left: usize,
     /// The pass reached the end of the directory instead of stopping on a cap.
     complete: bool,
+}
+
+/// Whether a failed `remove_file` still means this launch log is ours to retry.
+///
+/// `PermissionDenied` on a file we do not own is the sticky-`/tmp` case from
+/// SBS-956: another account left a `codexbar_launch_*.log` this process cannot
+/// unlink. Counting that as leftover keeps the one-shot legacy pass walking the
+/// temp root on every run. The same error on a file we own is still unfinished
+/// work — on Windows that is how an elevated leftover in the same `%TEMP%`
+/// typically presents — so it must keep the marker from being written. Other
+/// errors are still plausibly ours and are retried.
+fn leftover_after_failed_remove(kind: std::io::ErrorKind, ours: bool) -> bool {
+    match kind {
+        // Already gone: a concurrent sweep, the OS temp cleaner, or the user
+        // won the race between the stat and the unlink. Nothing is left to
+        // finish, so counting it would force one more full temp walk.
+        std::io::ErrorKind::NotFound => false,
+        // Replaced by a directory in that same window. `remove_file` will
+        // never remove it and it is not one of our logs.
+        std::io::ErrorKind::IsADirectory => false,
+        // Another account's leftover on a sticky temp dir is not ours to
+        // finish. One we do own is, including a Windows High-integrity
+        // leftover that fails with ERROR_ACCESS_DENIED.
+        std::io::ErrorKind::PermissionDenied => ours,
+        _ => true,
+    }
+}
+
+/// Whether this launch-log entry belongs to the current account.
+///
+/// Unix can tell from the uid. Windows cannot distinguish a High-integrity
+/// leftover in the same `%TEMP%` from a foreign sticky file, so PermissionDenied
+/// is treated as ours and retried.
+fn launch_log_is_ours(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.uid() == current_uid()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        true
+    }
 }
 
 /// Deletes launch logs left behind by runs that failed or were killed.
@@ -266,6 +313,19 @@ fn sweep_launch_logs_in(
     now: SystemTime,
     scan_limit: usize,
     remove_limit: usize,
+) -> SweepOutcome {
+    sweep_launch_logs_with(dir, keep, now, scan_limit, remove_limit, launch_log_is_ours)
+}
+
+/// The sweep with the ownership check injected, so a foreign leftover can be
+/// exercised without a second uid.
+fn sweep_launch_logs_with(
+    dir: &Path,
+    keep: Option<&Path>,
+    now: SystemTime,
+    scan_limit: usize,
+    remove_limit: usize,
+    is_ours: impl Fn(&std::fs::Metadata) -> bool,
 ) -> SweepOutcome {
     let mut outcome = SweepOutcome {
         removed: 0,
@@ -290,7 +350,9 @@ fn sweep_launch_logs_in(
             continue;
         };
         if !metadata.is_file() {
-            outcome.left += 1;
+            // A planted symlink or a directory that happens to match the name
+            // is not one of ours and will never become one, so it must not
+            // keep the one-shot legacy pass alive (SBS-956).
             continue;
         }
         let stale = metadata
@@ -298,10 +360,28 @@ fn sweep_launch_logs_in(
             .ok()
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age > LAUNCH_LOG_MAX_AGE);
-        if stale && std::fs::remove_file(&path).is_ok() {
-            outcome.removed += 1;
-        } else {
-            outcome.left += 1;
+        if !stale {
+            // Only count a leftover this user could actually finish. Another
+            // account's in-age log on a sticky temp dir never becomes ours:
+            // once stale, the unlink below fails with PermissionDenied and is
+            // already not counted. Counting it here instead would hold the
+            // one-shot marker open until the file ages out, and every command
+            // in between pays an uncapped walk of the temp root (SBS-956).
+            if is_ours(&metadata) {
+                outcome.left += 1;
+            }
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => outcome.removed += 1,
+            Err(error) if leftover_after_failed_remove(error.kind(), is_ours(&metadata)) => {
+                outcome.left += 1;
+            }
+            Err(_) => {
+                // PermissionDenied on a file we do not own: another account's
+                // leftover on a sticky temp dir. Not ours to finish, so it
+                // does not block the one-shot marker (SBS-956).
+            }
         }
     }
     outcome
@@ -330,7 +410,11 @@ fn sweep_stale_launch_logs_in(dir: &Path, keep: &Path, now: SystemTime) -> usize
 /// itself with a marker as soon as no legacy log is left. A run that stops on
 /// the removal cap, or that finds logs still inside the age bound, writes no
 /// marker and tries again next time, so it converges instead of stranding
-/// files behind whatever the directory happens to list first.
+/// files behind whatever the directory happens to list first. A stale log this
+/// process cannot unlink because it belongs to another account (`PermissionDenied`
+/// on sticky `/tmp`) is not unfinished work and does not block the marker. A
+/// stale log this account still owns, including a Windows High-integrity leftover
+/// that fails with `ERROR_ACCESS_DENIED`, does.
 fn sweep_legacy_temp_launch_logs(log_dir: &Path, temp_dir: &Path, now: SystemTime) {
     let marker = log_dir.join(LEGACY_SWEEP_MARKER);
     if marker.exists() {
@@ -1004,5 +1088,139 @@ mod tests {
         sweep_stale_launch_logs_in(dir.path(), &dir.path().join("codexbar_launch_1.log"), later);
 
         assert!(marker.exists());
+    }
+
+    /// SBS-956: the one-shot marker is gated on `left == 0`. PermissionDenied
+    /// on a foreign sticky leftover must not keep that counter alive; the same
+    /// error on a file we own must.
+    #[test]
+    fn permission_denied_is_not_a_leftover_unless_the_file_is_ours() {
+        assert!(!leftover_after_failed_remove(
+            std::io::ErrorKind::PermissionDenied,
+            false
+        ));
+        assert!(leftover_after_failed_remove(
+            std::io::ErrorKind::PermissionDenied,
+            true
+        ));
+        assert!(leftover_after_failed_remove(
+            std::io::ErrorKind::Other,
+            false
+        ));
+        assert!(leftover_after_failed_remove(
+            std::io::ErrorKind::Interrupted,
+            false
+        ));
+        // Already gone, or never removable as a file: neither is work left.
+        for ours in [true, false] {
+            assert!(
+                !leftover_after_failed_remove(std::io::ErrorKind::NotFound, ours),
+                "a file removed under us is not a leftover (ours={ours})"
+            );
+            assert!(
+                !leftover_after_failed_remove(std::io::ErrorKind::IsADirectory, ours),
+                "a directory is never unlinked by remove_file (ours={ours})"
+            );
+        }
+    }
+
+    /// SBS-956: the marker is gated on `left == 0`, so an in-age log belonging
+    /// to another account would hold it open for up to a day, and every CLI
+    /// run in that window walks the whole temp root. uid cannot be faked in a
+    /// test, so the ownership check is injected.
+    #[test]
+    fn a_foreign_in_age_launch_log_does_not_hold_the_legacy_marker_open() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("codexbar_launch_1.log"), b"in age").unwrap();
+        let now = SystemTime::now();
+
+        let ours = sweep_launch_logs_with(
+            dir.path(),
+            None,
+            now,
+            usize::MAX,
+            LAUNCH_LOG_SWEEP_LIMIT,
+            |_| true,
+        );
+        assert_eq!(
+            ours.left, 1,
+            "an in-age log this user owns is still unfinished work"
+        );
+
+        let foreign = sweep_launch_logs_with(
+            dir.path(),
+            None,
+            now,
+            usize::MAX,
+            LAUNCH_LOG_SWEEP_LIMIT,
+            |_| false,
+        );
+        assert_eq!(
+            foreign.left, 0,
+            "another account's in-age log is never work this user can finish"
+        );
+        assert!(
+            foreign.complete,
+            "the walk still finished, so the marker may be written"
+        );
+        assert!(
+            dir.path().join("codexbar_launch_1.log").exists(),
+            "a foreign log must be left alone, not deleted"
+        );
+    }
+
+    /// A directory that happens to match the launch-log name is never removed
+    /// (the sweep only unlinks regular files). Counting it as leftover would
+    /// keep every later CLI run walking the temp root — the same
+    /// non-convergence as an unlink this user cannot perform.
+    #[test]
+    fn the_legacy_temp_pass_retires_past_a_launch_log_named_directory() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let decoy = temp_dir.path().join("codexbar_launch_7.log");
+        std::fs::create_dir(&decoy).unwrap();
+        let later = SystemTime::now() + LAUNCH_LOG_MAX_AGE + Duration::from_secs(60);
+
+        sweep_legacy_temp_launch_logs(log_dir.path(), temp_dir.path(), later);
+
+        assert!(
+            decoy.is_dir(),
+            "the sweep must not follow or remove a directory"
+        );
+        assert!(
+            log_dir.path().join(LEGACY_SWEEP_MARKER).exists(),
+            "a name we will never unlink must not block retirement"
+        );
+    }
+
+    /// An own stale file whose unlink returns PermissionDenied (directory not
+    /// writable, or Windows High-integrity leftover) must keep the pass alive.
+    #[cfg(unix)]
+    #[test]
+    fn the_legacy_temp_pass_retries_when_an_own_stale_log_cannot_be_unlinked() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root ignores the directory mode, so there is nothing to prove here.
+        if current_uid() == 0 {
+            return;
+        }
+
+        let log_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ours = temp_dir.path().join("codexbar_launch_1234.log");
+        std::fs::write(&ours, b"x").unwrap();
+        // Unlink fails, but the file is still this user's.
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let later = SystemTime::now() + LAUNCH_LOG_MAX_AGE + Duration::from_secs(60);
+
+        sweep_legacy_temp_launch_logs(log_dir.path(), temp_dir.path(), later);
+
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(ours.exists(), "PermissionDenied unlink must leave the file");
+        assert!(
+            !log_dir.path().join(LEGACY_SWEEP_MARKER).exists(),
+            "an own file this user could not unlink must keep the pass alive"
+        );
     }
 }
