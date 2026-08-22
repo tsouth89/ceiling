@@ -14,9 +14,13 @@ import {
   formatHourLabel,
   peakHour,
   peakWeekday,
+  priceState,
+  pricingCoverage,
+  pricingCoverageNote,
   selectProviders,
   totalValue,
   type ActivityMetric,
+  type CellTotals,
 } from "../lib/activityHeatmap";
 
 const METRICS: { key: ActivityMetric; label: string }[] = [
@@ -36,6 +40,22 @@ function formatTokens(value: number): string {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
+}
+
+/**
+ * Whether this cell's reading is understated by missing prices.
+ *
+ * Only the API-value metric can be: those tokens are real, but no price is
+ * known for the model, so the dollar figure is lower than the work done. The
+ * Tokens metric counts the same tokens with nothing missing, so hatching it as
+ * unpriced would blank the intensity of a genuinely busy cell and call a known
+ * number unknown (SBS-952).
+ */
+function isUnpricedFor(
+  cell: Pick<CellTotals, "pricedTokens" | "totalTokens">,
+  metric: ActivityMetric,
+): boolean {
+  return metric === "apiValue" && priceState(cell) === "unpriced";
 }
 
 function formatMetric(value: number, metric: ActivityMetric): string {
@@ -124,6 +144,8 @@ export function ActivityHeatmapCard() {
   const busiestHour = useMemo(() => peakHour(rows, metric), [rows, metric]);
   const busiestWeekday = useMemo(() => peakWeekday(rows, metric), [rows, metric]);
   const total = useMemo(() => totalValue(rows, metric), [rows, metric]);
+  const coverage = useMemo(() => pricingCoverage(rows), [rows]);
+  const coverageNote = pricingCoverageNote(coverage);
 
   const showTooltip = (event: React.MouseEvent<HTMLElement>, text: string) => {
     const host = hostRef.current;
@@ -178,6 +200,12 @@ export function ActivityHeatmapCard() {
         </div>
       </header>
 
+      {coverageNote && (
+        <p className="activity-card__coverage" role="status">
+          {coverageNote}.
+        </p>
+      )}
+
       {providerIds.length > 1 && (
         <div className="activity-card__providers" role="group" aria-label="Providers">
           {providerIds.map((id) => {
@@ -219,6 +247,9 @@ export function ActivityHeatmapCard() {
         <div className="activity-card__section">
           <div className="activity-card__section-head">
             <span className="activity-card__section-title">By day</span>
+            {/* The coverage note lives once, in the header's role="status".
+                Repeating it here read it out a second time to a screen
+                reader and duplicated it on screen. */}
             <span className="activity-card__section-note">
               {formatMetric(total, metric)} total
             </span>
@@ -229,12 +260,16 @@ export function ActivityHeatmapCard() {
             aria-label={`Daily activity for the last ${calendar.length} days`}
           >
             {calendar.map((cell) => {
-              const label = `${shortDate(cell.date)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls`;
+              const unpriced = isUnpricedFor(cell, metric);
+              const label = `${shortDate(cell.date)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls${
+                unpriced ? ", unpriced" : ""
+              }`;
               return (
                 <div
                   key={cell.date}
                   className="activity-card__cell activity-card__cell--day"
                   data-level={cell.level}
+                  data-price-state={unpriced ? "unpriced" : undefined}
                   title={label}
                   onMouseMove={(event) => showTooltip(event, label)}
                   onMouseLeave={hideTooltip}
@@ -256,7 +291,9 @@ export function ActivityHeatmapCard() {
             <span className="activity-card__section-note">
               {busiestHour && busiestWeekday
                 ? `Busiest ${WEEKDAY_LABELS[busiestWeekday.weekday]}, around ${formatHourLabel(busiestHour.hour)}`
-                : "No peak yet"}
+                : coverage.totalTokens > 0 && coverage.pricedTokens === 0 && metric === "apiValue"
+                  ? "No priced dollars to rank"
+                  : "No peak yet"}
             </span>
           </div>
           <div className="activity-card__grid-wrap">
@@ -278,12 +315,16 @@ export function ActivityHeatmapCard() {
                     {WEEKDAY_LABELS[weekday]}
                   </span>
                   {row.map((cell) => {
-                    const label = `${WEEKDAY_LABELS[weekday]} ${formatHourLabel(cell.hour)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls`;
+                    const unpriced = isUnpricedFor(cell, metric);
+                    const label = `${WEEKDAY_LABELS[weekday]} ${formatHourLabel(cell.hour)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls${
+                      unpriced ? ", unpriced" : ""
+                    }`;
                     return (
                       <div
                         key={cell.hour}
                         className="activity-card__cell activity-card__cell--hour"
                         data-level={cell.level}
+                        data-price-state={unpriced ? "unpriced" : undefined}
                         title={label}
                         onMouseMove={(event) => showTooltip(event, label)}
                         onMouseLeave={hideTooltip}

@@ -6,9 +6,13 @@ import {
   buildWeekHourGrid,
   formatHourLabel,
   intensityLevel,
+  isEmptyHeatmap,
   parseLocalDate,
   peakHour,
   peakWeekday,
+  priceState,
+  pricingCoverage,
+  pricingCoverageNote,
   selectProviders,
   totalValue,
 } from "./activityHeatmap";
@@ -19,6 +23,8 @@ const point = (over: Partial<ActivityHourPoint>): ActivityHourPoint => ({
   hour: 9,
   apiValueUsd: 1,
   tokens: 100,
+  pricedTokens: 100,
+  totalTokens: 100,
   calls: 1,
   ...over,
 });
@@ -271,5 +277,86 @@ describe("formatHourLabel", () => {
     expect(formatHourLabel(9)).toBe("9 AM");
     expect(formatHourLabel(12)).toBe("12 PM");
     expect(formatHourLabel(23)).toBe("11 PM");
+  });
+});
+
+describe("pricing coverage (SBS-952)", () => {
+  // A no-price provider used to paint every cell at intensity 0, print
+  // "$0.00 total", and drop the busiest-hour line. That is idle, not unknown.
+
+  it("keeps an all-unpriced month out of the idle state", () => {
+    const hours = [
+      point({
+        date: "2026-08-10",
+        hour: 9,
+        apiValueUsd: 0,
+        tokens: 8_000,
+        pricedTokens: 0,
+        totalTokens: 8_000,
+        calls: 12,
+      }),
+      point({
+        date: "2026-08-11",
+        hour: 14,
+        apiValueUsd: 0,
+        tokens: 2_000,
+        pricedTokens: 0,
+        totalTokens: 2_000,
+        calls: 3,
+      }),
+    ];
+
+    const coverage = pricingCoverage(hours);
+    expect(coverage.pricedTokens).toBe(0);
+    expect(coverage.totalTokens).toBe(10_000);
+    expect(coverage.coverage).toBe(0);
+    expect(coverage.unpricedProviderIds).toEqual(["codex"]);
+    expect(pricingCoverageNote(coverage)).toBe(
+      "0% of tokens priced (unpriced models in Codex)",
+    );
+
+    expect(isEmptyHeatmap({ days: ["2026-08-10"], providerIds: ["codex"], hours, timezoneLabel: "UTC" })).toBe(
+      false,
+    );
+    expect(peakHour(hours, "apiValue")).toBeNull();
+    expect(peakHour(hours, "tokens")).toEqual({ hour: 9, value: 8_000 });
+
+    const days = ["2026-08-10", "2026-08-11"];
+    const calendar = buildCalendar(days, hours, "apiValue");
+    expect(calendar[0].level).toBe(0);
+    expect(calendar[0].value).toBe(0);
+    expect(calendar[0].totalTokens).toBe(8_000);
+    expect(priceState(calendar[0])).toBe("unpriced");
+    expect(priceState(calendar[1])).toBe("unpriced");
+    expect(priceState({ pricedTokens: 0, totalTokens: 0 })).toBe("idle");
+  });
+
+  it("speaks only when some tokens are unpriced", () => {
+    const full = pricingCoverage([point({ pricedTokens: 100, totalTokens: 100 })]);
+    expect(full.coverage).toBe(1);
+    expect(pricingCoverageNote(full)).toBeNull();
+
+    const empty = pricingCoverage([]);
+    expect(empty.coverage).toBeNull();
+    expect(pricingCoverageNote(empty)).toBeNull();
+
+    const mixed = pricingCoverage([
+      point({ providerId: "codex", pricedTokens: 400, totalTokens: 1_000 }),
+      point({ providerId: "claude", pricedTokens: 500, totalTokens: 500 }),
+    ]);
+    expect(mixed.coverage).toBeCloseTo(0.6);
+    expect(mixed.unpricedProviderIds).toEqual(["codex"]);
+    expect(pricingCoverageNote(mixed)).toBe(
+      "60% of tokens priced (unpriced models in Codex)",
+    );
+  });
+
+  it("does not treat missing coverage as idle when the Tokens metric has work", () => {
+    const hours = [
+      point({ apiValueUsd: 0, tokens: 900, pricedTokens: 0, totalTokens: 900 }),
+    ];
+    expect(totalValue(hours, "apiValue")).toBe(0);
+    expect(totalValue(hours, "tokens")).toBe(900);
+    expect(buildCalendar(["2026-08-10"], hours, "tokens")[0].level).toBeGreaterThan(0);
   });
 });

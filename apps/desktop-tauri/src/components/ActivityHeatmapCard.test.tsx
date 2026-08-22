@@ -34,6 +34,8 @@ const hour = (over: Partial<ActivityHourPoint> = {}): ActivityHourPoint => ({
   hour: 9,
   apiValueUsd: 4,
   tokens: 1000,
+  pricedTokens: 1000,
+  totalTokens: 1000,
   calls: 2,
   ...over,
 });
@@ -152,5 +154,74 @@ describe("ActivityHeatmapCard", () => {
     expect(levels[0]).toBe("2");
     expect(levels[28]).toBe("2");
     expect(levels[29]).toBe("4");
+  });
+
+  it("names unknown prices instead of looking idle (SBS-952)", async () => {
+    getLocalActivityHeatmap.mockResolvedValue(
+      heatmap({
+        providerIds: ["codex"],
+        hours: [
+          hour({
+            apiValueUsd: 0,
+            tokens: 8000,
+            pricedTokens: 0,
+            totalTokens: 8000,
+            calls: 12,
+          }),
+        ],
+      }),
+    );
+    render(<ActivityHeatmapCard />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("0% of tokens priced (unpriced models in Codex)."),
+    );
+    expect(screen.getByText(/No priced dollars to rank/)).toBeInTheDocument();
+    expect(screen.queryByText(/No local activity in this window yet/)).not.toBeInTheDocument();
+    const unpriced = document.querySelectorAll('[data-price-state="unpriced"]');
+    expect(unpriced.length).toBeGreaterThan(0);
+  });
+
+  /// SBS-952: the unpriced hatch replaces the data-level background outright,
+  /// so applying it under Tokens blanked the intensity of a genuinely busy
+  /// cell — and called a fully known token count unknown.
+  it("does not hatch the Tokens metric, whose volume is fully known", async () => {
+    getLocalActivityHeatmap.mockResolvedValue(
+      heatmap({
+        providerIds: ["codex"],
+        hours: [
+          hour({
+            apiValueUsd: 0,
+            tokens: 8000,
+            pricedTokens: 0,
+            totalTokens: 8000,
+            calls: 12,
+          }),
+        ],
+      }),
+    );
+    render(<ActivityHeatmapCard />);
+
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('[data-price-state="unpriced"]').length,
+      ).toBeGreaterThan(0),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Tokens/ }));
+
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('[data-price-state="unpriced"]').length,
+      ).toBe(0),
+    );
+    const lit = document.querySelectorAll(
+      '.activity-card__cell[data-level="1"], .activity-card__cell[data-level="2"], .activity-card__cell[data-level="3"], .activity-card__cell[data-level="4"]',
+    );
+    expect(lit.length).toBeGreaterThan(0);
+    expect(
+      screen.queryByTitle(/tokens.*unpriced/),
+      "the Tokens tooltip must not call a known count unpriced",
+    ).toBeNull();
   });
 });
