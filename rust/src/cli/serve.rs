@@ -24,6 +24,10 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Same numeric cap as the desktop refresh fetch gate. A local polling
 /// script otherwise multiplies into one live provider request per connection.
 const MAX_CONCURRENT_CONNECTIONS: usize = 8;
+/// How long a rejected client is given to finish sending before the socket is
+/// dropped. Long enough for a request already in flight, short enough that a
+/// client that keeps talking cannot hold the task open.
+const BUSY_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Args, Debug, Clone)]
 pub struct ServeArgs {
@@ -64,7 +68,6 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         Some(loaded.token)
     };
     let listener = TcpListener::bind(("127.0.0.1", args.port)).await?;
-    eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
     let (settings, accounts) =
         tokio::task::spawn_blocking(|| (Settings::load(), ConfiguredAccounts::load()))
             .await
@@ -76,6 +79,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         accounts,
     });
     let limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+    // Printed once, immediately before the accept loop. Announcing it right
+    // after bind meant a script that waits for this line and connects
+    // completed the TCP handshake against a socket nobody was accepting yet,
+    // then hung for however long `Settings::load` waited on the state write
+    // lock - up to STATE_LOCK_TIMEOUT with legacy credentials still in
+    // settings.json.
+    eprintln!("Ceiling server listening on http://127.0.0.1:{}", args.port);
     serve_connections(listener, limiter, state).await
 }
 
@@ -127,6 +137,25 @@ async fn reject_when_busy(mut stream: TcpStream) {
     let response = json_response(503, serde_json::json!({ "error": "too many connections" }));
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.shutdown().await;
+    // A client that already sent its request line leaves those bytes unread.
+    // Closing a socket with unread data sends RST on Windows, which can
+    // discard the 503 still sitting in the client's receive buffer - so
+    // ordinary backpressure would read as a dead server. Consume what is
+    // there (bounded) before dropping the socket.
+    drain_briefly(&mut stream).await;
+}
+
+/// Read and discard until the peer closes, or until the timeout.
+async fn drain_briefly(stream: &mut TcpStream) {
+    let mut sink = [0u8; 1024];
+    let _ = tokio::time::timeout(BUSY_DRAIN_TIMEOUT, async {
+        while let Ok(read) = stream.read(&mut sink).await {
+            if read == 0 {
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 async fn handle_client(mut stream: TcpStream, state: &ServeState) -> anyhow::Result<()> {
@@ -879,8 +908,10 @@ mod tests {
         assert_eq!(rows[0]["provider"], "grok");
     }
 
-    /// SBS-959: extra clients wait for a permit instead of each spawning a
-    /// handler (and therefore a provider fetch).
+    /// SBS-959: only as many handlers run as there are permits, so a polling
+    /// script cannot multiply into one live provider fetch per connection.
+    /// A client that arrives with every slot taken is answered 503 rather
+    /// than queued - it does not wait for a permit and never runs a handler.
     #[tokio::test]
     async fn spawn_bounded_client_runs_at_most_one_handler_per_permit() {
         use std::sync::atomic::{AtomicUsize, Ordering};
