@@ -8,6 +8,7 @@
 //! pool % is still a separate subscription meter — these dollars are not cash
 //! billed against the pool. Rows without ticks stay unpriced.
 
+use crate::codex_sessions::last_path_segment;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
@@ -123,13 +124,10 @@ pub fn load_session_meta(session_dir: &Path) -> SessionMeta {
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let project = cwd
-        .map(|path| {
-            Path::new(path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(path)
-                .to_string()
-        })
+        // `cwd` is whatever machine wrote this session, so a Windows path can
+        // be read on Linux or in WSL. `Path::file_name` would keep the whole
+        // string there and call `C:\projects\ceiling` the project name.
+        .map(|path| last_path_segment(path).unwrap_or(path).to_string())
         .or_else(|| project_from_session_path(session_dir));
     let effort = value
         .get("reasoning_effort")
@@ -154,11 +152,9 @@ pub fn load_session_meta(session_dir: &Path) -> SessionMeta {
 fn project_from_session_path(session_dir: &Path) -> Option<String> {
     let encoded = session_dir.parent()?.file_name()?.to_string_lossy();
     let decoded = percent_decode(&encoded);
-    let name = Path::new(&decoded)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .filter(|s| !s.is_empty())?;
-    Some(name.to_string())
+    // The decoded folder name is a path the writing machine chose, so it can
+    // carry Windows separators whatever host is reading it.
+    Some(last_path_segment(&decoded)?.to_string())
 }
 
 fn percent_decode(input: &str) -> String {
