@@ -62,54 +62,127 @@ function stripComments(css) {
 }
 
 /**
- * Strip JS/TS comments without treating // inside a string as a comment.
- * A reviewer who pastes boxShadow: "0 0 8px red" into a comment should
- * not turn prebuild red.
+ * Blank out JS/TS comments and regex-literal bodies, and report which offsets
+ * sit inside a string literal.
+ *
+ * Three things have to survive this pass. A reviewer who pastes
+ * `boxShadow: "0 0 8px red"` into a comment must not turn prebuild red. A
+ * regex must not be read as a comment: `/^[a-z][a-z0-9+.-]*:\/\//` (already in
+ * `src/test/tauriCsp.test.ts`) otherwise blanks the rest of its line from the
+ * embedded `//`, and a regex containing `/*` blanks everything up to the next
+ * `*\/` — silently hiding every later boxShadow in that module. And the
+ * `boxShadow` key itself has to be distinguishable from the same word sitting
+ * inside a string, so `const msg = 'use boxShadow: "0 0 8px red"'` does not
+ * count as a painted glow.
+ *
+ * String *contents* are kept, because the value being looked for is a string.
+ * Regex bodies are blanked, because nothing downstream wants them and blanking
+ * removes any chance of their punctuation being read as code.
+ *
+ * @returns {{ code: string, inString: boolean[] }} `code` is the same length as
+ * `src`, so every index and reported line number still lines up.
  */
-function stripJsComments(src) {
-  let out = "";
+function scanJs(src) {
+  const code = new Array(src.length);
+  const inString = new Array(src.length).fill(false);
+  const blank = (i) => {
+    code[i] = src[i] === "\n" ? "\n" : " ";
+  };
+  // A `/` opens a regex only in a value position. After an identifier, a
+  // number, a closing bracket, or a string it is division.
+  let lastSignificant = "";
+  const regexAllowed = () =>
+    lastSignificant === "" || !/[A-Za-z0-9_$)\]"'`]/.test(lastSignificant);
+
   let i = 0;
   while (i < src.length) {
     const two = src.slice(i, i + 2);
     if (two === "//") {
-      while (i < src.length && src[i] !== "\n") {
-        out += " ";
-        i += 1;
-      }
+      while (i < src.length && src[i] !== "\n") blank(i++);
       continue;
     }
     if (two === "/*") {
-      while (i + 1 < src.length && src.slice(i, i + 2) !== "*/") {
-        out += src[i] === "\n" ? "\n" : " ";
-        i += 1;
-      }
-      out += "  ";
-      i += 2;
+      while (i + 1 < src.length && src.slice(i, i + 2) !== "*/") blank(i++);
+      if (i < src.length) blank(i++);
+      if (i < src.length) blank(i++);
       continue;
     }
     const quote = src[i];
     if (quote === '"' || quote === "'" || quote === "`") {
-      out += quote;
+      code[i] = quote;
       i += 1;
       while (i < src.length) {
         if (src[i] === "\\") {
-          out += src[i] + (src[i + 1] ?? "");
-          i += 2;
+          inString[i] = true;
+          code[i] = src[i];
+          i += 1;
+          if (i < src.length) {
+            inString[i] = true;
+            code[i] = src[i];
+            i += 1;
+          }
           continue;
         }
-        out += src[i];
         if (src[i] === quote) {
+          code[i] = src[i];
           i += 1;
           break;
         }
+        inString[i] = true;
+        code[i] = src[i];
         i += 1;
       }
+      lastSignificant = quote;
       continue;
     }
-    out += src[i];
+    if (quote === "/" && regexAllowed()) {
+      const closed = blankRegexBody(src, i, code, blank);
+      if (closed !== null) {
+        i = closed;
+        lastSignificant = "/";
+        continue;
+      }
+    }
+    code[i] = src[i];
+    if (!/\s/.test(src[i])) lastSignificant = src[i];
     i += 1;
   }
-  return out;
+  return { code: code.join(""), inString };
+}
+
+/**
+ * Blank the body of the regex literal starting at `open`, keeping the
+ * delimiters and flags. Returns the index just past the literal, or null when
+ * the `/` turns out not to open one (an unterminated run to end of line).
+ */
+function blankRegexBody(src, open, code, blank) {
+  let i = open + 1;
+  let inClass = false;
+  while (i < src.length) {
+    const char = src[i];
+    if (char === "\n") return null;
+    if (char === "\\") {
+      blank(i);
+      i += 1;
+      if (i < src.length) blank(i);
+      i += 1;
+      continue;
+    }
+    if (char === "[") inClass = true;
+    else if (char === "]") inClass = false;
+    else if (char === "/" && !inClass) break;
+    blank(i);
+    i += 1;
+  }
+  if (i >= src.length) return null;
+  code[open] = "/";
+  code[i] = "/";
+  i += 1;
+  while (i < src.length && /[a-z]/.test(src[i])) {
+    code[i] = src[i];
+    i += 1;
+  }
+  return i;
 }
 
 /**
@@ -305,15 +378,22 @@ function glowLayersInCss(css) {
 }
 
 /**
- * boxShadow: "..." / '...' and the quoted-key form "boxShadow": "...".
- * Template literals and identifiers (boxShadow: glow) are not string
- * literals and are not scanned.
+ * boxShadow: "..." / '...', the quoted-key form "boxShadow": "...", and the
+ * DOM assignment form `el.style.boxShadow = "..."`, which is the usual way an
+ * inline shadow is set and renders exactly the same glow.
+ *
+ * Template literals and identifiers (boxShadow: glow) are not string literals
+ * and are not scanned.
+ *
+ * `inString` marks offsets inside a string literal. The key must sit outside
+ * one, so prose that merely quotes the property name is not a painted glow.
  */
-function jsBoxShadowLiterals(src) {
+function jsBoxShadowLiterals(src, inString = []) {
   const out = [];
-  const start = /(?:["']boxShadow["']|\bboxShadow\b)\s*:\s*(["'])/g;
+  const start = /(?:["']boxShadow["']|\bboxShadow\b)\s*[:=]\s*(["'])/g;
   let match;
   while ((match = start.exec(src))) {
+    if (inString[match.index]) continue;
     const quote = match[1];
     let i = match.index + match[0].length;
     let value = "";
@@ -333,10 +413,10 @@ function jsBoxShadowLiterals(src) {
 }
 
 function glowLayersInJs(src) {
-  const stripped = stripJsComments(src);
-  const props = collectCustomProperties(stripped);
+  const { code, inString } = scanJs(src);
+  const props = collectCustomProperties(code);
   const glows = [];
-  for (const literal of jsBoxShadowLiterals(stripped)) {
+  for (const literal of jsBoxShadowLiterals(code, inString)) {
     for (const layer of shadowLayers(literal.value)) {
       if (layerGlows(layer, props)) glows.push({ layer, index: literal.index });
     }
@@ -423,6 +503,42 @@ function assertDetectorWorks() {
       0,
       "url slashes are not a comment",
     ],
+    // SBS-974: the DOM assignment form paints the same glow as the object form.
+    [
+      'el.style.boxShadow = "0 0 8px red";',
+      1,
+      "style.boxShadow assignment",
+    ],
+    [
+      'el.style.boxShadow = "0 1px 3px red";',
+      0,
+      "style.boxShadow assignment, drop shadow",
+    ],
+    // A regex is not a comment. Both of these used to blank the glow that
+    // follows them, the second one to the end of the file.
+    [
+      'const re = /^[a-z][a-z0-9+.-]*:\\/\\//; const x = { boxShadow: "0 0 8px red" };',
+      1,
+      "glow after a regex containing //",
+    ],
+    [
+      'const re = /a\\/*b/; const x = { boxShadow: "0 0 8px red" };',
+      1,
+      "glow after a regex containing /*",
+    ],
+    // Division still is division, so the comment stripper must not swallow
+    // the rest of the line as a regex body.
+    [
+      'const half = total / 2; const x = { boxShadow: "0 0 8px red" };',
+      1,
+      "division is not a regex",
+    ],
+    // The property name inside prose paints nothing.
+    [
+      'const msg = \'use boxShadow: "0 0 8px red"\';',
+      0,
+      "boxShadow named inside a string",
+    ],
   ];
   for (const [src, expected, label] of scanJsCases) {
     if (glowLayersInJs(src).length !== expected) {
@@ -473,9 +589,9 @@ for (const path of scripts) {
     process.exit(2);
   }
 
-  const stripped = stripJsComments(src);
+  const { code: stripped, inString } = scanJs(src);
   const props = collectCustomProperties(stripped);
-  const literals = jsBoxShadowLiterals(stripped);
+  const literals = jsBoxShadowLiterals(stripped, inString);
   scanned += literals.length;
 
   for (const literal of literals) {
