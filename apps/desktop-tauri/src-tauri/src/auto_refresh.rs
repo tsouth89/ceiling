@@ -46,13 +46,13 @@ pub fn install(app: tauri::AppHandle) {
                 if let Err(error) = refreshed {
                     tracing::warn!(%error, "Automatic provider refresh failed");
                 }
-                if scheduled_due {
-                    if let (Some(interval), Some(scheduled_at)) = (interval, scheduled_at) {
-                        schedule = Some((
-                            interval,
-                            next_fixed_tick(scheduled_at, Instant::now(), interval),
-                        ));
-                    }
+                if let (true, Some(interval), Some(scheduled_at)) =
+                    (scheduled_due, interval, scheduled_at)
+                {
+                    schedule = Some((
+                        interval,
+                        next_fixed_tick(scheduled_at, Instant::now(), interval),
+                    ));
                 }
             }
 
