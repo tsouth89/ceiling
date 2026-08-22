@@ -2,6 +2,14 @@
 
 ## [Ceiling] Unreleased
 
+## [Ceiling] 1.5.35 - 2026-08-22
+
+Charts stops showing numbers it cannot stand behind. A month whose models have no published prices painted as an empty one, the busiest day on the activity heatmap could share a shade with the quietest, and a Codex session carried whatever calendar day it was first parsed on, so a DST change or a trip moved usage onto the wrong day. Two cards scanning at once could overwrite each other's index, and a price refresh landing mid-scan stamped old dollars as current for every card already in the file.
+
+The rest is state a surface reported but could not actually reach. A settings or credentials write could run unserialized on a filesystem that cannot `flock`, Install and Restart could check a staged installer against a different release's digest, and dismissing an update mid-download un-dismissed itself on the next progress chunk. A machine reporting no home directory no longer reads Gemini credentials from — or writes refreshed Google tokens into — whatever directory it happened to start in.
+
+Ceiling also asks for a GitHub star now. At most twice, ever, and only after a provider has actually reported a reading.
+
 ### Added
 - **Ceiling asks for a GitHub star, at most twice ever.** A card in the bottom-right of the dashboard, and the only thing Ceiling has ever asked of anyone using it. The first ask waits until a provider has actually reported a reading and that reading has been on screen for twenty seconds, so it lands after the app has done something useful rather than during setup, when it would be asking to be paid before the work. The second, if the first went unanswered, waits for a later version to have shipped and for a week to have passed since the first, because a version bump the day after is still two asks in one week. Clicking through to GitHub ends it permanently; so does reaching the second ask. Later and the close button mean the same thing and never count as interest. It is not a Windows notification, it takes no focus and traps none, Escape closes it, and the only network call involved is opening the repository in your browser when you ask for it.
 
