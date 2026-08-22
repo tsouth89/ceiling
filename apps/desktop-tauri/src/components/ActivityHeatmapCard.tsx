@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getLocalActivityHeatmap } from "../lib/tauri";
 import { useLocalScanRefresh } from "../hooks/useLocalScanRefresh";
-import type { ActivityHeatmap } from "../types/bridge";
+import { useLocale } from "../hooks/useLocale";
+import { formatLocale } from "../lib/formatLocale";
+import type { ActivityHeatmap, Language } from "../types/bridge";
+import type { LocaleKey } from "../i18n/keys";
 import { getProviderIcon } from "./providers/providerIcons";
 import {
   chartTooltipPosition,
   type ChartTooltipPosition,
 } from "./charts/chartTooltip";
 import {
-  WEEKDAY_LABELS,
   buildCalendar,
   buildWeekHourGrid,
-  formatHourLabel,
   peakHour,
   peakWeekday,
   selectProviders,
@@ -19,41 +20,75 @@ import {
   type ActivityMetric,
 } from "../lib/activityHeatmap";
 
-const METRICS: { key: ActivityMetric; label: string }[] = [
-  { key: "apiValue", label: "API value" },
-  { key: "tokens", label: "Tokens" },
+const METRICS: { key: ActivityMetric; labelKey: LocaleKey }[] = [
+  { key: "apiValue", labelKey: "ActivityHeatmapMetricApiValue" },
+  { key: "tokens", labelKey: "ActivityHeatmapMetricTokens" },
 ];
 
 /** Hour ticks every six hours keeps 24 columns legible at panel width. */
 const HOUR_TICKS = [0, 6, 12, 18];
 
-function formatUsd(value: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+/**
+ * Map the Settings language to an Intl locale tag (SBS-972).
+ *
+ * Chinese is the only shipped non-English bundle, and `locale.rs` resolves
+ * every other language to the English one. They resolve to `en-US` here for
+ * the same reason: `undefined` hands Intl the operating system's locale, so a
+ * Japanese or Spanish selection rendered English copy alongside German dates
+ * and separators on a German machine.
+ */
+export function activityIntlLocale(language: Language): string {
+  return language === "chinese" ? "zh-CN" : "en-US";
 }
 
-function formatTokens(value: number): string {
-  return new Intl.NumberFormat("en-US", {
+/**
+ * The English sentinel `get_local_activity_heatmap` returns when the worker
+ * fails. Tauri hands it back as an ordinary error string, so a bare
+ * `tauriErrorMessage(err) || t(...)` never reached the localized copy - the
+ * sentinel is not empty, so it always won and a Chinese UI read English.
+ */
+const SCAN_FAILED_SENTINEL = "Unable to read local activity.";
+
+/** Translate the sentinel and the empty rejection; pass real detail through. */
+export function localizedScanError(message: string, readFailed: string): string {
+  return message === "" || message === SCAN_FAILED_SENTINEL ? readFailed : message;
+}
+
+export function formatActivityUsd(value: number, locale: string | undefined): string {
+  return new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(value);
+}
+
+export function formatActivityTokens(value: number, locale: string | undefined): string {
+  return new Intl.NumberFormat(locale, {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-function formatMetric(value: number, metric: ActivityMetric): string {
-  return metric === "apiValue" ? formatUsd(value) : `${formatTokens(value)} tokens`;
+function formatShortDate(date: string, locale: string | undefined): string {
+  const [year, month, day] = date.split("-").map(Number);
+  if (!year || !month || !day) return date;
+  return new Date(year, month - 1, day).toLocaleDateString(locale, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatHourLabel(hour: number, locale: string | undefined): string {
+  return new Intl.DateTimeFormat(locale, { hour: "numeric" }).format(
+    new Date(2020, 0, 1, hour),
+  );
+}
+
+function formatWeekday(weekday: number, locale: string | undefined): string {
+  // 4 January 2026 is a Sunday, matching Date.prototype.getDay() === 0.
+  return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
+    new Date(2026, 0, 4 + weekday),
+  );
 }
 
 function providerLabel(providerId: string): string {
   return providerId.charAt(0).toUpperCase() + providerId.slice(1);
-}
-
-/** "Aug 15" for cell labels; the year is already implied by a 30-day window. */
-function shortDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  if (!year || !month || !day) return date;
-  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
 }
 
 function tauriErrorMessage(err: unknown): string {
@@ -73,6 +108,8 @@ type Tooltip = ChartTooltipPosition & { text: string };
  * telling two shades apart.
  */
 export function ActivityHeatmapCard() {
+  const { t, language } = useLocale();
+  const locale = activityIntlLocale(language);
   const [heatmap, setHeatmap] = useState<ActivityHeatmap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,7 +130,7 @@ export function ActivityHeatmapCard() {
         if (live) setHeatmap(data);
       })
       .catch((err: unknown) => {
-        if (live) setError(tauriErrorMessage(err) || "Unable to read local activity.");
+        if (live) setError(tauriErrorMessage(err));
       })
       .finally(() => {
         if (live) setLoading(false);
@@ -101,6 +138,11 @@ export function ActivityHeatmapCard() {
     return () => {
       live = false;
     };
+    // Deliberately not keyed on `t`. LocaleProvider rebuilds it whenever the
+    // bundle changes, so listing it here re-ran the fetch on every language
+    // switch: the grid was replaced by the Reading spinner, and a cold cache
+    // repeated the whole transcript scan the card had just finished. The
+    // failure text is translated at render instead.
   }, [refreshes]);
 
   const providerIds = heatmap?.providerIds ?? [];
@@ -132,18 +174,23 @@ export function ActivityHeatmapCard() {
   };
   const hideTooltip = () => setTooltip(null);
 
+  const formatMetric = (value: number, current: ActivityMetric): string =>
+    current === "apiValue"
+      ? formatActivityUsd(value, locale)
+      : formatLocale(t("ActivityHeatmapTokensUnit"), formatActivityTokens(value, locale));
+
   if (loading) {
     return (
-      <section className="activity-card" aria-label="Activity heatmap">
-        <p className="activity-card__status">Reading local activity…</p>
+      <section className="activity-card" aria-label={t("ActivityHeatmapAriaLabel")}>
+        <p className="activity-card__status">{t("ActivityHeatmapReading")}</p>
       </section>
     );
   }
 
-  if (error) {
+  if (error !== null) {
     return (
-      <section className="activity-card" aria-label="Activity heatmap">
-        <p className="activity-card__status">{error}</p>
+      <section className="activity-card" aria-label={t("ActivityHeatmapAriaLabel")}>
+        <p className="activity-card__status">{localizedScanError(error, t("ActivityHeatmapReadFailed"))}</p>
       </section>
     );
   }
@@ -154,15 +201,19 @@ export function ActivityHeatmapCard() {
   const allProvidersHidden = providerIds.length > 0 && visibleProviders.length === 0;
 
   return (
-    <section className="activity-card" aria-label="Activity heatmap">
+    <section className="activity-card" aria-label={t("ActivityHeatmapAriaLabel")}>
       <header className="activity-card__header">
         <div>
-          <h3 className="activity-card__title">When you work</h3>
+          <h3 className="activity-card__title">{t("ActivityHeatmapTitle")}</h3>
           <p className="activity-card__subtitle">
-            Last {calendar.length} days of local activity, {heatmap?.timezoneLabel ?? "local time"}
+            {formatLocale(
+              t("ActivityHeatmapSubtitle"),
+              String(calendar.length),
+              heatmap?.timezoneLabel ?? t("ActivityHeatmapLocalTime"),
+            )}
           </p>
         </div>
-        <div className="activity-card__switch" role="group" aria-label="Metric">
+        <div className="activity-card__switch" role="group" aria-label={t("ActivityHeatmapMetricGroup")}>
           {METRICS.map((option) => (
             <button
               key={option.key}
@@ -172,14 +223,14 @@ export function ActivityHeatmapCard() {
               aria-pressed={metric === option.key}
               onClick={() => setMetric(option.key)}
             >
-              {option.label}
+              {t(option.labelKey)}
             </button>
           ))}
         </div>
       </header>
 
       {providerIds.length > 1 && (
-        <div className="activity-card__providers" role="group" aria-label="Providers">
+        <div className="activity-card__providers" role="group" aria-label={t("ActivityHeatmapProvidersGroup")}>
           {providerIds.map((id) => {
             const on = !excluded.includes(id);
             return (
@@ -211,25 +262,30 @@ export function ActivityHeatmapCard() {
         {!hasActivity && (
           <p className="activity-card__status" role="status">
             {allProvidersHidden
-              ? "Every provider is hidden. Turn one back on above."
-              : "No local activity in this window yet."}
+              ? t("ActivityHeatmapProvidersHidden")
+              : t("ActivityHeatmapEmpty")}
           </p>
         )}
 
         <div className="activity-card__section">
           <div className="activity-card__section-head">
-            <span className="activity-card__section-title">By day</span>
+            <span className="activity-card__section-title">{t("ActivityHeatmapByDay")}</span>
             <span className="activity-card__section-note">
-              {formatMetric(total, metric)} total
+              {formatLocale(t("ActivityHeatmapTotal"), formatMetric(total, metric))}
             </span>
           </div>
           <div
             className="activity-card__days"
             role="img"
-            aria-label={`Daily activity for the last ${calendar.length} days`}
+            aria-label={formatLocale(t("ActivityHeatmapDaysAria"), String(calendar.length))}
           >
             {calendar.map((cell) => {
-              const label = `${shortDate(cell.date)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls`;
+              const label = formatLocale(
+                t("ActivityHeatmapCellSummary"),
+                formatShortDate(cell.date, locale),
+                formatMetric(cell.value, metric),
+                String(cell.calls),
+              );
               return (
                 <div
                   key={cell.date}
@@ -244,41 +300,51 @@ export function ActivityHeatmapCard() {
           </div>
           {calendar.length > 0 && (
             <div className="activity-card__days-axis" aria-hidden>
-              <span>{shortDate(calendar[0].date)}</span>
-              <span>{shortDate(calendar[calendar.length - 1].date)}</span>
+              <span>{formatShortDate(calendar[0].date, locale)}</span>
+              <span>{formatShortDate(calendar[calendar.length - 1].date, locale)}</span>
             </div>
           )}
         </div>
 
         <div className="activity-card__section">
           <div className="activity-card__section-head">
-            <span className="activity-card__section-title">By hour</span>
+            <span className="activity-card__section-title">{t("ActivityHeatmapByHour")}</span>
             <span className="activity-card__section-note">
               {busiestHour && busiestWeekday
-                ? `Busiest ${WEEKDAY_LABELS[busiestWeekday.weekday]}, around ${formatHourLabel(busiestHour.hour)}`
-                : "No peak yet"}
+                ? formatLocale(
+                    t("ActivityHeatmapBusiest"),
+                    formatWeekday(busiestWeekday.weekday, locale),
+                    formatHourLabel(busiestHour.hour, locale),
+                  )
+                : t("ActivityHeatmapNoPeak")}
             </span>
           </div>
           <div className="activity-card__grid-wrap">
             <div className="activity-card__hour-axis" aria-hidden>
               {HOUR_TICKS.map((hour) => (
                 <span key={hour} style={{ gridColumn: `${hour + 1} / span 6` }}>
-                  {formatHourLabel(hour)}
+                  {formatHourLabel(hour, locale)}
                 </span>
               ))}
             </div>
             <div
               className="activity-card__grid"
               role="img"
-              aria-label="Activity by weekday and hour of day"
+              aria-label={t("ActivityHeatmapHoursAria")}
             >
               {grid.map((row, weekday) => (
                 <div className="activity-card__grid-row" key={weekday}>
                   <span className="activity-card__weekday" aria-hidden>
-                    {WEEKDAY_LABELS[weekday]}
+                    {formatWeekday(weekday, locale)}
                   </span>
                   {row.map((cell) => {
-                    const label = `${WEEKDAY_LABELS[weekday]} ${formatHourLabel(cell.hour)}: ${formatMetric(cell.value, metric)}, ${cell.calls} calls`;
+                    const label = formatLocale(
+                      t("ActivityHeatmapHourCell"),
+                      formatWeekday(weekday, locale),
+                      formatHourLabel(cell.hour, locale),
+                      formatMetric(cell.value, metric),
+                      String(cell.calls),
+                    );
                     return (
                       <div
                         key={cell.hour}
@@ -308,15 +374,15 @@ export function ActivityHeatmapCard() {
       </div>
 
       <footer className="activity-card__footer">
-        <span className="activity-card__legend-label">Less</span>
+        <span className="activity-card__legend-label">{t("ActivityHeatmapLess")}</span>
         <span className="activity-card__legend-swatches" aria-hidden>
           {[0, 1, 2, 3, 4].map((level) => (
             <span key={level} className="activity-card__cell" data-level={level} />
           ))}
         </span>
-        <span className="activity-card__legend-label">More</span>
+        <span className="activity-card__legend-label">{t("ActivityHeatmapMore")}</span>
         <span className="activity-card__footer-note">
-          From local transcript timestamps. Nothing leaves this machine.
+          {t("ActivityHeatmapFooterNote")}
         </span>
       </footer>
     </section>
