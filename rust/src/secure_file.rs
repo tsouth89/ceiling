@@ -36,7 +36,7 @@ const STATE_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(120
 ///
 /// Unix unlinks by name and never reports this state, so the retry is compiled
 /// in everywhere but only enabled where it can happen.
-const DELETE_PENDING_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+const DELETE_PENDING_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
 const RETRIES_DELETE_PENDING: bool = cfg!(windows);
 
 /// Serialize read-modify-write transactions across Ceiling processes.
@@ -257,8 +257,12 @@ impl StateWriteLock {
             if !RETRIES_DELETE_PENDING {
                 return attempt;
             }
+            // A directory sitting on the sibling path is also access-denied on
+            // Windows, and unlike a closing handle it never clears. Retrying
+            // that only delays a failure the caller needs now.
             let denied = matches!(&attempt, LockAttempt::Failed(error)
-                if error.kind() == io::ErrorKind::PermissionDenied);
+                if error.kind() == io::ErrorKind::PermissionDenied)
+                && !exclusive.is_dir();
             if !denied || std::time::Instant::now() >= deadline {
                 return attempt;
             }
@@ -2000,7 +2004,13 @@ mod tests {
             attempts, 1,
             "a failed fallback must not be retried as success"
         );
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        // A directory on the sibling path is access-denied on Windows too, but
+        // it never clears. The delete-pending retry must not sit on it: this
+        // used to spend the whole grace period before failing.
+        assert!(
+            started.elapsed() < DELETE_PENDING_GRACE,
+            "an unfixable fallback must fail without waiting out the retry grace"
+        );
     }
 
     #[test]
