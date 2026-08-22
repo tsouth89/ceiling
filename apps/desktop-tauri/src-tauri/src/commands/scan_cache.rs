@@ -309,6 +309,20 @@ fn apply_store<T>(
     if started == 0 || started != current {
         return false;
     }
+    // The entries already in the file were priced under whatever fingerprint
+    // it carries. Stamping it with `started` while keeping them would relabel
+    // every other key's value as current — the heatmap's dates, or the
+    // Estimated API value card's other range — and they would be served that
+    // way until the TTL or a rewrite. `cached()` drops them on read for
+    // exactly this reason; a write has to do the same, or one key's scan
+    // launders another key's stale dollars (SBS-946).
+    if (cache.fingerprint != started || cache.version != version) && !cache.entries.is_empty() {
+        tracing::info!(
+            cached = cache.entries.len(),
+            "model prices or the cache layout moved; dropping cached entries rather than relabelling them"
+        );
+        cache.entries.clear();
+    }
     cache.version = version;
     cache.fingerprint = started;
     cache.entries.insert(
@@ -410,6 +424,52 @@ mod tests {
         let now = 1_000_000_000;
 
         assert!(!is_stale(now + 60_000, now, ttl));
+    }
+
+    /// SBS-946: the other direction. A scan that starts *after* the catalog
+    /// moved passes `started == current`, so the write is allowed - but the
+    /// file on disk is still stamped F1 and still holds F1-priced values for
+    /// other keys. Stamping it F2 and keeping them served old dollars as
+    /// current until the TTL. The stale entries go instead.
+    #[test]
+    fn a_write_under_new_prices_drops_the_entries_priced_under_the_old_ones() {
+        let mut cache = cache_with(&[("today", 1), ("yesterday", 2)]);
+        cache.version = 1;
+        cache.fingerprint = 7;
+
+        let stored = apply_store(&mut cache, 1, 8, 8, "tomorrow".to_string(), Row(99), 2);
+
+        assert!(stored, "a scan wholly under the new prices may be written");
+        assert_eq!(
+            cache.fingerprint, 8,
+            "the file now describes the new prices"
+        );
+        assert!(
+            !cache.entries.contains_key("today") && !cache.entries.contains_key("yesterday"),
+            "values priced under the old catalog must not be relabelled as current"
+        );
+        assert!(
+            cache.entries.contains_key("tomorrow"),
+            "the value actually priced under the new catalog stays"
+        );
+    }
+
+    /// A cache already on the current fingerprint keeps its other keys: this
+    /// must not turn every write into a cache flush.
+    #[test]
+    fn a_write_under_the_same_prices_keeps_the_other_keys() {
+        let mut cache = cache_with(&[("today", 1)]);
+        cache.version = 1;
+        cache.fingerprint = 8;
+
+        let stored = apply_store(&mut cache, 1, 8, 8, "tomorrow".to_string(), Row(99), 2);
+
+        assert!(stored);
+        assert!(
+            cache.entries.contains_key("today"),
+            "an entry priced under the same catalog is still current"
+        );
+        assert!(cache.entries.contains_key("tomorrow"));
     }
 
     /// A value priced under F1 must not relabel the whole cache as F2.
