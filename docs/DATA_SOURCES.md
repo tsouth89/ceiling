@@ -41,9 +41,13 @@ browser cookie databases; website cookies must be copied explicitly. See
 
 - The Ceiling desktop app makes no analytics or telemetry calls to
   Ceiling-operated servers.
-- Every usage request targets the provider's own domain listed above.
-- The only non-provider destination is **Wayfinder**, which calls the local
-  gateway URL you configure yourself.
+- Every usage request targets the provider's own domain listed above, or,
+  for Wayfinder, the local gateway URL you configure yourself.
+- Status-page polling is opt-in under Notifications and only runs for
+  enabled providers.
+- Two other non-provider hosts are contacted regardless of that switch:
+  models.dev (public model prices, 24-hour TTL) and GitHub
+  (`api.github.com`) for the update check on the selected channel.
 
 If you enable a provider and don't see it described here or in the in-app panel,
 that's a bug. Please open an issue.

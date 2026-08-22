@@ -1,10 +1,14 @@
 //! Provider incident badges (SBS-280).
 //!
 //! Reads public provider status pages so a "0 tokens left" moment can be told
-//! apart from an outage. This is the only outbound request Ceiling makes that
-//! is not to a provider the user already signed in to, so it is opt-in and
-//! cached hard: at most one request per provider per [`INCIDENT_TTL`], and only
-//! while a surface is actually asking.
+//! apart from an outage. It adds a set of outbound hosts derived from the
+//! user's enabled providers - each provider's public status page - on top of
+//! the usage requests those providers already receive, so it is opt-in and
+//! cached hard: at most one request per
+//! provider per [`INCIDENT_TTL`], and only while a surface is actually asking.
+//!
+//! Ceiling already contacts models.dev for public model prices and GitHub for
+//! the update check; those are not gated by this switch.
 //!
 //! Nothing about the user is sent. A status page request carries no
 //! credentials, no account id, and no usage figures.
