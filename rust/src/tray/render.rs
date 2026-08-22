@@ -260,11 +260,13 @@ mod tests {
         assert_eq!(rgba.len() as u32, w * h * 4);
         assert_eq!(rgba[3], 0, "top-left corner should remain transparent");
         assert!(
-            rgba.chunks_exact(4)
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| { pixel[3] == 255 && (pixel[0], pixel[1], pixel[2]) == CEILING })
         );
         assert!(
-            rgba.chunks_exact(4).any(|pixel| {
+            rgba.as_chunks::<4>().0.iter().any(|pixel| {
                 pixel[3] == 255 && (pixel[0], pixel[1], pixel[2]) == (225, 232, 238)
             })
         );
@@ -285,7 +287,9 @@ mod tests {
         assert_ne!(normal, error);
         assert!(
             error
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| { pixel[3] == 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2] })
         );
     }
@@ -339,7 +343,9 @@ mod tests {
         let (rgba, _, _) = render_percent_icon_rgba(72.0, false);
         // A visible glyph pixel: opaque, and neither the tile nor the ceiling line.
         assert!(
-            rgba.chunks_exact(4)
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
                 .any(|px| px[3] == 255 && px[0] != TILE.0 && px[0] != CEILING.0)
         );
     }
