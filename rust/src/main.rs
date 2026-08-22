@@ -442,9 +442,7 @@ fn launch_arg_summary() -> String {
 /// Whether an exit code is worth keeping a launch log for.
 ///
 /// Only a genuine failure is. A usage error is the user's typo, already
-/// explained on stderr, and `missing_subcommand` reaches here through the `Ok`
-/// path rather than clap's own exit, so bare `codexbar` would otherwise leave a
-/// file behind on every run.
+/// explained on stderr.
 fn keeps_launch_log(exit_code: i32) -> bool {
     exit_code != exit_codes::SUCCESS && exit_code != exit_codes::USAGE_ERROR
 }
@@ -521,7 +519,7 @@ fn run(log_path: Option<&Path>) -> i32 {
         }
     };
 
-    dispatch_command(&rt, cli.command)
+    dispatch_command(&rt, cli)
 }
 
 fn startup_log() -> String {
@@ -549,8 +547,9 @@ fn wsl_log() -> Option<String> {
     Some(log)
 }
 
-fn dispatch_command(rt: &Runtime, command: Option<Commands>) -> i32 {
-    match command {
+fn dispatch_command(rt: &Runtime, cli: Cli) -> i32 {
+    let default_usage = cli.to_usage_args();
+    match cli.command {
         Some(Commands::Usage(args)) => run_categorized(rt, cli::usage::run(args)),
         Some(Commands::Cost(args)) => run_categorized(rt, cli::cost::run(args)),
         Some(Commands::Diagnose(args)) => run_categorized(rt, cli::diagnose::run(args)),
@@ -561,7 +560,7 @@ fn dispatch_command(rt: &Runtime, command: Option<Commands>) -> i32 {
         Some(Commands::Autostart(args)) => run_unexpected(rt, cli::autostart::run(args)),
         Some(Commands::Account(args)) => run_unexpected(rt, cli::account::run(args)),
         Some(Commands::Config(args)) => run_unexpected(rt, cli::config::run(args)),
-        None => missing_subcommand(),
+        None => run_categorized(rt, cli::usage::run(default_usage)),
     }
 }
 
@@ -590,17 +589,6 @@ where
             error_code(&e)
         }
     }
-}
-
-fn missing_subcommand() -> i32 {
-    // The egui menubar shell has been retired; the desktop UI lives in
-    // apps/desktop-tauri. The CLI binary now requires an explicit subcommand.
-    eprintln!(
-        "codexbar is now CLI-only. Run a subcommand (e.g. `codexbar usage -p claude`) \
-         or launch the Tauri desktop shell via `apps/desktop-tauri`.\n\
-         Use `codexbar --help` for the full list of subcommands."
-    );
-    exit_codes::USAGE_ERROR
 }
 
 /// Categorize an error into the appropriate exit code
@@ -708,8 +696,7 @@ mod tests {
         assert!(!skips_launch_log(["codexbar", "--version"]));
     }
 
-    /// A usage error is the user's typo, already explained on stderr. Bare
-    /// `codexbar` returns it through the `Ok` path, not clap's own exit.
+    /// A usage error is the user's typo, already explained on stderr.
     #[test]
     fn only_real_failures_keep_their_log() {
         assert!(!keeps_launch_log(exit_codes::SUCCESS));
