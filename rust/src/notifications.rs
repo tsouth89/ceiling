@@ -194,7 +194,17 @@ fn is_spend_spike(today_usd: f64, baseline_usd: f64, multiplier: f64) -> bool {
     if let Some(ratio) = spend_spike_ratio(today_usd, baseline_usd) {
         return ratio >= multiplier;
     }
-    today_usd >= spend_anomaly_absolute_trigger_usd()
+    at_least_cents(today_usd, spend_anomaly_absolute_trigger_usd())
+}
+
+/// `value >= threshold`, compared at cent precision.
+///
+/// `today_usd` is a sum of f64 per-model estimates, so a day genuinely worth
+/// $20.00 can land at 19.999999998 and miss a bare `>=` — while the toast
+/// would have printed it as "$20.00" and the user would be looking at a
+/// message that contradicts the threshold it claims to have crossed.
+fn at_least_cents(value: f64, threshold: f64) -> bool {
+    (value * 100.0).round() >= (threshold * 100.0).round()
 }
 
 fn spend_anomaly_toast_body(today_usd: f64, baseline_usd: f64) -> String {
@@ -205,7 +215,7 @@ fn spend_anomaly_toast_body(today_usd: f64, baseline_usd: f64) -> String {
     } else {
         let trigger = spend_anomaly_absolute_trigger_usd();
         format!(
-            "Today's estimated API value is ${today_usd:.2}, at or above the ${trigger:.2} absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
+            "Today's estimated API value is ${today_usd:.2}, at or above the ${trigger:.2} absolute trigger used when there is no usable recent median. This is an estimate from local Codex and Claude logs, not a bill."
         )
     }
 }
@@ -2381,6 +2391,24 @@ mod tests {
     #[test]
     fn a_spike_needs_both_the_ratio_and_a_meaningful_total() {
         // Cents times a big multiplier are still cents.
+        // SBS-967: today_usd is a sum of f64 estimates, so a day worth exactly
+        // the trigger can arrive a hair under it. The toast prints "$20.00"
+        // either way, so the comparison is made at the same cent precision.
+        let trigger = spend_anomaly_absolute_trigger_usd();
+        let a_hair_under = trigger - 1e-9;
+        assert!(
+            a_hair_under < trigger,
+            "the fixture must actually be below the trigger in raw f64"
+        );
+        assert!(
+            is_spend_spike(a_hair_under, 0.0, 3.0),
+            "a day that rounds to the trigger must fire, not miss by a float hair"
+        );
+        assert!(
+            !is_spend_spike(trigger - 0.01, 0.0, 3.0),
+            "a cent under the trigger is a real shortfall and must not fire"
+        );
+
         assert!(!is_spend_spike(0.30, 0.01, 3.0));
         assert!(is_spend_spike(30.0, 2.0, 3.0));
         assert!(!is_spend_spike(5.0, 2.0, 3.0));
@@ -2435,11 +2463,11 @@ mod tests {
         );
         assert_eq!(
             spend_anomaly_toast_body(20.0, 0.0),
-            "Today's estimated API value is $20.00, at or above the $20.00 absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
+            "Today's estimated API value is $20.00, at or above the $20.00 absolute trigger used when there is no usable recent median. This is an estimate from local Codex and Claude logs, not a bill."
         );
         assert_eq!(
             spend_anomaly_toast_body(180.0, 0.0),
-            "Today's estimated API value is $180.00, at or above the $20.00 absolute trigger used when recent days are too small to form a median. This is an estimate from local Codex and Claude logs, not a bill."
+            "Today's estimated API value is $180.00, at or above the $20.00 absolute trigger used when there is no usable recent median. This is an estimate from local Codex and Claude logs, not a bill."
         );
     }
 
