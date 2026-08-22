@@ -362,7 +362,7 @@ fn status_payload_with_spend(
     provider: Option<&str>,
     enabled: &[ProviderId],
     include_identity: bool,
-    spend_for: impl Fn(&str) -> Option<serde_json::Value>,
+    mut spend_for: impl FnMut(&str) -> Option<serde_json::Value>,
 ) -> serde_json::Value {
     if let Some(name) = provider
         && ProviderId::from_cli_name(name).is_none()
