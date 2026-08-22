@@ -125,9 +125,12 @@ pub(super) fn load_credentials(
 /// Whether `config_dir` names an account other than the one the CLI is signed
 /// in as. Passing the ambient directory explicitly is still the ambient account.
 fn is_explicit_account(config_dir: Option<&Path>) -> bool {
-    match config_dir {
-        Some(dir) => !crate::core::same_dir(dir, &crate::core::ambient_claude_config_dir()),
-        None => false,
+    match (config_dir, crate::core::ambient_claude_config_dir()) {
+        (Some(dir), Some(ambient)) => !crate::core::same_dir(dir, &ambient),
+        // No ambient home: a caller-supplied directory cannot be the CLI's
+        // default account, so treat it as explicit (SBS-1021).
+        (Some(_), None) => true,
+        (None, _) => false,
     }
 }
 
@@ -346,13 +349,18 @@ fn push_keyring_candidate(candidates: &mut Vec<String>, value: String) {
     candidates.push(value.to_string());
 }
 
-/// Get the credentials file path
 /// Resolve the credentials file for a config directory, defaulting to the one
 /// the CLI itself would use (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
+///
+/// No resolvable ambient directory is an explicit error, not `./.claude`
+/// (SBS-1021 / SBS-950).
 fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError> {
     let dir = config_dir
         .map(Path::to_path_buf)
-        .unwrap_or_else(crate::core::ambient_claude_config_dir);
+        .or_else(crate::core::ambient_claude_config_dir)
+        .ok_or_else(|| {
+            ProviderError::NotInstalled("Could not resolve Claude config directory.".to_string())
+        })?;
     Ok(crate::core::claude_credentials_path(&dir))
 }
 

@@ -73,17 +73,20 @@ impl CodexApi {
     }
 
     /// The `CODEX_HOME` this client reads from.
-    fn codex_home(&self) -> PathBuf {
+    ///
+    /// `None` when following the CLI and no home can be resolved. The working
+    /// directory is not a substitute (SBS-1021 / SBS-950).
+    fn codex_home(&self) -> Option<PathBuf> {
         self.codex_home
             .clone()
-            .unwrap_or_else(crate::core::ambient_codex_home)
+            .or_else(crate::core::ambient_codex_home)
     }
 
     /// Identity claims for this client's home, for labeling and for keying usage
     /// by account. Never includes token material.
     pub fn identity(&self) -> Option<crate::core::CodexIdentity> {
         use crate::core::AccountIdentity;
-        crate::core::CodexIdentity::read(&self.codex_home())
+        crate::core::CodexIdentity::read(&self.codex_home()?)
     }
 
     /// Fetch usage information from Codex API
@@ -166,7 +169,9 @@ impl CodexApi {
     }
 
     fn load_credentials(&self) -> Result<CodexCredentials, ProviderError> {
-        let auth_path = self.get_auth_path();
+        let auth_path = self.get_auth_path().ok_or_else(|| {
+            ProviderError::NotInstalled("Could not resolve Codex home directory.".to_string())
+        })?;
 
         if !auth_path.exists() {
             return Err(ProviderError::NotInstalled(format!(
@@ -268,14 +273,17 @@ impl CodexApi {
         }
     }
 
-    fn get_auth_path(&self) -> PathBuf {
-        self.codex_home().join("auth.json")
+    fn get_auth_path(&self) -> Option<PathBuf> {
+        Some(self.codex_home()?.join("auth.json"))
     }
 
     fn resolve_base_url(&self) -> String {
         // Each home carries its own config.toml, so a per-account base URL
         // override follows the account rather than leaking across them.
-        let config_path = self.codex_home().join("config.toml");
+        let Some(home) = self.codex_home() else {
+            return DEFAULT_BASE_URL.to_string();
+        };
+        let config_path = home.join("config.toml");
 
         if let Ok(content) = std::fs::read_to_string(&config_path)
             && let Some(base_url) = parse_chatgpt_base_url(&content)
@@ -1053,7 +1061,7 @@ mod tests {
 
         assert_eq!(credentials.access_token, "from-account-dir");
         assert_eq!(credentials.account_id.as_deref(), Some("acct-scoped"));
-        assert_eq!(api.get_auth_path(), home.path().join("auth.json"));
+        assert_eq!(api.get_auth_path(), Some(home.path().join("auth.json")));
     }
 
     #[test]

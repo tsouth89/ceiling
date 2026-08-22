@@ -33,16 +33,27 @@ pub type ClaudeAccountStore = DirectoryAccountStore<ClaudeIdentity>;
 
 /// Resolve the Claude config directory the CLI itself would use:
 /// `CLAUDE_CONFIG_DIR` when set to a non-empty value, otherwise `~/.claude`.
-pub fn ambient_claude_config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+///
+/// No resolvable home is not the working directory. Returning `./.claude`
+/// would treat a checkout as the ambient config root (SBS-1021 / SBS-950).
+pub fn ambient_claude_config_dir() -> Option<PathBuf> {
+    ambient_claude_config_dir_from(
+        std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        dirs::home_dir(),
+    )
+}
+
+pub(crate) fn ambient_claude_config_dir_from(
+    claude_config_dir: Option<&str>,
+    home_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(dir) = claude_config_dir {
         let trimmed = dir.trim();
         if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
+            return Some(PathBuf::from(trimmed));
         }
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(DEFAULT_CLAUDE_DIR)
+    Some(home_dir?.join(DEFAULT_CLAUDE_DIR))
 }
 
 /// The OAuth credential file for a config directory.
@@ -97,7 +108,7 @@ impl ClaudeIdentity {
 }
 
 impl AccountIdentity for ClaudeIdentity {
-    fn ambient_dir() -> PathBuf {
+    fn ambient_dir() -> Option<PathBuf> {
         ambient_claude_config_dir()
     }
 
@@ -317,6 +328,32 @@ mod tests {
         assert!(
             ClaudeAccountStore::default_path().ends_with("claude-accounts.json"),
             "claude accounts must not share a file with another provider"
+        );
+    }
+
+    /// Pins SBS-1021: a missing home is not the working directory. Returning
+    /// `Some("./.claude")` here is what loaded a checkout as the ambient
+    /// config root (the Gemini leftover from SBS-950).
+    #[test]
+    fn missing_home_is_not_the_working_directory() {
+        assert_eq!(ambient_claude_config_dir_from(None, None), None);
+        assert_eq!(ambient_claude_config_dir_from(Some("  "), None), None);
+        assert_eq!(ambient_claude_config_dir_from(Some(""), None), None);
+    }
+
+    #[test]
+    fn an_explicit_config_dir_does_not_need_a_home() {
+        assert_eq!(
+            ambient_claude_config_dir_from(Some("/work"), None),
+            Some(PathBuf::from("/work"))
+        );
+    }
+
+    #[test]
+    fn default_config_dir_joins_the_home() {
+        assert_eq!(
+            ambient_claude_config_dir_from(None, Some(PathBuf::from("/home/me"))),
+            Some(PathBuf::from("/home/me").join(".claude"))
         );
     }
 }

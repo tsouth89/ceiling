@@ -153,7 +153,9 @@ fn bridge_provider<I: Displayable>(data: &DirectoryAccountData<I>) -> ProviderAc
             .collect(),
         active_index: active,
         following_cli: !data.is_explicit(),
-        ambient_dir: I::ambient_dir().display().to_string(),
+        ambient_dir: I::ambient_dir()
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_default(),
     }
 }
 
@@ -224,14 +226,19 @@ fn ensure_ambient_registered<I: Displayable>() {
     if !data.accounts.is_empty() {
         return;
     }
-    if !I::is_signed_in(&I::ambient_dir()) {
+    let Some(ambient) = I::ambient_dir() else {
+        return;
+    };
+    if !I::is_signed_in(&ambient) {
         return;
     }
     if let Err(error) = store.try_update(|data| {
         if !data.accounts.is_empty() {
             return Ok(());
         }
-        let ambient = I::ambient_dir();
+        let Some(ambient) = I::ambient_dir() else {
+            return Ok(());
+        };
         if I::is_signed_in(&ambient) {
             data.add_account(DirectoryAccount::<I>::new(None, ambient));
         }

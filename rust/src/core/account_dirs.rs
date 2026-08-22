@@ -22,8 +22,10 @@ use uuid::Uuid;
 /// Provider-specific behavior for a directory-backed account.
 pub trait AccountIdentity: Clone + PartialEq + Serialize + DeserializeOwned {
     /// The directory the CLI itself would use when the user has configured no
-    /// accounts explicitly.
-    fn ambient_dir() -> PathBuf;
+    /// accounts explicitly. `None` when that directory cannot be resolved
+    /// (no provider env var and no home). The working directory is not a
+    /// substitute (SBS-1021 / SBS-950).
+    fn ambient_dir() -> Option<PathBuf>;
 
     /// File name this provider's accounts are persisted under.
     fn store_file_name() -> &'static str;
@@ -191,11 +193,12 @@ impl<I: AccountIdentity> DirectoryAccountData<I> {
     /// Falls back to the ambient directory when no accounts are configured, so
     /// users who never open the Accounts UI keep today's behavior exactly: the
     /// CLI stays the source of truth and switching there is still picked up
-    /// automatically.
-    pub fn active_dir(&self) -> PathBuf {
+    /// automatically. `None` when there is no configured account and no
+    /// resolvable ambient directory — never the working directory (SBS-1021).
+    pub fn active_dir(&self) -> Option<PathBuf> {
         self.active_account()
             .map(|account| account.config_dir.clone())
-            .unwrap_or_else(I::ambient_dir)
+            .or_else(I::ambient_dir)
     }
 
     /// Whether Ceiling is tracking accounts explicitly rather than following
@@ -279,10 +282,11 @@ impl<I: AccountIdentity> DirectoryAccountData<I> {
     }
 
     /// Every distinct directory Ceiling should scan for local activity. Includes
-    /// the ambient directory when no accounts are configured.
+    /// the ambient directory when no accounts are configured and one can be
+    /// resolved. A missing home yields no scan roots, not cwd (SBS-1021).
     pub fn all_dirs(&self) -> Vec<PathBuf> {
         if self.accounts.is_empty() {
-            return vec![I::ambient_dir()];
+            return I::ambient_dir().into_iter().collect();
         }
         let mut seen = HashSet::new();
         self.accounts
@@ -462,8 +466,8 @@ mod tests {
     }
 
     impl AccountIdentity for TestIdentity {
-        fn ambient_dir() -> PathBuf {
-            PathBuf::from("/ambient")
+        fn ambient_dir() -> Option<PathBuf> {
+            Some(PathBuf::from("/ambient"))
         }
         fn store_file_name() -> &'static str {
             "test-accounts.json"
@@ -498,8 +502,38 @@ mod tests {
         let data = Data::new();
         assert!(data.active_account().is_none());
         assert!(!data.is_explicit());
-        assert_eq!(data.active_dir(), PathBuf::from("/ambient"));
+        assert_eq!(data.active_dir(), Some(PathBuf::from("/ambient")));
         assert_eq!(data.all_dirs(), vec![PathBuf::from("/ambient")]);
+    }
+
+    /// Pins SBS-1021: following the CLI with no resolvable ambient directory
+    /// must not invent `.` as the config/session root.
+    #[test]
+    fn missing_ambient_dir_is_not_the_working_directory() {
+        #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        struct NoHomeIdentity;
+
+        impl AccountIdentity for NoHomeIdentity {
+            fn ambient_dir() -> Option<PathBuf> {
+                None
+            }
+            fn store_file_name() -> &'static str {
+                "no-home-accounts.json"
+            }
+            fn read(_config_dir: &Path) -> Option<Self> {
+                None
+            }
+            fn is_signed_in(_config_dir: &Path) -> bool {
+                false
+            }
+            fn suggested_label(&self) -> Option<String> {
+                None
+            }
+        }
+
+        let data = DirectoryAccountData::<NoHomeIdentity>::new();
+        assert_eq!(data.active_dir(), None);
+        assert!(data.all_dirs().is_empty());
     }
 
     #[test]
@@ -512,7 +546,7 @@ mod tests {
         assert!(data.has_multiple());
         assert!(data.is_explicit());
         assert_eq!(data.active_account().map(|a| a.id), Some(id));
-        assert_eq!(data.active_dir(), PathBuf::from("/dirs/work"));
+        assert_eq!(data.active_dir(), Some(PathBuf::from("/dirs/work")));
     }
 
     #[test]
@@ -554,7 +588,7 @@ mod tests {
         data.remove_account(second);
 
         assert_eq!(data.active_account().map(|a| a.id), Some(first));
-        assert_eq!(data.active_dir(), PathBuf::from("/dirs/personal"));
+        assert_eq!(data.active_dir(), Some(PathBuf::from("/dirs/personal")));
     }
 
     #[test]
@@ -566,7 +600,7 @@ mod tests {
 
         assert_eq!(data.count(), 0);
         assert!(!data.is_explicit());
-        assert_eq!(data.active_dir(), PathBuf::from("/ambient"));
+        assert_eq!(data.active_dir(), Some(PathBuf::from("/ambient")));
     }
 
     #[test]
@@ -576,7 +610,7 @@ mod tests {
         data.active_index = 17;
 
         assert_eq!(data.clamped_active_index(), 0);
-        assert_eq!(data.active_dir(), PathBuf::from("/dirs/personal"));
+        assert_eq!(data.active_dir(), Some(PathBuf::from("/dirs/personal")));
     }
 
     #[test]
@@ -586,10 +620,10 @@ mod tests {
         data.accounts.push(account("b", "/dirs/shared/"));
         data.accounts.push(account("c", "/dirs/other"));
 
-        assert_eq!(
-            data.all_dirs(),
-            vec![PathBuf::from("/dirs/shared"), PathBuf::from("/dirs/other")]
-        );
+        assert_eq!(data.all_dirs(), vec![
+            PathBuf::from("/dirs/shared"),
+            PathBuf::from("/dirs/other")
+        ]);
     }
 
     #[test]
@@ -680,8 +714,8 @@ mod tests {
     }
 
     impl AccountIdentity for UnserializableIdentity {
-        fn ambient_dir() -> PathBuf {
-            PathBuf::from("/ambient")
+        fn ambient_dir() -> Option<PathBuf> {
+            Some(PathBuf::from("/ambient"))
         }
         fn store_file_name() -> &'static str {
             "unserializable-accounts.json"

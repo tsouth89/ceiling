@@ -365,7 +365,7 @@ impl LocalAgentSessionScanner {
         let sessions = self.scan_files(
             &host,
             now,
-            &Self::codex_sessions_root(),
+            Self::codex_sessions_root().as_deref(),
             &Self::claude_projects_roots(),
             &processes,
         );
@@ -400,16 +400,17 @@ impl LocalAgentSessionScanner {
         &self,
         host: &str,
         now: DateTime<Utc>,
-        codex_root: &Path,
+        codex_root: Option<&Path>,
         claude_roots: &[PathBuf],
         processes: &[AgentProcessRecord],
     ) -> Vec<AgentSession> {
         let mut agents = AgentPSOutputParser::agent_processes(processes);
         agents.sort_by_key(|process| std::cmp::Reverse(process.started_at));
-        let mut rollouts = VecDeque::from(Self::codex_rollouts(
-            codex_root,
-            now.with_timezone(&Local).date_naive(),
-        ));
+        let mut rollouts = VecDeque::from(
+            codex_root
+                .map(|root| Self::codex_rollouts(root, now.with_timezone(&Local).date_naive()))
+                .unwrap_or_default(),
+        );
         let claude_count = agents
             .iter()
             .filter(|process| process.provider == Some(AgentSessionProvider::Claude))
@@ -578,23 +579,16 @@ impl LocalAgentSessionScanner {
             })
     }
 
-    fn codex_sessions_root() -> PathBuf {
-        if let Ok(path) = std::env::var("CODEX_HOME")
-            && !path.trim().is_empty()
+    fn codex_sessions_root() -> Option<PathBuf> {
+        let home = crate::core::ambient_codex_home()?;
+        if home
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("sessions"))
         {
-            let path = PathBuf::from(path.trim());
-            if path
-                .file_name()
-                .is_some_and(|name| name.eq_ignore_ascii_case("sessions"))
-            {
-                return path;
-            }
-            return path.join("sessions");
+            Some(home)
+        } else {
+            Some(home.join("sessions"))
         }
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".codex")
-            .join("sessions")
     }
 
     fn claude_projects_roots() -> Vec<PathBuf> {
