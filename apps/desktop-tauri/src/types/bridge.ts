@@ -811,6 +811,10 @@ export interface ActivityHourPoint {
   apiValueUsd: number;
   /** Provider-normalized processed tokens. */
   tokens: number;
+  /** Model tokens with a canonical price (pricing-coverage numerator). */
+  pricedTokens: number;
+  /** All model tokens (priced + unpriced) — pricing-coverage denominator. */
+  totalTokens: number;
   /** Usage records in this hour. */
   calls: number;
 }
