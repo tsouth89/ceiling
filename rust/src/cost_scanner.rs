@@ -3937,9 +3937,18 @@ mod tests {
     /// timestamp, not a string stored at parse time.
     #[test]
     fn ingest_parsed_buckets_codex_by_current_local_day() {
+        // One clock read, converted twice. Taking Utc::now() and then
+        // Local::now() separately let local midnight fall between them, which
+        // put the record on one day and the scan range on the other, and
+        // ingest_parsed then filtered it out.
         let timestamp = Utc::now();
         let day = crate::core::local_day_key(timestamp);
-        let today = Local::now().date_naive();
+        let today = timestamp.with_timezone(&Local).date_naive();
+        assert_eq!(
+            day,
+            today.format("%F").to_string(),
+            "the record's day and the scan range must come from one instant"
+        );
         let range = CostUsageDayRange::new(today, today);
         let mut rollups = CodexReportRollups::new(1, &range, &[], today, true);
         let record = CodexUsageRecord {
