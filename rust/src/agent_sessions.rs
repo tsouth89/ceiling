@@ -580,7 +580,11 @@ impl LocalAgentSessionScanner {
     }
 
     fn codex_sessions_root() -> Option<PathBuf> {
-        let home = crate::core::ambient_codex_home()?;
+        Self::codex_sessions_root_from(crate::core::ambient_codex_home())
+    }
+
+    fn codex_sessions_root_from(home: Option<PathBuf>) -> Option<PathBuf> {
+        let home = home?;
         if home
             .file_name()
             .is_some_and(|name| name.eq_ignore_ascii_case("sessions"))

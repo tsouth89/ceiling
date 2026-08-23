@@ -48,6 +48,7 @@ describe("settings AccountsPanel", () => {
       );
     });
     expect(container.textContent).toContain("C:\\codex-work");
+    expect(container.textContent).toContain("AccountsFollowingCliHint");
     expect(screen.getByPlaceholderText("C:\\codex-work")).toBeTruthy();
   });
 
@@ -62,6 +63,9 @@ describe("settings AccountsPanel", () => {
       expect(container.querySelector(".accounts-following")).toBeTruthy();
     });
 
+    expect(container.textContent).toContain("AccountsFollowingCli");
+    expect(container.textContent).not.toContain("AccountsFollowingCliHint");
+    expect(container.querySelector(".accounts-following .accounts-path")).toBeNull();
     expect(container.textContent).not.toContain("-work");
     for (const path of container.querySelectorAll("code.accounts-path")) {
       expect(path.textContent?.trim()).not.toBe("");
@@ -81,6 +85,8 @@ describe("settings AccountsPanel", () => {
       expect(container.querySelector(".accounts-following")).toBeTruthy();
     });
 
+    expect(container.textContent).not.toContain("AccountsFollowingCliHint");
+    expect(container.querySelector(".accounts-following .accounts-path")).toBeNull();
     expect(container.textContent).not.toContain("-work");
     for (const path of container.querySelectorAll("code.accounts-path")) {
       expect(path.textContent?.trim()).not.toBe("");

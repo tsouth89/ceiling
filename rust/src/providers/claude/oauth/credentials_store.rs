@@ -355,9 +355,16 @@ fn push_keyring_candidate(candidates: &mut Vec<String>, value: String) {
 /// No resolvable ambient directory is an explicit error, not `./.claude`
 /// (SBS-1021 / SBS-950).
 fn credentials_path(config_dir: Option<&Path>) -> Result<PathBuf, ProviderError> {
+    credentials_path_from(config_dir, crate::core::ambient_claude_config_dir())
+}
+
+fn credentials_path_from(
+    config_dir: Option<&Path>,
+    ambient_dir: Option<PathBuf>,
+) -> Result<PathBuf, ProviderError> {
     let dir = config_dir
         .map(Path::to_path_buf)
-        .or_else(crate::core::ambient_claude_config_dir)
+        .or(ambient_dir)
         .ok_or_else(|| {
             ProviderError::NotInstalled("Could not resolve Claude config directory.".to_string())
         })?;
@@ -581,10 +588,12 @@ fn apply_refresh_to_credentials_json(
 mod tests {
     use super::{
         CredentialSource, ENV_TOKEN_KEY, KEYRING_SERVICE, apply_refresh_to_credentials_json,
-        cached_refreshed_if_fresher, credentials_path, disk_still_holds_exchanged_refresh,
-        load_credentials, merge_refreshed_credentials_json, parse_credentials_json,
-        persist_refreshed_credentials, persist_refreshed_for_source, store_refreshed,
+        cached_refreshed_if_fresher, credentials_path, credentials_path_from,
+        disk_still_holds_exchanged_refresh, load_credentials, merge_refreshed_credentials_json,
+        parse_credentials_json, persist_refreshed_credentials, persist_refreshed_for_source,
+        store_refreshed,
     };
+    use crate::core::ProviderError;
     use crate::providers::claude::oauth::ClaudeOAuthCredentials;
     use std::path::Path;
 
@@ -1078,6 +1087,27 @@ mod tests {
         let path = credentials_path(None).expect("path");
 
         assert_eq!(path, dir.path().join(".credentials.json"));
+    }
+
+    /// Pins SBS-1021: no ambient Claude home is `NotInstalled`, not `./.claude`.
+    #[test]
+    fn unresolved_ambient_dir_is_not_installed_and_does_not_probe_relative_claude() {
+        let planted = tempfile::tempdir().expect("tempdir");
+        write_credentials(&planted.path().join(".claude"));
+
+        let error = credentials_path_from(None, None).expect_err("unresolved home");
+        assert!(
+            matches!(error, ProviderError::NotInstalled(_)),
+            "expected NotInstalled, got {error:?}"
+        );
+        assert!(
+            planted
+                .path()
+                .join(".claude")
+                .join(".credentials.json")
+                .exists(),
+            "decoy exists so a relative .claude probe would have succeeded"
+        );
     }
 
     #[test]

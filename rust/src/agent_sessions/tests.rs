@@ -238,6 +238,58 @@ bad line
         );
     }
 
+    /// Pins SBS-1021: an unresolved Codex home is not `./sessions` and does not
+    /// invent a file-only session from a relative rollout tree.
+    #[test]
+    fn unresolved_codex_home_does_not_scan_a_relative_sessions_path() {
+        assert_eq!(
+            LocalAgentSessionScanner::codex_sessions_root_from(None),
+            None,
+            "unresolved home must not become ./sessions"
+        );
+
+        let now = Utc.with_ymd_and_hms(2026, 7, 12, 12, 0, 0).unwrap();
+        let today = now.with_timezone(&Local).date_naive();
+        let decoy = tempfile::tempdir().expect("tempdir");
+        let day_dir = decoy
+            .path()
+            .join("sessions")
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).expect("decoy dir");
+        std::fs::write(
+            day_dir.join("rollout-unresolved.jsonl"),
+            r#"{"type":"session_meta","payload":{"session_id":"should-not-appear","cwd":"/tmp","originator":"codex_exec","source":"cli"}}"#,
+        )
+        .expect("decoy rollout");
+
+        let scanner = LocalAgentSessionScanner::default();
+        let found_when_resolved = scanner.scan_files(
+            "localhost",
+            now,
+            Some(&decoy.path().join("sessions")),
+            &[],
+            &[],
+        );
+        assert!(
+            found_when_resolved
+                .iter()
+                .any(|session| session.id == "should-not-appear" && session.pid.is_none()),
+            "the planted rollout must be discoverable when a home is resolved: {found_when_resolved:?}"
+        );
+
+        let unresolved = scanner.scan_files("localhost", now, None, &[], &[]);
+        assert!(
+            unresolved.is_empty(),
+            "unresolved home must not create file-only sessions: {unresolved:?}"
+        );
+        assert!(
+            unresolved.iter().all(|session| session.pid.is_some()),
+            "unresolved home must not invent file-only sessions"
+        );
+    }
+
     #[test]
     fn claude_metadata_parser_stops_after_session_and_cwd_are_known() {
         struct FirstLineOnly {

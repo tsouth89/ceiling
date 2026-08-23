@@ -155,15 +155,12 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
           <span className="credential-card__badge credential-card__badge--set">
             {t("AccountsFollowingCli")}
           </span>
-          <span className="credential-card__meta">
-            {t("AccountsFollowingCliHint")}
-            {ambientDir ? (
-              <>
-                {" "}
-                <code className="accounts-path">{ambientDir}</code>
-              </>
-            ) : null}
-          </span>
+          {ambientDir ? (
+            <span className="credential-card__meta">
+              {t("AccountsFollowingCliHint")}{" "}
+              <code className="accounts-path">{ambientDir}</code>
+            </span>
+          ) : null}
         </div>
       ) : (
         <ul className="credential-list accounts-list">
