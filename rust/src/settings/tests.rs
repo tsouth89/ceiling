@@ -682,6 +682,128 @@ fn test_start_at_login_repairs_legacy_desktop_command_after_update() {
 }
 
 #[test]
+fn test_start_at_login_does_not_steal_another_tree() {
+    let installed = tempfile::tempdir().expect("installed dir");
+    let portable = tempfile::tempdir().expect("portable dir");
+    let installed_desktop = installed.path().join("ceiling.exe");
+    let portable_cli = portable.path().join("codexbar-cli.exe");
+    let portable_desktop = portable.path().join("ceiling.exe");
+    std::fs::write(&installed_desktop, b"installed").expect("write installed");
+    std::fs::write(&portable_cli, b"cli").expect("write portable cli");
+    std::fs::write(&portable_desktop, b"portable").expect("write portable desktop");
+    let installed_command = format!("\"{}\"", installed_desktop.display());
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &installed_command,
+        &portable_cli
+    ));
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &installed_command,
+        &portable_desktop
+    ));
+}
+
+#[test]
+fn test_start_at_login_preserves_custom_args() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let command = format!("\"{}\" --minimized", desktop_path.display());
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &command,
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_preserves_custom_args_on_stale_sibling() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let cli_path = temp.path().join("codexbar-cli.exe");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&cli_path, b"cli").expect("write cli");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let command = format!("\"{}\" --minimized", cli_path.display());
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &command,
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_preserves_unrelated_run_value() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        r#""D:\tools\other.exe""#,
+        &desktop_path
+    ));
+    assert!(!Settings::start_at_login_command_needs_repair(
+        "",
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_repairs_unquoted_owned_command() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let unquoted = desktop_path.display().to_string();
+
+    assert!(Settings::start_at_login_command_needs_repair(
+        &unquoted,
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_repairs_unquoted_owned_command_with_spaces() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let install_dir = temp.path().join("Program Files").join("Ceiling");
+    std::fs::create_dir_all(&install_dir).expect("create install dir");
+    let desktop_path = install_dir.join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let unquoted = desktop_path.display().to_string();
+
+    assert!(Settings::start_at_login_command_needs_repair(
+        &unquoted,
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_parses_an_exe_named_parent_directory() {
+    let path = std::path::PathBuf::from(r"C:\Users\person.exe\Ceiling\ceiling.exe");
+    let command = path.display().to_string();
+
+    assert!(Settings::start_at_login_command_needs_repair(
+        &command, &path
+    ));
+}
+
+#[test]
+fn test_start_at_login_ownership_includes_custom_args_but_excludes_foreign_entries() {
+    let installed = std::path::PathBuf::from(r"C:\Program Files\Ceiling\ceiling.exe");
+
+    assert!(Settings::start_at_login_command_is_owned(
+        r#""C:\Program Files\Ceiling\ceiling.exe" --minimized"#,
+        &installed
+    ));
+    assert!(!Settings::start_at_login_command_is_owned(
+        r#""D:\Portable\Ceiling\ceiling.exe""#,
+        &installed
+    ));
+    assert!(!Settings::start_at_login_command_is_owned(
+        r#""C:\Tools\other.exe""#,
+        &installed
+    ));
+}
+
+#[test]
 fn test_language_defaults_to_english() {
     let settings = Settings::default();
     assert_eq!(settings.ui_language, Language::English);
