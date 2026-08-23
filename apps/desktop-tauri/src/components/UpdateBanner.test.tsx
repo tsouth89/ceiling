@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatePayload } from "../types/bridge";
 import UpdateBanner from "./UpdateBanner";
+import { expectNoAccessibilityViolations } from "../test/accessibility";
 
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
@@ -80,5 +81,13 @@ describe("UpdateBanner accessibility", () => {
       />,
     );
     expect(screen.getByRole("alert").textContent).toContain("network failed");
+  });
+
+  it("has no detectable accessibility violations", async () => {
+    const { container } = render(
+      <UpdateBanner updateState={state("available")} {...handlers} />,
+    );
+
+    await expectNoAccessibilityViolations(container);
   });
 });
