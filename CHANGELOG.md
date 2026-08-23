@@ -7,6 +7,7 @@
 
 ### Fixed
 - **The detached Settings window now reopens where you left it.** Its saved size and position are restored and clamped on screen instead of being overwritten by a second frontend resize on every open. Closes #275.
+- **A corrupt `window_geometry.json` no longer wipes other windows' saved positions.** SBS-1024 locked the persist so two surfaces could not drop each other's keys, but a file that would not read or parse still loaded as empty defaults, and the next save replaced the whole file with only the window that just moved. Persist now refuses that write — the same fail-closed rule API keys already use — instead of rewriting siblings to an empty store. Closes SBS-1041.
 - **Loading settings no longer rewrites another install's start-at-login command.** Every `Settings::load` repaired `HKCU\...\Run\Ceiling` whenever the value was not the quoted path of this process. A portable CLI or a second tree therefore replaced the installed desktop's startup entry, and any extra arguments were stripped. Repair now runs only when this process owns that entry — the same intended exe, or a stale `codexbar-cli.exe` / `codexbar-desktop.exe` sibling in the same directory — and leaves custom arguments and other trees alone. Closes SBS-1053.
 - **MCP `get_status` no longer hides an exhausted Weekly behind a healthy session.** Top-level `remaining_percent` copied only `usage.primary`, so a Claude/Codex 5-hour window with room made the advertised cap-check sink look fine while Weekly was already at 100%. It now uses the same constraining-window ranking as the desktop strip across primary, secondary, and tertiary (exhausted first, then highest used %). Closes SBS-1055.
 - **Remembered window positions no longer drop a sibling when two surfaces save at once.** `window_geometry.json` was updated with an unlocked read-modify-write, so moving Settings while the float bar or Pop Out also wrote could replace the file with a snapshot that had never seen the other key. Geometry persist now holds the same cross-process state lock as settings and credentials. Closes SBS-1024.
@@ -1561,4 +1562,3 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
-
