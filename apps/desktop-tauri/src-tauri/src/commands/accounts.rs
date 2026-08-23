@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn missing_ambient_dir_serializes_as_json_null() {
-        let json = serde_json::to_value(&sample_bridge(None)).expect("serialize");
+        let json = serde_json::to_value(sample_bridge(None)).expect("serialize");
         assert_eq!(json["ambientDir"], serde_json::Value::Null);
         let text = serde_json::to_string(&sample_bridge(None)).expect("serialize");
         assert!(
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn resolved_ambient_dir_serializes_as_a_string() {
         let json =
-            serde_json::to_value(&sample_bridge(Some(r"C:\codex".into()))).expect("serialize");
+            serde_json::to_value(sample_bridge(Some(r"C:\codex".into()))).expect("serialize");
         assert_eq!(
             json["ambientDir"],
             serde_json::Value::String(r"C:\codex".into())
