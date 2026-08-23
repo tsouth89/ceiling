@@ -6,6 +6,7 @@
 - **Remembered window positions no longer drop a sibling when two surfaces save at once.** `window_geometry.json` was updated with an unlocked read-modify-write, so moving Settings while the float bar or Pop Out also wrote could replace the file with a snapshot that had never seen the other key. Geometry persist now holds the same cross-process state lock as settings and credentials. Closes SBS-1024.
 - **`codexbar` with no subcommand now runs `usage`.** CLI.md and `--help` already called usage the default command, but a bare `codexbar` printed an error asking for an explicit subcommand. It now does what those docs said. Closes SBS-1026.
 - **A corrupt `settings.json` is no longer renamed to `.bak` without the state lock.** SBS-954 moved an unparseable file aside so the next save could not overwrite it, but `Settings::load` did that rename before taking the lock. A concurrent `try_update` that had already written a good repair could then have that repair moved to `settings.json.bak`. The unlocked load now only parses; if the file is corrupt (or still carries embedded credentials) it takes the lock, re-reads, and quarantines only then. Closes SBS-1029.
+- **MCP `get_status` no longer runs a 30-day local cost scan to fill today's spend.** The tool is advertised as a cheap "am I about to hit my cap?" check, but it called the same 30-day Codex/Claude/Grok walk as `get_spend` just to read `today`. It now scans one inclusive local day for `today_spend`. Use `get_spend` for 7/30-day totals. Closes SBS-1033.
 
 ## [Ceiling] 1.5.35 - 2026-08-22
 

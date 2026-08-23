@@ -169,6 +169,8 @@ codexbar statusline --provider codex --no-cost
 
 Expose usage and spend over MCP stdio. Local-first, no network.
 
+Tools: `get_usage` reads the desktop widget snapshot (cache-only). `get_status` is the cheap cap check — snapshot quota plus today's estimated spend from a 1-day local log scan, not a 30-day rescan. `get_spend` walks local Codex/Claude/Grok logs for today, 7 days, and 30 days.
+
 ```text
 codexbar mcp [OPTIONS]
 ```
