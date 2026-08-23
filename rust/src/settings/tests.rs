@@ -761,6 +761,21 @@ fn test_start_at_login_repairs_unquoted_owned_command() {
 }
 
 #[test]
+fn test_start_at_login_repairs_unquoted_owned_command_with_spaces() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let install_dir = temp.path().join("Program Files").join("Ceiling");
+    std::fs::create_dir_all(&install_dir).expect("create install dir");
+    let desktop_path = install_dir.join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let unquoted = desktop_path.display().to_string();
+
+    assert!(Settings::start_at_login_command_needs_repair(
+        &unquoted,
+        &desktop_path
+    ));
+}
+
+#[test]
 fn test_language_defaults_to_english() {
     let settings = Settings::default();
     assert_eq!(settings.ui_language, Language::English);

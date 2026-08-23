@@ -49,6 +49,11 @@ fn parse_start_at_login_command(command: &str) -> Option<(String, String)> {
         }
         return Some((exe.to_string(), extras.to_string()));
     }
+    let lowercase = command.to_ascii_lowercase();
+    if let Some(exe_end) = lowercase.find(".exe").map(|index| index + 4) {
+        let (exe, extras) = command.split_at(exe_end);
+        return Some((exe.to_string(), extras.to_string()));
+    }
     if let Some((exe, extras)) = command.split_once(char::is_whitespace) {
         if exe.is_empty() {
             return None;
