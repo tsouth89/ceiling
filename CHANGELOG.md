@@ -6,6 +6,7 @@
 - **A leaked `serve.token` is rotated on Windows, not just Unix.** After SBS-953, a world-readable token was replaced on Unix, but Windows still tightened the DACL and reused the same secret. The ACL is now inspected before tightening; if anyone other than the current user, SYSTEM, or Administrators can read the file, the token is replaced. Closes SBS-1043.
 
 ### Fixed
+- **Codex latest-session cost follows transcript time.** Copying or touching an older rollout no longer makes it replace a newer session in local cost summaries. Fixes #271.
 - **A corrupt `window_geometry.json` no longer wipes other windows' saved positions.** SBS-1024 locked the persist so two surfaces could not drop each other's keys, but a file that would not read or parse still loaded as empty defaults, and the next save replaced the whole file with only the window that just moved. Persist now refuses that write — the same fail-closed rule API keys already use — instead of rewriting siblings to an empty store. Closes SBS-1041.
 - **Loading settings no longer rewrites another install's start-at-login command.** Every `Settings::load` repaired `HKCU\...\Run\Ceiling` whenever the value was not the quoted path of this process. A portable CLI or a second tree therefore replaced the installed desktop's startup entry, and any extra arguments were stripped. Repair now runs only when this process owns that entry — the same intended exe, or a stale `codexbar-cli.exe` / `codexbar-desktop.exe` sibling in the same directory — and leaves custom arguments and other trees alone. Closes SBS-1053.
 - **MCP `get_status` no longer hides an exhausted Weekly behind a healthy session.** Top-level `remaining_percent` copied only `usage.primary`, so a Claude/Codex 5-hour window with room made the advertised cap-check sink look fine while Weekly was already at 100%. It now uses the same constraining-window ranking as the desktop strip across primary, secondary, and tertiary (exhausted first, then highest used %). Closes SBS-1055.
@@ -1561,4 +1562,3 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
-
