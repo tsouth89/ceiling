@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { TAB_META } from "./Settings";
+import settingsSource from "./Settings.tsx?raw";
 
 /** Live Settings shell tabs, in render order. SBS-872. */
 const LIVE_SETTINGS_TABS = [
@@ -31,8 +30,7 @@ describe("Settings navigation", () => {
   });
 
   it("does not overwrite restored window geometry on mount", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/surfaces/Settings.tsx"), "utf8");
-    expect(source).not.toContain("setSize(");
-    expect(source).not.toContain("setPosition(");
+    expect(settingsSource).not.toContain("setSize(");
+    expect(settingsSource).not.toContain("setPosition(");
   });
 });
