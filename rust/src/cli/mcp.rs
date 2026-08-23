@@ -761,7 +761,8 @@ mod tests {
                 &default_enabled(),
             );
             assert_eq!(
-                payload["remaining_percent"], 0.0,
+                payload["remaining_percent"],
+                0.0,
                 "exhausted Weekly must bind remaining_percent for {}: {payload}",
                 provider.cli_name()
             );
