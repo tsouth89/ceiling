@@ -65,8 +65,10 @@ export function AccountsPanel() {
     setError(null);
     try {
       applyResult(await op());
+      return true;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -96,7 +98,7 @@ export function AccountsPanel() {
 interface ProviderProps {
   provider: ProviderAccountsBridge;
   busy: boolean;
-  onRun: (op: () => Promise<ProviderAccountsBridge>) => Promise<void>;
+  onRun: (op: () => Promise<ProviderAccountsBridge>) => Promise<boolean>;
 }
 
 function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
@@ -129,14 +131,14 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
 
   const handleAdd = async () => {
     if (!dir.trim()) return;
-    await onRun(() =>
+    const added = await onRun(() =>
       addDirectoryAccount(
         provider.providerId,
         dir.trim(),
         label.trim() || null,
       ),
     );
-    resetForm();
+    if (added) resetForm();
   };
 
   const cli = LOGIN_CLI[provider.providerId] ?? provider.providerId;
