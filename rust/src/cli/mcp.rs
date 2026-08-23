@@ -812,4 +812,13 @@ mod tests {
         assert_eq!(window.window_minutes, Some(10_080));
         assert_eq!(window.remaining_percent(), 50.0);
     }
+
+    #[test]
+    fn status_remaining_is_null_when_no_measured_window_exists() {
+        let entry = WidgetProviderEntry::new(ProviderId::Claude, Utc::now());
+        let snap = WidgetSnapshot::new(vec![entry], Utc::now());
+        let payload = status_without_spend_scan(Some(&snap), Some("claude"), &default_enabled());
+
+        assert!(payload["remaining_percent"].is_null());
+    }
 }
