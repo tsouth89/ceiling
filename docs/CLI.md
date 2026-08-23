@@ -135,7 +135,7 @@ Useful options:
 - `--allow-unauthenticated` - skip the per-user bearer token. Any local process can then read usage. Existing scripts that do not send `Authorization` need this flag.
 - `--include-identity` - include account email, organization, login method, and raw provider errors. Those fields are omitted by default.
 
-On first start, Ceiling prints an `Authorization: Bearer …` token and stores it at `<user config dir>/Ceiling/serve.token` (current-user ACL on Windows, mode `0600` elsewhere). Later starts print only the path. `/health` stays unauthenticated. `/usage` and `/cost` require the token unless `--allow-unauthenticated` is set.
+On first start, Ceiling prints an `Authorization: Bearer …` token and stores it at `<user config dir>/Ceiling/serve.token` (current-user ACL on Windows, mode `0600` elsewhere). Later starts print only the path. If an existing token file is readable by other users, Ceiling replaces it with a new token rather than tightening the ACL and reusing the leaked value. `/health` stays unauthenticated. `/usage` and `/cost` require the token unless `--allow-unauthenticated` is set.
 
 Example:
 

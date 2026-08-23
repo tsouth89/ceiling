@@ -561,17 +561,14 @@ fn load_or_create_serve_token_at(path: PathBuf) -> io::Result<ServeToken> {
 }
 
 fn read_existing_serve_token(path: PathBuf) -> io::Result<ServeToken> {
-    // Stat before chmod. A token that was world-readable is already leaked;
-    // tightening the mode cannot un-expose it, so treat it as invalid and let
-    // the caller mint a replacement.
-    #[cfg(unix)]
-    {
-        if serve_token_mode_is_too_open(&path)? {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "serve token file is readable by other users",
-            ));
-        }
+    // Inspect ACL/mode before tightening. A token that was readable by other
+    // users is already leaked; chmod / DACL rewrite cannot un-expose it, so
+    // treat it as invalid and let the caller mint a replacement.
+    if serve_token_mode_is_too_open(&path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "serve token file is readable by other users",
+        ));
     }
     let token = std::fs::read_to_string(&path)?;
     let token = token.trim();
@@ -616,24 +613,31 @@ fn create_new_serve_token(path: &Path) -> io::Result<String> {
 }
 
 fn validate_existing_token_file(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        if serve_token_mode_is_too_open(path)? {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "serve token file is readable by other users",
-            ));
-        }
+    if serve_token_mode_is_too_open(path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "serve token file is readable by other users",
+        ));
     }
-    let _ = path;
     Ok(())
 }
 
-#[cfg(unix)]
 fn serve_token_mode_is_too_open(path: &Path) -> io::Result<bool> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
-    Ok(mode & 0o077 != 0)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+        Ok(mode & 0o077 != 0)
+    }
+    #[cfg(windows)]
+    {
+        crate::windows_security::path_dacl_is_readable_by_others(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Ok(false)
+    }
 }
 
 fn protect_token_file(path: &std::path::Path) -> io::Result<()> {
@@ -759,6 +763,10 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+        #[cfg(windows)]
+        {
+            assert!(!crate::windows_security::path_dacl_is_readable_by_others(&path).unwrap());
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -778,10 +786,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[cfg(unix)]
+    /// SBS-1043: Windows reused a leaked token after tightening the DACL.
+    /// Unix already rotated (SBS-953); both platforms now treat a too-open
+    /// ACL as invalid and mint a replacement.
+    #[cfg(any(unix, windows))]
     #[test]
     fn rotates_a_world_readable_serve_token_instead_of_reusing_it() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!(
             "ceiling-serve-token-open-{}",
             uuid::Uuid::new_v4().simple()
@@ -789,14 +799,30 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("serve.token");
         std::fs::write(&path, "leaked-token\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            crate::windows_security::grant_everyone_file_access(&path).unwrap();
+        }
 
         let loaded = load_or_create_serve_token_at(path.clone()).unwrap();
         assert!(loaded.created);
         assert_ne!(loaded.token, "leaked-token");
         assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), loaded.token);
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        #[cfg(windows)]
+        {
+            assert!(!crate::windows_security::path_dacl_is_readable_by_others(&path).unwrap());
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

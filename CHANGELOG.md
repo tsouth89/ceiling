@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Security
+- **A leaked `serve.token` is rotated on Windows, not just Unix.** After SBS-953, a world-readable token was replaced on Unix, but Windows still tightened the DACL and reused the same secret. The ACL is now inspected before tightening; if anyone other than the current user, SYSTEM, or Administrators can read the file, the token is replaced. Closes SBS-1043.
+
 ### Fixed
 - **Remembered window positions no longer drop a sibling when two surfaces save at once.** `window_geometry.json` was updated with an unlocked read-modify-write, so moving Settings while the float bar or Pop Out also wrote could replace the file with a snapshot that had never seen the other key. Geometry persist now holds the same cross-process state lock as settings and credentials. Closes SBS-1024.
 - **`codexbar` with no subcommand now runs `usage`.** CLI.md and `--help` already called usage the default command, but a bare `codexbar` printed an error asking for an explicit subcommand. It now does what those docs said. Closes SBS-1026.
