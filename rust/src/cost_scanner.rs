@@ -3596,26 +3596,30 @@ mod tests {
         path
     }
 
-    /// SBS-1056: cancel must stop a multi-file Claude walk after the file that
-    /// saw the flag, not finish the rest of the corpus.
+    /// SBS-1056: the report walk hands this same flag into `parse_batch`.
+    /// Cancel after the first file must not parse the rest of the chunk.
     #[test]
-    fn a_claude_file_walk_stops_when_cancelled_mid_scan() {
+    fn parse_batch_stops_when_cancelled_mid_scan() {
         let dir = tempfile::tempdir().unwrap();
         let files = [
             write_claude_transcript(dir.path(), "a.jsonl", 1),
             write_claude_transcript(dir.path(), "b.jsonl", 2),
             write_claude_transcript(dir.path(), "c.jsonl", 3),
         ];
-        let cutoff = Utc::now() - Duration::days(2);
         let cancel = AtomicBool::new(false);
-        let mut seen = 0;
-        for_each_claude_file(&files, &cutoff, Some(&cancel), |_, _| {
-            seen += 1;
-            cancel.store(true, Ordering::Relaxed);
-        });
+        let parsed = parse_batch(
+            &files,
+            1,
+            &|_path| {
+                cancel.store(true, Ordering::Relaxed);
+                1u32
+            },
+            Some(&cancel),
+        );
         assert_eq!(
-            seen, 1,
-            "cancellation after the first file must not visit the rest"
+            parsed.len(),
+            1,
+            "cancellation after the first file must not parse the rest"
         );
     }
 
