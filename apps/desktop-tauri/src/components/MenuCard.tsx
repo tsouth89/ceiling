@@ -33,18 +33,25 @@ export function CopyIconButton({ text }: { text: string }) {
   const { t } = useLocale();
   const [state, setState] = useState<"idle" | "success" | "failure">("idle");
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const copyRequestRef = useRef(0);
 
   const handleCopy = useCallback(async () => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
+    const requestId = ++copyRequestRef.current;
+    let next: "success" | "failure";
     try {
       await navigator.clipboard.writeText(text);
-      setState("success");
+      next = "success";
     } catch {
-      setState("failure");
+      next = "failure";
     }
+    if (requestId !== copyRequestRef.current) return;
+    setState(next);
     timeoutRef.current = setTimeout(() => {
+      if (requestId !== copyRequestRef.current) return;
       setState("idle");
     }, 900);
   }, [text]);

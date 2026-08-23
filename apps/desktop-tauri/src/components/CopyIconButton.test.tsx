@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -103,6 +103,56 @@ describe("CopyIconButton", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
     }, { timeout: 1500 });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the latest copy result when writes settle out of order", async () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const writeTextSpy = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: writeTextSpy,
+      },
+    });
+
+    render(
+      <LocaleProvider>
+        <CopyIconButton text="test-race" />
+      </LocaleProvider>,
+    );
+
+    const btn = await screen.findByRole("button", { name: "Copy" });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+
+    expect(writeTextSpy).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve();
+    });
+    const successBtn = await screen.findByRole("button", { name: "Copied" });
+    expect(successBtn).toHaveTextContent("✓");
+
+    await act(async () => {
+      first.reject(new Error("Clipboard access denied"));
+    });
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy error" })).toBeNull();
 
     vi.unstubAllGlobals();
   });
