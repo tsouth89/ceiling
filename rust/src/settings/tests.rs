@@ -776,6 +776,34 @@ fn test_start_at_login_repairs_unquoted_owned_command_with_spaces() {
 }
 
 #[test]
+fn test_start_at_login_parses_an_exe_named_parent_directory() {
+    let path = std::path::PathBuf::from(r"C:\Users\person.exe\Ceiling\ceiling.exe");
+    let command = path.display().to_string();
+
+    assert!(Settings::start_at_login_command_needs_repair(
+        &command, &path
+    ));
+}
+
+#[test]
+fn test_start_at_login_ownership_includes_custom_args_but_excludes_foreign_entries() {
+    let installed = std::path::PathBuf::from(r"C:\Program Files\Ceiling\ceiling.exe");
+
+    assert!(Settings::start_at_login_command_is_owned(
+        r#""C:\Program Files\Ceiling\ceiling.exe" --minimized"#,
+        &installed
+    ));
+    assert!(!Settings::start_at_login_command_is_owned(
+        r#""D:\Portable\Ceiling\ceiling.exe""#,
+        &installed
+    ));
+    assert!(!Settings::start_at_login_command_is_owned(
+        r#""C:\Tools\other.exe""#,
+        &installed
+    ));
+}
+
+#[test]
 fn test_language_defaults_to_english() {
     let settings = Settings::default();
     assert_eq!(settings.ui_language, Language::English);

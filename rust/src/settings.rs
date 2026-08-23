@@ -50,9 +50,12 @@ fn parse_start_at_login_command(command: &str) -> Option<(String, String)> {
         return Some((exe.to_string(), extras.to_string()));
     }
     let lowercase = command.to_ascii_lowercase();
-    if let Some(exe_end) = lowercase.find(".exe").map(|index| index + 4) {
+    for (index, _) in lowercase.match_indices(".exe") {
+        let exe_end = index + 4;
         let (exe, extras) = command.split_at(exe_end);
-        return Some((exe.to_string(), extras.to_string()));
+        if extras.is_empty() || extras.starts_with(char::is_whitespace) {
+            return Some((exe.to_string(), extras.to_string()));
+        }
     }
     if let Some((exe, extras)) = command.split_once(char::is_whitespace) {
         if exe.is_empty() {
@@ -1139,6 +1142,13 @@ impl Settings {
         existing != Self::start_at_login_command(current_exe)
     }
 
+    fn start_at_login_command_is_owned(existing: &str, current_exe: &std::path::Path) -> bool {
+        let intended = Self::start_at_login_exe_path(current_exe);
+        parse_start_at_login_command(existing).is_some_and(|(existing_exe, _)| {
+            owns_start_at_login_entry(std::path::Path::new(&existing_exe), &intended)
+        })
+    }
+
     #[cfg(target_os = "windows")]
     pub fn apply_start_at_login_registry(enabled: bool) -> anyhow::Result<()> {
         use winreg::RegKey;
@@ -1155,7 +1165,14 @@ impl Settings {
             let command = Self::start_at_login_command(&exe_path);
             run_key.set_value("Ceiling", &command)?;
         } else {
-            let _ = run_key.delete_value("Ceiling");
+            let existing = run_key.get_value::<String, _>("Ceiling").ok();
+            let current_exe = std::env::current_exe()?;
+            if existing
+                .as_deref()
+                .is_some_and(|command| Self::start_at_login_command_is_owned(command, &current_exe))
+            {
+                let _ = run_key.delete_value("Ceiling");
+            }
         }
 
         Ok(())
@@ -1178,19 +1195,23 @@ impl Settings {
             return false;
         };
 
-        match std::env::current_exe() {
-            Ok(exe_path) if Self::start_at_login_command_needs_repair(&existing, &exe_path) => {
-                let command = Self::start_at_login_command(&exe_path);
-                if let Err(error) = run_key.set_value("Ceiling", &command) {
-                    tracing::warn!("Failed to repair Ceiling start-at-login command: {error}");
-                }
-            }
+        let exe_path = match std::env::current_exe() {
+            Ok(exe_path) => exe_path,
             Err(error) => {
                 tracing::warn!(
                     "Failed to resolve current executable for start-at-login sync: {error}"
                 );
+                return false;
             }
-            _ => {}
+        };
+        if !Self::start_at_login_command_is_owned(&existing, &exe_path) {
+            return false;
+        }
+        if Self::start_at_login_command_needs_repair(&existing, &exe_path) {
+            let command = Self::start_at_login_command(&exe_path);
+            if let Err(error) = run_key.set_value("Ceiling", &command) {
+                tracing::warn!("Failed to repair Ceiling start-at-login command: {error}");
+            }
         }
 
         true
@@ -1216,7 +1237,11 @@ impl Settings {
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         if let Ok(run_key) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") {
-            run_key.get_value::<String, _>("Ceiling").is_ok()
+            let existing = run_key.get_value::<String, _>("Ceiling").ok();
+            let current_exe = std::env::current_exe().ok();
+            existing
+                .zip(current_exe)
+                .is_some_and(|(command, exe)| Self::start_at_login_command_is_owned(&command, &exe))
         } else {
             false
         }
