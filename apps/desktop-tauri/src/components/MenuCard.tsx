@@ -32,7 +32,7 @@ import { maskEmail } from "../lib/privacy";
 export function CopyIconButton({ text }: { text: string }) {
   const { t } = useLocale();
   const [state, setState] = useState<"idle" | "success" | "failure">("idle");
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyRequestRef = useRef(0);
 
   const handleCopy = useCallback(async () => {
