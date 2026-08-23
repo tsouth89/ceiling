@@ -1010,13 +1010,27 @@ fn notify_predictive_pace(
         return;
     }
 
-    let token_account_id = token_accounts
-        .get(&provider)
-        .and_then(ProviderAccountData::active_account)
-        .map(|account| account.id);
+    // Directory seats already stamp `account_id`; threshold toasts key on it.
+    // A provider-global token account is only a fallback when no seat is
+    // present — using it first made same-email seats share one pace key.
+    let directory_account_id = snapshot
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let token_account_id = if directory_account_id.is_some() {
+        None
+    } else {
+        token_accounts
+            .get(&provider)
+            .and_then(ProviderAccountData::active_account)
+            .map(|account| account.id)
+    };
     let Some(identity) = predictive_warning_identity(
         &snapshot.source_label,
         snapshot.account_email.as_deref(),
+        directory_account_id,
+        snapshot.account_organization.as_deref(),
         token_account_id,
     ) else {
         return;
@@ -1060,26 +1074,46 @@ fn notify_predictive_pace(
 /// per cycle per account rather than once per refresh.
 ///
 /// The dedupe key already carries the provider, so this only has to separate
-/// accounts within one. Providers that never report an account are still
-/// warnable: one unnamed account is still an account.
+/// accounts within one. Directory seats use the same `account_id` threshold
+/// toasts already key on; organization is included when that id is missing,
+/// because two seats can share an email across orgs (SBS-1057). A
+/// provider-global token-account UUID is used only when no directory seat
+/// is present: it cannot tell those seats apart. Providers that never
+/// report an account are still warnable: one unnamed account is still an
+/// account.
 fn predictive_warning_identity(
     source_label: &str,
     account_email: Option<&str>,
+    account_id: Option<&str>,
+    organization: Option<&str>,
     token_account_id: Option<uuid::Uuid>,
 ) -> Option<String> {
+    if let Some(account_id) = trimmed_lower(account_id) {
+        return Some(format!("account:{account_id}"));
+    }
     if let Some(id) = token_account_id {
         return Some(format!("token-account:{}", id.as_hyphenated()));
     }
     let source = source_label.trim().to_ascii_lowercase();
-    let account = account_email
-        .map(|email| email.trim().to_ascii_lowercase())
-        .filter(|email| !email.is_empty());
-    match (source.is_empty(), account) {
-        (false, Some(account)) => Some(format!("{source}:{account}")),
-        (false, None) => Some(source),
-        (true, Some(account)) => Some(account),
-        (true, None) => None,
+    let email = trimmed_lower(account_email);
+    let org = trimmed_lower(organization);
+    let mut parts = Vec::new();
+    if !source.is_empty() {
+        parts.push(source);
     }
+    if let Some(email) = email {
+        parts.push(email);
+    }
+    if let Some(org) = org {
+        parts.push(format!("org:{org}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(":"))
+}
+
+fn trimmed_lower(value: Option<&str>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
 }
 
 /// Which cadence a window represents, so the warning names the right thing.
@@ -1128,16 +1162,24 @@ mod predictive_warning_tests {
         let account_id = uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
 
         assert_eq!(
-            predictive_warning_identity("cli", Some("Person@Example.com"), None).as_deref(),
+            predictive_warning_identity("cli", Some("Person@Example.com"), None, None, None)
+                .as_deref(),
             Some("cli:person@example.com")
         );
         assert_eq!(
-            predictive_warning_identity("oauth", Some("Person@Example.com"), None).as_deref(),
+            predictive_warning_identity("oauth", Some("Person@Example.com"), None, None, None)
+                .as_deref(),
             Some("oauth:person@example.com")
         );
         assert_eq!(
-            predictive_warning_identity("oauth", Some("Person@Example.com"), Some(account_id))
-                .as_deref(),
+            predictive_warning_identity(
+                "oauth",
+                Some("Person@Example.com"),
+                None,
+                None,
+                Some(account_id)
+            )
+            .as_deref(),
             Some("token-account:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         );
     }
@@ -1147,14 +1189,72 @@ mod predictive_warning_tests {
         // Providers that never report an account still get one stable identity,
         // so they can be warned instead of silently skipped.
         assert_eq!(
-            predictive_warning_identity("oauth", None, None).as_deref(),
+            predictive_warning_identity("oauth", None, None, None, None).as_deref(),
             Some("oauth")
         );
         assert_eq!(
-            predictive_warning_identity("cli", Some("  "), None).as_deref(),
+            predictive_warning_identity("cli", Some("  "), None, None, None).as_deref(),
             Some("cli")
         );
-        assert_eq!(predictive_warning_identity("  ", None, None), None);
+        assert_eq!(
+            predictive_warning_identity("  ", None, None, None, None),
+            None
+        );
+    }
+
+    /// Two directory seats can share a login email (personal vs work org).
+    /// After #379 they stamp distinct `account_id`s; threshold toasts key on
+    /// those. Pace warnings used to prefer one provider-global token account
+    /// or source+email, so both seats shared a key (SBS-1057).
+    #[test]
+    fn predictive_warning_identity_separates_directory_seats_that_share_an_email() {
+        let token_account = uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+
+        let personal = predictive_warning_identity(
+            "oauth",
+            Some("Same@Example.com"),
+            Some("acct-personal"),
+            Some("Personal"),
+            Some(token_account),
+        );
+        let work = predictive_warning_identity(
+            "oauth",
+            Some("Same@Example.com"),
+            Some("acct-work"),
+            Some("Acme"),
+            Some(token_account),
+        );
+
+        assert_eq!(personal.as_deref(), Some("account:acct-personal"));
+        assert_eq!(work.as_deref(), Some("account:acct-work"));
+        assert_ne!(personal, work);
+    }
+
+    #[test]
+    fn predictive_warning_identity_uses_organization_when_email_is_shared() {
+        // Ambient seats have no directory id. Organization is what keeps a
+        // personal workspace from clearing or suppressing a work one.
+        let personal = predictive_warning_identity(
+            "oauth",
+            Some("Same@Example.com"),
+            None,
+            Some("Personal"),
+            None,
+        );
+        let work = predictive_warning_identity(
+            "oauth",
+            Some("Same@Example.com"),
+            None,
+            Some("Acme"),
+            None,
+        );
+
+        assert_eq!(
+            personal.as_deref(),
+            Some("oauth:same@example.com:org:personal")
+        );
+        assert_eq!(work.as_deref(), Some("oauth:same@example.com:org:acme"));
+        assert_ne!(personal, work);
     }
 
     #[test]
