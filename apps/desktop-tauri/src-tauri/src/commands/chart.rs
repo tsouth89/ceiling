@@ -2936,12 +2936,13 @@ mod tests {
     }
 
     fn write_claude_chart_transcript(dir: &std::path::Path, name: &str, index: u32) {
-        let ts = (Utc::now() - chrono::Duration::minutes(index as i64)).to_rfc3339();
+        let ts =
+            (Utc::now() - chrono::Duration::minutes(index as i64)).format("%Y-%m-%dT%H:%M:%S%.3fZ");
         std::fs::write(
             dir.join(name),
             format!(
                 r#"{{"type":"assistant","timestamp":"{ts}","requestId":"req-{index}","message":{{"id":"msg-{index}","model":"claude-opus-4-8","usage":{{"input_tokens":10,"output_tokens":100}}}}}}"#
-            ),
+            ) + "\n",
         )
         .expect("write transcript");
     }
@@ -2972,13 +2973,9 @@ mod tests {
             Some(cancel),
         );
         assert!(
-            cancelled
-                .cost_history
-                .iter()
-                .all(|point| point.value == 0.0),
+            cancelled.cost_history.is_empty() && cancelled.local_usage.is_none(),
             "a cancelled scan must not keep paying the corpus"
         );
-        assert!(cancelled.local_usage.is_none());
 
         let full = build_provider_chart_data_with_cancel(
             "claude".into(),
