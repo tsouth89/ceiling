@@ -117,14 +117,14 @@ impl ZaiProvider {
             return Ok(cleaned);
         }
 
-        // Try Windows Credential Manager
-        match keyring::Entry::new(ZAI_CREDENTIAL_TARGET, "api_token") {
-            Ok(entry) => match entry.get_password() {
-                Ok(token) => Ok(token),
-                Err(_) => Self::api_token_from_env(),
-            },
-            Err(_) => Self::api_token_from_env(),
+        if let Some(token) = crate::keychain::get_secret(
+            crate::keychain::Scope::Any,
+            ZAI_CREDENTIAL_TARGET,
+            "api_token",
+        ) {
+            return Ok(token);
         }
+        Self::api_token_from_env()
     }
 
     fn api_token_from_env() -> Result<String, ProviderError> {

@@ -43,7 +43,7 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `show_all_token_accounts_in_menu` | boolean | `false` | Show all token accounts instead of collapsing behind switchers. Safe to edit. |
 | `provider_configs` | object | `{}` | Per-provider configuration map. See below. Safe to edit. |
 | `unrecognized_provider_configs` | object | `{}` | Written by Ceiling, not by you. Holds `provider_configs` entries whose provider id this build does not recognize, so they survive until a build that knows them folds them back in. Leave it unchanged. |
-| `disable_keychain_access` | boolean | `false` | Disable keychain-style credential reads where supported. Safe to edit. |
+| `disable_keychain_access` | boolean | `false` | Disable all OS keychain reads and writes (SBS-1023). Credential paths skip the keyring and fall through to Preferences, environment, or files. Safe to edit. |
 | `hide_personal_info` | boolean | `false` | Hide emails and account names for streaming/sharing. Safe to edit. |
 | `update_channel` | string | `"stable"` | `"stable"` or `"beta"`. Safe to edit. |
 | `provider_metrics` | object | `{}` | Per-provider metric preference by CLI name; values include `automatic`, `session`, `weekly`, `model`, `tertiary`, `credits`, `extraUsage`, and `average`. Safe to edit. |
@@ -95,7 +95,7 @@ Each key is a provider CLI name. Values are objects with optional fields:
 | `openai_web_extras` | boolean | Codex-only; opt out of OpenAI web extras surfaces. |
 | `spark_usage_visible` | boolean | Codex-only; show Codex Spark quota rows. |
 | `historical_tracking` | boolean | Codex-only; default `false`. |
-| `avoid_keychain_prompts` | boolean | Claude-only; default `false`. |
+| `avoid_keychain_prompts` | boolean | Claude-only; default `false`. When true, Claude does not read or write the OS keychain (SBS-1023). |
 
 Legacy flat fields such as `codex_cookie_source`, `claude_cookie_source`, and
 `alibaba_api_region` are accepted on load and migrated into `provider_configs`.

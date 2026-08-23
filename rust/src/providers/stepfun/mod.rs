@@ -499,25 +499,21 @@ struct OsTokenSecretStore;
 
 impl TokenSecretStore for OsTokenSecretStore {
     fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
-        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
-        match entry.get_password() {
+        match crate::keychain::get_password(crate::keychain::Scope::Any, service, user) {
             Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
-            Ok(_) => Ok(None),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Ok(_) | Err(crate::keychain::Error::NotFound) => Ok(None),
             Err(error) => Err(error.to_string()),
         }
     }
 
     fn set(&self, service: &str, user: &str, value: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
-        entry.set_password(value).map_err(|error| error.to_string())
+        crate::keychain::set_password(crate::keychain::Scope::Any, service, user, value)
+            .map_err(|error| error.to_string())
     }
 
     fn delete(&self, service: &str, user: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(service, user).map_err(|error| error.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
+        match crate::keychain::delete_credential(crate::keychain::Scope::Any, service, user) {
+            Ok(()) | Err(crate::keychain::Error::NotFound) => Ok(()),
             Err(error) => Err(error.to_string()),
         }
     }
@@ -788,6 +784,28 @@ mod tests {
         assert_eq!(
             resolve_token_in(&FailingDeleteStore, None, STEPFUN_CREDENTIAL_TARGET, &[]).unwrap(),
             "leftover-oasis-token"
+        );
+    }
+
+    #[test]
+    fn clear_persisted_credentials_fails_closed_when_keychain_is_disabled() {
+        let _guard = crate::keychain::with_mock_store(
+            false,
+            &[(STEPFUN_CREDENTIAL_TARGET, "api_key", "leftover")],
+        );
+        let error = clear_token_secret(&OsTokenSecretStore)
+            .expect_err("a disabled keychain must fail revoke");
+        let message = error.to_string();
+        assert!(
+            message.contains("Could not delete StepFun keyring token")
+                && message.contains("disabled"),
+            "got {error}"
+        );
+        assert!(
+            OsTokenSecretStore
+                .get(STEPFUN_CREDENTIAL_TARGET, "api_key")
+                .is_err(),
+            "Disabled must not look like a missing token"
         );
     }
 

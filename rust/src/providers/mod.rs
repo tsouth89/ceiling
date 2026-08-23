@@ -139,9 +139,8 @@ pub(crate) fn resolve_api_key(
     {
         return Ok(key.trim().to_string());
     }
-    if let Ok(entry) = keyring::Entry::new(credential_target, "api_key")
-        && let Ok(key) = entry.get_password()
-        && !key.trim().is_empty()
+    if let Some(key) =
+        crate::keychain::get_secret(crate::keychain::Scope::Any, credential_target, "api_key")
     {
         return Ok(key);
     }
@@ -246,5 +245,32 @@ mod browser_cookie_policy_tests {
     fn clear_persisted_credentials_is_noop_for_providers_without_a_shadow_store() {
         assert!(clear_persisted_credentials(crate::core::ProviderId::Claude).is_ok());
         assert!(clear_persisted_credentials(crate::core::ProviderId::Codex).is_ok());
+    }
+
+    /// SBS-1023: a keyring-resident API key must not authenticate when the
+    /// user disabled keychain access. Without the gate this returns the mock
+    /// secret.
+    #[test]
+    fn resolve_api_key_skips_keyring_when_disabled() {
+        let _guard = crate::keychain::with_mock_store(
+            false,
+            &[("ceiling-sbs-1023", "api_key", "from-keyring")],
+        );
+        let error = resolve_api_key(None, "ceiling-sbs-1023", &[]).expect_err("skip");
+        assert!(matches!(error, crate::core::ProviderError::NotInstalled(_)));
+    }
+
+    /// SBS-1023: the same mock secret is used when access is allowed, so the
+    /// skip test above is not a missing-entry false pass.
+    #[test]
+    fn resolve_api_key_uses_keyring_when_enabled() {
+        let _guard = crate::keychain::with_mock_store(
+            true,
+            &[("ceiling-sbs-1023", "api_key", "from-keyring")],
+        );
+        assert_eq!(
+            resolve_api_key(None, "ceiling-sbs-1023", &[]).expect("keyring"),
+            "from-keyring"
+        );
     }
 }

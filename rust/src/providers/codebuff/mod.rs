@@ -75,8 +75,12 @@ impl CodebuffProvider {
     }
 
     fn api_key_from_keyring() -> Option<String> {
-        let entry = keyring::Entry::new(CODEBUFF_CREDENTIAL_TARGET, "api_key").ok()?;
-        clean_api_key(&entry.get_password().ok()?)
+        crate::keychain::get_secret(
+            crate::keychain::Scope::Any,
+            CODEBUFF_CREDENTIAL_TARGET,
+            "api_key",
+        )
+        .and_then(|key| clean_api_key(&key))
     }
 
     fn api_key_from_env() -> Option<String> {

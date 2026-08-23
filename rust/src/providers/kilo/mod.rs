@@ -200,11 +200,11 @@ fn direct_kilo_api_key(api_key: Option<&str>) -> Option<String> {
 }
 
 fn keyring_kilo_api_key() -> Option<String> {
-    keyring::Entry::new(KILO_CREDENTIAL_TARGET, "api_key")
-        .ok()?
-        .get_password()
-        .ok()
-        .filter(|token| !token.is_empty())
+    crate::keychain::get_secret(
+        crate::keychain::Scope::Any,
+        KILO_CREDENTIAL_TARGET,
+        "api_key",
+    )
 }
 
 fn env_kilo_api_key() -> Option<String> {

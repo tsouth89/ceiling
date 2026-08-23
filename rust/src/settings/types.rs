@@ -305,7 +305,7 @@ pub struct ProviderConfig {
     /// Codex-only: enable historical usage tracking in UI.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub historical_tracking: bool,
-    /// Claude-only: avoid keychain prompts when reading credentials.
+    /// Claude-only: skip OS keychain reads and token writes (SBS-1023).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub avoid_keychain_prompts: bool,
 }

@@ -12,6 +12,7 @@ pub mod cost_scanner;
 pub mod cursor_activity;
 mod grok_costs;
 pub mod host;
+mod keychain;
 pub mod locale;
 pub mod logging;
 pub mod login;
