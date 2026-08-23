@@ -7,6 +7,7 @@
 
 ### Fixed
 - **`usage --all-accounts` now fetches every configured Codex and Claude account.** Account fetches run with bounded concurrency, preserve configured order, and report failures independently. Text and JSON identify each configured account while the default output remains unchanged. Fixes #274.
+- **The detached Settings window now reopens where you left it.** Its saved size and position are restored and clamped on screen instead of being overwritten by a second frontend resize on every open. Closes #275.
 - **`serve --refresh-interval` now controls response caching.** Successful usage and cost responses are cached separately by provider selection for the requested TTL. A zero interval disables caching, and provider failures are retried on the next request. Fixes #273.
 - **Codex latest-session cost follows transcript time.** Copying or touching an older rollout no longer makes it replace a newer session in local cost summaries. Fixes #271.
 - **A corrupt `window_geometry.json` no longer wipes other windows' saved positions.** SBS-1024 locked the persist so two surfaces could not drop each other's keys, but a file that would not read or parse still loaded as empty defaults, and the next save replaced the whole file with only the window that just moved. Persist now refuses that write — the same fail-closed rule API keys already use — instead of rewriting siblings to an empty store. Closes SBS-1041.

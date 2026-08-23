@@ -3,6 +3,8 @@
 
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl};
 
+use crate::surface::SurfaceMode;
+
 const SETTINGS_LABEL: &str = "settings";
 const SETTINGS_WIDTH: f64 = 720.0;
 const SETTINGS_HEIGHT: f64 = 580.0;
@@ -22,9 +24,17 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
 
     let url = WebviewUrl::App(format!("index.html?window=settings&tab={tab}").into());
 
+    let stored = crate::geometry_store::load(SurfaceMode::Settings);
+    let width = stored
+        .and_then(|geometry| geometry.width)
+        .map_or(SETTINGS_WIDTH, f64::from);
+    let height = stored
+        .and_then(|geometry| geometry.height)
+        .map_or(SETTINGS_HEIGHT, f64::from);
+
     let win = tauri::WebviewWindowBuilder::new(app, SETTINGS_LABEL, url)
         .title("Ceiling Settings")
-        .inner_size(SETTINGS_WIDTH, SETTINGS_HEIGHT)
+        .inner_size(width, height)
         .decorations(false)
         .shadow(false)
         .theme(Some(tauri::Theme::Dark))
@@ -35,20 +45,45 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
     // Force DWM caption to dark; keep WS_THICKFRAME since window is resizable
     super::dwm::force_dark_caption_resizable(&win);
 
-    // Manually center: Tauri's .center() is unreliable on Windows when
-    // called from async commands. Compute position from the primary monitor.
-    if let Ok(Some(monitor)) = win.primary_monitor() {
-        let pos = monitor.position();
-        let size = monitor.size();
-        let scale = win.scale_factor().unwrap_or(1.0);
-        let win_w = (SETTINGS_WIDTH * scale) as i32;
-        let win_h = (SETTINGS_HEIGHT * scale) as i32;
-        let x = pos.x + (size.width as i32 - win_w) / 2;
-        let y = pos.y + (size.height as i32 - win_h) / 2;
+    if let Some((x, y)) = super::position::default_surface_position(app, SurfaceMode::Settings) {
         let _ = win.set_position(PhysicalPosition::new(x, y));
     }
 
     Ok(())
+}
+
+/// Persist move and resize events for the detached Settings window.
+pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -> bool {
+    if window.label() != SETTINGS_LABEL {
+        return false;
+    }
+
+    if matches!(
+        event,
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+    ) && !window.is_maximized().unwrap_or(false)
+        && !window.is_minimized().unwrap_or(false)
+        && let Ok(position) = window.outer_position()
+    {
+        let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+        let logical_size = window.outer_size().ok().map(|size| {
+            (
+                (size.width as f64 / scale).round().max(1.0) as u32,
+                (size.height as f64 / scale).round().max(1.0) as u32,
+            )
+        });
+        crate::geometry_store::save(
+            SurfaceMode::Settings,
+            crate::geometry_store::StoredGeometry {
+                x: position.x,
+                y: position.y,
+                width: logical_size.map(|size| size.0),
+                height: logical_size.map(|size| size.1),
+            },
+        );
+    }
+
+    true
 }
 
 /// Dismiss Settings without exiting CodexBar.
