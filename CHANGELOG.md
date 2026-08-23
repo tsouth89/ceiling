@@ -6,6 +6,7 @@
 - **A leaked `serve.token` is rotated on Windows, not just Unix.** After SBS-953, a world-readable token was replaced on Unix, but Windows still tightened the DACL and reused the same secret. The ACL is now inspected before tightening; if anyone other than the current user, SYSTEM, or Administrators can read the file, the token is replaced. Closes SBS-1043.
 
 ### Fixed
+- **`serve --refresh-interval` now controls response caching.** Successful usage and cost responses are cached separately by provider selection for the requested TTL. A zero interval disables caching, and provider failures are retried on the next request. Fixes #273.
 - **Loading settings no longer rewrites another install's start-at-login command.** Every `Settings::load` repaired `HKCU\...\Run\Ceiling` whenever the value was not the quoted path of this process. A portable CLI or a second tree therefore replaced the installed desktop's startup entry, and any extra arguments were stripped. Repair now runs only when this process owns that entry — the same intended exe, or a stale `codexbar-cli.exe` / `codexbar-desktop.exe` sibling in the same directory — and leaves custom arguments and other trees alone. Closes SBS-1053.
 - **MCP `get_status` no longer hides an exhausted Weekly behind a healthy session.** Top-level `remaining_percent` copied only `usage.primary`, so a Claude/Codex 5-hour window with room made the advertised cap-check sink look fine while Weekly was already at 100%. It now uses the same constraining-window ranking as the desktop strip across primary, secondary, and tertiary (exhausted first, then highest used %). Closes SBS-1055.
 - **Remembered window positions no longer drop a sibling when two surfaces save at once.** `window_geometry.json` was updated with an unlocked read-modify-write, so moving Settings while the float bar or Pop Out also wrote could replace the file with a snapshot that had never seen the other key. Geometry persist now holds the same cross-process state lock as settings and credentials. Closes SBS-1024.
@@ -1560,5 +1561,4 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
-
 

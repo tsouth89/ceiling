@@ -3,7 +3,8 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use clap::Args;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -54,6 +55,42 @@ struct ServeState {
     include_identity: bool,
     settings: Settings,
     accounts: ConfiguredAccounts,
+    cache: ResponseCache,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum CacheKey {
+    Usage(Option<String>),
+    Cost(Option<String>),
+}
+
+struct ResponseCache {
+    ttl: Duration,
+    entries: Mutex<std::collections::HashMap<CacheKey, (Instant, String)>>,
+}
+
+impl ResponseCache {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            entries: Mutex::new(Default::default()),
+        }
+    }
+
+    fn get_at(&self, key: &CacheKey, now: Instant) -> Option<String> {
+        if self.ttl.is_zero() {
+            return None;
+        }
+        let entries = self.entries.lock().unwrap();
+        let (created_at, response) = entries.get(key)?;
+        (now.saturating_duration_since(*created_at) < self.ttl).then(|| response.clone())
+    }
+
+    fn insert_at(&self, key: CacheKey, response: String, now: Instant) {
+        if !self.ttl.is_zero() {
+            self.entries.lock().unwrap().insert(key, (now, response));
+        }
+    }
 }
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
@@ -77,6 +114,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         include_identity: args.include_identity,
         settings,
         accounts,
+        cache: ResponseCache::new(Duration::from_secs(args.refresh_interval)),
     });
     let limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
     // Printed once, immediately before the accept loop. Announcing it right
@@ -187,20 +225,36 @@ async fn route_request(request: &ServeRequest, state: &ServeState) -> String {
             serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }),
         ),
         "/usage" => {
-            usage_response(
+            let key = CacheKey::Usage(request.query.get("provider").cloned());
+            if let Some(response) = state.cache.get_at(&key, Instant::now()) {
+                return response;
+            }
+            let (response, cacheable) = usage_response_with_cacheability(
                 request.query.get("provider").map(String::as_str),
                 state.include_identity,
                 &state.settings,
                 &state.accounts,
             )
-            .await
+            .await;
+            if cacheable {
+                state.cache.insert_at(key, response.clone(), Instant::now());
+            }
+            response
         }
         "/cost" => {
-            cost_response(
+            let key = CacheKey::Cost(request.query.get("provider").cloned());
+            if let Some(response) = state.cache.get_at(&key, Instant::now()) {
+                return response;
+            }
+            let response = cost_response(
                 request.query.get("provider").map(String::as_str),
                 &state.settings,
             )
-            .await
+            .await;
+            if response.starts_with("HTTP/1.1 200") {
+                state.cache.insert_at(key, response.clone(), Instant::now());
+            }
+            response
         }
         _ => json_response(404, serde_json::json!({ "error": "not found" })),
     }
@@ -212,15 +266,29 @@ async fn usage_response(
     settings: &Settings,
     accounts: &ConfiguredAccounts,
 ) -> String {
+    usage_response_with_cacheability(provider, include_identity, settings, accounts)
+        .await
+        .0
+}
+
+async fn usage_response_with_cacheability(
+    provider: Option<&str>,
+    include_identity: bool,
+    settings: &Settings,
+    accounts: &ConfiguredAccounts,
+) -> (String, bool) {
     let selection = match ProviderSelection::from_arg(provider) {
         Ok(selection) => selection,
         Err(error) => {
-            return json_response(400, serde_json::json!({ "error": error.to_string() }));
+            return (
+                json_response(400, serde_json::json!({ "error": error.to_string() })),
+                false,
+            );
         }
     };
     let providers = match selection.resolved_ids(settings) {
         Ok(providers) => providers,
-        Err(error) => return no_enabled_providers_response(error.to_string()),
+        Err(error) => return (no_enabled_providers_response(error.to_string()), false),
     };
     let ctx = FetchContext {
         source_mode: SourceMode::Auto,
@@ -236,6 +304,7 @@ async fn usage_response(
     };
 
     let mut results = Vec::new();
+    let mut cacheable = true;
     for provider_id in providers {
         let provider = instantiate_provider(provider_id);
         match provider
@@ -248,13 +317,19 @@ async fn usage_response(
                 "usage": public_usage(result.usage, include_identity),
                 "cost": result.cost,
             })),
-            Err(error) => results.push(serde_json::json!({
-                "provider": provider_id.cli_name(),
-                "error": public_error(error.to_string(), include_identity),
-            })),
+            Err(error) => {
+                cacheable = false;
+                results.push(serde_json::json!({
+                    "provider": provider_id.cli_name(),
+                    "error": public_error(error.to_string(), include_identity),
+                }));
+            }
         }
     }
-    json_response(200, serde_json::Value::Array(results))
+    (
+        json_response(200, serde_json::Value::Array(results)),
+        cacheable,
+    )
 }
 
 async fn cost_response(provider: Option<&str>, settings: &Settings) -> String {
@@ -870,7 +945,59 @@ mod tests {
             include_identity: false,
             settings: Settings::default(),
             accounts: ConfiguredAccounts::default(),
+            cache: ResponseCache::new(Duration::from_secs(60)),
         }
+    }
+
+    #[test]
+    fn response_cache_hits_before_ttl_and_expires_at_ttl() {
+        let cache = ResponseCache::new(Duration::from_secs(10));
+        let key = CacheKey::Usage(Some("codex".into()));
+        let start = Instant::now();
+        cache.insert_at(key.clone(), "response".into(), start);
+
+        assert_eq!(
+            cache.get_at(&key, start + Duration::from_secs(9)),
+            Some("response".into())
+        );
+        assert_eq!(cache.get_at(&key, start + Duration::from_secs(10)), None);
+    }
+
+    #[test]
+    fn zero_ttl_disables_response_cache() {
+        let cache = ResponseCache::new(Duration::ZERO);
+        let key = CacheKey::Cost(None);
+        let now = Instant::now();
+        cache.insert_at(key.clone(), "response".into(), now);
+
+        assert_eq!(cache.get_at(&key, now), None);
+        assert!(cache.entries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn usage_cost_and_provider_selections_have_independent_cache_entries() {
+        let cache = ResponseCache::new(Duration::from_secs(60));
+        let now = Instant::now();
+        cache.insert_at(CacheKey::Usage(None), "all usage".into(), now);
+        cache.insert_at(
+            CacheKey::Usage(Some("codex".into())),
+            "codex usage".into(),
+            now,
+        );
+        cache.insert_at(CacheKey::Cost(None), "all cost".into(), now);
+
+        assert_eq!(
+            cache.get_at(&CacheKey::Usage(None), now),
+            Some("all usage".into())
+        );
+        assert_eq!(
+            cache.get_at(&CacheKey::Usage(Some("codex".into())), now),
+            Some("codex usage".into())
+        );
+        assert_eq!(
+            cache.get_at(&CacheKey::Cost(None), now),
+            Some("all cost".into())
+        );
     }
 
     fn settings_with_no_enabled_providers() -> Settings {
