@@ -3,6 +3,13 @@ use serde::Deserialize;
 use super::UtilizationScale;
 use crate::core::{CostSnapshot, NamedRateWindow, RateWindow, UsageSnapshot};
 
+/// Marks the required primary slot as a placeholder when `five_hour` or its
+/// utilization is absent. Glance surfaces treat this id as unknown, not 0%
+/// (SBS-1040 / SBS-876).
+pub(super) const CLAUDE_SESSION_WINDOW_ID: &str = "claude-session";
+const CLAUDE_SESSION_TITLE: &str = "Session (5h)";
+const NO_SESSION_USAGE_REPORTED: &str = "No usage reported";
+
 /// Usage payload shared by Claude's OAuth and web endpoints.
 ///
 /// The two endpoints expose the same windows with different casing and have
@@ -161,9 +168,20 @@ impl ClaudeUsageResponse {
         let primary = self
             .five_hour
             .as_ref()
-            .and_then(|window| convert(window, Some(300), scale))
-            .unwrap_or_else(|| RateWindow::new(0.0));
-        let mut snapshot = UsageSnapshot::new(primary);
+            .and_then(|window| convert(window, Some(300), scale));
+        // UsageSnapshot still needs a primary slot, but 0% is not a reading.
+        // Mark Session unavailable so glance surfaces treat it as unknown.
+        let session_unknown = primary.is_none();
+        let mut snapshot = UsageSnapshot::new(
+            primary.unwrap_or_else(|| RateWindow::with_details(0.0, Some(300), None, None)),
+        );
+        if session_unknown {
+            snapshot = snapshot.with_unavailable_rate_window(
+                CLAUDE_SESSION_WINDOW_ID,
+                CLAUDE_SESSION_TITLE,
+                NO_SESSION_USAGE_REPORTED,
+            );
+        }
 
         if let Some(window) = self
             .seven_day
@@ -305,6 +323,100 @@ mod tests {
                 .expect("Sonnet model-specific window")
                 .used_percent,
             45.0
+        );
+    }
+
+    fn session_placeholder(usage: &crate::core::UsageSnapshot) -> &crate::core::InactiveRateWindow {
+        usage
+            .inactive_rate_windows
+            .iter()
+            .find(|window| window.id == "claude-session")
+            .expect("Session must stay unknown, not a fabricated 0%")
+    }
+
+    /// SBS-1040: a payload that simply omits `five_hour` used to mint
+    /// Session (5h) 0%. That is not a reading — the window is unknown.
+    #[test]
+    fn missing_five_hour_does_not_invent_a_zero_session() {
+        let response: ClaudeUsageResponse = serde_json::from_str(
+            r#"{
+                "seven_day": {"utilization": 23}
+            }"#,
+        )
+        .expect("response parses");
+
+        let usage = snapshot(&response);
+        let session = session_placeholder(&usage);
+        assert_eq!(session.title, "Session (5h)");
+        assert_eq!(session.state, crate::core::EnforcementState::Unavailable);
+        assert_eq!(usage.secondary.expect("weekly").used_percent, 23.0);
+        assert!(
+            usage
+                .inactive_rate_windows
+                .iter()
+                .any(|window| window.id == "claude-session"),
+            "absent five_hour must not render as a real 0% Session"
+        );
+    }
+
+    /// SBS-1040: `five_hour` present with a null utilization is the same lie.
+    #[test]
+    fn null_five_hour_utilization_does_not_invent_a_zero_session() {
+        let response: ClaudeUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": null, "resets_at": "2026-08-23T12:00:00Z"},
+                "seven_day": {"utilization": 23}
+            }"#,
+        )
+        .expect("response parses");
+
+        let usage = snapshot(&response);
+        assert_eq!(
+            session_placeholder(&usage).state,
+            crate::core::EnforcementState::Unavailable
+        );
+        assert_eq!(usage.secondary.expect("weekly").used_percent, 23.0);
+    }
+
+    /// Other windows with a null utilization are omitted, not minted at 0%.
+    #[test]
+    fn null_weekly_utilization_is_omitted_not_zero() {
+        let response: ClaudeUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 12},
+                "seven_day": {"utilization": null}
+            }"#,
+        )
+        .expect("response parses");
+
+        let usage = snapshot(&response);
+        assert_eq!(usage.primary.used_percent, 12.0);
+        assert!(
+            usage.secondary.is_none(),
+            "null weekly utilization must stay unknown"
+        );
+        assert!(
+            usage
+                .inactive_rate_windows
+                .iter()
+                .all(|window| window.id != "claude-session")
+        );
+    }
+
+    /// A reported 0% is a reading. Do not mark that unknown.
+    #[test]
+    fn a_reported_zero_session_stays_a_reading() {
+        let response: ClaudeUsageResponse =
+            serde_json::from_str(r#"{"five_hour": {"utilization": 0}}"#).expect("response parses");
+
+        let usage = snapshot(&response);
+        assert!((usage.primary.used_percent).abs() < f64::EPSILON);
+        assert!(
+            usage
+                .inactive_rate_windows
+                .iter()
+                .all(|window| window.id != "claude-session"),
+            "a reported 0% session is a reading, not unknown"
         );
     }
 }
