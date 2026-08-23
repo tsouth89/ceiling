@@ -90,13 +90,46 @@ fn load_file() -> GeometryFile {
     load_file_from(&path)
 }
 
+/// Fail-open reader. A missing, unreadable, or unparseable file restores
+/// nothing. Persist must not use this as its merge base — that is
+/// [`try_load_file_from`] (SBS-1041).
 fn load_file_from(path: &Path) -> GeometryFile {
-    let Ok(raw) = fs::read_to_string(path) else {
-        return GeometryFile::default();
+    try_load_file_from(path).unwrap_or_default()
+}
+
+/// Missing file → empty store. An existing file that will not read or parse
+/// is an error so persist cannot replace sibling positions with defaults.
+///
+/// Settings can quarantine a corrupt `settings.json` (`parse_or_quarantine`)
+/// and later write a complete in-memory snapshot. Geometry persist is a
+/// merge: the other windows' keys live only in this file. Treating decode
+/// failure as empty and writing would wipe them (SBS-1041). API keys
+/// already fail closed for the same reason.
+fn try_load_file_from(path: &Path) -> io::Result<GeometryFile> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(GeometryFile::default());
+        }
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "window_geometry.json could not be read; refusing to replace remembered positions ({error})"
+                ),
+            ));
+        }
     };
-    let mut file: GeometryFile = serde_json::from_str(&raw).unwrap_or_default();
+    let mut file: GeometryFile = serde_json::from_str(&raw).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "window_geometry.json could not be parsed; refusing to replace remembered positions ({error})"
+            ),
+        )
+    })?;
     migrate(&mut file);
-    file
+    Ok(file)
 }
 
 /// Bring an on-disk file up to `GEOMETRY_VERSION`. Legacy (versionless) files
@@ -127,7 +160,8 @@ fn save_file_to(path: &Path, file: &GeometryFile) -> io::Result<()> {
 ///
 /// Each persist is a full-file rewrite. Without the lock, two surfaces that
 /// move at once can each load a snapshot that lacks the other's key and the
-/// later write drops that sibling position.
+/// later write drops that sibling position. The load itself fails closed: a
+/// corrupt or unreadable file is not treated as empty defaults (SBS-1041).
 fn persist(mutate: impl FnOnce(&mut GeometryFile)) -> Result<(), String> {
     let Some(path) = geometry_path() else {
         return Err("No config directory available".into());
@@ -141,7 +175,7 @@ fn persist_at(path: &Path, mutate: impl FnOnce(&mut GeometryFile)) -> Result<(),
 
 fn persist_locked(path: &Path, mutate: impl FnOnce(&mut GeometryFile)) -> io::Result<()> {
     codexbar::secure_file::with_state_write_lock(|| {
-        let mut file = load_file_from(path);
+        let mut file = try_load_file_from(path)?;
         mutate(&mut file);
         #[cfg(test)]
         linger_after_load_for_tests();
@@ -561,5 +595,118 @@ mod tests {
         let file = load_file_from(&path);
         assert_eq!(file.entries.get("settings").copied(), Some(settings));
         assert_eq!(file.size_entries.get("flyout").copied(), Some(flyout));
+    }
+
+    /// SBS-1041: persist used to treat a corrupt file as empty defaults and
+    /// rewrite it with only the window that just moved. Fail closed instead.
+    #[test]
+    fn persist_does_not_replace_corrupt_geometry_with_empty_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("window_geometry.json");
+        let settings = StoredGeometry {
+            x: 10,
+            y: 20,
+            width: Some(520),
+            height: Some(600),
+        };
+        let floatbar = StoredGeometry {
+            x: 30,
+            y: 40,
+            width: None,
+            height: None,
+        };
+        save_entry_at(&path, "settings", settings);
+        save_entry_at(&path, "floatbar", floatbar);
+        assert_eq!(
+            load_file_from(&path).entries.get("floatbar").copied(),
+            Some(floatbar)
+        );
+
+        let corrupt = "{not-valid-json";
+        fs::write(&path, corrupt).expect("corrupt geometry");
+
+        let error = persist_at(&path, |file| {
+            file.version = GEOMETRY_VERSION;
+            file.entries.insert(
+                "settings".into(),
+                StoredGeometry {
+                    x: 99,
+                    y: 99,
+                    width: Some(1),
+                    height: Some(1),
+                },
+            );
+        })
+        .expect_err("corrupt persist must fail closed");
+        assert!(
+            error.contains("could not be parsed"),
+            "persist error should name the parse failure, got: {error}"
+        );
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("read live"),
+            corrupt,
+            "the corrupt file must stay so sibling bytes are not overwritten"
+        );
+        assert!(
+            try_load_file_from(&path).is_err(),
+            "writers must not see corrupt geometry as an empty store"
+        );
+        let reader = load_file_from(&path);
+        assert!(
+            reader.entries.is_empty() && reader.size_entries.is_empty(),
+            "readers may fail open; they must not invent sibling positions"
+        );
+    }
+
+    /// Same merge-from-empty wipe, for a path that exists but cannot be read.
+    #[test]
+    fn persist_does_not_replace_unreadable_geometry_with_empty_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("window_geometry.json");
+        fs::create_dir(&path).expect("occupy path with a directory");
+
+        let error = persist_at(&path, |file| {
+            file.version = GEOMETRY_VERSION;
+            file.entries.insert(
+                "settings".into(),
+                StoredGeometry {
+                    x: 1,
+                    y: 2,
+                    width: None,
+                    height: None,
+                },
+            );
+        })
+        .expect_err("unreadable persist must fail closed");
+        assert!(
+            error.contains("could not be read"),
+            "persist error should name the read failure, got: {error}"
+        );
+        assert!(
+            path.is_dir(),
+            "an unreadable path must not be replaced with a defaults file"
+        );
+    }
+
+    #[test]
+    fn missing_geometry_file_is_empty_and_can_be_persisted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("window_geometry.json");
+        let settings = StoredGeometry {
+            x: 10,
+            y: 20,
+            width: Some(520),
+            height: Some(600),
+        };
+
+        let loaded = try_load_file_from(&path).expect("missing file is an empty store");
+        assert!(loaded.entries.is_empty());
+
+        save_entry_at(&path, "settings", settings);
+        assert_eq!(
+            load_file_from(&path).entries.get("settings").copied(),
+            Some(settings)
+        );
     }
 }
