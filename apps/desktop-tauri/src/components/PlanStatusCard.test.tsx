@@ -67,6 +67,65 @@ function provider(
 }
 
 describe("PlanStatusCard", () => {
+  it("includes displayed quota windows in the card button name", () => {
+    render(
+      <PlanStatusCard
+        provider={provider()}
+        resetTimeRelative
+        showAsUsed
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Cursor; Monthly: 62% used; Auto: 90% used",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("includes provider errors in the card button name", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({ error: "Authentication failed" })}
+        resetTimeRelative
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Cursor: Authentication failed",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("includes unavailable windows in the card button name", () => {
+    render(
+      <PlanStatusCard
+        provider={provider({
+          primary: window(0),
+          primaryLabel: "Plan",
+          secondary: null,
+          inactiveRateWindows: [
+            {
+              id: "cursor-plan",
+              title: "Plan",
+              description: "No usage reported",
+              state: "unavailable",
+            },
+          ],
+        })}
+        resetTimeRelative
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Cursor; Plan: unavailable" }),
+    ).toBeInTheDocument();
+  });
+
   it("names each account by email when a provider has two (the reported bug)", () => {
     // Exactly the user's setup: two Codex accounts.
     const { unmount } = render(

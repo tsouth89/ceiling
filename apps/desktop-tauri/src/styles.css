@@ -2848,7 +2848,7 @@ body:has(.taskbar-flyout-frame) #root {
   gap: 8px;
   padding: 8px 16px 8px 10px;
   border-radius: 8px;
-  cursor: pointer;
+  cursor: default;
   user-select: none;
   border: 1px solid transparent;
   transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
@@ -2859,9 +2859,25 @@ body:has(.taskbar-flyout-frame) #root {
   background: var(--provider-row-bg-hover);
 }
 
-.providers-sidebar__row:focus-visible {
-  border-color: var(--provider-row-border-selected);
-  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.25);
+.providers-sidebar__select {
+  display: grid;
+  grid-template-columns: 8px 24px minmax(0, 1fr);
+  grid-column: 1 / 4;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.providers-sidebar__select:focus-visible {
+  outline: 2px solid var(--provider-row-border-selected);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .providers-sidebar__row--selected {
