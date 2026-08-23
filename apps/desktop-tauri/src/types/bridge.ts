@@ -975,7 +975,8 @@ export interface ProviderAccountsBridge {
   activeIndex: number;
   /** No accounts configured: Ceiling follows whichever the CLI is signed in as. */
   followingCli: boolean;
-  ambientDir: string;
+  /** Provider home being followed. `null` when that home cannot be resolved. */
+  ambientDir: string | null;
 }
 
 export interface AccountProbeBridge {
