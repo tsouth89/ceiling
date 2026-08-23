@@ -799,7 +799,12 @@ impl CostScanner {
     /// figure Charts already shows. SBS-934: `codexbar cost` and serve `/cost`
     /// must call this instead of treating Grok as unsupported.
     pub fn scan_grok(&self) -> CostSummary {
-        scan_grok_report(self, self.days, &[]).thirty_days
+        self.scan_grok_with_cancel(None)
+    }
+
+    /// Scan Grok local logs, stopping early when the caller cancels the scan.
+    pub fn scan_grok_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        scan_grok_report(self, self.days, &[], cancel).thirty_days
     }
 
     /// True when local session logs can be priced for this provider.
@@ -1938,9 +1943,9 @@ pub fn get_cost_usage_report_hourly(provider: &str, days: u32) -> Option<CostUsa
     let days = days.max(1);
     let scanner = CostScanner::new(days).with_hourly_activity();
     match provider {
-        "codex" => Some(scan_codex_report(&scanner, days, &[])),
-        "claude" => Some(scan_claude_report(&scanner, days, &[])),
-        "grok" => Some(scan_grok_report(&scanner, days, &[])),
+        "codex" => Some(scan_codex_report(&scanner, days, &[], None)),
+        "claude" => Some(scan_claude_report(&scanner, days, &[], None)),
+        "grok" => Some(scan_grok_report(&scanner, days, &[], None)),
         _ => None,
     }
 }
@@ -1962,15 +1967,28 @@ pub fn get_cost_usage_report_scoped(
     current_windows: &[CurrentUsageWindow],
     scoped_home: Option<PathBuf>,
 ) -> Option<CostUsageReport> {
+    get_cost_usage_report_scoped_with_cancel(provider, days, current_windows, scoped_home, None)
+}
+
+/// As [`get_cost_usage_report_scoped`], but stops the transcript walk when
+/// `cancel` is set. Charts register a flag so navigate-away / a newer scan
+/// does not keep paying the full 30-day corpus (SBS-1056).
+pub fn get_cost_usage_report_scoped_with_cancel(
+    provider: &str,
+    days: u32,
+    current_windows: &[CurrentUsageWindow],
+    scoped_home: Option<PathBuf>,
+    cancel: Option<&AtomicBool>,
+) -> Option<CostUsageReport> {
     let days = days.max(1);
     let scanner = match scoped_home {
         Some(home) => CostScanner::scoped_to(days, home),
         None => CostScanner::new(days),
     };
     match provider {
-        "codex" => Some(scan_codex_report(&scanner, days, current_windows)),
-        "claude" => Some(scan_claude_report(&scanner, days, current_windows)),
-        "grok" => Some(scan_grok_report(&scanner, days, current_windows)),
+        "codex" => Some(scan_codex_report(&scanner, days, current_windows, cancel)),
+        "claude" => Some(scan_claude_report(&scanner, days, current_windows, cancel)),
+        "grok" => Some(scan_grok_report(&scanner, days, current_windows, cancel)),
         _ => None,
     }
 }
@@ -2310,6 +2328,7 @@ fn scan_codex_report(
     scanner: &CostScanner,
     days: u32,
     windows: &[CurrentUsageWindow],
+    cancel: Option<&AtomicBool>,
 ) -> CostUsageReport {
     let today = Local::now().date_naive();
     let start = codex_period_start(today, days);
@@ -2322,15 +2341,31 @@ fn scan_codex_report(
     let mut seen = HashSet::new();
     let mut files = Vec::new();
     for sessions_dir in scanner.get_codex_sessions_dirs() {
-        files.extend(codex_session_files(&sessions_dir, &range, &mut seen, None));
+        if is_cancelled(cancel) {
+            break;
+        }
+        files.extend(codex_session_files(
+            &sessions_dir,
+            &range,
+            &mut seen,
+            cancel,
+        ));
     }
     // The archive is a flat dir, so gate on the rollout's filename date rather
     // than walking a date tree that does not exist there.
     for archived_dir in scanner.get_codex_archived_dirs() {
-        files.extend(codex_archived_files(&archived_dir, &range, &mut seen, None));
+        if is_cancelled(cancel) {
+            break;
+        }
+        files.extend(codex_archived_files(
+            &archived_dir,
+            &range,
+            &mut seen,
+            cancel,
+        ));
     }
 
-    for_each_codex_file(&files, None, |path, records| {
+    for_each_codex_file(&files, cancel, |path, records| {
         rollups.ingest_parsed(path, records);
     });
 
@@ -2438,6 +2473,7 @@ fn scan_grok_report(
     scanner: &CostScanner,
     days: u32,
     windows: &[CurrentUsageWindow],
+    cancel: Option<&AtomicBool>,
 ) -> CostUsageReport {
     let mut daily = empty_daily_summaries(days);
     let mut hourly = HourlySummaries::new();
@@ -2462,9 +2498,12 @@ fn scan_grok_report(
     let mut period_sessions = 0;
 
     for session_dir in discover_grok_session_dirs(&sessions_root) {
+        if is_cancelled(cancel) {
+            break;
+        }
         let meta = load_session_meta(&session_dir);
         let updates = session_dir.join("updates.jsonl");
-        let records = parse_grok_updates_file(&updates, &meta, cutoff);
+        let records = parse_grok_updates_file(&updates, &meta, cutoff, cancel);
         if records.is_empty() {
             continue;
         }
@@ -2543,6 +2582,7 @@ fn scan_claude_report(
     scanner: &CostScanner,
     days: u32,
     windows: &[CurrentUsageWindow],
+    cancel: Option<&AtomicBool>,
 ) -> CostUsageReport {
     let projects_dirs = scanner.get_claude_projects_dirs();
     let mut daily = empty_daily_summaries(days);
@@ -2558,7 +2598,10 @@ fn scan_claude_report(
     // Union files across ambient + every configured Claude account home.
     let mut files = Vec::new();
     for projects_dir in projects_dirs.iter().filter(|dir| dir.exists()) {
-        files.extend(scanner.claude_files_since(projects_dir, &cutoff, None));
+        if is_cancelled(cancel) {
+            break;
+        }
+        files.extend(scanner.claude_files_since(projects_dir, &cutoff, cancel));
     }
     files.sort();
     files.dedup();
@@ -2573,7 +2616,7 @@ fn scan_claude_report(
     let mut seven_day_sessions = 0;
     let mut period_sessions = 0;
 
-    for_each_claude_file(&files, &cutoff, None, |path, records| {
+    for_each_claude_file(&files, &cutoff, cancel, |path, records| {
         let mut file_summary = CostSummary::default();
         let mut latest_recorded_at: Option<DateTime<Utc>> = None;
         let mut contributed_today = false;
@@ -2859,11 +2902,13 @@ mod tests {
             &CostScanner::scoped_to(2, personal.path().to_path_buf()),
             2,
             &[],
+            None,
         );
         let work_report = scan_codex_report(
             &CostScanner::scoped_to(2, work.path().to_path_buf()),
             2,
             &[],
+            None,
         );
 
         // Each account sees only its own logs, not the other's, and not the sum.
@@ -2926,6 +2971,7 @@ mod tests {
             &CostScanner::with_ambient_and_account_homes(2, ambient.clone(), Vec::new()),
             2,
             &[],
+            None,
         );
         assert_eq!(ambient_only.thirty_days.input_tokens, 1000);
 
@@ -2938,6 +2984,7 @@ mod tests {
             ),
             2,
             &[],
+            None,
         );
         assert_eq!(
             both.thirty_days.input_tokens, 8000,
@@ -2954,6 +3001,7 @@ mod tests {
             ),
             2,
             &[],
+            None,
         );
         assert_eq!(
             with_dup_home.thirty_days.input_tokens, 8000,
@@ -2996,6 +3044,7 @@ mod tests {
             ),
             2,
             &[],
+            None,
         );
         assert_eq!(
             report.thirty_days.input_tokens, 1000,
@@ -3034,6 +3083,7 @@ mod tests {
             &CostScanner::with_ambient_and_account_homes(2, tmp.path().to_path_buf(), Vec::new()),
             2,
             &[],
+            None,
         );
 
         assert_eq!(
@@ -3269,8 +3319,8 @@ mod tests {
         let standard =
             CostScanner::with_codex_speed(2, Some("standard")).with_ambient_home(ambient.clone());
         let fast = CostScanner::with_codex_speed(2, Some("fast")).with_ambient_home(ambient);
-        let std_report = scan_codex_report(&standard, 2, &windows);
-        let fast_report = scan_codex_report(&fast, 2, &windows);
+        let std_report = scan_codex_report(&standard, 2, &windows, None);
+        let fast_report = scan_codex_report(&fast, 2, &windows, None);
 
         let std_window = std_report
             .current_windows
@@ -3538,6 +3588,147 @@ mod tests {
         unique.dedup();
         assert_eq!(dedup_keys.len(), unique.len(), "no record read twice");
         assert_eq!(unique.len(), 3, "every record accounted for exactly once");
+    }
+
+    fn write_claude_transcript(dir: &Path, name: &str, index: u32) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("{}\n", claude_event_line(index, 100))).unwrap();
+        path
+    }
+
+    /// SBS-1056: the report walk hands this same flag into `parse_batch`.
+    /// Cancel after the first file must not parse the rest of the chunk.
+    #[test]
+    fn parse_batch_stops_when_cancelled_mid_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = [
+            write_claude_transcript(dir.path(), "a.jsonl", 1),
+            write_claude_transcript(dir.path(), "b.jsonl", 2),
+            write_claude_transcript(dir.path(), "c.jsonl", 3),
+        ];
+        let cancel = AtomicBool::new(false);
+        let parsed = parse_batch(
+            &files,
+            1,
+            &|_path| {
+                cancel.store(true, Ordering::Relaxed);
+                1u32
+            },
+            Some(&cancel),
+        );
+        assert_eq!(
+            parsed.len(),
+            1,
+            "cancellation after the first file must not parse the rest"
+        );
+    }
+
+    /// SBS-1056: the chart 30-day report used to pass `None` into the walk.
+    #[test]
+    fn a_cancelled_claude_report_does_not_read_the_corpus() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("projects").join("p");
+        std::fs::create_dir_all(&project).unwrap();
+        write_claude_transcript(&project, "one.jsonl", 1);
+        write_claude_transcript(&project, "two.jsonl", 2);
+        write_claude_transcript(&project, "three.jsonl", 3);
+
+        let cancel = AtomicBool::new(true);
+        let cancelled = get_cost_usage_report_scoped_with_cancel(
+            "claude",
+            30,
+            &[],
+            Some(home.path().to_path_buf()),
+            Some(&cancel),
+        )
+        .expect("claude is supported");
+        assert_eq!(
+            cancelled.thirty_days.sessions_count, 0,
+            "an already-cancelled report must not parse transcripts"
+        );
+
+        let full = get_cost_usage_report_scoped("claude", 30, &[], Some(home.path().to_path_buf()))
+            .expect("claude is supported");
+        assert_eq!(full.thirty_days.sessions_count, 3);
+    }
+
+    #[test]
+    fn a_cancelled_codex_report_does_not_read_the_corpus() {
+        let today = Local::now().date_naive();
+        let home = tempfile::tempdir().unwrap();
+        let day_dir = home
+            .path()
+            .join("sessions")
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let ts = (Utc::now() - Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        std::fs::write(
+            day_dir.join(format!(
+                "rollout-{}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl",
+                today.format("%Y-%m-%d")
+            )),
+            format!(
+                r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let cancel = AtomicBool::new(true);
+        let cancelled = get_cost_usage_report_scoped_with_cancel(
+            "codex",
+            2,
+            &[],
+            Some(home.path().to_path_buf()),
+            Some(&cancel),
+        )
+        .expect("codex is supported");
+        assert_eq!(cancelled.thirty_days.sessions_count, 0);
+        assert_eq!(cancelled.thirty_days.input_tokens, 0);
+
+        let full = get_cost_usage_report_scoped("codex", 2, &[], Some(home.path().to_path_buf()))
+            .expect("codex is supported");
+        assert_eq!(full.thirty_days.sessions_count, 1);
+        assert_eq!(full.thirty_days.input_tokens, 1000);
+    }
+
+    #[test]
+    fn a_cancelled_grok_report_does_not_read_the_corpus() {
+        let home = tempfile::tempdir().unwrap();
+        let session = home
+            .path()
+            .join("sessions")
+            .join("proj")
+            .join("019f-session");
+        std::fs::create_dir_all(&session).unwrap();
+        let now = Utc::now();
+        let ts = now.timestamp() as f64;
+        let ms = now.timestamp_millis();
+        std::fs::write(
+            session.join("updates.jsonl"),
+            format!(
+                r#"{{"timestamp":{ts},"method":"_x.ai/session/update","params":{{"sessionId":"s1","_meta":{{"eventId":"e1","agentTimestampMs":{ms}}},"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":0,"reasoningTokens":0,"modelCalls":1,"costUsdTicks":10000000000,"modelUsage":{{"grok-4.5-build":{{"inputTokens":1000,"outputTokens":100,"cachedReadTokens":0,"reasoningTokens":0,"modelCalls":1,"costUsdTicks":10000000000}}}}}}}}}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            session.join("summary.json"),
+            r#"{"info":{"cwd":"/tmp/ceiling"},"current_model_id":"grok-4.5"}"#,
+        )
+        .unwrap();
+
+        let scanner = CostScanner::new(7).with_ambient_home(home.path().to_path_buf());
+        let cancel = AtomicBool::new(true);
+        let cancelled = scan_grok_report(&scanner, 7, &[], Some(&cancel));
+        assert_eq!(cancelled.thirty_days.sessions_count, 0);
+        assert_eq!(cancelled.thirty_days.input_tokens, 0);
+
+        let full = scanner.scan_grok();
+        assert_eq!(full.sessions_count, 1);
+        assert_eq!(full.input_tokens, 1000);
     }
 
     #[test]
@@ -3827,6 +4018,7 @@ mod tests {
             &CostScanner::new(7).with_ambient_home(home.path().to_path_buf()),
             7,
             &[],
+            None,
         );
 
         assert_eq!(report.thirty_days.sessions_count, 1);
@@ -3886,6 +4078,7 @@ mod tests {
             &CostScanner::new(7).with_ambient_home(home.path().to_path_buf()),
             7,
             &[],
+            None,
         );
 
         assert_eq!(mixed.thirty_days.input_tokens, 51_000);
@@ -3998,6 +4191,7 @@ mod tests {
             &CostScanner::scoped_to(2, home.path().to_path_buf()),
             2,
             &[],
+            None,
         );
         assert!(
             without_hourly.hourly_activity.is_empty(),
@@ -4012,6 +4206,7 @@ mod tests {
             &CostScanner::scoped_to(2, home.path().to_path_buf()).with_hourly_activity(),
             2,
             &[],
+            None,
         );
 
         let expected: Vec<(NaiveDate, u32)> = [earlier, recent]

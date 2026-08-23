@@ -718,6 +718,7 @@ locale_keys! {
     DetailChartCredits,
     DetailChartUsageBreakdown,
     DetailChartEmpty,
+    MiniChartNoData,
     DetailUpdatedPrefix,
     PanelAllProviders,
     PanelAllProvidersShort,
