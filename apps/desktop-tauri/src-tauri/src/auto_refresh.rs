@@ -9,24 +9,30 @@ use crate::commands::ProviderUsageSnapshot;
 use crate::state::AppState;
 
 const AUTO_REFRESH_POLL_INTERVAL: Duration = Duration::from_secs(15);
-const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// `refresh_interval_secs = 0` is manual-only: no periodic background refresh.
+fn scheduled_refresh_interval(refresh_interval_secs: u64) -> Option<Duration> {
+    (refresh_interval_secs > 0).then(|| Duration::from_secs(refresh_interval_secs))
+}
 
 pub fn install(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut schedule: Option<(Duration, Instant)> = None;
         let mut next_reset: Option<DateTime<Utc>> = None;
         loop {
-            let interval = PROVIDER_REFRESH_INTERVAL;
+            let interval = scheduled_refresh_interval(Settings::load().refresh_interval_secs);
             let now = Instant::now();
-            let scheduled_at = schedule
-                .filter(|(scheduled_interval, _)| *scheduled_interval == interval)
-                .map(|(_, scheduled_at)| scheduled_at)
-                .unwrap_or(now);
+            let scheduled_at = interval.map(|interval| {
+                schedule
+                    .filter(|(scheduled_interval, _)| *scheduled_interval == interval)
+                    .map(|(_, scheduled_at)| scheduled_at)
+                    .unwrap_or(now)
+            });
             // A window that just reset is the one moment a stale reading is most
             // visible, and reset notifications are only produced inside a refresh.
             // Waiting for the next fixed tick delayed them by minutes, so cross a
             // known boundary and refresh on this wake instead.
-            let scheduled_due = now >= scheduled_at;
+            let scheduled_due = scheduled_at.is_some_and(|scheduled_at| now >= scheduled_at);
             let reset_due = next_reset.is_some_and(|reset| Utc::now() >= reset);
 
             if scheduled_due || reset_due {
@@ -40,12 +46,18 @@ pub fn install(app: tauri::AppHandle) {
                 if let Err(error) = refreshed {
                     tracing::warn!(%error, "Automatic provider refresh failed");
                 }
-                if scheduled_due {
+                if let (true, Some(interval), Some(scheduled_at)) =
+                    (scheduled_due, interval, scheduled_at)
+                {
                     schedule = Some((
                         interval,
                         next_fixed_tick(scheduled_at, Instant::now(), interval),
                     ));
                 }
+            }
+
+            if interval.is_none() {
+                schedule = None;
             }
 
             // Only ever track a boundary that is still ahead of us. A provider
@@ -282,6 +294,27 @@ async fn check_spend_anomaly_alert(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_refresh_interval_is_manual_only() {
+        assert_eq!(scheduled_refresh_interval(0), None);
+    }
+
+    #[test]
+    fn configured_refresh_interval_is_used() {
+        assert_eq!(
+            scheduled_refresh_interval(300),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(
+            scheduled_refresh_interval(42),
+            Some(Duration::from_secs(42))
+        );
+        assert_eq!(
+            scheduled_refresh_interval(900),
+            Some(Duration::from_secs(900))
+        );
+    }
 
     #[test]
     fn fixed_cadence_advances_from_the_scheduled_tick() {

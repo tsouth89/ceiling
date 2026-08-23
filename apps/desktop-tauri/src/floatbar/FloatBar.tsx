@@ -510,9 +510,13 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
 
   // The detached floatbar should keep usage fresh, but it must not open or
   // focus any other surface. Refresh data only; provider-updated events feed
-  // this window when the backend completes.
+  // this window when the backend completes. 0 = manual refresh only.
   useEffect(() => {
-    const intervalMs = Math.max(60_000, settings.refreshIntervalSecs * 1000);
+    const intervalSecs = settings.refreshIntervalSecs;
+    if (intervalSecs === 0) {
+      return;
+    }
+    const intervalMs = intervalSecs * 1000;
     const tick = () => {
       void refreshProvidersIfStale().catch(() => {});
     };
