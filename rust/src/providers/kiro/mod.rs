@@ -471,12 +471,11 @@ mod tests {
     use super::*;
 
     fn assert_failure_is_not_zero_percent(result: Result<UsageSnapshot, ProviderError>) {
-        match result {
-            Ok(usage) => panic!(
+        if let Ok(usage) = result {
+            panic!(
                 "failure must not be reported as {}% used",
                 usage.primary.used_percent
-            ),
-            Err(_) => {}
+            );
         }
     }
 
@@ -497,7 +496,7 @@ mod tests {
     #[test]
     fn cli_output_with_percent_is_a_reading() {
         let usage = KiroProvider::new()
-            .parse_cli_output("Plan: Pro\n██████░░░░ 42%")
+            .parse_cli_output("Plan: Pro\n██████ 42%")
             .expect("percent bar is a reading");
         assert_eq!(usage.primary.used_percent, 42.0);
         assert_eq!(usage.login_method.as_deref(), Some("Pro"));

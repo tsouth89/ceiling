@@ -865,12 +865,11 @@ mod tests {
     }
 
     fn assert_failure_is_not_zero_percent(result: Result<UsageSnapshot, ProviderError>) {
-        match result {
-            Ok(usage) => panic!(
+        if let Ok(usage) = result {
+            panic!(
                 "failure must not be reported as {}% used",
                 usage.primary.used_percent
-            ),
-            Err(_) => {}
+            );
         }
     }
 

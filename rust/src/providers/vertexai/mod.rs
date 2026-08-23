@@ -358,12 +358,11 @@ mod tests {
     /// The old fail-open returned `Ok(RateWindow::new(0.0))`. This helper is
     /// what proves SBS-1061: restore that and the test panics.
     fn assert_failure_is_not_zero_percent(result: Result<UsageSnapshot, ProviderError>) {
-        match result {
-            Ok(usage) => panic!(
+        if let Ok(usage) = result {
+            panic!(
                 "failure must not be reported as {}% used",
                 usage.primary.used_percent
-            ),
-            Err(_) => {}
+            );
         }
     }
 
