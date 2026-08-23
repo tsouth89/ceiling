@@ -478,6 +478,7 @@ export const ALL_LOCALE_KEYS = [
   "DetailChartCredits",
   "DetailChartUsageBreakdown",
   "DetailChartEmpty",
+  "MiniChartNoData",
   "DetailUpdatedPrefix",
   "PanelAllProviders",
   "PanelAllProvidersShort",

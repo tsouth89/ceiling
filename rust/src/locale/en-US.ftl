@@ -473,6 +473,7 @@ DetailChartCost = Cost (30 days)
 DetailChartCredits = Credits used (30 days)
 DetailChartUsageBreakdown = Usage by service (30 days)
 DetailChartEmpty = No chart data yet.
+MiniChartNoData = No data
 DetailUpdatedPrefix = Updated
 PanelAllProviders = All providers
 PanelAllProvidersShort = All

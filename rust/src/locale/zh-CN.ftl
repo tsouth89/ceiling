@@ -473,6 +473,7 @@ DetailChartCost = 费用（30 天）
 DetailChartCredits = 已用额度（30 天）
 DetailChartUsageBreakdown = 按服务的用量（30 天）
 DetailChartEmpty = 暂无图表数据。
+MiniChartNoData = 暂无数据
 DetailUpdatedPrefix = 已更新
 PanelAllProviders = 所有服务商
 PanelAllProvidersShort = 全部

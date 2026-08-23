@@ -4,6 +4,7 @@
  */
 
 import type { DailyCostPoint, DailyUsageBreakdown } from "../types/bridge";
+import { useLocale } from "../hooks/useLocale";
 
 interface BarChartProps {
   points: DailyCostPoint[];
@@ -21,11 +22,17 @@ export function SimpleBarChart({
   label,
   formatValue,
 }: BarChartProps) {
+  const { t } = useLocale();
   if (points.length === 0) {
+    const emptyText = t("MiniChartNoData");
     return (
-      <div className="mini-chart mini-chart--empty">
+      <div
+        className="mini-chart mini-chart--empty"
+        role="img"
+        aria-label={label ? `${label}: ${emptyText}` : emptyText}
+      >
         {label && <span className="mini-chart__label">{label}</span>}
-        <span className="mini-chart__empty-msg">No data</span>
+        <span className="mini-chart__empty-msg">{emptyText}</span>
       </div>
     );
   }
@@ -117,11 +124,17 @@ export function StackedBarChart({
   height = 64,
   label,
 }: StackedBarChartProps) {
+  const { t } = useLocale();
   if (points.length === 0) {
+    const emptyText = t("MiniChartNoData");
     return (
-      <div className="mini-chart mini-chart--empty">
+      <div
+        className="mini-chart mini-chart--empty"
+        role="img"
+        aria-label={label ? `${label}: ${emptyText}` : emptyText}
+      >
         {label && <span className="mini-chart__label">{label}</span>}
-        <span className="mini-chart__empty-msg">No data</span>
+        <span className="mini-chart__empty-msg">{emptyText}</span>
       </div>
     );
   }
