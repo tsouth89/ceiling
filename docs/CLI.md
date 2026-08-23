@@ -131,7 +131,7 @@ codexbar serve [OPTIONS]
 Useful options:
 
 - `--port <PORT>` - local HTTP port (default `8080`).
-- `--refresh-interval <SECONDS>` - response cache TTL (default `60`).
+- `--refresh-interval <SECONDS>` - successful `/usage` and `/cost` response cache TTL (default `60`). Provider selections are cached separately. Set to `0` to disable caching.
 - `--allow-unauthenticated` - skip the per-user bearer token. Any local process can then read usage. Existing scripts that do not send `Authorization` need this flag.
 - `--include-identity` - include account email, organization, login method, and raw provider errors. Those fields are omitted by default.
 
