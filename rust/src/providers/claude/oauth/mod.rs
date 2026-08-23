@@ -729,4 +729,52 @@ mod tests {
         assert!(message.contains("rate limited"));
         assert!(message.contains("credentials were preserved"));
     }
+
+    /// SBS-1040: OAuth used to mint Session (5h) 0% when five_hour was omitted.
+    #[test]
+    fn omitted_five_hour_stays_unknown_not_zero() {
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{"seven_day": {"utilization": 14, "resets_at": "2026-08-30T10:00:00Z"}}"#,
+        )
+        .expect("response parses");
+
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+        let session = usage
+            .inactive_rate_windows
+            .iter()
+            .find(|window| window.id == "claude-session")
+            .expect("omitted five_hour must stay unknown");
+        assert_eq!(session.title, "Session (5h)");
+        assert_eq!(session.state, crate::core::EnforcementState::Unavailable);
+        assert!((usage.secondary.expect("weekly").used_percent - 14.0).abs() < 0.001);
+    }
+
+    /// SBS-1040: a null utilization is not 0%.
+    #[test]
+    fn null_utilization_stays_unknown_not_zero() {
+        let window = UsageWindow {
+            utilization: None,
+            resets_at: Some("2026-08-23T12:00:00Z".to_string()),
+        };
+
+        assert!(
+            ClaudeOAuthFetcher::to_rate_window(&window, Some(300), UtilizationScale::Percent)
+                .is_none(),
+            "absent utilization must not become a 0% Session"
+        );
+
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{"five_hour": {"utilization": null}, "seven_day": {"utilization": 9}}"#,
+        )
+        .expect("response parses");
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &test_credentials());
+        assert!(
+            usage
+                .inactive_rate_windows
+                .iter()
+                .any(|window| window.id == "claude-session"
+                    && window.state == crate::core::EnforcementState::Unavailable)
+        );
+        assert!((usage.secondary.expect("weekly").used_percent - 9.0).abs() < 0.001);
+    }
 }

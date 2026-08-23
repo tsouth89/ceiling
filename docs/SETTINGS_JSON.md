@@ -32,14 +32,14 @@ fields marked safe, but Ceiling may overwrite the file when the app exits.
 | `notification_policy_version` | number | `1` | Internal migration marker. Not a UI preference. |
 | `provider_usage_thresholds` | object | `{}` | Per-provider overrides; keys are CLI names, optionally suffixed with `:session` or `:weekly`; values are `{ "high": number, "critical": number }`. Safe to edit. |
 | `switcher_shows_icons` | boolean | `true` | Show provider icons in merged switcher UI. Safe to edit. |
-| `menu_bar_shows_highest_usage` | boolean | `false` | Prefer the provider closest to its limit in merged display. Safe to edit. |
-| `menu_bar_shows_percent` | boolean | `false` | Replace bar-only tray display with provider branding plus percent where supported. Safe to edit. |
+| `menu_bar_shows_highest_usage` | boolean | `false` | Legacy compatibility field. The branded tray always follows the most constrained healthy provider and ignores this flag. Leave it unchanged. |
+| `menu_bar_shows_percent` | boolean | `false` | Legacy compatibility field. The branded tray always draws the Ceiling icon and ignores this flag. Leave it unchanged. |
 | `show_as_used` | boolean | `true` | Show usage as used (`true`) or remaining (`false`). Safe to edit. |
 | `enable_animations` | boolean | `true` | Enable UI animations. Safe to edit. |
 | `reset_time_relative` | boolean | `true` | Show reset times as relative values. Safe to edit. |
 | `show_reset_when_exhausted` | boolean | `false` | Replace exhausted quota text with the concrete reset time. Safe to edit. |
 | `predictive_pace_warning_enabled` | boolean | `false` | Warn when provider pace predicts exhaustion before reset. Opt-in prediction. Safe to edit. |
-| `menu_bar_display_mode` | string | `"detailed"` | `"minimal"`, `"compact"`, or `"detailed"`. Safe to edit. |
+| `menu_bar_display_mode` | string | `"detailed"` | Legacy compatibility field (`"minimal"`, `"compact"`, or `"detailed"`). The branded tray ignores this setting. Leave it unchanged. |
 | `show_all_token_accounts_in_menu` | boolean | `false` | Show all token accounts instead of collapsing behind switchers. Safe to edit. |
 | `provider_configs` | object | `{}` | Per-provider configuration map. See below. Safe to edit. |
 | `unrecognized_provider_configs` | object | `{}` | Written by Ceiling, not by you. Holds `provider_configs` entries whose provider id this build does not recognize, so they survive until a build that knows them folds them back in. Leave it unchanged. |

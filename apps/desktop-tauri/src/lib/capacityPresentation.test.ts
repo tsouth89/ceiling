@@ -865,6 +865,37 @@ describe("capacityPresentation", () => {
       ).toBe(false);
     });
 
+    it("does not treat a missing Claude session as a 0% hero (SBS-1040)", () => {
+      const snap = provider({
+        providerId: "claude",
+        displayName: "Claude",
+        primary: window(0),
+        primaryLabel: "Session (5h)",
+        secondary: window(23),
+        secondaryLabel: "Weekly",
+        inactiveRateWindows: [
+          {
+            id: "claude-session",
+            title: "Session (5h)",
+            description: "No usage reported",
+            state: "unavailable",
+          },
+        ],
+      });
+      expect(primaryNamedState(snap)).toBe("unavailable");
+      expect(glanceMeters(snap).primary).toBeNull();
+      expect(glanceMeters(snap).companions.map((meter) => meter.label)).toEqual([
+        "Weekly",
+      ]);
+      expect(
+        allMeasuredWindows(snap).some(
+          (measured) =>
+            measured.window.usedPercent === 0 &&
+            measured.label.toLowerCase().includes("session"),
+        ),
+      ).toBe(false);
+    });
+
     it("still heroes a real 0% plan when no inactive row marks it a placeholder", () => {
       // Unknown is not empty: a genuine 0% reading must stay a 0% hero.
       const snap = provider({
