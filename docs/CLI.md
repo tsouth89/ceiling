@@ -135,7 +135,7 @@ Useful options:
 - `--allow-unauthenticated` - skip the per-user bearer token. Any local process can then read usage. Existing scripts that do not send `Authorization` need this flag.
 - `--include-identity` - include account email, organization, login method, and raw provider errors. Those fields are omitted by default.
 
-On first start, Ceiling prints an `Authorization: Bearer …` token and stores it at `<user config dir>/Ceiling/serve.token` (current-user ACL on Windows, mode `0600` elsewhere). Later starts print only the path. `/health` stays unauthenticated. `/usage` and `/cost` require the token unless `--allow-unauthenticated` is set.
+On first start, Ceiling prints an `Authorization: Bearer …` token and stores it at `<user config dir>/Ceiling/serve.token` (current-user ACL on Windows, mode `0600` elsewhere). Later starts print only the path. If an existing token file is readable by other users, Ceiling replaces it with a new token rather than tightening the ACL and reusing the leaked value. `/health` stays unauthenticated. `/usage` and `/cost` require the token unless `--allow-unauthenticated` is set.
 
 Example:
 
@@ -186,7 +186,7 @@ Tools:
 | `list_providers` | widget snapshot + settings | Quota cache presence and whether local spend scanning is supported. |
 | `get_usage` | widget snapshot | Remaining quota windows. `period_cost_usd` is the provider's billed / current-period `CostSnapshot.used`, with `cost_period` as the provider's period label (for example `Monthly`). It is **not** this conversation's spend. |
 | `get_spend` | local Codex / Claude / Grok logs | Estimated API-value spend for today, 7 days, and 30 days. Not a bill. |
-| `get_status` | snapshot + local logs | Compact remaining-quota plus `today_spend`. `usage` is the same object as `get_usage` (including `period_cost_usd`). `today_spend` is local estimated log spend for today. |
+| `get_status` | snapshot + local logs | Compact remaining-quota plus `today_spend`. `remaining_percent` is the constraining window across primary/secondary/tertiary (exhausted first, then highest used %), not `usage.primary` alone. `usage` is the same object as `get_usage` (including `period_cost_usd`). `today_spend` is local estimated log spend for today. |
 
 `session_cost_usd` is not emitted. Older builds stuffed billed period cost into that name.
 

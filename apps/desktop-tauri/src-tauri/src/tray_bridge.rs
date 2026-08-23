@@ -406,15 +406,13 @@ fn presentation_snapshots(
 
 /// Update the tray icon pixels and tooltip text to reflect current provider usage.
 ///
-/// Behaviour mirrors egui's `choose_tray_update_plan` (rust/src/native_ui/app.rs):
-/// - If `menu_bar_shows_highest_usage` is on OR `menu_bar_display_mode == "minimal"`,
-///   render the bar from the healthy provider with the highest session usage.
-/// - Otherwise render from the first enabled healthy provider (catalog order).
-/// - When any provider exposes a weekly/secondary window, the icon shows both
-///   bars from the same picked provider.
-/// - With zero healthy providers but at least one error, fall back to an
-///   error-styled icon using the last known max percentage so the tray
-///   still communicates "something is wrong".
+/// One branded tray icon represents Ceiling as a whole. Its severity color
+/// follows the most constrained healthy provider. Legacy icon-selection
+/// settings (`menu_bar_shows_highest_usage`, `menu_bar_shows_percent`,
+/// `menu_bar_display_mode`) are intentionally ignored.
+///
+/// With zero healthy providers but at least one error, fall back to an
+/// error-styled icon so the tray still communicates "something is wrong".
 pub fn update_tray_icon_and_tooltip(
     app: &AppHandle,
     snapshots: &[crate::commands::ProviderUsageSnapshot],
