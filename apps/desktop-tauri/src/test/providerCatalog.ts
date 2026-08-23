@@ -9,6 +9,7 @@ import providerSource from "../../../../rust/src/core/provider.rs?raw";
 export function liveProviderCatalogFrom(
   src: string,
 ): Array<[string, string]> {
+  src = src.replace(/\r\n/g, "\n");
   const variants = providerIdAll(src);
   const cliNames = providerIdStringMap(src, "cli_name");
   const displayNames = providerIdStringMap(src, "display_name");

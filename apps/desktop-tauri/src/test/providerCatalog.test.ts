@@ -27,4 +27,9 @@ describe("provider catalog contract (SBS-1048)", () => {
       /pub fn all\(/,
     );
   });
+
+  it("parses provider.rs when the checkout uses CRLF", () => {
+    const crlf = providerSource.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+    expect(liveProviderCatalogFrom(crlf)).toEqual(live);
+  });
 });
