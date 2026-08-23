@@ -2,6 +2,9 @@
 
 ## [Ceiling] Unreleased
 
+### Fixed
+- **`codexbar` with no subcommand now runs `usage`.** CLI.md and `--help` already called usage the default command, but a bare `codexbar` printed an error asking for an explicit subcommand. It now does what those docs said. Closes SBS-1026.
+
 ## [Ceiling] 1.5.35 - 2026-08-22
 
 Charts stops showing numbers it cannot stand behind. A month whose models have no published prices painted as an empty one, the busiest day on the activity heatmap could share a shade with the quietest, and a Codex session carried whatever calendar day it was first parsed on, so a DST change or a trip moved usage onto the wrong day. Two cards scanning at once could overwrite each other's index, and a price refresh landing mid-scan stamped old dollars as current for every card already in the file.

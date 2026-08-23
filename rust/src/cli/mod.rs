@@ -1,7 +1,7 @@
 //! CLI module - command-line interface
 //!
 //! Matches the original CodexBar CLI structure:
-//! - `codexbar` - launches the menu bar GUI app (default)
+//! - `codexbar` - print usage from enabled providers (default)
 //! - `codexbar usage` - print usage from providers
 //! - `codexbar cost` - print local token cost usage
 //! - `codexbar autostart` - manage Windows auto-start
@@ -172,7 +172,64 @@ impl Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn bare_invocation_parses_as_default_usage() {
+        let cli = Cli::try_parse_from(["codexbar"]).expect("bare invocation should parse");
+        assert!(cli.command.is_none());
+
+        let args = cli.to_usage_args();
+        assert!(args.provider.is_none());
+        assert_eq!(args.format, usage::OutputFormat::Text);
+        assert!(!args.brief);
+        assert!(!args.json);
+    }
+
+    #[test]
+    fn top_level_usage_flags_map_onto_the_default_command() {
+        let cli = Cli::try_parse_from(["codexbar", "--provider", "all", "--brief", "--json"])
+            .expect("top-level usage flags should parse without a subcommand");
+        assert!(cli.command.is_none());
+
+        let args = cli.to_usage_args();
+        assert_eq!(args.provider.as_deref(), Some("all"));
+        assert!(args.brief);
+        assert_eq!(args.format, usage::OutputFormat::Json);
+        assert!(args.json);
+    }
+
+    #[test]
+    fn explicit_usage_subcommand_still_parses() {
+        let cli = Cli::try_parse_from(["codexbar", "usage", "--provider", "claude"])
+            .expect("explicit usage should parse");
+        match cli.command {
+            Some(Commands::Usage(args)) => {
+                assert_eq!(args.provider.as_deref(), Some("claude"));
+            }
+            other => panic!("expected usage subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn top_level_help_names_usage_as_the_default_command() {
+        let mut command = Cli::command();
+        let mut output = Vec::new();
+        command
+            .write_long_help(&mut output)
+            .expect("top-level help should render");
+
+        let help = String::from_utf8(output).expect("help should be valid utf-8");
+        assert!(
+            help.contains("default command"),
+            "help should name usage as the default: {help}"
+        );
+        assert!(
+            !help.contains("requires an explicit subcommand")
+                && !help.contains("codexbar is now CLI-only"),
+            "help should not claim a subcommand is required: {help}"
+        );
+    }
 
     #[test]
     fn top_level_help_mentions_nanogpt_provider() {
