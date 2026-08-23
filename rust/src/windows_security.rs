@@ -205,9 +205,9 @@ pub fn path_dacl_is_readable_by_others(path: &Path) -> io::Result<bool> {
         GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
             .map_err(|error| windows_error("GetSecurityDescriptorDacl failed", error))?;
         // A missing or NULL DACL is "everyone". An empty DACL is deny-all.
-        if !present.as_bool() || dacl.is_null() {
+        let Some(dacl) = dacl.as_ref().filter(|_| present.as_bool()) else {
             return Ok(true);
-        }
+        };
 
         let mut info = ACL_SIZE_INFORMATION::default();
         GetAclInformation(
@@ -222,17 +222,21 @@ pub fn path_dacl_is_readable_by_others(path: &Path) -> io::Result<bool> {
             let mut ace_ptr = std::ptr::null_mut();
             GetAce(dacl, index, &mut ace_ptr)
                 .map_err(|error| windows_error("GetAce failed", error))?;
-            if ace_ptr.is_null() {
+            let Some(ace) = ace_ptr.cast::<ACCESS_ALLOWED_ACE>().as_ref() else {
                 return Err(io::Error::other("GetAce returned a null ACE"));
-            }
-            let ace = &*ace_ptr.cast::<ACCESS_ALLOWED_ACE>();
+            };
             if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
                 continue;
             }
             if !ace_grants_read(ace.Mask) {
                 continue;
             }
-            let ace_sid = PSID((&ace.SidStart as *const u32).cast_mut().cast());
+            let ace_sid = PSID(
+                std::ptr::from_ref(&ace.SidStart)
+                    .cast::<u32>()
+                    .cast_mut()
+                    .cast(),
+            );
             if EqualSid(ace_sid, user_sid).is_ok()
                 || EqualSid(ace_sid, system.as_psid()).is_ok()
                 || EqualSid(ace_sid, administrators.as_psid()).is_ok()
