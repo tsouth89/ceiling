@@ -2,6 +2,12 @@
 
 ## [Ceiling] Unreleased
 
+## [Ceiling] 1.5.36 - 2026-08-23
+
+This release closes out the current maintenance queue with safer local state, more accurate usage and cost reporting, and better behavior across the desktop, CLI, and MCP server. It also adds multi-account CLI usage, restores detached Settings window geometry, and strengthens accessibility regression coverage.
+
+The Windows server token now rotates after unsafe exposure. Concurrent and corrupt settings files fail safely, startup ownership is respected, refresh intervals work as configured, and account or quota views no longer substitute misleading data.
+
 ### Security
 - **A leaked `serve.token` is rotated on Windows, not just Unix.** After SBS-953, a world-readable token was replaced on Unix, but Windows still tightened the DACL and reused the same secret. The ACL is now inspected before tightening; if anyone other than the current user, SYSTEM, or Administrators can read the file, the token is replaced. Closes SBS-1043.
 
