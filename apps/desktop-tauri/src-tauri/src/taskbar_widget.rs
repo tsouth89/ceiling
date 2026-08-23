@@ -121,13 +121,13 @@ impl<'a> ConstrainingReadout<'a> {
 
 /// Inactive-row ids that mark `primary` as a placeholder, not a reading.
 ///
-/// Match by id only. Sweep: only Cursor writes 0% primary plus an inactive
-/// row for that same window (`cursor-plan` / `cursor-monthly`).
+/// Match by id only. Sweep: Cursor writes 0% primary plus an inactive row
+/// (`cursor-plan` / `cursor-monthly`); Claude does the same for a missing
+/// Session (`claude-session`, SBS-1040).
 fn primary_named_state(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<&str> {
-    let row = snapshot
-        .inactive_rate_windows
-        .iter()
-        .find(|row| row.id == "cursor-plan" || row.id == "cursor-monthly")?;
+    let row = snapshot.inactive_rate_windows.iter().find(|row| {
+        row.id == "cursor-plan" || row.id == "cursor-monthly" || row.id == "claude-session"
+    })?;
     Some(if row.state == "unavailable" {
         "unavailable"
     } else {
@@ -3714,6 +3714,34 @@ mod tests {
         assert_eq!(with_auto.label, Some("Auto"));
         assert!(with_auto.named_state.is_none());
         assert_eq!(strip_readout_percent(&with_auto, true), Some(42));
+    }
+
+    /// SBS-1040: Claude writes 0% primary when five_hour/utilization is
+    /// missing, plus `claude-session` unavailable. The tile must not paint 0%.
+    #[test]
+    fn claude_strip_omits_percent_when_session_is_unavailable() {
+        let mut snapshot = snap("claude", None, 0.0);
+        snapshot.primary_label = Some("Session (5h)".into());
+        snapshot
+            .inactive_rate_windows
+            .push(crate::commands::InactiveRateWindowSnapshot {
+                id: "claude-session".into(),
+                title: "Session (5h)".into(),
+                description: "No usage reported".into(),
+                state: "unavailable".into(),
+            });
+
+        let readout = constraining_readout(&snapshot);
+        assert_eq!(readout.named_state, Some("unavailable"));
+        assert_eq!(strip_readout_percent(&readout, true), None);
+        assert_eq!(strip_readout_percent(&readout, false), None);
+
+        snapshot.secondary = Some(rate_window(23.0, Some(10_080)));
+        snapshot.secondary_label = Some("Weekly".into());
+        let with_weekly = constraining_readout(&snapshot);
+        assert_eq!(with_weekly.label, Some("Weekly"));
+        assert!(with_weekly.named_state.is_none());
+        assert_eq!(strip_readout_percent(&with_weekly, true), Some(23));
     }
 
     /// SBS-876: omitting the percent is only half the job. Without a label the

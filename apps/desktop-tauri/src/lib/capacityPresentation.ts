@@ -54,11 +54,16 @@ export const GLANCE_COMPANION_HOT_PERCENT = 70;
  * primary alongside an unavailable Weekly inactive row with a different
  * id (`weekly`); title matching would hide that 51% reading (SBS-876).
  *
- * Sweep: the only writer that emits 0% primary AND an inactive row for
- * that same window is Cursor (`cursor-plan` unavailable, `cursor-monthly`
- * notEnforced in `rust/src/providers/cursor/api.rs`).
+ * Sweep: writers that emit 0% primary AND an inactive row for that same
+ * window — Cursor (`cursor-plan` unavailable, `cursor-monthly` notEnforced)
+ * and Claude (`claude-session` unavailable when five_hour/utilization is
+ * absent, SBS-1040).
  */
-const PRIMARY_PLACEHOLDER_IDS = new Set(["cursor-plan", "cursor-monthly"]);
+const PRIMARY_PLACEHOLDER_IDS = new Set([
+  "cursor-plan",
+  "cursor-monthly",
+  "claude-session",
+]);
 
 export function isPrimaryPlaceholderId(id: string): boolean {
   return PRIMARY_PLACEHOLDER_IDS.has(id);
