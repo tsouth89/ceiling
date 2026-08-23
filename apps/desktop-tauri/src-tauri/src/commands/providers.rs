@@ -1773,10 +1773,38 @@ mod widget_snapshot_tests {
         let amount = on_demand.amount.as_ref().expect("amount");
         assert_eq!(amount.used, 1002.16);
         assert_eq!(amount.limit, Some(1800.0));
+        // Spend already started: the strip surfaces on-demand even while Auto
+        // still has room. Persist has to keep the amount so that ranking can.
+        assert_eq!(
+            entry.constraining_rate_window().map(|w| w.used_percent),
+            Some(56.0),
+            "on-demand spend binds the strip window: {entry:?}"
+        );
+    }
+
+    #[test]
+    fn widget_entry_cursor_ranking_keeps_auto_when_on_demand_is_unused() {
+        let metadata = instantiate_provider(ProviderId::Cursor).metadata().clone();
+        let usage = UsageSnapshot::new(RateWindow::new(95.0))
+            .with_secondary(RateWindow::new(55.0))
+            .with_extra_rate_window("cursor-api", "API", RateWindow::new(12.0));
+        let mut usage = usage;
+        usage.extra_rate_windows.push(
+            codexbar::core::NamedRateWindow::new(
+                "cursor-on-demand",
+                "On-demand",
+                RateWindow::new(0.0),
+            )
+            .with_amount(codexbar::core::WindowAmount::new(0.0, "USD").with_limit(1_800.0)),
+        );
+        let result = ProviderFetchResult::new(usage, "oauth");
+        let snap = ProviderUsageSnapshot::from_fetch_result(ProviderId::Cursor, &metadata, &result);
+        let entry = widget_entry_from_usage_snapshot(&snap).expect("entry");
+
         assert_eq!(
             entry.constraining_rate_window().map(|w| w.used_percent),
             Some(55.0),
-            "Auto still has room, so persist must not let Plan bind"
+            "unused on-demand must not let Plan outrank Auto"
         );
     }
 }
