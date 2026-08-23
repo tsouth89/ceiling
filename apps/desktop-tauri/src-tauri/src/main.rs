@@ -298,6 +298,9 @@ fn main() {
             if shell::flyout_window::handle_window_event(window, event) {
                 return;
             }
+            if shell::settings_window::handle_window_event(window, event) {
+                return;
+            }
             // Only the main window participates in blur-dismiss and close-to-hide.
             // The detached settings window uses normal OS close behavior.
             if window.label() != "main" {
