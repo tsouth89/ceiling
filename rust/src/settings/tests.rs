@@ -1640,6 +1640,58 @@ fn unparseable_settings_are_moved_aside_instead_of_overwritten() {
     );
 }
 
+/// SBS-1029: `Settings::load` used to call [`Settings::parse_or_quarantine`]
+/// without the state lock. A concurrent locked [`Settings::try_update`] can
+/// write a good repair after this thread read the corrupt bytes; renaming
+/// then would move that repair to `.bak`.
+#[test]
+fn unlocked_corrupt_read_does_not_rename_a_concurrent_repair() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    let original = "{\"refresh_interval_secs\":\"60\"";
+    std::fs::write(&path, original).expect("write corrupt settings");
+
+    let (loaded, pending_quarantine) = Settings::read_path(&path, false);
+    assert!(
+        pending_quarantine,
+        "an unlocked parse failure must ask load() to retry under the lock"
+    );
+    assert_eq!(
+        loaded.refresh_interval_secs,
+        Settings::default().refresh_interval_secs
+    );
+    assert!(
+        path.exists(),
+        "the unlocked path must leave the live file in place"
+    );
+    assert!(
+        !Settings::backup_path(&path).exists(),
+        "the unlocked path must not create a backup"
+    );
+
+    // Locked try_update repair occupies the live path (SBS-954 / SBS-1029).
+    let repaired = "{\n  \"refresh_interval_secs\": 42\n}";
+    std::fs::write(&path, repaired).expect("write repair");
+
+    // load() re-reads under the lock. The file is valid now, so quarantine
+    // must not run and the repair must stay.
+    let (reloaded, pending_after_repair) = Settings::read_path(&path, true);
+    assert!(
+        !pending_after_repair,
+        "a successful locked re-read has nothing left to quarantine"
+    );
+    assert_eq!(reloaded.refresh_interval_secs, 42);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read live"),
+        repaired,
+        "the repair must stay at the live path"
+    );
+    assert!(
+        !Settings::backup_path(&path).exists(),
+        "a good repair must not be moved to .bak"
+    );
+}
+
 /// SBS-964: a privacy-conscious reader who leaves incident badges off still
 /// sees models.dev and GitHub traffic. Claiming the badge is the only
 /// non-provider outbound request is false; the copy has to name those hosts.
