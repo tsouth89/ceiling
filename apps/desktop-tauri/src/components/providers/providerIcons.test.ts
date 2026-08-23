@@ -22,7 +22,10 @@ const DARK_CARD = "#1c2026";
 const LIGHT_CARD = "#f5f7fa";
 
 describe("provider icon registry", () => {
-  it("has explicit icon metadata for every provider in the catalog", () => {
+  it("has explicit icon metadata for every live ProviderId (SBS-1048)", () => {
+    // Walks the Rust-generated catalog, not a hand-kept subset. A live
+    // ProviderId without PROVIDER_ICON_REGISTRY must fail Frontend CI.
+    expect(TEST_PROVIDER_CATALOG.map(([id]) => id)).toContain("wayfinder");
     for (const [id] of TEST_PROVIDER_CATALOG) {
       expect(PROVIDER_ICON_REGISTRY[id], id).toBeDefined();
     }
