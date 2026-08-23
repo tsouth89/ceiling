@@ -23,16 +23,27 @@ pub type CodexAccountStore = DirectoryAccountStore<CodexIdentity>;
 
 /// Resolve the Codex home the CLI itself would use: `CODEX_HOME` when set to a
 /// non-empty value, otherwise `~/.codex`.
-pub fn ambient_codex_home() -> PathBuf {
-    if let Ok(home) = std::env::var("CODEX_HOME") {
+///
+/// No resolvable home is not the working directory. Returning `./.codex`
+/// would treat a checkout as the ambient session root (SBS-1021 / SBS-950).
+pub fn ambient_codex_home() -> Option<PathBuf> {
+    ambient_codex_home_from(
+        std::env::var("CODEX_HOME").ok().as_deref(),
+        dirs::home_dir(),
+    )
+}
+
+pub(crate) fn ambient_codex_home_from(
+    codex_home: Option<&str>,
+    home_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(home) = codex_home {
         let trimmed = home.trim();
         if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
+            return Some(PathBuf::from(trimmed));
         }
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(DEFAULT_CODEX_DIR)
+    Some(home_dir?.join(DEFAULT_CODEX_DIR))
 }
 
 /// Identity read from a Codex home's `auth.json`.
@@ -61,7 +72,7 @@ impl CodexIdentity {
 }
 
 impl AccountIdentity for CodexIdentity {
-    fn ambient_dir() -> PathBuf {
+    fn ambient_dir() -> Option<PathBuf> {
         ambient_codex_home()
     }
 
@@ -179,6 +190,32 @@ mod tests {
         assert!(
             CodexAccountStore::default_path().ends_with("codex-accounts.json"),
             "codex accounts must not share a file with another provider"
+        );
+    }
+
+    /// Pins SBS-1021: a missing home is not the working directory. Returning
+    /// `Some("./.codex")` here is what loaded a checkout as the ambient
+    /// session root (the Gemini leftover from SBS-950).
+    #[test]
+    fn missing_home_is_not_the_working_directory() {
+        assert_eq!(ambient_codex_home_from(None, None), None);
+        assert_eq!(ambient_codex_home_from(Some("  "), None), None);
+        assert_eq!(ambient_codex_home_from(Some(""), None), None);
+    }
+
+    #[test]
+    fn an_explicit_codex_home_does_not_need_a_home_directory() {
+        assert_eq!(
+            ambient_codex_home_from(Some("/homes/work"), None),
+            Some(PathBuf::from("/homes/work"))
+        );
+    }
+
+    #[test]
+    fn default_codex_home_joins_the_home() {
+        assert_eq!(
+            ambient_codex_home_from(None, Some(PathBuf::from("/home/me"))),
+            Some(PathBuf::from("/home/me").join(".codex"))
         );
     }
 }

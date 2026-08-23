@@ -169,7 +169,7 @@ impl ClaudeOAuthFetcher {
         let dir = self
             .config_dir
             .clone()
-            .unwrap_or_else(crate::core::ambient_claude_config_dir);
+            .or_else(crate::core::ambient_claude_config_dir)?;
         crate::core::ClaudeIdentity::read(&dir)
     }
 

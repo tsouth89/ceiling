@@ -44,8 +44,9 @@ pub struct ProviderAccountsBridge {
     /// True when no accounts are configured and Ceiling follows whichever
     /// account the CLI is signed in as, which is the default.
     pub following_cli: bool,
-    /// The directory being followed in that case.
-    pub ambient_dir: String,
+    /// The directory being followed in that case. `None` when the provider
+    /// home cannot be resolved; never an empty string.
+    pub ambient_dir: Option<String>,
 }
 
 /// Result of inspecting a directory before adding it as an account.
@@ -153,7 +154,7 @@ fn bridge_provider<I: Displayable>(data: &DirectoryAccountData<I>) -> ProviderAc
             .collect(),
         active_index: active,
         following_cli: !data.is_explicit(),
-        ambient_dir: I::ambient_dir().display().to_string(),
+        ambient_dir: I::ambient_dir().map(|dir| dir.display().to_string()),
     }
 }
 
@@ -224,14 +225,19 @@ fn ensure_ambient_registered<I: Displayable>() {
     if !data.accounts.is_empty() {
         return;
     }
-    if !I::is_signed_in(&I::ambient_dir()) {
+    let Some(ambient) = I::ambient_dir() else {
+        return;
+    };
+    if !I::is_signed_in(&ambient) {
         return;
     }
     if let Err(error) = store.try_update(|data| {
         if !data.accounts.is_empty() {
             return Ok(());
         }
-        let ambient = I::ambient_dir();
+        let Some(ambient) = I::ambient_dir() else {
+            return Ok(());
+        };
         if I::is_signed_in(&ambient) {
             data.add_account(DirectoryAccount::<I>::new(None, ambient));
         }
@@ -545,5 +551,38 @@ mod tests {
         assert!(parse_tint(Some("#4f8ff7; background: url(x)".into())).is_err());
         assert!(parse_tint(Some("var(--accent)".into())).is_err());
         assert!(parse_tint(Some("#zzzzzz".into())).is_err());
+    }
+
+    fn sample_bridge(ambient_dir: Option<String>) -> ProviderAccountsBridge {
+        ProviderAccountsBridge {
+            provider_id: "codex".into(),
+            display_name: "Codex".into(),
+            env_var: "CODEX_HOME".into(),
+            accounts: vec![],
+            active_index: 0,
+            following_cli: true,
+            ambient_dir,
+        }
+    }
+
+    #[test]
+    fn missing_ambient_dir_serializes_as_json_null() {
+        let json = serde_json::to_value(sample_bridge(None)).expect("serialize");
+        assert_eq!(json["ambientDir"], serde_json::Value::Null);
+        let text = serde_json::to_string(&sample_bridge(None)).expect("serialize");
+        assert!(
+            !text.contains("\"ambientDir\":\"\""),
+            "empty string must not stand in for a missing home: {text}"
+        );
+    }
+
+    #[test]
+    fn resolved_ambient_dir_serializes_as_a_string() {
+        let json =
+            serde_json::to_value(sample_bridge(Some(r"C:\codex".into()))).expect("serialize");
+        assert_eq!(
+            json["ambientDir"],
+            serde_json::Value::String(r"C:\codex".into())
+        );
     }
 }

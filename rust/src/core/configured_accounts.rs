@@ -80,8 +80,16 @@ impl ConfiguredAccounts {
     /// snapshotted when the refresh cycle started.
     pub fn active_dir_for(&self, provider: ProviderId) -> Option<PathBuf> {
         match provider {
-            ProviderId::Codex => self.codex.is_explicit().then(|| self.codex.active_dir()),
-            ProviderId::Claude => self.claude.is_explicit().then(|| self.claude.active_dir()),
+            ProviderId::Codex => self
+                .codex
+                .is_explicit()
+                .then(|| self.codex.active_dir())
+                .flatten(),
+            ProviderId::Claude => self
+                .claude
+                .is_explicit()
+                .then(|| self.claude.active_dir())
+                .flatten(),
             _ => None,
         }
     }

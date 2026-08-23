@@ -47,6 +47,20 @@ fn configured_account_homes(provider: ProviderId) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Ambient Claude `projects/` root from the user's home.
+///
+/// No home is not `.claude/projects` under the working directory
+/// (SBS-1021 / SBS-950).
+fn claude_projects_dir_from_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    let home = home?;
+    let primary = home.join(".claude").join("projects");
+    if primary.exists() {
+        Some(primary)
+    } else {
+        Some(home.join(".config").join("claude").join("projects"))
+    }
+}
+
 /// Cost summary from scanning local logs
 #[derive(Debug, Clone, Default)]
 pub struct CostSummary {
@@ -965,18 +979,8 @@ impl CostScanner {
                     PathBuf::from(trimmed).join("projects"),
                 );
             }
-        } else {
-            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-            let primary = home.join(".claude").join("projects");
-            if primary.exists() {
-                push(&mut dirs, &mut seen, primary);
-            } else {
-                push(
-                    &mut dirs,
-                    &mut seen,
-                    home.join(".config").join("claude").join("projects"),
-                );
-            }
+        } else if let Some(projects) = claude_projects_dir_from_home(dirs::home_dir()) {
+            push(&mut dirs, &mut seen, projects);
         }
 
         for account_home in self.account_homes(ProviderId::Claude) {
@@ -2729,6 +2733,12 @@ mod tests {
     use super::*;
     use crate::core::ProviderId;
     use std::io::Write;
+
+    /// Pins SBS-1021: a missing home is not `.claude/projects` under cwd.
+    #[test]
+    fn missing_home_is_not_the_working_directory_for_claude_projects() {
+        assert_eq!(claude_projects_dir_from_home(None), None);
+    }
 
     #[test]
     fn project_from_cwd_extracts_basename() {

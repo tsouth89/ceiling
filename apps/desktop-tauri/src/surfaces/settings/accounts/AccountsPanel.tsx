@@ -141,8 +141,10 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
 
   const cli = LOGIN_CLI[provider.providerId] ?? provider.providerId;
   // A literal path beats "<path>": it is copy-pasteable and shows the shape of
-  // the answer, sitting beside the directory already in use.
-  const suggestedDir = `${provider.ambientDir}-work`;
+  // the answer, sitting beside the directory already in use. Skip it when the
+  // provider home is unresolved — interpolating anyway yields "-work".
+  const ambientDir = provider.ambientDir?.trim() || null;
+  const suggestedDir = ambientDir ? `${ambientDir}-work` : null;
 
   return (
     <div className="accounts-provider">
@@ -153,10 +155,12 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
           <span className="credential-card__badge credential-card__badge--set">
             {t("AccountsFollowingCli")}
           </span>
-          <span className="credential-card__meta">
-            {t("AccountsFollowingCliHint")}{" "}
-            <code className="accounts-path">{provider.ambientDir}</code>
-          </span>
+          {ambientDir ? (
+            <span className="credential-card__meta">
+              {t("AccountsFollowingCliHint")}{" "}
+              <code className="accounts-path">{ambientDir}</code>
+            </span>
+          ) : null}
         </div>
       ) : (
         <ul className="credential-list accounts-list">
@@ -223,8 +227,16 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
           <li>
             {t("AccountsSetupStep1")}
             <code className="accounts-path accounts-setup__command">
-              mkdir &quot;{suggestedDir}&quot;; $env:{provider.envVar}=&quot;
-              {suggestedDir}&quot;; {cli} login
+              {suggestedDir ? (
+                <>
+                  mkdir &quot;{suggestedDir}&quot;; $env:{provider.envVar}=&quot;
+                  {suggestedDir}&quot;; {cli} login
+                </>
+              ) : (
+                <>
+                  $env:{provider.envVar}=&quot;&lt;path&gt;&quot;; {cli} login
+                </>
+              )}
             </code>
           </li>
           <li>{t("AccountsSetupStep2")}</li>
@@ -235,7 +247,7 @@ function ProviderAccounts({ provider, busy, onRun }: ProviderProps) {
         <input
           className="text-input"
           type="text"
-          placeholder={suggestedDir}
+          placeholder={suggestedDir ?? t("AccountsDirPlaceholder")}
           value={dir}
           onChange={(e) => {
             setDir(e.target.value);
