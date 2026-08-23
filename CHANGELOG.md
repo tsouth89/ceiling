@@ -6,6 +6,7 @@
 - **A leaked `serve.token` is rotated on Windows, not just Unix.** After SBS-953, a world-readable token was replaced on Unix, but Windows still tightened the DACL and reused the same secret. The ACL is now inspected before tightening; if anyone other than the current user, SYSTEM, or Administrators can read the file, the token is replaced. Closes SBS-1043.
 
 ### Fixed
+- **Codex latest-session cost follows transcript time.** Copying or touching an older rollout no longer makes it replace a newer session in local cost summaries. Fixes #271.
 - **MCP `get_status` no longer hides an exhausted Weekly behind a healthy session.** Top-level `remaining_percent` copied only `usage.primary`, so a Claude/Codex 5-hour window with room made the advertised cap-check sink look fine while Weekly was already at 100%. It now uses the same constraining-window ranking as the desktop strip across primary, secondary, and tertiary (exhausted first, then highest used %). Closes SBS-1055.
 - **Remembered window positions no longer drop a sibling when two surfaces save at once.** `window_geometry.json` was updated with an unlocked read-modify-write, so moving Settings while the float bar or Pop Out also wrote could replace the file with a snapshot that had never seen the other key. Geometry persist now holds the same cross-process state lock as settings and credentials. Closes SBS-1024.
 - **`codexbar` with no subcommand now runs `usage`.** CLI.md and `--help` already called usage the default command, but a bare `codexbar` printed an error asking for an explicit subcommand. It now does what those docs said. Closes SBS-1026.
@@ -1559,6 +1560,5 @@ First stable release of Ceiling for Windows.
 - Configurable refresh cadence, manual refresh, and About links.
 - Async off-main log parsing for responsiveness; strict-concurrency build flags enabled.
 - Packaging + signing/notarization scripts (arm64); build scripts convert `.icon` bundle to `.icns`.
-
 
 

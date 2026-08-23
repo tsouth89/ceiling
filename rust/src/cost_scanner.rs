@@ -2182,7 +2182,7 @@ struct CodexReportRollups<'a> {
     hourly: HourlySummaries,
     collect_hourly: bool,
     current_windows: HashMap<String, CostSummary>,
-    latest: Option<(std::time::SystemTime, CostSummary)>,
+    latest: Option<(DateTime<Utc>, PathBuf, CostSummary)>,
     today_sessions: u32,
     seven_day_sessions: u32,
     period_sessions: u32,
@@ -2217,6 +2217,7 @@ impl<'a> CodexReportRollups<'a> {
     /// a caller bug rather than something to filter here.
     fn ingest_parsed(&mut self, path: &Path, records: &[CodexUsageRecord]) {
         let mut file_summary = CostSummary::default();
+        let mut latest_recorded_at = None;
         let mut contributed_today = false;
         let mut contributed_seven_days = false;
         for record in records {
@@ -2232,6 +2233,11 @@ impl<'a> CodexReportRollups<'a> {
                 &self.range.until_key,
             ) {
                 continue;
+            }
+            if let Some(timestamp) = record.timestamp
+                && latest_recorded_at.is_none_or(|seen| timestamp > seen)
+            {
+                latest_recorded_at = Some(timestamp);
             }
             // Always credit caller windows first. A missing daily bucket must not
             // drop custom/reset-window totals (that is what broke Estimated API
@@ -2277,15 +2283,17 @@ impl<'a> CodexReportRollups<'a> {
         self.period_sessions += 1;
         self.today_sessions += u32::from(contributed_today);
         self.seven_day_sessions += u32::from(contributed_seven_days);
-        let modified = fs::metadata(path)
+        let fallback_modified = fs::metadata(path)
             .and_then(|metadata| metadata.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        if self
-            .latest
-            .as_ref()
-            .is_none_or(|(seen, _)| modified > *seen)
-        {
-            self.latest = Some((modified, file_summary));
+            .ok()
+            .map(DateTime::<Utc>::from)
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+        let recorded_at = latest_recorded_at.unwrap_or(fallback_modified);
+        let path = path.to_path_buf();
+        if self.latest.as_ref().is_none_or(|(seen_at, seen_path, _)| {
+            recorded_at > *seen_at || (recorded_at == *seen_at && path > *seen_path)
+        }) {
+            self.latest = Some((recorded_at, path, file_summary));
         }
     }
 
@@ -2294,7 +2302,7 @@ impl<'a> CodexReportRollups<'a> {
             self.daily,
             self.hourly,
             days,
-            self.latest.map(|(_, summary)| summary),
+            self.latest.map(|(_, _, summary)| summary),
             (
                 self.today_sessions,
                 self.seven_day_sessions,
@@ -4124,5 +4132,67 @@ mod tests {
             "derived local day {day} must receive the record"
         );
         assert_eq!(report.hourly_activity.len(), 1);
+    }
+
+    #[test]
+    fn codex_latest_session_uses_record_timestamp_not_file_mtime() {
+        let now = Utc::now();
+        let today = now.with_timezone(&Local).date_naive();
+        let range = CostUsageDayRange::new(today, today);
+        let dir = tempfile::tempdir().unwrap();
+        let newer_path = dir.path().join("newer.jsonl");
+        let older_path = dir.path().join("older.jsonl");
+        std::fs::write(&newer_path, "newer").unwrap();
+        std::fs::write(&older_path, "older touched later").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&newer_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(3_600),
+                ),
+            )
+            .unwrap();
+
+        let record = |timestamp, input| CodexUsageRecord {
+            timestamp: Some(timestamp),
+            model: "gpt-5.6-sol".to_string(),
+            effort: None,
+            project: None,
+            plan: None,
+            input,
+            cached: 0,
+            output: 1,
+        };
+        let mut rollups = CodexReportRollups::new(1, &range, &[], today, false);
+        rollups.ingest_parsed(&newer_path, &[record(now, 222)]);
+        rollups.ingest_parsed(&older_path, &[record(now - Duration::hours(1), 111)]);
+
+        let latest = rollups.finish(1).latest_session.expect("latest session");
+        assert_eq!(latest.input_tokens, 222);
+    }
+
+    #[test]
+    fn codex_latest_session_ties_are_broken_by_path() {
+        let now = Utc::now();
+        let today = now.with_timezone(&Local).date_naive();
+        let range = CostUsageDayRange::new(today, today);
+        let record = |input| CodexUsageRecord {
+            timestamp: Some(now),
+            model: "gpt-5.6-sol".to_string(),
+            effort: None,
+            project: None,
+            plan: None,
+            input,
+            cached: 0,
+            output: 1,
+        };
+        let mut rollups = CodexReportRollups::new(1, &range, &[], today, false);
+        rollups.ingest_parsed(Path::new("a.jsonl"), &[record(111)]);
+        rollups.ingest_parsed(Path::new("b.jsonl"), &[record(222)]);
+
+        let latest = rollups.finish(1).latest_session.expect("latest session");
+        assert_eq!(latest.input_tokens, 222);
     }
 }
