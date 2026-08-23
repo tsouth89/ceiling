@@ -1,6 +1,5 @@
 import {
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type DragEvent as ReactDragEvent,
   useEffect,
   useRef,
@@ -166,18 +165,6 @@ export function ProvidersSidebar({
     setDropTargetId(null);
   };
 
-  const handleKey = (row: ProviderSidebarRow) => (e: ReactKeyboardEvent<HTMLLIElement>) => {
-    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-      e.preventDefault();
-      moveId(row.id, e.key === "ArrowUp" ? -1 : 1);
-      return;
-    }
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onSelect(row.id);
-    }
-  };
-
   const sidebarRef = useRef<HTMLUListElement>(null);
 
   // Explicit wheel handler — WebView2 on Windows can swallow wheel events
@@ -217,9 +204,8 @@ export function ProvidersSidebar({
       <ul
         ref={sidebarRef}
         className="providers-sidebar"
-        role="listbox"
+        role="list"
         aria-label="Providers"
-        aria-orientation="vertical"
         onWheel={handleWheel}
       >
         {ordered.length === 0 && (
@@ -254,37 +240,39 @@ export function ProvidersSidebar({
             <li
               key={p.id}
               className={cls}
-              role="option"
-              tabIndex={isSelected ? 0 : -1}
-              aria-selected={isSelected}
               draggable={!disabled}
               style={rowStyle}
-              onClick={() => onSelect(p.id)}
-              onKeyDown={handleKey(p)}
               onDragStart={handleDragStart(p.id)}
               onDragOver={handleDragOver(p.id)}
               onDrop={handleDrop(p.id)}
               onDragEnd={handleDragEnd}
             >
-              <span
-                className={`providers-sidebar__status providers-sidebar__status--${p.status}`}
-                title={t(STATUS_TO_KEY[p.status])}
-                aria-label={t(STATUS_TO_KEY[p.status])}
-              />
-              <ProviderIcon providerId={p.id} size={24} />
-              <div className="providers-sidebar__text">
-                <span className="providers-sidebar__name">{p.displayName}</span>
-                <span className="providers-sidebar__subtitle">
-                  <span className="providers-sidebar__subtitle-primary">
-                    {p.subtitlePrimary}
-                  </span>
-                  {p.subtitleSecondary && (
-                    <span className="providers-sidebar__subtitle-secondary">
-                      {p.subtitleSecondary}
+              <button
+                type="button"
+                className="providers-sidebar__select"
+                onClick={() => onSelect(p.id)}
+                aria-current={isSelected ? "true" : undefined}
+              >
+                <span
+                  className={`providers-sidebar__status providers-sidebar__status--${p.status}`}
+                  title={t(STATUS_TO_KEY[p.status])}
+                  aria-label={t(STATUS_TO_KEY[p.status])}
+                />
+                <ProviderIcon providerId={p.id} size={24} />
+                <span className="providers-sidebar__text">
+                  <span className="providers-sidebar__name">{p.displayName}</span>
+                  <span className="providers-sidebar__subtitle">
+                    <span className="providers-sidebar__subtitle-primary">
+                      {p.subtitlePrimary}
                     </span>
-                  )}
+                    {p.subtitleSecondary && (
+                      <span className="providers-sidebar__subtitle-secondary">
+                        {p.subtitleSecondary}
+                      </span>
+                    )}
+                  </span>
                 </span>
-              </div>
+              </button>
               <span
                 className="providers-sidebar__handle"
                 aria-hidden="true"

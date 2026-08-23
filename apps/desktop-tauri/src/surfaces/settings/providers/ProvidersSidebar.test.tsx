@@ -61,8 +61,9 @@ describe("ProvidersSidebar", () => {
       </LocaleProvider>,
     );
 
-    expect(await screen.findByRole("listbox", { name: "Providers" })).toBeInTheDocument();
-    expect(screen.getAllByRole("option")).toHaveLength(TEST_PROVIDER_CATALOG.length);
+    expect(await screen.findByRole("list", { name: "Providers" })).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(TEST_PROVIDER_CATALOG.length);
+    expect(screen.queryByRole("option")).toBeNull();
     const names = Array.from(
       container.querySelectorAll(".providers-sidebar__name"),
       (node) => node.textContent,
@@ -177,5 +178,41 @@ describe("ProvidersSidebar", () => {
     );
 
     expect(await screen.findByRole("button", { name: "Move up Codex" })).toBeDisabled();
+  });
+
+  it("keeps selection, enable, and reorder as sibling controls", async () => {
+    const onSelect = vi.fn();
+    const onToggleEnabled = vi.fn();
+    const onReorder = vi.fn();
+    render(
+      <LocaleProvider>
+        <ProvidersSidebar
+          providers={rows()}
+          selectedId="codex"
+          searchText=""
+          onSearchTextChange={vi.fn()}
+          onSelect={onSelect}
+          onReorder={onReorder}
+          onToggleEnabled={onToggleEnabled}
+        />
+      </LocaleProvider>,
+    );
+
+    const select = (await screen.findByText("Codex")).closest("button");
+    expect(select).not.toBeNull();
+    const enabled = screen.getByRole("checkbox", { name: "Codex enabled" });
+    const down = screen.getByRole("button", { name: "Move down Codex" });
+    const row = select!.closest("li");
+    expect(row).toContainElement(enabled);
+    expect(row).toContainElement(down);
+    expect(select).not.toContainElement(enabled);
+    expect(select).not.toContainElement(down);
+
+    fireEvent.click(select!);
+    fireEvent.click(enabled);
+    fireEvent.click(down);
+    expect(onSelect).toHaveBeenCalledWith("codex");
+    expect(onToggleEnabled).toHaveBeenCalledWith("codex", false);
+    expect(onReorder).toHaveBeenCalled();
   });
 });
