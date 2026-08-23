@@ -501,8 +501,7 @@ impl TokenSecretStore for OsTokenSecretStore {
     fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
         match crate::keychain::get_password(crate::keychain::Scope::Any, service, user) {
             Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
-            Ok(_) => Ok(None),
-            Err(crate::keychain::Error::Disabled | crate::keychain::Error::NotFound) => Ok(None),
+            Ok(_) | Err(crate::keychain::Error::NotFound) => Ok(None),
             Err(error) => Err(error.to_string()),
         }
     }
@@ -514,9 +513,7 @@ impl TokenSecretStore for OsTokenSecretStore {
 
     fn delete(&self, service: &str, user: &str) -> Result<(), String> {
         match crate::keychain::delete_credential(crate::keychain::Scope::Any, service, user) {
-            Ok(()) | Err(crate::keychain::Error::Disabled | crate::keychain::Error::NotFound) => {
-                Ok(())
-            }
+            Ok(()) | Err(crate::keychain::Error::NotFound) => Ok(()),
             Err(error) => Err(error.to_string()),
         }
     }
@@ -787,6 +784,28 @@ mod tests {
         assert_eq!(
             resolve_token_in(&FailingDeleteStore, None, STEPFUN_CREDENTIAL_TARGET, &[]).unwrap(),
             "leftover-oasis-token"
+        );
+    }
+
+    #[test]
+    fn clear_persisted_credentials_fails_closed_when_keychain_is_disabled() {
+        let _guard = crate::keychain::with_mock_store(
+            false,
+            &[(STEPFUN_CREDENTIAL_TARGET, "api_key", "leftover")],
+        );
+        let error = clear_token_secret(&OsTokenSecretStore)
+            .expect_err("a disabled keychain must fail revoke");
+        let message = error.to_string();
+        assert!(
+            message.contains("Could not delete StepFun keyring token")
+                && message.contains("disabled"),
+            "got {error}"
+        );
+        assert!(
+            OsTokenSecretStore
+                .get(STEPFUN_CREDENTIAL_TARGET, "api_key")
+                .is_err(),
+            "Disabled must not look like a missing token"
         );
     }
 
