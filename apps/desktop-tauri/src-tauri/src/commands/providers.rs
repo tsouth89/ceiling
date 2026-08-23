@@ -736,8 +736,16 @@ fn widget_entry_from_usage_snapshot(
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
 
-    let mut entry = codexbar::core::WidgetProviderEntry::new(provider, updated_at)
-        .with_primary(rate_window_from_snapshot(&snap.primary));
+    let mut entry = codexbar::core::WidgetProviderEntry::new(provider, updated_at);
+    let primary_is_placeholder = snap.inactive_rate_windows.iter().any(|window| {
+        matches!(
+            window.id.as_str(),
+            "cursor-plan" | "cursor-monthly" | "claude-session"
+        )
+    });
+    if !primary_is_placeholder {
+        entry = entry.with_primary(rate_window_from_snapshot(&snap.primary));
+    }
     if let Some(secondary) = snap.secondary.as_ref() {
         entry = entry.with_secondary(rate_window_from_snapshot(secondary));
     }
@@ -1538,5 +1546,30 @@ mod widget_snapshot_tests {
         assert_eq!(usage.period_cost_usd, Some(12.5));
         assert_eq!(usage.cost_period.as_deref(), Some("Monthly"));
         assert_eq!(entry.credits_remaining, Some(87.5));
+    }
+
+    #[test]
+    fn widget_entry_omits_an_unavailable_claude_session_placeholder() {
+        let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+        let usage = UsageSnapshot::new(RateWindow::new(0.0)).with_unavailable_rate_window(
+            "claude-session",
+            "Session (5h)",
+            "No usage reported",
+        );
+        let result = ProviderFetchResult::new(usage, "oauth");
+        let snap = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
+
+        let entry = widget_entry_from_usage_snapshot(&snap).expect("entry");
+        assert!(entry.primary.is_none());
+    }
+
+    #[test]
+    fn widget_entry_keeps_a_measured_zero_percent_primary() {
+        let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(0.0)), "oauth");
+        let snap = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
+
+        let entry = widget_entry_from_usage_snapshot(&snap).expect("entry");
+        assert_eq!(entry.primary.expect("measured primary").used_percent, 0.0);
     }
 }
