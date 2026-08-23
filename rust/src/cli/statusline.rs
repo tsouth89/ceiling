@@ -129,7 +129,7 @@ fn format_entry(entry: &WidgetProviderEntry, show_cost: bool) -> String {
         && let Some(cost) = entry
             .token_usage
             .as_ref()
-            .and_then(|usage| usage.session_cost_usd)
+            .and_then(|usage| usage.period_cost_usd)
             .filter(|cost| *cost > 0.0)
     {
         parts.push(format!("${cost:.2}"));

@@ -754,10 +754,11 @@ fn widget_entry_from_usage_snapshot(
         if let Some(remaining) = cost.remaining {
             entry = entry.with_credits_remaining(remaining);
         }
-        // Statusline / MCP read session_cost_usd from token_usage; provider
-        // CostSnapshot.used is the billed/period dollar figure we have.
-        entry = entry
-            .with_token_usage(codexbar::core::TokenUsageSummary::new().with_session(cost.used, 0));
+        // Statusline / MCP read period_cost_usd from token_usage. Provider
+        // CostSnapshot.used is the billed/current-period dollar figure.
+        entry = entry.with_token_usage(
+            codexbar::core::TokenUsageSummary::new().with_period(cost.used, cost.period.clone()),
+        );
     }
     Some(entry)
 }
@@ -1517,5 +1518,25 @@ mod predictive_warning_tests {
         let (title, body) = capacity_event_notification(&[partial, banked]).unwrap();
         assert_eq!(title, "Codex capacity restored");
         assert_eq!(body, "Weekly 90% → 10% used; 2 banked resets available.");
+    }
+}
+
+#[cfg(test)]
+mod widget_snapshot_tests {
+    use super::*;
+    use codexbar::core::{CostSnapshot, RateWindow, UsageSnapshot};
+
+    /// SBS-1031: CostSnapshot.used is billed/period spend, not a conversation.
+    #[test]
+    fn widget_entry_stores_period_cost_from_cost_snapshot() {
+        let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(42.0)), "oauth")
+            .with_cost(CostSnapshot::new(12.5, "USD", "Monthly").with_limit(100.0));
+        let snap = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
+        let entry = widget_entry_from_usage_snapshot(&snap).expect("entry");
+        let usage = entry.token_usage.expect("token usage");
+        assert_eq!(usage.period_cost_usd, Some(12.5));
+        assert_eq!(usage.cost_period.as_deref(), Some("Monthly"));
+        assert_eq!(entry.credits_remaining, Some(87.5));
     }
 }
