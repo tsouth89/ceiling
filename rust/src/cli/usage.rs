@@ -258,10 +258,11 @@ fn usage_targets(command: &UsageCommand) -> Vec<UsageTarget> {
         .providers
         .iter()
         .flat_map(|provider| {
-            let accounts = command
-                .all_accounts
-                .then(|| command.accounts.targets_for(*provider))
-                .unwrap_or_default();
+            let accounts = if command.all_accounts {
+                command.accounts.targets_for(*provider)
+            } else {
+                Vec::new()
+            };
             if accounts.is_empty() {
                 vec![UsageTarget {
                     provider: *provider,
