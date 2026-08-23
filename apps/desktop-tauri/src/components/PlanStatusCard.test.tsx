@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import PlanStatusCard from "./PlanStatusCard";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
+import { expectNoAccessibilityViolations } from "../test/accessibility";
 
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({
@@ -67,6 +68,19 @@ function provider(
 }
 
 describe("PlanStatusCard", () => {
+  it("has no detectable accessibility violations", async () => {
+    const { container } = render(
+      <PlanStatusCard
+        provider={provider()}
+        resetTimeRelative
+        showAsUsed
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await expectNoAccessibilityViolations(container);
+  });
+
   it("includes displayed quota windows in the card button name", () => {
     render(
       <PlanStatusCard
