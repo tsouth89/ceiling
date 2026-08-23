@@ -682,6 +682,85 @@ fn test_start_at_login_repairs_legacy_desktop_command_after_update() {
 }
 
 #[test]
+fn test_start_at_login_does_not_steal_another_tree() {
+    let installed = tempfile::tempdir().expect("installed dir");
+    let portable = tempfile::tempdir().expect("portable dir");
+    let installed_desktop = installed.path().join("ceiling.exe");
+    let portable_cli = portable.path().join("codexbar-cli.exe");
+    let portable_desktop = portable.path().join("ceiling.exe");
+    std::fs::write(&installed_desktop, b"installed").expect("write installed");
+    std::fs::write(&portable_cli, b"cli").expect("write portable cli");
+    std::fs::write(&portable_desktop, b"portable").expect("write portable desktop");
+    let installed_command = format!("\"{}\"", installed_desktop.display());
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &installed_command,
+        &portable_cli
+    ));
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &installed_command,
+        &portable_desktop
+    ));
+}
+
+#[test]
+fn test_start_at_login_preserves_custom_args() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let command = format!("\"{}\" --minimized", desktop_path.display());
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &command,
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_preserves_custom_args_on_stale_sibling() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let cli_path = temp.path().join("codexbar-cli.exe");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&cli_path, b"cli").expect("write cli");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let command = format!("\"{}\" --minimized", cli_path.display());
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        &command,
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_preserves_unrelated_run_value() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+
+    assert!(!Settings::start_at_login_command_needs_repair(
+        r#""D:\tools\other.exe""#,
+        &desktop_path
+    ));
+    assert!(!Settings::start_at_login_command_needs_repair(
+        "",
+        &desktop_path
+    ));
+}
+
+#[test]
+fn test_start_at_login_repairs_unquoted_owned_command() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let desktop_path = temp.path().join("ceiling.exe");
+    std::fs::write(&desktop_path, b"desktop").expect("write desktop");
+    let unquoted = desktop_path.display().to_string();
+
+    assert!(Settings::start_at_login_command_needs_repair(
+        &unquoted,
+        &desktop_path
+    ));
+}
+
+#[test]
 fn test_language_defaults_to_english() {
     let settings = Settings::default();
     assert_eq!(settings.ui_language, Language::English);
