@@ -9,7 +9,8 @@ use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeZone, Timeli
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, CostUsageReport, CurrentUsageWindow, get_cost_usage_report,
-    get_cost_usage_report_hourly, get_cost_usage_report_scoped, get_cost_usage_report_with_windows,
+    get_cost_usage_report_hourly, get_cost_usage_report_scoped_with_cancel,
+    get_cost_usage_report_with_windows,
 };
 use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
@@ -568,6 +569,7 @@ pub async fn get_provider_chart_data(
     let fallback_provider_id = provider_id.clone();
     let fallback_scope = account_scope.kind();
     let cancel = register_chart_scan(&provider_id);
+    let cancel_watch = cancel.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         build_provider_chart_data_with_cancel(
             provider_id,
@@ -584,7 +586,10 @@ pub async fn get_provider_chart_data(
         tracing::warn!("Provider chart data worker failed: {}", err);
         ProviderChartData::empty_with_scope(fallback_provider_id, fallback_scope)
     });
-    store_chart_data(cache_key, result.clone());
+    // A superseded scan must not write a partial/empty payload over a newer one.
+    if !cancel_watch.load(Ordering::Relaxed) {
+        store_chart_data(cache_key, result.clone());
+    }
     result
 }
 
@@ -1792,15 +1797,35 @@ fn build_provider_chart_data_with_cancel(
     // reset-aligned windows so one pass over the logs serves both.
     let (comparison_specs, comparison_windows) = comparison_period_specs(Utc::now());
     usage_windows.extend(comparison_windows);
+    if cancel
+        .as_deref()
+        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
+        return ProviderChartData::empty_with_scope(provider_id, account_scope.kind());
+    }
     let report = match &account_scope {
-        ChartAccountScope::MachineWide => {
-            get_cost_usage_report_scoped(&provider_id, 30, &usage_windows, None)
-        }
-        ChartAccountScope::Account { config_dir, .. } => {
-            get_cost_usage_report_scoped(&provider_id, 30, &usage_windows, Some(config_dir.clone()))
-        }
+        ChartAccountScope::MachineWide => get_cost_usage_report_scoped_with_cancel(
+            &provider_id,
+            30,
+            &usage_windows,
+            None,
+            cancel.as_deref(),
+        ),
+        ChartAccountScope::Account { config_dir, .. } => get_cost_usage_report_scoped_with_cancel(
+            &provider_id,
+            30,
+            &usage_windows,
+            Some(config_dir.clone()),
+            cancel.as_deref(),
+        ),
         ChartAccountScope::UnresolvedAccount { .. } => None,
     };
+    if cancel
+        .as_deref()
+        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
+        return ProviderChartData::empty_with_scope(provider_id, account_scope.kind());
+    }
     let cost_history: Vec<DailyCostPoint> = report
         .as_ref()
         .map(|report| {
@@ -1831,7 +1856,10 @@ fn build_provider_chart_data_with_cancel(
                 &comparison_specs,
             )
         });
-        if scoped_summary.is_some() || account_scope != ChartAccountScope::MachineWide {
+        // An empty MachineWide report already walked the same corpus. A second
+        // 30+1 scan just repeats that cost (SBS-1056). Fall back only when the
+        // provider has no report path at all.
+        if report.is_some() || account_scope != ChartAccountScope::MachineWide {
             scoped_summary
         } else {
             load_local_usage_summary_cached(&provider_id, cancel.as_deref())
@@ -2241,11 +2269,7 @@ fn scan_local_cost(
     match provider_id {
         "codex" => Some(scanner.scan_codex_with_cancel(cancel)),
         "claude" => Some(scanner.scan_claude_with_cancel(cancel)),
-        // Grok has no cancel-aware summary path yet; use the full report scan.
-        "grok" => {
-            let _ = (scanner, cancel);
-            codexbar::cost_scanner::get_cost_usage_report("grok", days).map(|r| r.thirty_days)
-        }
+        "grok" => Some(scanner.scan_grok_with_cancel(cancel)),
         _ => None,
     }
 }
@@ -2452,6 +2476,7 @@ fn load_openai_dashboard_chart_data(
 
 #[cfg(test)]
 mod tests {
+    use super::build_provider_chart_data_with_cancel;
     use super::{
         ACTIVITY_HEATMAP_DAYS, ActivityHourPoint, CHART_CACHE_MAX_ENTRIES,
         CHART_CACHE_MAX_ENTRY_AGE, CHART_CACHE_VERSION, CachedProviderChartData, ChartAccountScope,
@@ -2476,6 +2501,8 @@ mod tests {
     use codexbar::settings::Language;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
     fn cache_entry(refreshed_at_ms: i64) -> CachedProviderChartData {
@@ -2906,6 +2933,63 @@ mod tests {
         );
 
         assert_ne!(personal, work);
+    }
+
+    fn write_claude_chart_transcript(dir: &std::path::Path, name: &str, index: u32) {
+        let ts =
+            (Utc::now() - chrono::Duration::minutes(index as i64)).format("%Y-%m-%dT%H:%M:%S%.3fZ");
+        std::fs::write(
+            dir.join(name),
+            format!(
+                r#"{{"type":"assistant","timestamp":"{ts}","requestId":"req-{index}","message":{{"id":"msg-{index}","model":"claude-opus-4-8","usage":{{"input_tokens":10,"output_tokens":100}}}}}}"#
+            ) + "\n",
+        )
+        .expect("write transcript");
+    }
+
+    /// SBS-1056: cancel must abort the primary 30-day report walk, not only the
+    /// post-scan local_usage fallback.
+    #[test]
+    fn cancelled_chart_scan_does_not_walk_the_primary_corpus() {
+        let home = tempfile::tempdir().expect("temp home");
+        let project = home.path().join("projects").join("p");
+        std::fs::create_dir_all(&project).expect("projects dir");
+        write_claude_chart_transcript(&project, "one.jsonl", 1);
+        write_claude_chart_transcript(&project, "two.jsonl", 2);
+        write_claude_chart_transcript(&project, "three.jsonl", 3);
+        let scope = ChartAccountScope::Account {
+            account_id: "acct".into(),
+            config_dir: home.path().to_path_buf(),
+        };
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let cancelled = build_provider_chart_data_with_cancel(
+            "claude".into(),
+            None,
+            None,
+            None,
+            scope.clone(),
+            Vec::new(),
+            Some(cancel),
+        );
+        assert!(
+            cancelled.cost_history.is_empty() && cancelled.local_usage.is_none(),
+            "a cancelled scan must not keep paying the corpus"
+        );
+
+        let full = build_provider_chart_data_with_cancel(
+            "claude".into(),
+            None,
+            None,
+            None,
+            scope,
+            Vec::new(),
+            None,
+        );
+        assert!(
+            full.local_usage.is_some(),
+            "the same corpus must be visible when the scan is not cancelled"
+        );
     }
 
     #[test]

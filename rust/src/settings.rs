@@ -37,6 +37,67 @@ fn legacy_credential_to_migrate<'a>(
         .filter(|_| stored_value.is_none_or(|value| value.trim().is_empty()))
 }
 
+fn parse_start_at_login_command(command: &str) -> Option<(String, String)> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    if let Some(rest) = command.strip_prefix('"') {
+        let (exe, extras) = rest.split_once('"')?;
+        if exe.is_empty() {
+            return None;
+        }
+        return Some((exe.to_string(), extras.to_string()));
+    }
+    let lowercase = command.to_ascii_lowercase();
+    for (index, _) in lowercase.match_indices(".exe") {
+        let exe_end = index + 4;
+        let (exe, extras) = command.split_at(exe_end);
+        if extras.is_empty() || extras.starts_with(char::is_whitespace) {
+            return Some((exe.to_string(), extras.to_string()));
+        }
+    }
+    if let Some((exe, extras)) = command.split_once(char::is_whitespace) {
+        if exe.is_empty() {
+            return None;
+        }
+        return Some((exe.to_string(), extras.to_string()));
+    }
+    Some((command.to_string(), String::new()))
+}
+
+fn start_at_login_path_key(path: &std::path::Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+fn is_start_at_login_binary_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("ceiling.exe")
+        || name.eq_ignore_ascii_case("codexbar-cli.exe")
+        || name.eq_ignore_ascii_case("codexbar-desktop.exe")
+}
+
+fn owns_start_at_login_entry(existing_exe: &std::path::Path, intended: &std::path::Path) -> bool {
+    if start_at_login_path_key(existing_exe) == start_at_login_path_key(intended) {
+        return true;
+    }
+    let existing_name = existing_exe.file_name().and_then(|name| name.to_str());
+    let intended_name = intended.file_name().and_then(|name| name.to_str());
+    if !existing_name.is_some_and(is_start_at_login_binary_name)
+        || !intended_name.is_some_and(is_start_at_login_binary_name)
+    {
+        return false;
+    }
+    match (existing_exe.parent(), intended.parent()) {
+        (Some(existing_dir), Some(intended_dir)) => {
+            start_at_login_path_key(existing_dir) == start_at_login_path_key(intended_dir)
+        }
+        _ => false,
+    }
+}
+
 mod api_keys;
 mod manual_cookies;
 mod provider_workspace;
@@ -868,7 +929,8 @@ impl Settings {
             _ => Self::default(),
         };
 
-        // Sync autostart toggle with actual registry state and repair stale commands from older builds.
+        // Sync the toggle with whether Run\Ceiling exists. Repair only when
+        // this process owns that entry (SBS-1053).
         #[cfg(target_os = "windows")]
         {
             settings.start_at_login = Self::sync_start_at_login_registry();
@@ -1066,8 +1128,28 @@ impl Settings {
         format!("\"{}\"", exe_path.display())
     }
 
+    /// Rewrite `Run\Ceiling` only when this process owns that entry and the
+    /// value is a bare stale path for this tree. Custom arguments and other
+    /// install trees are left alone (SBS-1053).
     fn start_at_login_command_needs_repair(existing: &str, current_exe: &std::path::Path) -> bool {
+        let intended = Self::start_at_login_exe_path(current_exe);
+        let Some((existing_exe, extras)) = parse_start_at_login_command(existing) else {
+            return false;
+        };
+        if !extras.trim().is_empty() {
+            return false;
+        }
+        if !owns_start_at_login_entry(std::path::Path::new(&existing_exe), &intended) {
+            return false;
+        }
         existing != Self::start_at_login_command(current_exe)
+    }
+
+    fn start_at_login_command_is_owned(existing: &str, current_exe: &std::path::Path) -> bool {
+        let intended = Self::start_at_login_exe_path(current_exe);
+        parse_start_at_login_command(existing).is_some_and(|(existing_exe, _)| {
+            owns_start_at_login_entry(std::path::Path::new(&existing_exe), &intended)
+        })
     }
 
     #[cfg(target_os = "windows")]
@@ -1086,7 +1168,14 @@ impl Settings {
             let command = Self::start_at_login_command(&exe_path);
             run_key.set_value("Ceiling", &command)?;
         } else {
-            let _ = run_key.delete_value("Ceiling");
+            let existing = run_key.get_value::<String, _>("Ceiling").ok();
+            let current_exe = std::env::current_exe()?;
+            if existing
+                .as_deref()
+                .is_some_and(|command| Self::start_at_login_command_is_owned(command, &current_exe))
+            {
+                let _ = run_key.delete_value("Ceiling");
+            }
         }
 
         Ok(())
@@ -1109,19 +1198,23 @@ impl Settings {
             return false;
         };
 
-        match std::env::current_exe() {
-            Ok(exe_path) if Self::start_at_login_command_needs_repair(&existing, &exe_path) => {
-                let command = Self::start_at_login_command(&exe_path);
-                if let Err(error) = run_key.set_value("Ceiling", &command) {
-                    tracing::warn!("Failed to repair Ceiling start-at-login command: {error}");
-                }
-            }
+        let exe_path = match std::env::current_exe() {
+            Ok(exe_path) => exe_path,
             Err(error) => {
                 tracing::warn!(
                     "Failed to resolve current executable for start-at-login sync: {error}"
                 );
+                return false;
             }
-            _ => {}
+        };
+        if !Self::start_at_login_command_is_owned(&existing, &exe_path) {
+            return false;
+        }
+        if Self::start_at_login_command_needs_repair(&existing, &exe_path) {
+            let command = Self::start_at_login_command(&exe_path);
+            if let Err(error) = run_key.set_value("Ceiling", &command) {
+                tracing::warn!("Failed to repair Ceiling start-at-login command: {error}");
+            }
         }
 
         true
@@ -1147,7 +1240,11 @@ impl Settings {
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         if let Ok(run_key) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") {
-            run_key.get_value::<String, _>("Ceiling").is_ok()
+            let existing = run_key.get_value::<String, _>("Ceiling").ok();
+            let current_exe = std::env::current_exe().ok();
+            existing
+                .zip(current_exe)
+                .is_some_and(|(command, exe)| Self::start_at_login_command_is_owned(&command, &exe))
         } else {
             false
         }

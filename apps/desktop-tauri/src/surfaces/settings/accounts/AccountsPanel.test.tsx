@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderAccountsBridge } from "../../../types/bridge";
 import { AccountsPanel } from "./AccountsPanel";
@@ -91,5 +91,40 @@ describe("settings AccountsPanel", () => {
     for (const path of container.querySelectorAll("code.accounts-path")) {
       expect(path.textContent?.trim()).not.toBe("");
     }
+  });
+
+  it("keeps account values when adding fails", async () => {
+    tauriMocks.getDirectoryAccounts.mockResolvedValue([provider()]);
+    tauriMocks.addDirectoryAccount.mockRejectedValue(new Error("add failed"));
+    render(<AccountsPanel />);
+
+    const dir = await screen.findByPlaceholderText("C:\\codex-work");
+    const label = screen.getByPlaceholderText("AccountsLabelPlaceholder");
+    fireEvent.change(dir, { target: { value: "C:\\codex-work" } });
+    fireEvent.change(label, { target: { value: "Work" } });
+    fireEvent.click(screen.getByText("AccountsAddButton"));
+
+    await screen.findByText("add failed");
+    expect(dir).toHaveValue("C:\\codex-work");
+    expect(label).toHaveValue("Work");
+  });
+
+  it("clears account values after adding succeeds", async () => {
+    tauriMocks.getDirectoryAccounts.mockResolvedValue([provider()]);
+    tauriMocks.addDirectoryAccount.mockResolvedValue(
+      provider({ followingCli: false }),
+    );
+    render(<AccountsPanel />);
+
+    const dir = await screen.findByPlaceholderText("C:\\codex-work");
+    const label = screen.getByPlaceholderText("AccountsLabelPlaceholder");
+    fireEvent.change(dir, { target: { value: "C:\\codex-work" } });
+    fireEvent.change(label, { target: { value: "Work" } });
+    fireEvent.click(screen.getByText("AccountsAddButton"));
+
+    await waitFor(() => {
+      expect(dir).toHaveValue("");
+      expect(label).toHaveValue("");
+    });
   });
 });

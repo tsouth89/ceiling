@@ -27,7 +27,7 @@ export default function UpdateBanner({
     <div className={cls}>
       {updateState.status === "available" && (
         <>
-          <span>
+          <span role="status">
             {t("BannerUpdateAvailablePrefix")} <strong>{updateState.version}</strong>
           </span>
           <div className="update-banner__actions">
@@ -62,7 +62,7 @@ export default function UpdateBanner({
 
       {updateState.status === "downloading" && (
         <div className="update-banner__downloading">
-          <span>
+          <span role="status">
             {t("BannerDownloadingPrefix")}
             {updateState.version && (
               <>
@@ -70,11 +70,21 @@ export default function UpdateBanner({
                 <strong>{updateState.version}</strong>
               </>
             )}
-            {updateState.progress != null &&
-              ` — ${Math.round(updateState.progress * 100)}%`}
           </span>
           {updateState.progress != null && (
-            <div className="update-banner__progress">
+            <span aria-hidden="true">
+              {` — ${Math.round(updateState.progress * 100)}%`}
+            </span>
+          )}
+          {updateState.progress != null && (
+            <div
+              className="update-banner__progress"
+              role="progressbar"
+              aria-label={t("BannerDownloadingPrefix")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(updateState.progress * 100)}
+            >
               <div
                 className="update-banner__progress-bar"
                 style={{
@@ -88,7 +98,7 @@ export default function UpdateBanner({
 
       {updateState.status === "ready" && (
         <>
-          <span>
+          <span role="status">
             {t("BannerUpdateAvailablePrefix")}
             {updateState.version && (
               <>
@@ -130,7 +140,7 @@ export default function UpdateBanner({
 
       {updateState.status === "error" && (
         <>
-          <span>
+          <span role="alert">
             {t("BannerUpdateFailedPrefix")}
             {updateState.error && <>: {updateState.error}</>}
           </span>

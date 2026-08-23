@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Grok logs store USD cost as integer ticks: `usd = ticks / COST_USD_TICKS_PER_DOLLAR`.
 pub const COST_USD_TICKS_PER_DOLLAR: u64 = 10_000_000_000;
@@ -197,6 +198,7 @@ pub fn parse_grok_updates_file(
     path: &Path,
     meta: &SessionMeta,
     cutoff: DateTime<Utc>,
+    cancel: Option<&AtomicBool>,
 ) -> Vec<GrokUsageRecord> {
     let Ok(file) = File::open(path) else {
         return Vec::new();
@@ -209,6 +211,9 @@ pub fn parse_grok_updates_file(
     let mut subagent_keys: Vec<String> = Vec::new();
 
     for line in reader.lines().map_while(Result::ok) {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            break;
+        }
         // Cheap prefilter: most lines are tool chatter.
         if !line.contains("turn_completed")
             && !line.contains("subagent_finished")
@@ -272,7 +277,7 @@ pub fn parse_grok_updates_file(
         }
     }
 
-    if !usage_records.is_empty() {
+    if !usage_records.is_empty() || cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return usage_records;
     }
 
@@ -605,7 +610,7 @@ mod tests {
         assert_eq!(meta.effort.as_deref(), Some("high"));
 
         let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff);
+        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff, None);
         assert_eq!(records.len(), 1);
         let r = &records[0];
         assert_eq!(r.model, "grok-4.5-build");
@@ -696,7 +701,7 @@ mod tests {
         let meta = load_session_meta(&session);
         assert_eq!(meta.project.as_deref(), Some("toolport"));
         let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff);
+        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff, None);
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.partial));
         assert!(
@@ -730,7 +735,7 @@ mod tests {
         write_session(&session, &updates, summary);
         let meta = load_session_meta(&session);
         let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff);
+        let records = parse_grok_updates_file(&session.join("updates.jsonl"), &meta, cutoff, None);
         assert_eq!(records.len(), 1);
         assert!(records[0].partial);
         assert_eq!(records[0].input, 75_000);
