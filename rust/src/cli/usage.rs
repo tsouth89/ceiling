@@ -1,16 +1,18 @@
 //! Usage command implementation
 
 use clap::Args;
+use futures::stream::{self, StreamExt};
 use serde::Serialize;
 
 use crate::core::{
-    ConfiguredAccounts, CostSnapshot, FetchContext, ProviderFetchResult, ProviderId, RateWindow,
-    SourceMode, UsagePace, UsageSnapshot, instantiate_provider,
+    AccountTarget, ConfiguredAccounts, CostSnapshot, FetchContext, ProviderFetchResult, ProviderId,
+    RateWindow, SourceMode, UsagePace, UsageSnapshot, instantiate_provider,
 };
 use crate::settings::Settings;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel, fetch_provider_status};
 
 pub const PROVIDER_ARG_HELP: &str = "Provider to query (for example: codex, claude, gemini, antigravity/agy, nanogpt, deepseek, codebuff, windsurf, all, both)";
+const MAX_CONCURRENT_ACCOUNT_FETCHES: usize = 4;
 
 /// Arguments for the usage command
 #[derive(Args, Debug, Default)]
@@ -179,6 +181,7 @@ struct UsageCommand {
     pretty: bool,
     ctx: FetchContext,
     accounts: ConfiguredAccounts,
+    all_accounts: bool,
 }
 
 impl UsageCommand {
@@ -198,6 +201,7 @@ impl UsageCommand {
             pretty: args.pretty,
             ctx: build_usage_fetch_context(&args, source_mode),
             accounts: ConfiguredAccounts::load(),
+            all_accounts: args.all_accounts,
         })
     }
 
@@ -243,30 +247,74 @@ enum UsageOutput {
     },
 }
 
+#[derive(Clone)]
+struct UsageTarget {
+    provider: ProviderId,
+    account: Option<AccountTarget>,
+}
+
+fn usage_targets(command: &UsageCommand) -> Vec<UsageTarget> {
+    command
+        .providers
+        .iter()
+        .flat_map(|provider| {
+            let accounts = if command.all_accounts {
+                command.accounts.targets_for(*provider)
+            } else {
+                Vec::new()
+            };
+            if accounts.is_empty() {
+                vec![UsageTarget {
+                    provider: *provider,
+                    account: None,
+                }]
+            } else {
+                accounts
+                    .into_iter()
+                    .map(|account| UsageTarget {
+                        provider: *provider,
+                        account: Some(account),
+                    })
+                    .collect()
+            }
+        })
+        .collect()
+}
+
 async fn collect_usage_output(command: &UsageCommand) -> UsageOutput {
+    let targets = usage_targets(command);
     match command.format {
         OutputFormat::Text => {
-            let mut sections = Vec::new();
-            for provider_id in &command.providers {
-                sections.push(fetch_provider_text_output(*provider_id, command).await);
-            }
-            UsageOutput::Text(sections)
+            let mut sections = stream::iter(targets.into_iter().enumerate())
+                .map(|(index, target)| async move {
+                    (index, fetch_provider_text_output(&target, command).await)
+                })
+                .buffer_unordered(MAX_CONCURRENT_ACCOUNT_FETCHES)
+                .collect::<Vec<_>>()
+                .await;
+            sections.sort_by_key(|(index, _)| *index);
+            UsageOutput::Text(sections.into_iter().map(|(_, section)| section).collect())
         }
         OutputFormat::Json => {
-            let mut results = Vec::new();
-            for provider_id in &command.providers {
-                results.push(fetch_provider_json_output(*provider_id, command).await);
-            }
+            let mut results = stream::iter(targets.into_iter().enumerate())
+                .map(|(index, target)| async move {
+                    (index, fetch_provider_json_output(&target, command).await)
+                })
+                .buffer_unordered(MAX_CONCURRENT_ACCOUNT_FETCHES)
+                .collect::<Vec<_>>()
+                .await;
+            results.sort_by_key(|(index, _)| *index);
             UsageOutput::Json {
-                results,
+                results: results.into_iter().map(|(_, result)| result).collect(),
                 pretty: command.pretty,
             }
         }
     }
 }
 
-async fn fetch_provider_text_output(provider_id: ProviderId, command: &UsageCommand) -> String {
-    match fetch_provider_result(provider_id, command).await {
+async fn fetch_provider_text_output(target: &UsageTarget, command: &UsageCommand) -> String {
+    let provider_id = target.provider;
+    let output = match fetch_provider_result(target, command).await {
         Ok((result, status)) => {
             if command.brief {
                 render_brief_text(provider_id, &result)
@@ -275,34 +323,45 @@ async fn fetch_provider_text_output(provider_id: ProviderId, command: &UsageComm
             }
         }
         Err(e) => render_text_error(provider_id, &e.to_string(), command.use_color),
-    }
+    };
+    annotate_text_account(output, target.account.as_ref(), command.brief)
 }
 
 async fn fetch_provider_json_output(
-    provider_id: ProviderId,
+    target: &UsageTarget,
     command: &UsageCommand,
 ) -> serde_json::Value {
-    match fetch_provider_result(provider_id, command).await {
+    let provider_id = target.provider;
+    let mut output = match fetch_provider_result(target, command).await {
         Ok((result, status)) => render_json_result(provider_id, result, status.as_ref()),
         Err(e) => serde_json::json!({
             "provider": provider_id.cli_name(),
             "error": e.to_string(),
         }),
-    }
+    };
+    annotate_json_account(&mut output, target.account.as_ref());
+    output
 }
 
 async fn fetch_provider_result(
-    provider_id: ProviderId,
+    target: &UsageTarget,
     command: &UsageCommand,
 ) -> anyhow::Result<(ProviderFetchResult, Option<StatusInfo>)> {
+    let provider_id = target.provider;
     let provider = instantiate_provider(provider_id);
     let status_future = command
         .fetch_status
         .then(|| fetch_provider_status(provider_id.cli_name()));
-    let ctx = command
-        .ctx
-        .clone()
-        .for_account(provider_id, &command.accounts);
+    let ctx = match &target.account {
+        Some(account) => command
+            .ctx
+            .clone()
+            .pinned_to_account_dir(provider_id, account.config_dir.clone()),
+        None => command
+            .ctx
+            .clone()
+            .for_account(provider_id, &command.accounts),
+    };
     let result = provider.fetch_usage(&ctx).await?;
     let status = if let Some(fut) = status_future {
         fut.await
@@ -310,6 +369,28 @@ async fn fetch_provider_result(
         None
     };
     Ok((result, status))
+}
+
+fn annotate_text_account(output: String, account: Option<&AccountTarget>, brief: bool) -> String {
+    match account {
+        Some(account) if brief => {
+            format!("{output}, account {} ({})", account.label, account.id)
+        }
+        Some(account) => format!(
+            "{output}\n  Configured account: {} ({})",
+            account.label, account.id
+        ),
+        None => output,
+    }
+}
+
+fn annotate_json_account(output: &mut serde_json::Value, account: Option<&AccountTarget>) {
+    if let Some(account) = account {
+        output["configured_account"] = serde_json::json!({
+            "id": account.id,
+            "label": account.label,
+        });
+    }
 }
 
 fn render_text_error(provider_id: ProviderId, error_msg: &str, use_color: bool) -> String {
@@ -604,9 +685,99 @@ fn render_progress_bar(percent: f64, width: usize, use_color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{ClaudeIdentity, CodexIdentity, DirectoryAccount};
 
     fn fetch_result(usage: UsageSnapshot) -> ProviderFetchResult {
         ProviderFetchResult::new(usage, "test")
+    }
+
+    fn test_command(all_accounts: bool, accounts: ConfiguredAccounts) -> UsageCommand {
+        UsageCommand {
+            format: OutputFormat::Json,
+            providers: vec![ProviderId::Codex, ProviderId::Claude, ProviderId::Gemini],
+            use_color: false,
+            brief: false,
+            fetch_status: false,
+            pretty: false,
+            ctx: FetchContext::default(),
+            accounts,
+            all_accounts,
+        }
+    }
+
+    #[test]
+    fn all_accounts_expands_supported_providers_only() {
+        let mut accounts = ConfiguredAccounts::default();
+        accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("personal".into()),
+                "/accounts/personal".into(),
+            ));
+        accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("work".into()),
+                "/accounts/work".into(),
+            ));
+        accounts
+            .claude
+            .add_account(DirectoryAccount::<ClaudeIdentity>::new(
+                Some("team".into()),
+                "/accounts/claude-team".into(),
+            ));
+
+        let targets = usage_targets(&test_command(true, accounts));
+
+        assert_eq!(targets.len(), 4);
+        assert_eq!(targets[0].account.as_ref().unwrap().label, "personal");
+        assert_eq!(targets[1].account.as_ref().unwrap().label, "work");
+        assert_eq!(targets[2].provider, ProviderId::Claude);
+        assert_eq!(targets[2].account.as_ref().unwrap().label, "team");
+        assert_eq!(targets[3].provider, ProviderId::Gemini);
+        assert!(targets[3].account.is_none());
+    }
+
+    #[test]
+    fn default_usage_keeps_one_active_target_per_provider() {
+        let mut accounts = ConfiguredAccounts::default();
+        accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("personal".into()),
+                "/accounts/personal".into(),
+            ));
+        accounts
+            .codex
+            .add_account(DirectoryAccount::<CodexIdentity>::new(
+                Some("work".into()),
+                "/accounts/work".into(),
+            ));
+
+        let targets = usage_targets(&test_command(false, accounts));
+
+        assert_eq!(targets.len(), 3);
+        assert!(targets.iter().all(|target| target.account.is_none()));
+    }
+
+    #[test]
+    fn configured_account_is_identified_in_json_and_text_errors() {
+        let account = AccountTarget {
+            id: "account-id".into(),
+            label: "work".into(),
+            tint: None,
+            config_dir: "/accounts/work".into(),
+        };
+        let mut json = serde_json::json!({"provider": "codex", "error": "failed"});
+
+        annotate_json_account(&mut json, Some(&account));
+        let text = annotate_text_account("Codex  Error: failed".into(), Some(&account), false);
+        let brief = annotate_text_account("Codex: Session 10%".into(), Some(&account), true);
+
+        assert_eq!(json["configured_account"]["id"], "account-id");
+        assert_eq!(json["configured_account"]["label"], "work");
+        assert!(text.contains("Configured account: work (account-id)"));
+        assert_eq!(brief, "Codex: Session 10%, account work (account-id)");
     }
 
     #[test]

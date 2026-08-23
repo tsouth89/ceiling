@@ -6,6 +6,7 @@
 - **A leaked `serve.token` is rotated on Windows, not just Unix.** After SBS-953, a world-readable token was replaced on Unix, but Windows still tightened the DACL and reused the same secret. The ACL is now inspected before tightening; if anyone other than the current user, SYSTEM, or Administrators can read the file, the token is replaced. Closes SBS-1043.
 
 ### Fixed
+- **`usage --all-accounts` now fetches every configured Codex and Claude account.** Account fetches run with bounded concurrency, preserve configured order, and report failures independently. Text and JSON identify each configured account while the default output remains unchanged. Fixes #274.
 - **The detached Settings window now reopens where you left it.** Its saved size and position are restored and clamped on screen instead of being overwritten by a second frontend resize on every open. Closes #275.
 - **`serve --refresh-interval` now controls response caching.** Successful usage and cost responses are cached separately by provider selection for the requested TTL. A zero interval disables caching, and provider failures are retried on the next request. Fixes #273.
 - **Codex latest-session cost follows transcript time.** Copying or touching an older rollout no longer makes it replace a newer session in local cost summaries. Fixes #271.

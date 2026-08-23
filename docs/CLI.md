@@ -48,6 +48,8 @@ Useful options:
 - `--source <auto|web|cli|oauth>` - data source.
 - `--brief` - one compact line per provider.
 
+Without `--all-accounts`, JSON keeps its existing one-entry-per-provider shape. With the flag, directory-backed providers emit one entry per configured account and add a `configured_account` object containing its stable `id` and display `label`. Providers without configured account support still emit one unchanged entry.
+
 Examples:
 
 ```sh
