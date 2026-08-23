@@ -229,11 +229,13 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub switcher_shows_icons: bool,
 
-    /// Prefer the provider closest to its limit in merged menu bar display
+    /// Legacy compatibility field. The branded tray always follows the most
+    /// constrained healthy provider and ignores this flag.
     #[serde(default)]
     pub menu_bar_shows_highest_usage: bool,
 
-    /// Replace bar-only tray display with provider branding plus percent text where supported
+    /// Legacy compatibility field. The branded tray always draws the Ceiling
+    /// icon and ignores this flag.
     #[serde(default)]
     pub menu_bar_shows_percent: bool,
 
@@ -255,7 +257,8 @@ pub struct Settings {
     #[serde(default)]
     pub predictive_pace_warning_enabled: bool,
 
-    /// Menu bar display mode: "minimal", "compact", or "detailed"
+    /// Legacy compatibility field (`"minimal"`, `"compact"`, or `"detailed"`).
+    /// The branded tray ignores this setting.
     pub menu_bar_display_mode: String,
 
     /// Show all token accounts in provider menus instead of collapsing behind switchers

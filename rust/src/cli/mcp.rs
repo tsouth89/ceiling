@@ -95,7 +95,7 @@ impl CeilingMcp {
     }
 
     #[tool(
-        description = "Cheap compact status: remaining quota from the desktop snapshot plus today's estimated spend from a 1-day local log scan (not the 30-day get_spend walk). Good for 'am I about to hit my cap?' checks. usage.period_cost_usd is billed/current-period cost, not session spend; today_spend is local estimated log spend for today. Use get_spend for 7/30-day totals."
+        description = "Cheap compact status: remaining quota from the desktop snapshot plus today's estimated spend from a 1-day local log scan (not the 30-day get_spend walk). Good for 'am I about to hit my cap?' checks. remaining_percent is the constraining window across primary/secondary/tertiary (same ranking as the desktop strip: exhausted first, then highest used %), so an exhausted Weekly is not hidden behind a healthy session. usage.period_cost_usd is billed/current-period cost, not session spend; today_spend is local estimated log spend for today. Use get_spend for 7/30-day totals."
     )]
     fn get_status(
         &self,
@@ -120,7 +120,9 @@ impl ServerHandler for CeilingMcp {
                 "Ceiling local usage/spend tools. get_usage reads the desktop widget snapshot \
 (cache-only). get_spend scans local Codex/Claude/Grok logs for today, 7 days, and 30 days. \
 Prefer get_status for a cheap remaining-quota + today-$ check before starting a large job; \
-it does not run the 30-day spend scan. usage.period_cost_usd is the \
+it does not run the 30-day spend scan. remaining_percent is the constraining \
+window across primary/secondary/tertiary (exhausted first, then highest used %), \
+not primary alone. usage.period_cost_usd is the \
 provider billed/current-period figure (CostSnapshot.used), not this conversation's spend; \
 today_spend / get_spend are estimated API value from local logs, never a billed invoice. \
 Account email and login method are omitted unless the server was started with \
@@ -377,12 +379,11 @@ fn status_payload_with_spend(
     }
 
     let chosen = choose_status_provider(snapshot, provider, enabled);
-    let usage = match (&chosen, snapshot) {
-        (Some(id), Some(snap)) => snap
-            .entry_for(*id)
-            .map(|entry| entry_usage_json(entry, include_identity)),
+    let chosen_entry = match (&chosen, snapshot) {
+        (Some(id), Some(snap)) => snap.entry_for(*id),
         _ => None,
     };
+    let usage = chosen_entry.map(|entry| entry_usage_json(entry, include_identity));
 
     let spend = chosen.and_then(|id| {
         let cli = id.cli_name();
@@ -397,11 +398,13 @@ fn status_payload_with_spend(
         spend_for(cli)
     });
 
-    let remaining = usage
-        .as_ref()
-        .and_then(|u| u.get("primary"))
-        .and_then(|p| p.get("remaining_percent"))
-        .cloned();
+    // SBS-1055: remaining_percent is the advertised cap-check sink. Copying
+    // only usage.primary hid an exhausted Claude/Codex Weekly behind a healthy
+    // session. Rank the slots the widget snapshot carries the same way the
+    // desktop strip does (capacityPresentation.constrainingWindow).
+    let remaining = chosen_entry
+        .and_then(constraining_rate_window)
+        .map(RateWindow::remaining_percent);
 
     json!({
         "ok": usage.is_some() || spend.is_some(),
@@ -440,6 +443,46 @@ fn choose_status_provider(
         .iter()
         .find(|e| enabled.contains(&e.provider))
         .map(|e| e.provider)
+}
+
+/// Window that actually constrains this provider.
+///
+/// Mirrors desktop `constrainingWindow` over the slots the widget snapshot
+/// carries (primary / secondary / tertiary). Exhausted/maxed outranks
+/// everything, then highest used %, then soonest reset.
+fn constraining_rate_window(entry: &WidgetProviderEntry) -> Option<&RateWindow> {
+    let mut best = entry.primary.as_ref();
+    for candidate in [entry.secondary.as_ref(), entry.tertiary.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        match best {
+            None => best = Some(candidate),
+            Some(current) if window_outranks(candidate, current) => best = Some(candidate),
+            _ => {}
+        }
+    }
+    best
+}
+
+fn window_outranks(candidate: &RateWindow, best: &RateWindow) -> bool {
+    let candidate_blocking = candidate.is_exhausted();
+    let best_blocking = best.is_exhausted();
+    if candidate_blocking != best_blocking {
+        return candidate_blocking;
+    }
+    match candidate.used_percent.total_cmp(&best.used_percent) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => reset_at_rank(candidate) < reset_at_rank(best),
+    }
+}
+
+fn reset_at_rank(window: &RateWindow) -> i64 {
+    window
+        .resets_at
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
@@ -693,5 +736,89 @@ mod tests {
         );
         assert_eq!(scanned, 0);
         assert!(payload["today_spend"].is_null(), "payload: {payload}");
+    }
+
+    fn dual_window_snapshot(
+        provider: ProviderId,
+        primary_used: f64,
+        secondary_used: f64,
+    ) -> WidgetSnapshot {
+        let entry = WidgetProviderEntry::new(provider, Utc::now())
+            .with_primary(RateWindow::new(primary_used))
+            .with_secondary(RateWindow::new(secondary_used));
+        WidgetSnapshot::new(vec![entry], Utc::now())
+    }
+
+    /// SBS-1055: get_status remaining_percent copied only usage.primary, so a
+    /// healthy 5-hour session hid an exhausted Claude/Codex Weekly.
+    #[test]
+    fn status_remaining_surfaces_exhausted_weekly_over_healthy_session() {
+        for provider in [ProviderId::Claude, ProviderId::Codex] {
+            let snap = dual_window_snapshot(provider, 42.0, 100.0);
+            let payload = status_without_spend_scan(
+                Some(&snap),
+                Some(provider.cli_name()),
+                &default_enabled(),
+            );
+            assert_eq!(
+                payload["remaining_percent"],
+                0.0,
+                "exhausted Weekly must bind remaining_percent for {}: {payload}",
+                provider.cli_name()
+            );
+            assert_eq!(payload["usage"]["primary"]["remaining_percent"], 58.0);
+            assert_eq!(payload["usage"]["secondary"]["remaining_percent"], 0.0);
+            assert_eq!(payload["usage"]["secondary"]["is_exhausted"], true);
+        }
+    }
+
+    #[test]
+    fn status_remaining_uses_hotter_weekly_when_session_is_fresher() {
+        let snap = dual_window_snapshot(ProviderId::Claude, 34.0, 91.0);
+        let payload = status_without_spend_scan(Some(&snap), Some("claude"), &default_enabled());
+        assert_eq!(payload["remaining_percent"], 9.0);
+    }
+
+    #[test]
+    fn status_remaining_keeps_hotter_session_over_quiet_weekly() {
+        let snap = dual_window_snapshot(ProviderId::Claude, 92.0, 40.0);
+        let payload = status_without_spend_scan(Some(&snap), Some("claude"), &default_enabled());
+        assert_eq!(payload["remaining_percent"], 8.0);
+    }
+
+    #[test]
+    fn status_remaining_surfaces_exhausted_tertiary_over_healthy_primary() {
+        let entry = WidgetProviderEntry::new(ProviderId::Claude, Utc::now())
+            .with_primary(RateWindow::new(10.0))
+            .with_tertiary(RateWindow::new(100.0));
+        let snap = WidgetSnapshot::new(vec![entry], Utc::now());
+        let payload = status_without_spend_scan(Some(&snap), Some("claude"), &default_enabled());
+        assert_eq!(payload["remaining_percent"], 0.0);
+    }
+
+    #[test]
+    fn constraining_window_breaks_used_ties_by_soonest_reset() {
+        let soon = Utc::now() + chrono::Duration::hours(1);
+        let later = Utc::now() + chrono::Duration::hours(24);
+        let entry = WidgetProviderEntry::new(ProviderId::Claude, Utc::now())
+            .with_primary(RateWindow::with_details(50.0, Some(300), Some(later), None))
+            .with_secondary(RateWindow::with_details(
+                50.0,
+                Some(10_080),
+                Some(soon),
+                None,
+            ));
+        let window = constraining_rate_window(&entry).expect("window");
+        assert_eq!(window.window_minutes, Some(10_080));
+        assert_eq!(window.remaining_percent(), 50.0);
+    }
+
+    #[test]
+    fn status_remaining_is_null_when_no_measured_window_exists() {
+        let entry = WidgetProviderEntry::new(ProviderId::Claude, Utc::now());
+        let snap = WidgetSnapshot::new(vec![entry], Utc::now());
+        let payload = status_without_spend_scan(Some(&snap), Some("claude"), &default_enabled());
+
+        assert!(payload["remaining_percent"].is_null());
     }
 }
