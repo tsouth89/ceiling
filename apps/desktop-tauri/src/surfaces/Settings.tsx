@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from "react";
-import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   BootstrapState,
@@ -11,7 +11,7 @@ import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
 import { useTabListKeyboard } from "../hooks/useTabListKeyboard";
 import type { LocaleKey } from "../i18n/keys";
-import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
+import { closeSettingsWindow, setSurfaceMode } from "../lib/tauri";
 import GeneralTab from "./settings/tabs/GeneralTab";
 import DisplayTab from "./settings/tabs/DisplayTab";
 import AdvancedTab from "./settings/tabs/AdvancedTab";
@@ -117,41 +117,6 @@ function isSettingsTab(value: string): value is SettingsTab {
   return TAB_META.some((t) => t.id === value);
 }
 
-const SETTINGS_WINDOW_HEIGHT = 580;
-const SETTINGS_WINDOW_WIDTH = 600;
-
-async function applySettingsWindowSize() {
-  const workArea = await getWorkAreaRect().catch(() => null);
-  const screenWidth = window.screen.availWidth || window.innerWidth || SETTINGS_WINDOW_WIDTH;
-  const screenHeight = window.screen.availHeight || window.innerHeight || SETTINGS_WINDOW_HEIGHT;
-  const maxWidth = Math.min(workArea?.width ?? screenWidth, screenWidth);
-  const maxHeight = Math.min(workArea?.height ?? screenHeight, screenHeight);
-  const width = Math.max(
-    360,
-    Math.min(SETTINGS_WINDOW_WIDTH, maxWidth - 16),
-  );
-  const height = Math.max(
-    360,
-    Math.min(SETTINGS_WINDOW_HEIGHT, maxHeight - 16),
-  );
-  const win = getCurrentWindow();
-  await win.setSize(new LogicalSize(width, height)).catch(() => {});
-  const screenOrigin = window.screen as Screen & {
-    availLeft?: number;
-    availTop?: number;
-  };
-  const left = screenOrigin.availLeft ?? workArea?.x ?? 0;
-  const top = screenOrigin.availTop ?? workArea?.y ?? 0;
-  await win
-    .setPosition(
-      new LogicalPosition(
-        left + Math.max(8, Math.round((screenWidth - width) / 2)),
-        top + Math.max(8, Math.round((screenHeight - height) / 2)),
-      ),
-    )
-    .catch(() => {});
-}
-
 export default function Settings({ state, initialTab: propTab }: { state: BootstrapState; initialTab?: string }) {
   const { settings, saving, error, update } = useSettings(state.settings);
   const { t } = useLocale();
@@ -163,10 +128,6 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
         ? shellTarget.tab
         : "general";
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
-
-  useEffect(() => {
-    void applySettingsWindowSize();
-  }, []);
 
   // Respond to prop-driven tab changes (detached window re-focus events).
   useEffect(() => {

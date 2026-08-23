@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TAB_META } from "./Settings";
+import settingsSource from "./Settings.tsx?raw";
 
 /** Live Settings shell tabs, in render order. SBS-872. */
 const LIVE_SETTINGS_TABS = [
@@ -26,5 +27,10 @@ describe("Settings navigation", () => {
     // falls through to General. settingsTabs.test.ts compares this list
     // to the Rust allowlist and the SettingsTabId union.
     expect(TAB_META.map((tab) => tab.id)).toEqual([...LIVE_SETTINGS_TABS]);
+  });
+
+  it("does not overwrite restored window geometry on mount", () => {
+    expect(settingsSource).not.toContain("setSize(");
+    expect(settingsSource).not.toContain("setPosition(");
   });
 });

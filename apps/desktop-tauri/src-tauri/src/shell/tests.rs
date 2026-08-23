@@ -896,6 +896,51 @@ fn remembered_popout_position_clamps_using_stored_size() {
 }
 
 #[test]
+fn remembered_settings_position_clamps_using_stored_size() {
+    let monitor = MonitorPlacement {
+        bounds: Rect {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 800,
+        },
+        work_area: Rect {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 760,
+        },
+        scale_factor: 1.0,
+    };
+    let stored = crate::geometry_store::StoredGeometry {
+        x: 900,
+        y: 700,
+        width: Some(720),
+        height: Some(580),
+    };
+
+    let position =
+        remembered_surface_position_with_monitors(SurfaceMode::Settings, stored, &[monitor], None);
+
+    assert_eq!(position, Some((272, 172)));
+}
+
+#[test]
+fn remembered_panel_size_uses_stored_settings_size() {
+    let stored = crate::geometry_store::StoredGeometry {
+        x: 0,
+        y: 0,
+        width: Some(840),
+        height: Some(680),
+    };
+
+    let size = remembered_panel_size(SurfaceMode::Settings, stored);
+
+    assert_eq!(size.width, 840);
+    assert_eq!(size.height, 680);
+}
+
+#[test]
 fn remembered_panel_size_uses_stored_popout_size() {
     let stored = crate::geometry_store::StoredGeometry {
         x: 0,
