@@ -222,6 +222,9 @@ pub fn path_dacl_is_readable_by_others(path: &Path) -> io::Result<bool> {
             let mut ace_ptr = std::ptr::null_mut();
             GetAce(dacl, index, &mut ace_ptr)
                 .map_err(|error| windows_error("GetAce failed", error))?;
+            if ace_ptr.is_null() {
+                return Err(io::Error::other("GetAce returned a null ACE"));
+            }
             let ace = &*ace_ptr.cast::<ACCESS_ALLOWED_ACE>();
             if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
                 continue;
