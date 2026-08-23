@@ -225,6 +225,22 @@ export default function PlanStatusCard({
   const notEnforcedSummary = inactiveWindowSummary(provider, "notEnforced");
   const unavailableSummary = inactiveWindowSummary(provider, "unavailable");
   const resetCredits = bankedResetCredits(provider);
+  const meterSummary = [meters.primary, ...meters.companions]
+    .filter((meter): meter is ConstrainingWindow => meter != null)
+    .map((meter) => {
+      const percent = glanceDisplayPercent(meter.window, showAsUsed);
+      const suffix = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
+      return `${meter.label}: ${percent}% ${suffix}`;
+    });
+  if (notEnforcedSummary) {
+    meterSummary.push(`${notEnforcedSummary}: ${t("NotCurrentlyEnforced")}`);
+  }
+  if (unavailableSummary) {
+    meterSummary.push(`${unavailableSummary}: ${t("WindowUnavailable")}`);
+  }
+  const accessibleLabel = provider.error
+    ? `${provider.displayName}: ${provider.error}`
+    : [provider.displayName, ...meterSummary].join("; ");
 
   const className = [
     "plan-status-card",
@@ -347,7 +363,7 @@ export default function PlanStatusCard({
         className={className}
         style={{ "--plan-brand": brand } as CSSProperties}
         onClick={onSelect}
-        aria-label={provider.displayName}
+        aria-label={accessibleLabel}
         aria-busy={isRefreshing}
       >
         {body}
