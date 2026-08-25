@@ -150,7 +150,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/usage
 
 ### HTTP endpoints
 
-The server binds to `127.0.0.1` only and additionally rejects any request whose `Host` header is not local (`127.0.0.1`, `localhost`, or `[::1]`), so it is not reachable from other machines. It is read-only: every route answers `GET` and no route mutates any state. `/usage` and `/cost` require the bearer token described above unless `--allow-unauthenticated` is set; `/health` never requires it.
+The server binds to `127.0.0.1` only and additionally rejects any request whose `Host` header is not local (`127.0.0.1`, `localhost`, or `[::1]`), so it is not reachable from other machines. It is read-only: every route answers `GET` and no route mutates usage or account data (successful `/usage` and `/cost` responses do update the response cache described under `--refresh-interval`). `/usage` and `/cost` require the bearer token described above unless `--allow-unauthenticated` is set; `/health` never requires it.
 
 | Route | Description |
 |---|---|
@@ -162,7 +162,7 @@ The `provider` query parameter accepts a provider CLI name (for example `claude`
 
 `/usage` and `/cost` return a JSON array with one object per requested provider. A provider that fails to fetch reports an error inside its own array entry — the HTTP status is still `200` — and without `--include-identity` that error text is normalized to `"provider request failed"`. `/cost` reads local session logs and supports only Claude, Codex, and Grok; any other provider's entry has `"supported": false`. The scan window is fixed at 30 days (the `cost` subcommand's `--days` flag does not apply here).
 
-Error responses are JSON of the shape `{ "error": "<message>" }`:
+Error responses are JSON of the shape `{ "error": "<message>" }`; the `409` additionally carries a `"code"` field:
 
 | Status | When |
 |---|---|
